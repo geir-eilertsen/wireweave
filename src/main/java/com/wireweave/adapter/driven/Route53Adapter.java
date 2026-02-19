@@ -1,7 +1,7 @@
 package com.wireweave.adapter.driven;
 
 import com.wireweave.domain.DnsRecord;
-import com.wireweave.domain.Domain;
+import com.wireweave.domain.DnsZone;
 import com.wireweave.domain.port.ForGettingDnsInfo;
 import java.util.stream.Collectors;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
@@ -26,9 +26,9 @@ public class Route53Adapter implements ForGettingDnsInfo {
     }
 
     @Override
-    public List<DnsRecord> getDnsRecords(Domain domain) {
+    public List<DnsRecord> getDnsRecords(DnsZone dnsZone) {
         try {
-            String hostedZoneId = findHostedZoneId(domain.name());
+            String hostedZoneId = findHostedZoneId(dnsZone.name());
             if (hostedZoneId == null) {
                 return List.of();
             }
@@ -70,9 +70,9 @@ public class Route53Adapter implements ForGettingDnsInfo {
     }
 
     @Override
-    public List<Domain> getDomains() {
+    public List<DnsZone> getDnsZones() {
         return route53Client.listHostedZones().hostedZones().stream()
-                .map(zone -> new Domain(zone.name()))
+                .map(zone -> new DnsZone(zone.name()))
                 .collect(Collectors.toList());
     }
 
@@ -121,11 +121,11 @@ public class Route53Adapter implements ForGettingDnsInfo {
 
         Route53Adapter adapter = new Route53Adapter(client);
 
-        List<Domain> domains = adapter.getDomains();
-        domains.forEach(System.out::println);
+        List<DnsZone> dnsZones = adapter.getDnsZones();
+        dnsZones.forEach(System.out::println);
 
-        Domain domain = domains.getFirst();
-        List<DnsRecord> records = adapter.getDnsRecords(domain);
+        DnsZone dnsZone = dnsZones.getFirst();
+        List<DnsRecord> records = adapter.getDnsRecords(dnsZone);
         records.forEach(System.out::println);
     }
 }
