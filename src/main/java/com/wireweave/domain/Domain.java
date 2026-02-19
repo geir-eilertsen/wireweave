@@ -1,5 +1,5 @@
 package com.wireweave.domain;
 
-public class Domain {
+public record Domain(String name) {
 
 }

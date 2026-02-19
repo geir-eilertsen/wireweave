@@ -4,6 +4,7 @@ import com.wireweave.domain.DnsRecord;
 import com.wireweave.domain.Domain;
 import java.util.List;
 
-public interface ForGettingDnsRecords {
+public interface ForGettingDnsInfo {
     List<DnsRecord> getDnsRecords(Domain domain);
+    List<Domain> getDomains();
 }
