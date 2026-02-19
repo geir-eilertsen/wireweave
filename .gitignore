@@ -1,0 +1,44 @@
+
+## .gitignore Template
+```
+# Java
+target/
+*.class
+*.jar
+*.war
+*.ear
+.mvn/
+mvnw
+mvnw.cmd
+
+# Node
+node_modules/
+dist/
+build/
+.npm
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+*.swp
+
+# Environment
+.env
+*.key
+*.conf
+*.pem
+
+# WireGuard
+wireguard-config/
+wg*.conf
+
+# Docker
+docker-compose.override.yml
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
