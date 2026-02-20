@@ -9,6 +9,7 @@ import lombok.ToString;
 @ToString
 public class ReverseProxyRoute {
     private final String name;
+    private final String domainName;
     private final String address;
     private final int port;
     private final String service;

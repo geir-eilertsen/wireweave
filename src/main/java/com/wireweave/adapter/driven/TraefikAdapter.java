@@ -77,12 +77,13 @@ public class TraefikAdapter implements ForGettingReverseProxyRoutes {
 
             if (routerConfig != null) {
                 String serviceName = (String) routerConfig.get("service");
+                String domainName = extractDomainFromRule(routerConfig);
 
                 if (serviceName != null && services.containsKey(serviceName)) {
                     Map<String, Object> serviceConfig = castToMap(services.get(serviceName));
 
                     if (serviceConfig != null) {
-                        routes.addAll(extractServiceUrls(routerName, serviceName, serviceConfig));
+                        routes.addAll(extractServiceUrls(routerName, domainName, serviceName, serviceConfig));
                     }
                 }
             }
@@ -100,12 +101,13 @@ public class TraefikAdapter implements ForGettingReverseProxyRoutes {
 
             if (routerConfig != null) {
                 String serviceName = (String) routerConfig.get("service");
+                String domainName = extractDomainFromRule(routerConfig);
 
                 if (serviceName != null && services.containsKey(serviceName)) {
                     Map<String, Object> serviceConfig = castToMap(services.get(serviceName));
 
                     if (serviceConfig != null) {
-                        routes.addAll(extractTcpServiceAddresses(routerName, serviceName, serviceConfig));
+                        routes.addAll(extractTcpServiceAddresses(routerName, domainName, serviceName, serviceConfig));
                     }
                 }
             }
@@ -114,7 +116,7 @@ public class TraefikAdapter implements ForGettingReverseProxyRoutes {
         return routes;
     }
 
-    private List<ReverseProxyRoute> extractServiceUrls(String routerName, String serviceName, Map<String, Object> serviceConfig) {
+    private List<ReverseProxyRoute> extractServiceUrls(String routerName, String domainName, String serviceName, Map<String, Object> serviceConfig) {
         List<ReverseProxyRoute> routes = new ArrayList<>();
 
         // Handle loadBalancer configuration
@@ -128,7 +130,7 @@ public class TraefikAdapter implements ForGettingReverseProxyRoutes {
 
                     if (url != null) {
                         AddressPort addressPort = parseUrl(url);
-                        routes.add(new ReverseProxyRoute(routerName, addressPort.address, addressPort.port, serviceName));
+                        routes.add(new ReverseProxyRoute(routerName, domainName, addressPort.address, addressPort.port, serviceName));
                     }
                 }
             }
@@ -137,7 +139,7 @@ public class TraefikAdapter implements ForGettingReverseProxyRoutes {
         return routes;
     }
 
-    private List<ReverseProxyRoute> extractTcpServiceAddresses(String routerName, String serviceName, Map<String, Object> serviceConfig) {
+    private List<ReverseProxyRoute> extractTcpServiceAddresses(String routerName, String domainName, String serviceName, Map<String, Object> serviceConfig) {
         List<ReverseProxyRoute> routes = new ArrayList<>();
 
         // Handle loadBalancer configuration
@@ -151,7 +153,7 @@ public class TraefikAdapter implements ForGettingReverseProxyRoutes {
 
                     if (address != null) {
                         AddressPort addressPort = parseAddress(address);
-                        routes.add(new ReverseProxyRoute(routerName, addressPort.address, addressPort.port, serviceName));
+                        routes.add(new ReverseProxyRoute(routerName, domainName, addressPort.address, addressPort.port, serviceName));
                     }
                 }
             }
@@ -228,6 +230,34 @@ public class TraefikAdapter implements ForGettingReverseProxyRoutes {
         return null;
     }
 
+    /**
+     * Extract domain name from router rule.
+     * Supports Host() and HostSNI() rules.
+     * Examples:
+     *   "Host(`example.com`)" -> "example.com"
+     *   "Host(`example.com`) && PathPrefix(`/api`)" -> "example.com"
+     *   "HostSNI(`example.com`)" -> "example.com"
+     */
+    private String extractDomainFromRule(Map<String, Object> routerConfig) {
+        String rule = (String) routerConfig.get("rule");
+
+        if (rule == null) {
+            return null;
+        }
+
+        // Try to match Host(`domain`) or HostSNI(`domain`)
+        // Pattern matches: Host(`domain`) or HostSNI(`domain`)
+        String hostPattern = "Host(?:SNI)?\\s*\\(\\s*`([^`]+)`\\s*\\)";
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(hostPattern);
+        java.util.regex.Matcher matcher = pattern.matcher(rule);
+
+        if (matcher.find()) {
+            return matcher.group(1);
+        }
+
+        return null;
+    }
+
     private record AddressPort(String address, int port) {}
 
     public static void main(String[] args) {
@@ -238,6 +268,7 @@ public class TraefikAdapter implements ForGettingReverseProxyRoutes {
         System.out.println("\nFound " + routes.size() + " routes:");
         routes.forEach(route -> {
             System.out.println("\nRoute: " + route.getName());
+            System.out.println("  Domain: " + route.getDomainName());
             System.out.println("  Service: " + route.getService());
             System.out.println("  Address: " + route.getAddress() + ":" + route.getPort());
         });
