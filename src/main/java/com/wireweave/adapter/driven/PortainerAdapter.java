@@ -3,6 +3,7 @@ package com.wireweave.adapter.driven;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.wireweave.domain.DockerHost;
 import com.wireweave.domain.DockerService;
 import com.wireweave.domain.port.ForGettingDockerInfo;
 import java.io.IOException;
@@ -17,40 +18,28 @@ import org.springframework.stereotype.Component;
 @Component
 public class PortainerAdapter implements ForGettingDockerInfo {
 
-    private String portainerUrl;
-    private final String apiToken;
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
 
     public PortainerAdapter() {
-        this.portainerUrl = System.getenv("WIREWEAVE_PORTAINER_URL");
-        if (portainerUrl == null || portainerUrl.isEmpty()) {
-            this.portainerUrl = "http://wireguard.home:9000";
-        } else {
-            this.portainerUrl = portainerUrl;
-        }
-
-        this.apiToken = System.getenv("WIREWEAVE_PORTAINER_TOKEN");
         this.httpClient = HttpClient.newHttpClient();
         this.objectMapper = new ObjectMapper();
     }
 
     @Override
-    public List<DockerService> getServicesWithExposedPorts() {
+    public List<DockerService> getServicesWithExposedPorts(DockerHost dockerHost) {
         try {
             // First, get the endpoint ID (usually 1 or 2 for local Docker)
-            int endpointId = getEndpointId();
+            int endpointId = getEndpointId(dockerHost);
 
             // Get list of containers from Portainer API
-            String containersUrl = portainerUrl + "/api/endpoints/" + endpointId + "/docker/containers/json";
+            String containersUrl = dockerHost.endpointsUrl() + "/" + endpointId + "/docker/containers/json";
 
             HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
                     .uri(URI.create(containersUrl))
                     .GET();
 
-            if (apiToken != null && !apiToken.isEmpty()) {
-                requestBuilder.header("X-API-Key", apiToken);
-            }
+            requestBuilder.header("X-API-Key", dockerHost.getApiToken());
 
             HttpRequest request = requestBuilder.build();
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
@@ -91,20 +80,16 @@ public class PortainerAdapter implements ForGettingDockerInfo {
             return services;
 
         } catch (IOException | InterruptedException e) {
-            throw new RuntimeException("Failed to get Docker services from Portainer at " + portainerUrl, e);
+            throw new RuntimeException("Failed to get Docker services from Portainer at " + dockerHost, e);
         }
     }
 
-    private int getEndpointId() throws IOException, InterruptedException {
-        String endpointsUrl = portainerUrl + "/api/endpoints";
-
+    private int getEndpointId(DockerHost dockerHost) throws IOException, InterruptedException {
         HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
-                .uri(URI.create(endpointsUrl))
+                .uri(URI.create(dockerHost.endpointsUrl()))
                 .GET();
 
-        if (apiToken != null && !apiToken.isEmpty()) {
-            requestBuilder.header("X-API-Key", apiToken);
-        }
+        requestBuilder.header("X-API-Key", dockerHost.getApiToken());
 
         HttpRequest request = requestBuilder.build();
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
@@ -114,15 +99,11 @@ public class PortainerAdapter implements ForGettingDockerInfo {
                     response.statusCode() + ". Body: " + response.body());
         }
 
-        System.out.println("DEBUG: Endpoints response: " + response.body());
-
         PortainerEndpoint[] endpoints = objectMapper.readValue(response.body(), PortainerEndpoint[].class);
 
         if (endpoints.length == 0) {
             throw new RuntimeException("No endpoints found in Portainer");
         }
-
-        System.out.println("DEBUG: Found " + endpoints.length + " endpoint(s). Using endpoint ID: " + endpoints[0].id + " (name: " + endpoints[0].name + ")");
 
         // Return the first endpoint (usually the local Docker environment)
         return endpoints[0].id;
@@ -173,9 +154,14 @@ public class PortainerAdapter implements ForGettingDockerInfo {
     public static void main(String[] args) {
         PortainerAdapter adapter = new PortainerAdapter();
 
-        System.out.println("Connecting to Portainer at: " + adapter.portainerUrl);
+        DockerHost dockerHost = new DockerHost(
+            "wireguard.home",
+            System.getenv("WIREWEAVE_PORTAINER_TOKEN")
+        );
 
-        List<DockerService> services = adapter.getServicesWithExposedPorts();
+        System.out.println("Connecting to Portainer at: " + dockerHost);
+
+        List<DockerService> services = adapter.getServicesWithExposedPorts(dockerHost);
 
         System.out.println("\nFound " + services.size() + " services with exposed ports:");
         services.forEach(service -> {
