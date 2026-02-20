@@ -12,13 +12,9 @@
 
 ## ✨ Features
 
-- 🕸️ **Automated Mesh Networking** - Generate full-mesh WireGuard configurations automatically
-- 🔐 **Secure Key Management** - Automatic key pair generation and distribution
-- 🌐 **Integrated DNS** - AWS Route53 integration for dynamic endpoints
-- 🔄 **Reverse Proxy** - Traefik integration with automatic SSL
-- 📱 **Mobile Ready** - QR code generation for instant mobile setup
-- 🐳 **Single Deployment** - Everything runs in one docker-compose stack
+- 🌐 **DNS Zone Listing** - View and manage AWS Route53 hosted zones via REST API
 - 🏗️ **Clean Architecture** - Built with hexagonal architecture principles
+- 🐳 **Docker Ready** - Containerized deployment with docker-compose
 
 ## 🚀 Quick Start
 ```bash
@@ -29,51 +25,34 @@ cp .env.example .env
 docker-compose up -d
 ```
 
-Visit http://localhost:3000
-
-## 📖 Documentation
-
-- [Architecture](docs/architecture.md)
-- [Deployment Guide](docs/deployment.md)
-- [API Reference](docs/api-reference.md)
+Visit http://localhost:8080/swagger-ui.html for API documentation
 
 ## 🏗️ Architecture
 
 WireWeave is built using hexagonal architecture with clear separation between:
-- **Domain Layer** - Core business logic for mesh topology and VPN configuration
+- **Domain Layer** - Core business logic
 - **Application Layer** - Use cases and orchestration
-- **Infrastructure Layer** - Adapters for AWS, Docker, and external systems
-- **Web Layer** - REST API and React UI
+- **Infrastructure Layer** - AWS Route53 adapter
+- **Web Layer** - REST API with OpenAPI documentation
 
 ## 🛠️ Technology Stack
 
 **Backend:**
 - Java 21 + Spring Boot 3.x
-- PostgreSQL
 - AWS SDK for Route53
-- Docker Java API
-
-**Frontend:**
-- React + TypeScript
-- Material-UI
-- React Query
+- Springdoc OpenAPI
 
 **Infrastructure:**
-- WireGuard
-- Traefik
 - Docker Compose
 
 ## 📋 Roadmap
 
-- [x] Project setup
-- [ ] Mesh topology generator (v0.2)
-- [ ] DNS automation (v0.3)
-- [ ] Site-to-site routing (v0.4)
-- [ ] Monitoring dashboard (v0.5)
-
-## 🤝 Contributing
-
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+- [x] Project setup and Docker containerization
+- [x] AWS Route53 DNS zone listing
+- [ ] WireGuard mesh topology generator
+- [ ] Automated DNS record management
+- [ ] Site-to-site routing configuration
+- [ ] Monitoring and management dashboard
 
 ## 📄 License
 
