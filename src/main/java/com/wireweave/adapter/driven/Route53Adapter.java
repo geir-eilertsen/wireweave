@@ -5,6 +5,7 @@ import com.wireweave.domain.DnsRecord.DnsRecordType;
 import com.wireweave.domain.DnsZone;
 import com.wireweave.domain.port.ForGettingDnsInfo;
 import java.util.stream.Collectors;
+import org.springframework.stereotype.Component;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
@@ -14,16 +15,19 @@ import software.amazon.awssdk.services.route53.model.*;
 import java.util.ArrayList;
 import java.util.List;
 
+@Component
 public class Route53Adapter implements ForGettingDnsInfo {
 
     private final Route53Client route53Client;
 
     public Route53Adapter() {
-        this.route53Client = Route53Client.builder().build();
-    }
-
-    public Route53Adapter(Route53Client route53Client) {
-        this.route53Client = route53Client;
+        String accessKeyId = System.getenv("WIREWEAVE_AWS_KEY");
+        String secretAccessKey = System.getenv("WIREWEAVE_AWS_SECRET");
+        AwsBasicCredentials credentials = AwsBasicCredentials.create(accessKeyId, secretAccessKey);
+        route53Client = Route53Client.builder()
+            .credentialsProvider(StaticCredentialsProvider.create(credentials))
+            .region(Region.AWS_GLOBAL)
+            .build();
     }
 
     @Override
@@ -112,15 +116,7 @@ public class Route53Adapter implements ForGettingDnsInfo {
     }
 
     public static void main(String[] args) {
-        String accessKeyId = System.getenv("WIREWEAVE_AWS_KEY");
-        String secretAccessKey = System.getenv("WIREWEAVE_AWS_SECRET");
-        AwsBasicCredentials credentials = AwsBasicCredentials.create(accessKeyId, secretAccessKey);
-        Route53Client client = Route53Client.builder()
-            .credentialsProvider(StaticCredentialsProvider.create(credentials))
-            .region(Region.AWS_GLOBAL)
-            .build();
-
-        Route53Adapter adapter = new Route53Adapter(client);
+        Route53Adapter adapter = new Route53Adapter();
 
         List<DnsZone> dnsZones = adapter.getDnsZones();
         dnsZones.forEach(System.out::println);
