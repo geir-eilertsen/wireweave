@@ -1,6 +1,7 @@
 package com.wireweave.adapter.driven;
 
 import com.wireweave.domain.DnsRecord;
+import com.wireweave.domain.DnsRecord.DnsRecordType;
 import com.wireweave.domain.DnsZone;
 import com.wireweave.domain.port.ForGettingDnsInfo;
 import java.util.stream.Collectors;
@@ -100,14 +101,14 @@ public class Route53Adapter implements ForGettingDnsInfo {
     }
 
     private DnsRecord mapToDnsRecord(ResourceRecordSet recordSet) {
-        String name = recordSet.name();
-        String type = recordSet.typeAsString();
-        Long ttl = recordSet.ttl();
-        List<String> values = recordSet.resourceRecords().stream()
+        return new DnsRecord(
+            recordSet.name(),
+            DnsRecordType.valueOf(recordSet.type().name()),
+            recordSet.ttl(),
+            recordSet.resourceRecords().stream()
                 .map(ResourceRecord::value)
-                .toList();
-
-        return new DnsRecord(name, type, ttl, values);
+                .toList()
+        );
     }
 
     public static void main(String[] args) {
