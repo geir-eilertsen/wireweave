@@ -31,7 +31,7 @@ public class TraefikAdapter implements ForGettingReverseProxyRoutes {
     public List<ReverseProxyRoute> getReverseProxyRoutes() {
         List<ReverseProxyRoute> routes = new ArrayList<>();
 
-        File configFile = new File("c://tmp/remote-apps.yml");
+        File configFile = new File("/traefik/remote-apps.yml");
 
         try (FileInputStream inputStream = new FileInputStream(configFile)) {
             this.config = yaml.load(inputStream);
