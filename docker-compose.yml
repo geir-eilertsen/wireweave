@@ -1,0 +1,10 @@
+services:
+  wireweave:
+    image: geireilertsen/wireweave:latest
+    container_name: wireweave
+    ports:
+      - "8888:8080"
+    environment:
+      WIREWEAVE_AWS_KEY: ${WIREWEAVE_AWS_KEY}
+      WIREWEAVE_AWS_SECRET: ${WIREWEAVE_AWS_SECRET}
+    restart: unless-stopped
