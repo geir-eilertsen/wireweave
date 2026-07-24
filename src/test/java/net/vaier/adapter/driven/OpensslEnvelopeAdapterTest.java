@@ -5,10 +5,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import net.vaier.domain.BackupRepository;
 import net.vaier.domain.BackupServer;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.RecoverySheet;
 import net.vaier.domain.SurvivalKit;
+import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.port.ForEncryptingSurvivalKits;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -35,8 +38,13 @@ class OpensslEnvelopeAdapterTest {
     Path dir;
 
     private BackupServer server() {
-        return new BackupServer("nas-borg", "NAS", "192.168.3.3", 8022,
+        return new BackupServer("nas-borg", TestMachineIds.of("NAS"), "192.168.3.3", 8022,
             "borg", "home/borg/backups", "/volume1/docker/borg", false);
+    }
+
+    /** The fleet's machine names, supplied by the caller — the sheet holds identities, not labels. */
+    private static Map<MachineId, String> names() {
+        return Map.of(TestMachineIds.of("NAS"), "NAS");
     }
 
     @Test
@@ -67,14 +75,14 @@ class OpensslEnvelopeAdapterTest {
         assumeTrue(opensslPresent(), "openssl is not installed on this machine");
         List<BackupRepository> repositories = List.of(
             new BackupRepository("Apalveien-5", "nas-borg", null, "s3cr3t-one", false));
-        String kit = SurvivalKit.render(server(), repositories, List.of(), "AAAAkey==", PASSPHRASE,
+        String kit = SurvivalKit.render(server(), repositories, List.of(), names(), "AAAAkey==", PASSPHRASE,
             Instant.parse("2026-07-23T10:15:30Z"), adapter);
         Files.writeString(dir.resolve(SurvivalKit.FILE_NAME), kit);
 
         String recovered = run(SurvivalKit.decryptCommand() + " -pass pass:'" + PASSPHRASE + "'");
 
         assertThat(recovered)
-            .isEqualTo(RecoverySheet.render(server(), repositories, List.of(), "AAAAkey=="))
+            .isEqualTo(RecoverySheet.render(server(), repositories, List.of(), names(), "AAAAkey=="))
             .contains("s3cr3t-one")
             .contains("ssh://borg@192.168.3.3:8022/home/borg/backups/Apalveien-5");
     }

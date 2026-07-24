@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Map;
 import net.vaier.domain.port.ForEncryptingSurvivalKits;
 
 /**
@@ -63,7 +64,8 @@ public final class SurvivalKit {
      *                   who opens it
      */
     public static String render(BackupServer server, List<BackupRepository> repositories,
-                                List<BackupJob> jobs, String configKey, String passphrase,
+                                List<BackupJob> jobs, Map<MachineId, String> machineNames,
+                                String configKey, String passphrase,
                                 Instant writtenAt, ForEncryptingSurvivalKits cipher) {
         if (passphrase == null || passphrase.isBlank()) {
             throw new IllegalArgumentException(
@@ -71,7 +73,7 @@ public final class SurvivalKit {
                     + "from a protected one and gives away every backup in the fleet");
         }
 
-        String sheet = RecoverySheet.render(server, repositories, jobs, configKey);
+        String sheet = RecoverySheet.render(server, repositories, jobs, machineNames, configKey);
 
         StringBuilder sb = new StringBuilder();
         sb.append("VAIER SURVIVAL KIT\n");

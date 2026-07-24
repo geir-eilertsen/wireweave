@@ -17,6 +17,8 @@ import net.vaier.domain.BackupRepository;
 import net.vaier.domain.BackupRun;
 import net.vaier.domain.BackupServer;
 import net.vaier.domain.ConflictException;
+import net.vaier.domain.Machine;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.SourcePaths;
 import net.vaier.domain.Unprotection;
 import net.vaier.domain.port.ForPersistingBackupJobs;
@@ -143,17 +145,19 @@ public class BackupService implements
      * detached and never throws, so it can never fail this call; its outcome rides back on the result.
      */
     @Override
-    public ProtectionOutcome protect(String machineName, List<String> paths) {
+    public ProtectionOutcome protect(Machine machine, List<String> paths) {
         BackupServer server = theBackupServer();
-        String slug = BackupRepository.sanitizedName(machineName);
-        Optional<BackupJob> existing = jobs.getByMachine(machineName).stream().findFirst();
+        // The machine arrives whole because both halves of it are needed and must agree: its identity keys
+        // the job store, while its name seeds the repository/job slug an operator reads on the NAS.
+        String slug = BackupRepository.sanitizedName(machine.name());
+        Optional<BackupJob> existing = jobs.getByMachine(machine.id()).stream().findFirst();
         boolean firstBackup = existing.isEmpty();
         BackupRepository repository = existing
             .flatMap(job -> repositories.getByName(job.repositoryName()))
             .orElseGet(() -> createRepository(slug, server));
         BackupJob job = existing
             .map(existingJob -> existingJob.protecting(paths))
-            .orElseGet(() -> BackupJob.firstFor(slug, machineName, repository.name(), paths));
+            .orElseGet(() -> BackupJob.firstFor(slug, machine.id(), repository.name(), paths));
         jobs.save(job);
         ReadyingOutcome readying = job.readyClientHostForFirstBackup(firstBackup, readier).orElse(null);
         return new ProtectionOutcome(job, readying);
@@ -170,8 +174,8 @@ public class BackupService implements
      * can tell the operator what really happened rather than assuming it worked.
      */
     @Override
-    public Unprotection unprotect(String machineName, List<String> paths) {
-        Optional<BackupJob> existing = jobs.getByMachine(machineName).stream().findFirst();
+    public Unprotection unprotect(MachineId machineId, List<String> paths) {
+        Optional<BackupJob> existing = jobs.getByMachine(machineId).stream().findFirst();
         if (existing.isEmpty()) {
             return Unprotection.nothingMatched(null);
         }

@@ -1,5 +1,7 @@
 package net.vaier.application;
 
+import net.vaier.domain.MachineId;
+
 /**
  * Provision a fleet-backup repository from a client host: install the passphrase file and run
  * {@code borg init} to create the repository on the NAS. This is the seam the
@@ -13,8 +15,8 @@ package net.vaier.application;
  */
 public interface InitBackupRepositoryUseCase {
 
-    /** Init the repository named {@code repositoryName} from the host {@code machineName}. */
-    RepoInitResult initRepo(String repositoryName, String machineName);
+    /** Init the repository named {@code repositoryName} from the host {@code machineId}. */
+    RepoInitResult initRepo(String repositoryName, MachineId machineId);
 
     /**
      * The outcome of an init attempt: {@code initialized} true when the repository is now ready (a fresh

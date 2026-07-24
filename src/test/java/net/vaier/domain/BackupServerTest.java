@@ -8,13 +8,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class BackupServerTest {
 
     private BackupServer server(String serverDataPath) {
-        return new BackupServer("nas-borg", "NAS", "192.168.3.3", 8022,
+        return new BackupServer("nas-borg", TestMachineIds.of("NAS"), "192.168.3.3", 8022,
             "borg", "home/borg/backups", serverDataPath, false);
     }
 
     @Test
     void rejectsBlankName() {
-        assertThatThrownBy(() -> new BackupServer(" ", "NAS", "192.168.3.3", 8022,
+        assertThatThrownBy(() -> new BackupServer(" ", TestMachineIds.of("NAS"), "192.168.3.3", 8022,
             "borg", "home/borg/backups", "/volume1/docker/borg", false))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("name");
@@ -23,7 +23,7 @@ class BackupServerTest {
     @Test
     void rejectsNameWithSpacesOrShellMetacharacters() {
         for (String bad : new String[]{"nas borg", "a; rm -rf ~", "a$(x)", "a/b", ""}) {
-            assertThatThrownBy(() -> new BackupServer(bad, "NAS", "192.168.3.3", 8022,
+            assertThatThrownBy(() -> new BackupServer(bad, TestMachineIds.of("NAS"), "192.168.3.3", 8022,
                 "borg", "home/borg/backups", "/volume1/docker/borg", false))
                 .as("name %s", bad)
                 .isInstanceOf(IllegalArgumentException.class);
@@ -33,7 +33,7 @@ class BackupServerTest {
     @Test
     void acceptsSafeIdentifierNames() {
         for (String ok : new String[]{"NUC-02", "colina27", "nas_borg"}) {
-            assertThat(new BackupServer(ok, "NAS", "192.168.3.3", 8022,
+            assertThat(new BackupServer(ok, TestMachineIds.of("NAS"), "192.168.3.3", 8022,
                 "borg", "home/borg/backups", "/volume1/docker/borg", false).name()).isEqualTo(ok);
         }
     }
@@ -50,22 +50,22 @@ class BackupServerTest {
 
     @Test
     void rejectsHostWithSpaceOrMetacharacter() {
-        assertThatThrownBy(() -> new BackupServer("nas-borg", "NAS", "192.168.3.3; rm", 8022,
+        assertThatThrownBy(() -> new BackupServer("nas-borg", TestMachineIds.of("NAS"), "192.168.3.3; rm", 8022,
             "borg", "home/borg/backups", "/volume1/docker/borg", false))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("host");
-        assertThatThrownBy(() -> new BackupServer("nas-borg", "NAS", "nas host", 8022,
+        assertThatThrownBy(() -> new BackupServer("nas-borg", TestMachineIds.of("NAS"), "nas host", 8022,
             "borg", "home/borg/backups", "/volume1/docker/borg", false))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("host");
         // A hostname or IPv4 literal is accepted.
-        assertThat(new BackupServer("nas-borg", "NAS", "nas.local", 8022,
+        assertThat(new BackupServer("nas-borg", TestMachineIds.of("NAS"), "nas.local", 8022,
             "borg", "home/borg/backups", "/volume1/docker/borg", false).host()).isEqualTo("nas.local");
     }
 
     @Test
     void rejectsBorgUserWithMetacharacter() {
-        assertThatThrownBy(() -> new BackupServer("nas-borg", "NAS", "192.168.3.3", 8022,
+        assertThatThrownBy(() -> new BackupServer("nas-borg", TestMachineIds.of("NAS"), "192.168.3.3", 8022,
             "borg;whoami", "home/borg/backups", "/volume1/docker/borg", false))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("borgUser");
@@ -73,42 +73,44 @@ class BackupServerTest {
 
     @Test
     void rejectsBaseRepoPathWithMetacharacter() {
-        assertThatThrownBy(() -> new BackupServer("nas-borg", "NAS", "192.168.3.3", 8022,
+        assertThatThrownBy(() -> new BackupServer("nas-borg", TestMachineIds.of("NAS"), "192.168.3.3", 8022,
             "borg", "home/borg backups", "/volume1/docker/borg", false))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("baseRepoPath");
-        assertThatThrownBy(() -> new BackupServer("nas-borg", "NAS", "192.168.3.3", 8022,
+        assertThatThrownBy(() -> new BackupServer("nas-borg", TestMachineIds.of("NAS"), "192.168.3.3", 8022,
             "borg", "home/$(x)", "/volume1/docker/borg", false))
             .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void rejectsServerDataPathWithMetacharacterButAllowsBlank() {
-        assertThatThrownBy(() -> new BackupServer("nas-borg", "NAS", "192.168.3.3", 8022,
+        assertThatThrownBy(() -> new BackupServer("nas-borg", TestMachineIds.of("NAS"), "192.168.3.3", 8022,
             "borg", "home/borg/backups", "/volume1/docker borg", false))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("serverDataPath");
-        assertThatThrownBy(() -> new BackupServer("nas-borg", "NAS", "192.168.3.3", 8022,
+        assertThatThrownBy(() -> new BackupServer("nas-borg", TestMachineIds.of("NAS"), "192.168.3.3", 8022,
             "borg", "home/borg/backups", "/vol;rm", false))
             .isInstanceOf(IllegalArgumentException.class);
         // Blank/null remain allowed (validated elsewhere before use as a path).
-        assertThat(new BackupServer("nas-borg", "NAS", "192.168.3.3", 8022,
+        assertThat(new BackupServer("nas-borg", TestMachineIds.of("NAS"), "192.168.3.3", 8022,
             "borg", "home/borg/backups", "  ", false).serverDataPath()).isEqualTo("  ");
-        assertThat(new BackupServer("nas-borg", "NAS", "192.168.3.3", 8022,
+        assertThat(new BackupServer("nas-borg", TestMachineIds.of("NAS"), "192.168.3.3", 8022,
             "borg", "home/borg/backups", null, false).serverDataPath()).isNull();
     }
 
     @Test
-    void rejectsBlankMachineName() {
-        assertThatThrownBy(() -> new BackupServer("nas-borg", " ", "192.168.3.3", 8022,
+    void rejectsAServerWithNoMachine() {
+        // A server with no machine is a server Vaier cannot SSH to — no provisioning, no authorize, no health
+        // probe — while every job on the fleet backs up through it. It must not be constructible.
+        assertThatThrownBy(() -> new BackupServer("nas-borg", null, "192.168.3.3", 8022,
             "borg", "home/borg/backups", "/volume1/docker/borg", false))
             .isInstanceOf(IllegalArgumentException.class)
-            .hasMessageContaining("machineName");
+            .hasMessageContaining("machineId");
     }
 
     @Test
     void rejectsBlankHost() {
-        assertThatThrownBy(() -> new BackupServer("nas-borg", "NAS", " ", 8022,
+        assertThatThrownBy(() -> new BackupServer("nas-borg", TestMachineIds.of("NAS"), " ", 8022,
             "borg", "home/borg/backups", "/volume1/docker/borg", false))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("host");
@@ -116,11 +118,11 @@ class BackupServerTest {
 
     @Test
     void rejectsOutOfRangePort() {
-        assertThatThrownBy(() -> new BackupServer("nas-borg", "NAS", "192.168.3.3", 0,
+        assertThatThrownBy(() -> new BackupServer("nas-borg", TestMachineIds.of("NAS"), "192.168.3.3", 0,
             "borg", "home/borg/backups", "/volume1/docker/borg", false))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("sshPort");
-        assertThatThrownBy(() -> new BackupServer("nas-borg", "NAS", "192.168.3.3", 70000,
+        assertThatThrownBy(() -> new BackupServer("nas-borg", TestMachineIds.of("NAS"), "192.168.3.3", 70000,
             "borg", "home/borg/backups", "/volume1/docker/borg", false))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("sshPort");
@@ -128,7 +130,7 @@ class BackupServerTest {
 
     @Test
     void defaultsBorgUserAndBaseRepoPathWhenBlank() {
-        BackupServer s = new BackupServer("nas-borg", "NAS", "192.168.3.3", 8022,
+        BackupServer s = new BackupServer("nas-borg", TestMachineIds.of("NAS"), "192.168.3.3", 8022,
             "  ", null, "/volume1/docker/borg", false);
         assertThat(s.borgUser()).isEqualTo(BackupServer.DEFAULT_BORG_USER);
         assertThat(s.baseRepoPath()).isEqualTo(BackupServer.DEFAULT_BASE_REPO_PATH);

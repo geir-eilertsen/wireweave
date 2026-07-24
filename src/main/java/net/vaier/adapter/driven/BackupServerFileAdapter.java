@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.domain.BackupServer;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.port.ForPersistingBackupServers;
 import org.springframework.stereotype.Component;
 import org.yaml.snakeyaml.DumperOptions;
@@ -88,22 +89,32 @@ public class BackupServerFileAdapter implements ForPersistingBackupServers {
 
     private BackupServer deserialize(Map<?, ?> m) {
         String name = asString(m.get("name"));
-        String machineName = asString(m.get("machineName"));
+        String rawMachineId = asString(m.get("machineId"));
         String host = asString(m.get("host"));
         Integer sshPort = m.get("sshPort") instanceof Number n ? n.intValue() : null;
         String borgUser = asString(m.get("borgUser"));
         String baseRepoPath = asString(m.get("baseRepoPath"));
         String serverDataPath = asString(m.get("serverDataPath"));
         boolean managed = m.get("managed") instanceof Boolean b && b;
-        if (name == null || machineName == null || host == null || sshPort == null) {
+        if (name == null || host == null || sshPort == null) {
             log.warn("Skipping malformed backup-server entry in {}", FILE_NAME);
+            return null;
+        }
+        MachineId machineId;
+        try {
+            machineId = MachineId.of(rawMachineId);
+        } catch (IllegalArgumentException e) {
+            // Loud: without its machine Vaier cannot SSH to the borg server at all — no provisioning, no
+            // authorize, no health probe — and every job on the fleet backs up through it.
+            log.error("Skipping backup-server entry '{}' in {} with an unusable machineId: {}",
+                name.replaceAll("[\\r\\n]+", "_"), FILE_NAME, e.getMessage());
             return null;
         }
         // borgUser/baseRepoPath default in the record's compact constructor when blank. Name/host/path
         // fields are identifier/safe-path validated at construction: a pre-fix entry carrying an unsafe
         // value is skipped with a warning rather than aborting the load of every other server.
         try {
-            return new BackupServer(name, machineName, host, sshPort, borgUser, baseRepoPath, serverDataPath,
+            return new BackupServer(name, machineId, host, sshPort, borgUser, baseRepoPath, serverDataPath,
                 managed);
         } catch (IllegalArgumentException e) {
             log.warn("Skipping invalid backup-server entry in {}: {}", FILE_NAME, e.getMessage());
@@ -124,7 +135,7 @@ public class BackupServerFileAdapter implements ForPersistingBackupServers {
         for (BackupServer s : servers) {
             Map<String, Object> entry = new LinkedHashMap<>();
             entry.put("name", s.name());
-            entry.put("machineName", s.machineName());
+            entry.put("machineId", s.machineId().value());
             entry.put("host", s.host());
             entry.put("sshPort", s.sshPort());
             entry.put("borgUser", s.borgUser());

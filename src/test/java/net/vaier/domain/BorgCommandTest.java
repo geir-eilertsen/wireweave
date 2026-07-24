@@ -20,7 +20,7 @@ class BorgCommandTest {
     private static final String SSH_HOME = "/home/ubuntu";
 
     private BackupServer server() {
-        return new BackupServer("nas-borg", "NAS", "192.168.3.3", 8022,
+        return new BackupServer("nas-borg", TestMachineIds.of("NAS"), "192.168.3.3", 8022,
             "borg", "home/borg/backups", "/volume1/docker/borg", false);
     }
 
@@ -30,14 +30,14 @@ class BorgCommandTest {
     }
 
     private BackupJob job() {
-        return new BackupJob("colina-home", "Colina 27", "nas-borg",
+        return new BackupJob("colina-home", TestMachineIds.of("Colina 27"), "nas-borg",
             List.of("/home/geir", "/etc"), List.of("*.tmp", "/var/cache"),
             7, 4, 6, "zstd,6", true, false);
     }
 
     /** The same job, opted in to "Back up as root" — borg runs under sudo on the machine. */
     private BackupJob rootJob() {
-        return new BackupJob("colina-home", "Colina 27", "nas-borg",
+        return new BackupJob("colina-home", TestMachineIds.of("Colina 27"), "nas-borg",
             List.of("/home/geir", "/etc"), List.of("*.tmp", "/var/cache"),
             7, 4, 6, "zstd,6", true, true);
     }
@@ -454,7 +454,7 @@ class BorgCommandTest {
             .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new BackupRepository("a$(touch pwned)", "nas-borg", null, "s3cr3t", false))
             .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new BackupServer("a; rm -rf ~", "NAS", "192.168.3.3", 8022,
+        assertThatThrownBy(() -> new BackupServer("a; rm -rf ~", TestMachineIds.of("NAS"), "192.168.3.3", 8022,
             "borg", "home/borg/backups", "/volume1/docker/borg", false))
             .isInstanceOf(IllegalArgumentException.class);
     }
@@ -643,7 +643,7 @@ class BorgCommandTest {
         // The real regression: widen a machine's restriction (a repo was added) and the older, broader entry
         // must be replaced — not duplicated. Executes the generated command against a real file to prove it.
         org.junit.jupiter.api.Assumptions.assumeTrue(bashAvailable(), "bash required for this test");
-        BackupServer srv = new BackupServer("nas-borg", "NAS", "192.168.3.3", 8022,
+        BackupServer srv = new BackupServer("nas-borg", TestMachineIds.of("NAS"), "192.168.3.3", 8022,
             "borg", "home/borg/backups", tmp.toString(), false);
 
         runBash(BorgCommand.authorizeKey(srv, PUBKEY, List.of("/home/borg/backups/colina27")));
@@ -879,7 +879,7 @@ class BorgCommandTest {
 
     @Test
     void pinHostKeysUsesTheBareHostFormWhenThePortIsTwentyTwo() {
-        BackupServer std = new BackupServer("nas-borg", "NAS", "192.168.3.3", 22,
+        BackupServer std = new BackupServer("nas-borg", TestMachineIds.of("NAS"), "192.168.3.3", 22,
             "borg", "home/borg/backups", "/volume1/docker/borg", false);
         List<String> keys = BorgCommand.parseHostKeys(ED25519);
         String cmd = BorgCommand.pinHostKeys(std, keys);

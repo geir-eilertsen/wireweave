@@ -2,7 +2,9 @@ package net.vaier.domain;
 
 import java.time.Instant;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import net.vaier.domain.port.ForEncryptingSurvivalKits;
 import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -26,13 +28,28 @@ class SurvivalKitTest {
         Base64.getEncoder().encodeToString(("[" + passphrase + "]" + plaintext).getBytes());
 
     private BackupServer server() {
-        return new BackupServer("nas-borg", "NAS", "192.168.3.3", 8022,
+        return new BackupServer("nas-borg", TestMachineIds.of("NAS"), "192.168.3.3", 8022,
             "borg", "home/borg/backups", "/volume1/docker/borg", false);
     }
 
     private BackupRepository repo(String name, String pass) {
         return new BackupRepository(name, "nas-borg", null, pass, false);
     }
+
+    /**
+     * What the fleet's machines are called. The stores key on identity so a rename cannot orphan them, but
+     * this page is read by someone who has just lost their fleet and has to recognise their own machines —
+     * so the caller supplies the names rather than the sheet holding a copy that could go stale.
+     */
+    private static Map<MachineId, String> names(String... machineNames) {
+        Map<MachineId, String> map = new LinkedHashMap<>();
+        map.put(TestMachineIds.of("NAS"), "NAS");
+        for (String name : machineNames) {
+            map.put(TestMachineIds.of(name), name);
+        }
+        return map;
+    }
+
 
     /** The marker as it actually terminates the header: alone on its own line. */
     private String markerLine() {
@@ -41,7 +58,8 @@ class SurvivalKitTest {
 
     private String kit() {
         return SurvivalKit.render(server(), List.of(repo("Apalveien-5", "s3cr3t-one")), List.of(),
-            "AAAAkey==", "correct-horse-battery-staple", Instant.parse("2026-07-23T10:15:30Z"), FAKE_CIPHER);
+            names("Apalveien 5"), "AAAAkey==", "correct-horse-battery-staple",
+            Instant.parse("2026-07-23T10:15:30Z"), FAKE_CIPHER);
     }
 
     @Test
@@ -85,7 +103,8 @@ class SurvivalKitTest {
         String afterMarker = kit.substring(kit.indexOf(markerLine()) + markerLine().length()).strip();
 
         assertThat(afterMarker).isEqualTo(FAKE_CIPHER.encrypt(
-            RecoverySheet.render(server(), List.of(repo("Apalveien-5", "s3cr3t-one")), List.of(), "AAAAkey=="),
+            RecoverySheet.render(server(), List.of(repo("Apalveien-5", "s3cr3t-one")), List.of(),
+                names("Apalveien 5"), "AAAAkey=="),
             "correct-horse-battery-staple"));
     }
 
@@ -101,7 +120,7 @@ class SurvivalKitTest {
         // Enough for the operator to spot a kit written before half the fleet existed; not a plaintext
         // inventory of the fleet's machines, sitting on a machine in it.
         String kit = SurvivalKit.render(server(),
-            List.of(repo("one", "p"), repo("two", "p"), repo("three", "p")), List.of(), "k",
+            List.of(repo("one", "p"), repo("two", "p"), repo("three", "p")), List.of(), names(), "k",
             "pass", Instant.parse("2026-07-23T10:15:30Z"), FAKE_CIPHER);
 
         assertThat(kit).contains("3 repositories");
@@ -113,7 +132,7 @@ class SurvivalKitTest {
         // Falling back to "no passphrase" would produce a file that looks exactly like a protected kit and
         // hands over the fleet to anyone who opens it. There is no safe default here.
         org.assertj.core.api.Assertions.assertThatThrownBy(() ->
-            SurvivalKit.render(server(), List.of(repo("r", "p")), List.of(), "k", "  ",
+            SurvivalKit.render(server(), List.of(repo("r", "p")), List.of(), names(), "k", "  ",
                 Instant.parse("2026-07-23T10:15:30Z"), FAKE_CIPHER))
             .isInstanceOf(IllegalArgumentException.class);
     }

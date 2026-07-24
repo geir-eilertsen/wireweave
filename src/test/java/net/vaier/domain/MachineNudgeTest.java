@@ -86,7 +86,7 @@ class MachineNudgeTest {
 
     @Test
     void designate_emptyWhenABackupServerAlreadyExists() {
-        BackupServer existing = new BackupServer("nas-borg", "nas", "192.168.3.50",
+        BackupServer existing = new BackupServer("nas-borg", TestMachineIds.of("nas"), "192.168.3.50",
             8022, "borg", null, "/volume1/docker/borg", true);
         assertThat(MachineNudge.designateBackupServer(
             storageMachine("nas", DeviceCategory.NAS), new BackupFleet(List.of(existing)))).isEmpty();

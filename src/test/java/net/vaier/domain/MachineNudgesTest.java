@@ -31,7 +31,7 @@ class MachineNudgesTest {
 
     @Test
     void composesNothingWhenNoConditionHolds() {
-        BackupServer existing = new BackupServer("nas-borg", "nas", "192.168.3.50",
+        BackupServer existing = new BackupServer("nas-borg", TestMachineIds.of("nas"), "192.168.3.50",
             8022, "borg", null, "/volume1/docker/borg", true);
         List<MachineNudge> nudges = MachineNudges.forMachine(
             machine(DeviceCategory.PRINTER), 0, false, false, true, new BackupFleet(List.of(existing)));

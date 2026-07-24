@@ -1,5 +1,6 @@
 package net.vaier.adapter.driven;
 
+import java.util.Optional;
 import net.vaier.application.BackupWorkDirResolver;
 import net.vaier.domain.AuthMethod;
 import net.vaier.domain.BackupJob;
@@ -7,12 +8,14 @@ import net.vaier.domain.BackupRepository;
 import net.vaier.domain.BackupServer;
 import net.vaier.domain.CommandResult;
 import net.vaier.domain.HostCredential;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.MountedArchive;
 import net.vaier.domain.NotFoundException;
 import net.vaier.domain.SshTarget;
 import net.vaier.domain.port.ForPersistingBackupJobs;
 import net.vaier.domain.port.ForPersistingBackupRepositories;
 import net.vaier.domain.port.ForPersistingBackupServers;
+import net.vaier.domain.port.ForResolvingMachineIds;
 import net.vaier.domain.port.ForResolvingSshTargets;
 import net.vaier.domain.port.ForRunningSshCommands;
 import org.junit.jupiter.api.BeforeEach;
@@ -53,11 +56,15 @@ class BorgArchiveMountAdapterTest {
     private ForPersistingBackupJobs jobs;
     private ForPersistingBackupRepositories repositories;
     private ForPersistingBackupServers servers;
+    private ForResolvingMachineIds machineIds;
     private final AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-07-15T10:00:00Z"));
 
     private BorgArchiveMountAdapter adapter;
 
     private static final String MACHINE = "Apalveien 5";
+
+    /** The machine's identity — what the job store and the work-dir cache are keyed by. */
+    private static final MachineId MACHINE_ID = mid(MACHINE);
     private static final String ARCHIVE_ID = "9f8e7d6c";
     private static final String ARCHIVE_NAME = "apalveien5-2026-07-14T02:00:00";
     private static final String WORK_DIR = "/home/ubuntu/.vaier-backup";
@@ -83,12 +90,14 @@ class BorgArchiveMountAdapterTest {
             public Clock withZone(java.time.ZoneId z) { return this; }
             public Instant instant() { return now.get(); }
         };
+        machineIds = mock(ForResolvingMachineIds.class);
         adapter = new BorgArchiveMountAdapter(sshTargets, ssh, workDirResolver, jobs, repositories, servers,
-            movingClock);
+            machineIds, movingClock);
 
-        when(workDirResolver.workDirFor(MACHINE)).thenReturn(WORK_DIR);
+        when(workDirResolver.workDirFor(MACHINE_ID, MACHINE)).thenReturn(WORK_DIR);
         when(sshTargets.resolve(MACHINE)).thenReturn(target());
-        when(jobs.getByMachine(MACHINE)).thenReturn(List.of(job()));
+        when(machineIds.nameForId(MACHINE_ID)).thenReturn(Optional.of(MACHINE));
+        when(jobs.getByMachine(MACHINE_ID)).thenReturn(List.of(job()));
         when(repositories.getAll()).thenReturn(List.of(repo()));
         when(servers.getAll()).thenReturn(List.of(server()));
     }
@@ -99,7 +108,7 @@ class BorgArchiveMountAdapterTest {
     }
 
     private static BackupJob job() {
-        return new BackupJob("apalveien-home", MACHINE, "apalveien",
+        return new BackupJob("apalveien-home", MACHINE_ID, "apalveien",
             List.of("/home/geir"), List.of(), 7, 4, 6, "zstd,6", true, false);
     }
 
@@ -108,7 +117,7 @@ class BorgArchiveMountAdapterTest {
     }
 
     private static BackupServer server() {
-        return new BackupServer("nas-borg", "NAS", "192.168.3.3", 8022,
+        return new BackupServer("nas-borg", mid("NAS"), "192.168.3.3", 8022,
             "borg", "home/borg/backups", "/volume1/docker/borg", false);
     }
 
@@ -185,7 +194,7 @@ class BorgArchiveMountAdapterTest {
 
     @Test
     void mount_aMachineWithNoBackupJob_isNotFound() {
-        when(jobs.getByMachine(MACHINE)).thenReturn(List.of());
+        when(jobs.getByMachine(MACHINE_ID)).thenReturn(List.of());
         // The probe still runs (mountpoint is derivable), but there is no repository to mount from.
         when(ssh.run(any(), any())).thenReturn(ok("NOT_MOUNTED"));
 

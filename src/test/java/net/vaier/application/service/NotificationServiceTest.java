@@ -1,8 +1,14 @@
 package net.vaier.application.service;
 
+import java.time.Instant;
 import net.vaier.config.ConfigResolver;
+import net.vaier.domain.BackupJob;
+import net.vaier.domain.BackupRun;
+import net.vaier.domain.BackupServer;
 import net.vaier.domain.MachineType;
 import net.vaier.domain.PeerSnapshot;
+import net.vaier.domain.TestMachineIds;
+import net.vaier.domain.port.ForProbingTcp.ProbeResult;
 import net.vaier.domain.port.ForSendingAdminNotification;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -102,27 +108,30 @@ class NotificationServiceTest {
 
     // --- fleet-backup failure / recovery alerts ---
 
-    private net.vaier.domain.BackupRun failedRun() {
-        net.vaier.domain.BackupJob job = new net.vaier.domain.BackupJob("colina-home", "Colina 27",
+    /** What the machine is called. A run holds its identity; the orchestrator supplies the name to render. */
+    private static final String MACHINE = "Colina 27";
+
+    private BackupRun failedRun() {
+        BackupJob job = new BackupJob("colina-home", TestMachineIds.of(MACHINE),
             "nas-borg", List.of("/home/geir"), List.of(), 7, 4, 6, "zstd,6", true, false);
-        return net.vaier.domain.BackupRun.fromExitCode(job, "run-1",
-            java.time.Instant.parse("2026-07-08T02:00:00Z"),
-            java.time.Instant.parse("2026-07-08T02:05:00Z"), 2, "borg failed");
+        return BackupRun.fromExitCode(job, "run-1",
+            Instant.parse("2026-07-08T02:00:00Z"),
+            Instant.parse("2026-07-08T02:05:00Z"), 2, "borg failed");
     }
 
-    private net.vaier.domain.BackupRun succeededRun() {
-        net.vaier.domain.BackupJob job = new net.vaier.domain.BackupJob("colina-home", "Colina 27",
+    private BackupRun succeededRun() {
+        BackupJob job = new BackupJob("colina-home", TestMachineIds.of(MACHINE),
             "nas-borg", List.of("/home/geir"), List.of(), 7, 4, 6, "zstd,6", true, false);
-        return net.vaier.domain.BackupRun.fromExitCode(job, "run-2",
-            java.time.Instant.parse("2026-07-08T02:00:00Z"),
-            java.time.Instant.parse("2026-07-08T02:40:00Z"), 0, "12 files, 3 GB");
+        return BackupRun.fromExitCode(job, "run-2",
+            Instant.parse("2026-07-08T02:00:00Z"),
+            Instant.parse("2026-07-08T02:40:00Z"), 0, "12 files, 3 GB");
     }
 
     @Test
     void notifyAdminsOfBackupFailure_composesSubjectAndBody() {
         when(configResolver.getDomain()).thenReturn("example.com");
 
-        service.notifyAdminsOfBackupFailure(failedRun());
+        service.notifyAdminsOfBackupFailure(failedRun(), MACHINE);
 
         ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
@@ -135,7 +144,7 @@ class NotificationServiceTest {
     void notifyAdminsOfBackupRecovery_composesAllClearSubject() {
         when(configResolver.getDomain()).thenReturn("example.com");
 
-        service.notifyAdminsOfBackupRecovery(succeededRun());
+        service.notifyAdminsOfBackupRecovery(succeededRun(), MACHINE);
 
         ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
         verify(adminNotifier).sendToAdmins(subject.capture(), any(), any());
@@ -144,8 +153,10 @@ class NotificationServiceTest {
 
     // --- fleet-backup server down / recovery alerts ---
 
-    private net.vaier.domain.BackupServer backupServer() {
-        return new net.vaier.domain.BackupServer("nas-borg", "NAS", "192.168.3.3", 8022,
+    private static final String SERVER_MACHINE = "NAS";
+
+    private BackupServer backupServer() {
+        return new BackupServer("nas-borg", TestMachineIds.of(SERVER_MACHINE), "192.168.3.3", 8022,
             "borg", "home/borg/backups", "/volume1/docker/borg", false);
     }
 
@@ -153,8 +164,7 @@ class NotificationServiceTest {
     void notifyAdminsOfBackupServerDown_composesSubjectAndBody() {
         when(configResolver.getDomain()).thenReturn("example.com");
 
-        service.notifyAdminsOfBackupServerDown(backupServer(),
-                net.vaier.domain.port.ForProbingTcp.ProbeResult.REFUSED);
+        service.notifyAdminsOfBackupServerDown(backupServer(), SERVER_MACHINE, ProbeResult.REFUSED);
 
         ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
@@ -167,7 +177,7 @@ class NotificationServiceTest {
     void notifyAdminsOfBackupServerRecovered_composesAllClearSubject() {
         when(configResolver.getDomain()).thenReturn("example.com");
 
-        service.notifyAdminsOfBackupServerRecovered(backupServer());
+        service.notifyAdminsOfBackupServerRecovered(backupServer(), SERVER_MACHINE);
 
         ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
         verify(adminNotifier).sendToAdmins(subject.capture(), any(), any());

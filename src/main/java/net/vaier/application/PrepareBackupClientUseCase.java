@@ -1,5 +1,7 @@
 package net.vaier.application;
 
+import net.vaier.domain.MachineId;
+
 public interface PrepareBackupClientUseCase {
 
     /**
@@ -12,14 +14,14 @@ public interface PrepareBackupClientUseCase {
      * (or when the host cannot be reached) it returns a {@code scriptOnly} result pointing the operator at
      * the staged script to run with {@code sudo bash}. Never throws.
      */
-    PrepareResult prepareClient(String machineName);
+    PrepareResult prepareClient(MachineId machineId);
 
     /**
      * The current state of a launched client-prepare run, read over SSH from the detached run's on-host
      * {@code .rc}/{@code .log} files (the same generic poll the server provisioning uses). Never throws: a
      * poll that times out or errors leaves the state {@code RUNNING} rather than reporting a false outcome.
      */
-    PrepareStatus prepareClientStatus(String machineName);
+    PrepareStatus prepareClientStatus(MachineId machineId);
 
     /**
      * The outcome of a prepare attempt, mirroring {@link ProvisionBackupServerUseCase.ProvisionResult}'s

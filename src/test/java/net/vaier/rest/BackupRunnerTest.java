@@ -21,6 +21,7 @@ import net.vaier.domain.CommandResult;
 import net.vaier.domain.DeviceCategory;
 import net.vaier.domain.HostCredentialView;
 import net.vaier.domain.Machine;
+import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.MachineType;
 import net.vaier.domain.port.ForPublishingEvents;
 import net.vaier.domain.port.ForRecordingBackupRuns;
@@ -79,7 +80,7 @@ class BackupRunnerTest {
     }
 
     private BackupServer server() {
-        return new BackupServer("nas-borg", "NAS", "192.168.3.3", 8022,
+        return new BackupServer("nas-borg", TestMachineIds.of("NAS"), "192.168.3.3", 8022,
             "borg", "home/borg/backups", "/volume1/docker/borg", false);
     }
 
@@ -88,12 +89,12 @@ class BackupRunnerTest {
     }
 
     private BackupJob job() {
-        return new BackupJob("colina-home", "Colina 27", "nas-borg",
+        return new BackupJob("colina-home", TestMachineIds.of("Colina 27"), "nas-borg",
             List.of("/home/geir"), List.of(), 7, 4, 6, "zstd,6", true, false);
     }
 
     private Machine sshMachine(String name) {
-        return new Machine(MachineId.generate(), name, MachineType.UBUNTU_SERVER, null, null, null, null, null, null, null,
+        return new Machine(TestMachineIds.of(name), name, MachineType.UBUNTU_SERVER, null, null, null, null, null, null, null,
             null, "10.13.13.9", false, null, DeviceCategory.SERVER, null);
     }
 
@@ -131,8 +132,8 @@ class BackupRunnerTest {
         workDirResolver = mock(BackupWorkDirResolver.class);
         events = mock(ForPublishingEvents.class);
         // Default: resolve to the SSH user's home so existing path assertions stay green.
-        when(workDirResolver.workDirFor(any())).thenReturn("/home/geir/.vaier-backup");
-        when(workDirResolver.homeFor(any())).thenReturn(Optional.of("/home/geir"));
+        when(workDirResolver.workDirFor(any(), any())).thenReturn("/home/geir/.vaier-backup");
+        when(workDirResolver.homeFor(any(), any())).thenReturn(Optional.of("/home/geir"));
         // Default: the repository's backup server is configured, so runs/lists reach the borg URL step.
         when(servers.getBackupServers()).thenReturn(List.of(server()));
         clock = Clock.fixed(Instant.parse("2026-07-08T02:00:00Z"), ZoneOffset.UTC);
@@ -166,7 +167,7 @@ class BackupRunnerTest {
 
     /** The same job with "Back up as root" on. */
     private BackupJob rootJob() {
-        return new BackupJob("colina-home", "Colina 27", "nas-borg",
+        return new BackupJob("colina-home", TestMachineIds.of("Colina 27"), "nas-borg",
             List.of("/home/geir"), List.of(), 7, 4, 6, "zstd,6", true, true);
     }
 
@@ -201,7 +202,7 @@ class BackupRunnerTest {
         hasCredential("Colina 27");
         when(runner.run(eq("Colina 27"), any())).thenReturn(new CommandResult(0, "STARTED 1234", "", false, "SHA256:x"));
         borgPresentOn("Colina 27");
-        when(workDirResolver.homeFor("Colina 27")).thenReturn(Optional.empty());
+        when(workDirResolver.homeFor(TestMachineIds.of("Colina 27"), "Colina 27")).thenReturn(Optional.empty());
 
         BackupRun run = backupRunner.runJob(rootJob(), repo(), "run-1");
 
@@ -218,7 +219,7 @@ class BackupRunnerTest {
         hasCredential("Colina 27");
         when(runner.run(eq("Colina 27"), any())).thenReturn(new CommandResult(0, "STARTED 1234", "", false, "SHA256:x"));
         borgPresentOn("Colina 27");
-        when(workDirResolver.homeFor("Colina 27")).thenReturn(Optional.empty());
+        when(workDirResolver.homeFor(TestMachineIds.of("Colina 27"), "Colina 27")).thenReturn(Optional.empty());
 
         BackupRun run = backupRunner.runJob(job(), repo(), "run-1");
 
@@ -272,7 +273,7 @@ class BackupRunnerTest {
         // the run reads BORG_PASSCOMMAND from <workDir>/<repo>.pass, so a mismatch would break the unlock.
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(workDirResolver.workDirFor("Colina 27")).thenReturn("/home/geir/.vaier-backup");
+        when(workDirResolver.workDirFor(TestMachineIds.of("Colina 27"), "Colina 27")).thenReturn("/home/geir/.vaier-backup");
         when(runner.run(eq("Colina 27"), any())).thenReturn(new CommandResult(0, "STARTED 1234", "", false, "SHA256:x"));
         borgPresentOn("Colina 27");
 
@@ -450,7 +451,7 @@ class BackupRunnerTest {
         verify(runner, never()).run(any(), any());
 
         // SSH access disabled: never runs, records a FAILED run.
-        Machine off = new Machine(MachineId.generate(), "Colina 27", MachineType.LAN_SERVER, null, null, null, null, null, null, null,
+        Machine off = new Machine(TestMachineIds.of("Colina 27"), "Colina 27", MachineType.LAN_SERVER, null, null, null, null, null, null, null,
             null, "10.13.13.9", false, null, DeviceCategory.SERVER, false);
         when(machines.getAllMachines()).thenReturn(List.of(off));
 
@@ -536,12 +537,12 @@ class BackupRunnerTest {
     // --- Slice 6: Vaier-owned nightly scheduling ---
 
     private BackupJob disabledJob() {
-        return new BackupJob("roon-media", "Roon", "nas-borg",
+        return new BackupJob("roon-media", TestMachineIds.of("Roon"), "nas-borg",
             List.of("/data"), List.of(), 7, 4, 6, "zstd,6", false, false);
     }
 
     private BackupJob succeededTodayJob() {
-        return new BackupJob("apalveien-srv", "Apalveien 5", "nas-borg",
+        return new BackupJob("apalveien-srv", TestMachineIds.of("Apalveien 5"), "nas-borg",
             List.of("/srv"), List.of(), 7, 4, 6, "zstd,6", true, false);
     }
 
@@ -618,9 +619,9 @@ class BackupRunnerTest {
         assertThat(runs.latestForJob("colina-home").orElseThrow().status())
             .isEqualTo(BackupRunStatus.FAILED);
         org.mockito.ArgumentCaptor<BackupRun> captor = org.mockito.ArgumentCaptor.forClass(BackupRun.class);
-        verify(backupNotifier, times(1)).notifyAdminsOfBackupFailure(captor.capture());
+        verify(backupNotifier, times(1)).notifyAdminsOfBackupFailure(captor.capture(), any());
         assertThat(captor.getValue().jobName()).isEqualTo("colina-home");
-        verify(backupNotifier, never()).notifyAdminsOfBackupRecovery(any());
+        verify(backupNotifier, never()).notifyAdminsOfBackupRecovery(any(), any());
     }
 
     @Test
@@ -634,7 +635,7 @@ class BackupRunnerTest {
         seedRunning("run-2");
         backupRunner.pollRunningRuns();
 
-        verify(backupNotifier, times(1)).notifyAdminsOfBackupFailure(any());
+        verify(backupNotifier, times(1)).notifyAdminsOfBackupFailure(any(), any());
     }
 
     @Test
@@ -651,8 +652,8 @@ class BackupRunnerTest {
 
         assertThat(runs.latestForJob("colina-home").orElseThrow().status())
             .isEqualTo(BackupRunStatus.RUNNING);
-        verify(backupNotifier, never()).notifyAdminsOfBackupFailure(any());
-        verify(backupNotifier, never()).notifyAdminsOfBackupRecovery(any());
+        verify(backupNotifier, never()).notifyAdminsOfBackupFailure(any(), any());
+        verify(backupNotifier, never()).notifyAdminsOfBackupRecovery(any(), any());
     }
 
     @Test
@@ -667,8 +668,8 @@ class BackupRunnerTest {
         pollSettlesWith("0", "12 files, 3 GB");
         backupRunner.pollRunningRuns();
 
-        verify(backupNotifier, times(1)).notifyAdminsOfBackupFailure(any());
-        verify(backupNotifier, times(1)).notifyAdminsOfBackupRecovery(any());
+        verify(backupNotifier, times(1)).notifyAdminsOfBackupFailure(any(), any());
+        verify(backupNotifier, times(1)).notifyAdminsOfBackupRecovery(any(), any());
     }
 
     @Test
@@ -682,8 +683,8 @@ class BackupRunnerTest {
 
         assertThat(runs.latestForJob("colina-home").orElseThrow().status())
             .isEqualTo(BackupRunStatus.WARNING);
-        verify(backupNotifier, never()).notifyAdminsOfBackupFailure(any());
-        verify(backupNotifier, never()).notifyAdminsOfBackupRecovery(any());
+        verify(backupNotifier, never()).notifyAdminsOfBackupFailure(any(), any());
+        verify(backupNotifier, never()).notifyAdminsOfBackupRecovery(any(), any());
     }
 
     @Test
@@ -705,7 +706,7 @@ class BackupRunnerTest {
         assertThat(settled.status()).isEqualTo(BackupRunStatus.INCOMPLETE);
         assertThat(settled.unreadableFiles().total()).isEqualTo(2);
         // Once, on the crossing — the second tick finds a terminal run and never re-polls it.
-        verify(backupNotifier, times(1)).notifyAdminsOfBackupFailure(any());
+        verify(backupNotifier, times(1)).notifyAdminsOfBackupFailure(any(), any());
     }
 
     @Test
@@ -720,8 +721,8 @@ class BackupRunnerTest {
         pollSettlesWith("1", "1 file skipped");
         backupRunner.pollRunningRuns();
 
-        verify(backupNotifier, times(1)).notifyAdminsOfBackupFailure(any());
-        verify(backupNotifier, times(1)).notifyAdminsOfBackupRecovery(any());
+        verify(backupNotifier, times(1)).notifyAdminsOfBackupFailure(any(), any());
+        verify(backupNotifier, times(1)).notifyAdminsOfBackupRecovery(any(), any());
     }
 
     @Test
@@ -737,7 +738,7 @@ class BackupRunnerTest {
         restarted.pollRunningRuns();
 
         verify(runner, never()).run(any(), any());
-        verify(backupNotifier, never()).notifyAdminsOfBackupFailure(any());
+        verify(backupNotifier, never()).notifyAdminsOfBackupFailure(any(), any());
     }
 
     // --- Settle events over SSE (the frontend never polls; a settle pushes an event it consumes) ---

@@ -1,6 +1,7 @@
 package net.vaier.domain;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -30,12 +31,18 @@ public final class RecoverySheet {
     private RecoverySheet() {}
 
     /**
-     * Render the contents. {@code jobs} only supplies the human name of the machine each repository holds — a
-     * repository no job claims is still listed, because it still holds archives, and omitting it would mean
-     * the contents quietly leave out data that exists.
+     * Render the contents. {@code jobs} only supplies which machine each repository holds — a repository no
+     * job claims is still listed, because it still holds archives, and omitting it would mean the contents
+     * quietly leave out data that exists.
+     *
+     * <p>{@code machineNames} turns machine identities into names. The stores are keyed by {@link MachineId}
+     * so a rename cannot orphan them, but this page is read by a person who has lost their fleet and needs to
+     * recognise their own machines — a UUID here would be the one thing that made the page useless on the day
+     * it matters. A machine that is no longer in the fleet says so, rather than being dropped or invented.
      */
     public static String render(BackupServer server, List<BackupRepository> repositories,
-                                List<BackupJob> jobs, String configKey) {
+                                List<BackupJob> jobs, Map<MachineId, String> machineNames,
+                                String configKey) {
         StringBuilder sb = new StringBuilder();
         sb.append("VAIER — HOW TO READ THIS FLEET'S BACKUPS\n");
         sb.append("========================================\n\n");
@@ -51,7 +58,7 @@ public final class RecoverySheet {
 
         sb.append("WHERE THE BACKUPS ARE\n");
         sb.append("---------------------\n");
-        row(sb, "Machine", server.machineName());
+        row(sb, "Machine", nameOf(server.machineId(), machineNames));
         row(sb, "Reached at", server.host() + ":" + server.sshPort());
         row(sb, "Borg user", server.borgUser());
         sb.append("\n");
@@ -62,7 +69,8 @@ public final class RecoverySheet {
             sb.append("None yet — nothing has been backed up.\n");
         } else {
             for (BackupRepository repo : repositories) {
-                row(sb, "Backups of", machineFor(repo, jobs).orElse("no machine (kept, not added to)"));
+                row(sb, "Backups of", machineFor(repo, jobs, machineNames)
+                    .orElse("no machine (kept, not added to)"));
                 row(sb, "Repository", repo.borgRepoUrl(server));
                 // A blank here would read as "no passphrase needed" and send someone away from the one
                 // repository that actually needs attention.
@@ -93,14 +101,25 @@ public final class RecoverySheet {
     }
 
     /** The human name of the machine a repository holds the backups of, via the job that targets it. */
-    private static Optional<String> machineFor(BackupRepository repo, List<BackupJob> jobs) {
+    private static Optional<String> machineFor(BackupRepository repo, List<BackupJob> jobs,
+                                               Map<MachineId, String> machineNames) {
         if (jobs == null) {
             return Optional.empty();
         }
         return jobs.stream()
             .filter(j -> repo.name().equals(j.repositoryName()))
-            .map(BackupJob::machineName)
+            .map(j -> nameOf(j.machineId(), machineNames))
             .findFirst();
+    }
+
+    /**
+     * What to call a machine on this page. An id with no name is not hidden and not guessed — that rule is
+     * {@link Machine#labelFor}'s, shared with the admin alerts, because the archives are still there to read
+     * and an operator has to be able to tell a live machine from a departed one on every one of them.
+     */
+    private static String nameOf(MachineId machineId, Map<MachineId, String> machineNames) {
+        return Machine.labelFor(machineId,
+            Optional.ofNullable(machineNames == null ? null : machineNames.get(machineId)));
     }
 
     /** One aligned label/value line. Values are never wrapped — a broken passphrase is a useless passphrase. */

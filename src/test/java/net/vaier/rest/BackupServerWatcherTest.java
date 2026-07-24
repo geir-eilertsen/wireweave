@@ -1,5 +1,10 @@
 package net.vaier.rest;
 
+import net.vaier.application.GetMachinesUseCase;
+import net.vaier.domain.DeviceCategory;
+import net.vaier.domain.Machine;
+import net.vaier.domain.MachineType;
+import net.vaier.domain.TestMachineIds;
 import net.vaier.application.GetBackupServersUseCase;
 import net.vaier.application.NotifyAdminsOfBackupServerDownUseCase;
 import net.vaier.domain.BackupServer;
@@ -24,12 +29,19 @@ import static org.mockito.Mockito.when;
 class BackupServerWatcherTest {
 
     GetBackupServersUseCase servers;
+    GetMachinesUseCase machines;
     ForProbingTcp probe;
     NotifyAdminsOfBackupServerDownUseCase notifier;
     BackupServerWatcher watcher;
 
+    /** The machine hosting the borg server — its id is what the server record actually points at. */
+    private Machine nas() {
+        return new Machine(TestMachineIds.of("NAS"), "NAS", MachineType.LAN_SERVER, null, null, null, null,
+            null, null, null, null, "192.168.3.3", false, null, DeviceCategory.SERVER, null);
+    }
+
     private BackupServer server(String name) {
-        return new BackupServer(name, "NAS", "192.168.3.3", 8022,
+        return new BackupServer(name, TestMachineIds.of("NAS"), "192.168.3.3", 8022,
             "borg", "home/borg/backups", "/volume1/docker/borg", false);
     }
 
@@ -38,7 +50,9 @@ class BackupServerWatcherTest {
         servers = mock(GetBackupServersUseCase.class);
         probe = mock(ForProbingTcp.class);
         notifier = mock(NotifyAdminsOfBackupServerDownUseCase.class);
-        watcher = new BackupServerWatcher(servers, probe, notifier);
+        machines = mock(GetMachinesUseCase.class);
+        when(machines.getAllMachines()).thenReturn(List.of(nas()));
+        watcher = new BackupServerWatcher(servers, machines, probe, notifier);
     }
 
     @Test
@@ -49,8 +63,8 @@ class BackupServerWatcherTest {
         watcher.checkBackupServers();
         watcher.checkBackupServers();
 
-        verify(notifier, never()).notifyAdminsOfBackupServerDown(any(), any());
-        verify(notifier, never()).notifyAdminsOfBackupServerRecovered(any());
+        verify(notifier, never()).notifyAdminsOfBackupServerDown(any(), any(), any());
+        verify(notifier, never()).notifyAdminsOfBackupServerRecovered(any(), any());
     }
 
     @Test
@@ -62,7 +76,7 @@ class BackupServerWatcherTest {
         watcher.checkBackupServers(); // strike 2, crosses to down
         watcher.checkBackupServers(); // steady down, no re-page
 
-        verify(notifier, times(1)).notifyAdminsOfBackupServerDown(any(BackupServer.class), eq(ProbeResult.REFUSED));
+        verify(notifier, times(1)).notifyAdminsOfBackupServerDown(any(BackupServer.class), any(), eq(ProbeResult.REFUSED));
     }
 
     @Test
@@ -72,7 +86,7 @@ class BackupServerWatcherTest {
 
         watcher.checkBackupServers(); // one blip only
 
-        verify(notifier, never()).notifyAdminsOfBackupServerDown(any(), any());
+        verify(notifier, never()).notifyAdminsOfBackupServerDown(any(), any(), any());
     }
 
     @Test
@@ -86,8 +100,8 @@ class BackupServerWatcherTest {
         watcher.checkBackupServers(); // recovery
         watcher.checkBackupServers(); // steady healthy, quiet
 
-        verify(notifier, times(1)).notifyAdminsOfBackupServerDown(any(), eq(ProbeResult.REFUSED));
-        verify(notifier, times(1)).notifyAdminsOfBackupServerRecovered(any(BackupServer.class));
+        verify(notifier, times(1)).notifyAdminsOfBackupServerDown(any(), any(), eq(ProbeResult.REFUSED));
+        verify(notifier, times(1)).notifyAdminsOfBackupServerRecovered(any(BackupServer.class), any());
     }
 
     @Test
@@ -98,7 +112,7 @@ class BackupServerWatcherTest {
         watcher.checkBackupServers();
         watcher.checkBackupServers();
 
-        verify(notifier).notifyAdminsOfBackupServerDown(any(), eq(ProbeResult.UNREACHABLE));
+        verify(notifier).notifyAdminsOfBackupServerDown(any(), any(), eq(ProbeResult.UNREACHABLE));
     }
 
     @Test
@@ -106,7 +120,7 @@ class BackupServerWatcherTest {
         when(servers.getBackupServers()).thenReturn(List.of(server("nas-borg")));
         when(probe.probe(eq("192.168.3.3"), eq(8022), anyInt())).thenReturn(ProbeResult.REFUSED);
         doThrow(new RuntimeException("smtp down"))
-            .when(notifier).notifyAdminsOfBackupServerDown(any(), any());
+            .when(notifier).notifyAdminsOfBackupServerDown(any(), any(), any());
 
         watcher.checkBackupServers();
         org.assertj.core.api.Assertions.assertThatCode(() -> watcher.checkBackupServers())
@@ -120,7 +134,7 @@ class BackupServerWatcherTest {
 
         org.assertj.core.api.Assertions.assertThatCode(() -> watcher.checkBackupServers())
             .doesNotThrowAnyException();
-        verify(notifier, never()).notifyAdminsOfBackupServerDown(any(), any());
+        verify(notifier, never()).notifyAdminsOfBackupServerDown(any(), any(), any());
     }
 
     @Test

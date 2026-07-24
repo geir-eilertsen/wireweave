@@ -2,7 +2,10 @@ package net.vaier.application;
 
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.domain.CommandResult;
+import net.vaier.domain.Machine;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.SshHome;
+import net.vaier.domain.SshTarget;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
@@ -46,25 +49,40 @@ public class BackupWorkDirResolver {
 
     private final RunRemoteCommandUseCase remoteCommand;
 
-    /** machineName -> the resolved absolute {@code $HOME}. The home is the primitive; the work dir derives. */
-    private final Map<String, String> homeCache = new ConcurrentHashMap<>();
+    /**
+     * {@link MachineId} -> the resolved absolute {@code $HOME}. The home is the primitive; the work dir derives.
+     *
+     * <p>Keyed by identity, not by name. A cache keyed on a display name answers for whatever machine now
+     * bears that name — so renaming one machine into another's old name would have served a stale home, and
+     * the home is the absolute path a run's pass file and its {@code BORG_RSH} key literals are built from.
+     */
+    private final Map<MachineId, String> homeCache = new ConcurrentHashMap<>();
 
     public BackupWorkDirResolver(RunRemoteCommandUseCase remoteCommand) {
         this.remoteCommand = remoteCommand;
     }
 
     /**
-     * The work dir for {@code machineName}: a cached {@code <home>/.vaier-backup} once resolved, else a
+     * The work dir for a machine: a cached {@code <home>/.vaier-backup} once resolved, else a
      * fresh {@code $HOME} probe over SSH. Returns {@link #FALLBACK_WORK_DIR} (uncached) on any failure —
      * a timeout, a non-zero exit, a blank or non-absolute {@code $HOME}, or an SSH error — so a run is
      * never blocked and a blip never sticks.
+     *
+     * <p>The machine arrives as both its {@code machineId} (which keys the cache) and its {@code machineName}
+     * (which is still how the SSH command path addresses a host). The two must describe one machine; every
+     * caller takes them from a single resolved {@link Machine} or {@link SshTarget}, never from two lookups.
+     * The name parameter goes away when the SSH path itself becomes id-native.
+     *
+     * <p>There is deliberately no {@code workDirFor(Machine)} convenience overload. Two ways to ask the same
+     * question is what this refactor is removing, and a test that mocks this class would silently get {@code
+     * null} from whichever overload it did not stub.
      */
-    public String workDirFor(String machineName) {
-        return homeFor(machineName).map(home -> home + "/.vaier-backup").orElse(FALLBACK_WORK_DIR);
+    public String workDirFor(MachineId machineId, String machineName) {
+        return homeFor(machineId, machineName).map(home -> home + "/.vaier-backup").orElse(FALLBACK_WORK_DIR);
     }
 
     /**
-     * The SSH user's absolute {@code $HOME} on {@code machineName}, cached once resolved — the same probe and
+     * The SSH user's absolute {@code $HOME} on a machine, cached once resolved — the same probe and
      * cache {@link #workDirFor} derives its directory from.
      *
      * <p>This is what a <b>Back up as root</b> run is built from. The borg client key and the pinned
@@ -80,8 +98,8 @@ public class BackupWorkDirResolver {
      * than guessed. A missing home does not degrade an as-root run, it breaks it — the run cannot even name the
      * key and the host pin — so the orchestration must refuse the run instead. Never throws.
      */
-    public java.util.Optional<String> homeFor(String machineName) {
-        String cached = homeCache.get(machineName);
+    public java.util.Optional<String> homeFor(MachineId machineId, String machineName) {
+        String cached = homeCache.get(machineId);
         if (cached != null) {
             return java.util.Optional.of(cached);
         }
@@ -91,7 +109,7 @@ public class BackupWorkDirResolver {
             // out, exited non-zero, or answered blank or relative has told Vaier nothing about this machine.
             java.util.Optional<String> home = SshHome.in(result);
             if (home.isPresent()) {
-                homeCache.put(machineName, home.get());
+                homeCache.put(machineId, home.get());
                 return home;
             }
         } catch (Exception e) {

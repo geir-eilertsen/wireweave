@@ -1,6 +1,7 @@
 package net.vaier.domain.port;
 
 import net.vaier.domain.BackupJob;
+import net.vaier.domain.MachineId;
 
 import java.util.List;
 import java.util.Optional;
@@ -14,8 +15,8 @@ public interface ForPersistingBackupJobs {
     /** The job named {@code name}, or empty when none is stored. */
     Optional<BackupJob> getByName(String name);
 
-    /** Every job that backs up the machine named {@code machineName}. */
-    List<BackupJob> getByMachine(String machineName);
+    /** Every job that backs up the machine {@code machineId}. */
+    List<BackupJob> getByMachine(MachineId machineId);
 
     /** Persist {@code job}, replacing any existing job with the same name. */
     void save(BackupJob job);

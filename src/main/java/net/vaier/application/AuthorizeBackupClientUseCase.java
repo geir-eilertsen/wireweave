@@ -1,5 +1,7 @@
 package net.vaier.application;
 
+import net.vaier.domain.MachineId;
+
 /**
  * Trust a backup client host's SSH key on a {@link net.vaier.domain.BackupServer}, so borg — which runs
  * on the client as the SSH user from {@code host-credentials.yml} (e.g. {@code geir}, <em>not</em> root)
@@ -14,13 +16,13 @@ package net.vaier.application;
 public interface AuthorizeBackupClientUseCase {
 
     /**
-     * Authorize the client {@code machineName} on the named backup server. Never throws: an unknown server,
+     * Authorize the client {@code machineId} on the named backup server. Never throws: an unknown server,
      * a guarded-out (unknown / SSH-disabled / credential-less) client or server machine, a backup server
      * with no data path (so no {@code authorized_keys} to write), a client that returns no valid public
      * key, or an SSH failure each come back as a reasoned negative {@link AuthorizeResult} rather than an
      * exception — Vaier never writes junk into {@code authorized_keys}.
      */
-    AuthorizeResult authorizeClient(String serverName, String machineName);
+    AuthorizeResult authorizeClient(String serverName, MachineId machineId);
 
     /**
      * The outcome of an authorize attempt: {@code authorized} when the client key is trusted on the server

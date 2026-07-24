@@ -15,7 +15,8 @@ import net.vaier.domain.port.ForProbingTcp.ProbeResult;
  * so this entity is stored in the clear.
  *
  * @param name           the Vaier-facing identity of this server, unique within the store
- * @param machineName    the Vaier {@link Machine} hosting it (e.g. {@code "NAS"}); how Vaier SSHes to it
+ * @param machineId      the identity of the Vaier {@link Machine} hosting it; how Vaier SSHes to it. Held as
+ *                       an id, never a display name, so renaming that machine cannot orphan the server
  * @param host           the host the borg-server sshd is reachable at
  * @param sshPort        the port the borg container's sshd listens on (default {@value #DEFAULT_SSH_PORT})
  * @param borgUser       the SSH user the borg client key authenticates as (default {@value #DEFAULT_BORG_USER})
@@ -27,7 +28,7 @@ import net.vaier.domain.port.ForProbingTcp.ProbeResult;
  */
 public record BackupServer(
     String name,
-    String machineName,
+    MachineId machineId,
     String host,
     int sshPort,
     String borgUser,
@@ -69,8 +70,8 @@ public record BackupServer(
             throw new IllegalArgumentException(
                 "Backup server name must contain only [A-Za-z0-9_-]: " + name);
         }
-        if (machineName == null || machineName.isBlank()) {
-            throw new IllegalArgumentException("Backup server machineName must not be blank");
+        if (machineId == null) {
+            throw new IllegalArgumentException("Backup server machineId must not be null");
         }
         if (host == null || host.isBlank()) {
             throw new IllegalArgumentException("Backup server host must not be blank");
@@ -196,10 +197,10 @@ public record BackupServer(
      * that a backup client can route to it (that asymmetry is the Colina bug). The per-job {@code checkNas}
      * probe, which runs from the client host, remains authoritative for "can jobs reach it?".
      */
-    public String downBody(String baseDomain, ProbeResult cause) {
+    public String downBody(String machineLabel, String baseDomain, ProbeResult cause) {
         StringBuilder body = new StringBuilder();
         body.append("Backup server: ").append(name).append("\n");
-        body.append("Machine: ").append(machineName).append("\n");
+        body.append("Machine: ").append(machineLabel).append("\n");
         body.append("Host: ").append(host).append(":").append(sshPort).append("\n");
         body.append("\n").append(describeCause(cause)).append("\n");
         appendVaierLink(body, baseDomain);
@@ -207,10 +208,10 @@ public record BackupServer(
     }
 
     /** Body for the all-clear email; same shape as {@link #downBody}, cf. {@link BackupRun#recoveryBody}. */
-    public String recoveryBody(String baseDomain) {
+    public String recoveryBody(String machineLabel, String baseDomain) {
         StringBuilder body = new StringBuilder();
         body.append("Backup server: ").append(name).append("\n");
-        body.append("Machine: ").append(machineName).append("\n");
+        body.append("Machine: ").append(machineLabel).append("\n");
         body.append("Host: ").append(host).append(":").append(sshPort).append("\n");
         body.append("\nThe borg server on ").append(host).append(" is reachable again.\n");
         appendVaierLink(body, baseDomain);

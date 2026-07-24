@@ -74,30 +74,30 @@ public class NotificationService implements
     }
 
     @Override
-    public void notifyAdminsOfBackupFailure(BackupRun run) {
-        adminNotifier.sendToAdmins(run.failureSubject(),
-                run.failureBody(configResolver.getDomain()),
+    public void notifyAdminsOfBackupFailure(BackupRun run, String machineLabel) {
+        adminNotifier.sendToAdmins(run.failureSubject(machineLabel),
+                run.failureBody(machineLabel, configResolver.getDomain()),
                 "backup failure for job " + run.jobName());
     }
 
     @Override
-    public void notifyAdminsOfBackupRecovery(BackupRun run) {
-        adminNotifier.sendToAdmins(run.recoverySubject(),
-                run.recoveryBody(configResolver.getDomain()),
+    public void notifyAdminsOfBackupRecovery(BackupRun run, String machineLabel) {
+        adminNotifier.sendToAdmins(run.recoverySubject(machineLabel),
+                run.recoveryBody(machineLabel, configResolver.getDomain()),
                 "backup recovery for job " + run.jobName());
     }
 
     @Override
-    public void notifyAdminsOfBackupServerDown(BackupServer server, ProbeResult cause) {
+    public void notifyAdminsOfBackupServerDown(BackupServer server, String machineLabel, ProbeResult cause) {
         adminNotifier.sendToAdmins(server.downSubject(),
-                server.downBody(configResolver.getDomain(), cause),
+                server.downBody(machineLabel, configResolver.getDomain(), cause),
                 "backup server down: " + server.name());
     }
 
     @Override
-    public void notifyAdminsOfBackupServerRecovered(BackupServer server) {
+    public void notifyAdminsOfBackupServerRecovered(BackupServer server, String machineLabel) {
         adminNotifier.sendToAdmins(server.recoverySubject(),
-                server.recoveryBody(configResolver.getDomain()),
+                server.recoveryBody(machineLabel, configResolver.getDomain()),
                 "backup server recovery: " + server.name());
     }
 

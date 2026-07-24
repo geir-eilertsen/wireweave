@@ -13,6 +13,7 @@ import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.domain.BackupRun;
 import net.vaier.domain.BackupRunStatus;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.port.ForRecordingBackupRuns;
 import org.springframework.stereotype.Component;
 import org.yaml.snakeyaml.DumperOptions;
@@ -80,7 +81,7 @@ public class BackupRunFileAdapter implements ForRecordingBackupRuns {
         String runId = asString(m.get("runId"));
         String jobName = asString(m.get("jobName"));
         String repositoryName = asString(m.get("repositoryName"));
-        String machineName = asString(m.get("machineName"));
+        String rawMachineId = asString(m.get("machineId"));
         BackupRunStatus status = parseStatus(asString(m.get("status")));
         Instant startedAt = parseInstant(asString(m.get("startedAt")));
         Instant finishedAt = parseInstant(asString(m.get("finishedAt")));
@@ -91,7 +92,17 @@ public class BackupRunFileAdapter implements ForRecordingBackupRuns {
             log.warn("Skipping malformed backup-run entry in {}", FILE_NAME);
             return null;
         }
-        return new BackupRun(runId, jobName, repositoryName, machineName, status,
+        MachineId machineId;
+        try {
+            machineId = MachineId.of(rawMachineId);
+        } catch (IllegalArgumentException e) {
+            // Loud: a run whose machine cannot be read can never be polled to a conclusion, so an in-flight
+            // RUNNING run would sit unresolved forever and the job would read as never having run.
+            log.error("Skipping backup-run entry for job '{}' in {} with an unusable machineId: {}",
+                jobName.replaceAll("[\\r\\n]+", "_"), FILE_NAME, e.getMessage());
+            return null;
+        }
+        return new BackupRun(runId, jobName, repositoryName, machineId, status,
             startedAt, finishedAt, exitCode, archiveName, summary);
     }
 
@@ -110,7 +121,7 @@ public class BackupRunFileAdapter implements ForRecordingBackupRuns {
             entry.put("runId", r.runId());
             entry.put("jobName", r.jobName());
             if (r.repositoryName() != null) entry.put("repositoryName", r.repositoryName());
-            if (r.machineName() != null) entry.put("machineName", r.machineName());
+            entry.put("machineId", r.machineId().value());
             entry.put("status", r.status().name());
             entry.put("startedAt", r.startedAt().toString());
             if (r.finishedAt() != null) entry.put("finishedAt", r.finishedAt().toString());

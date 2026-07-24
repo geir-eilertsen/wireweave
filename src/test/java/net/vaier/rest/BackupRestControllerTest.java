@@ -1,5 +1,7 @@
 package net.vaier.rest;
 
+import net.vaier.domain.NotFoundException;
+import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.MachineId;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import net.vaier.application.AuthorizeBackupClientUseCase;
@@ -60,6 +62,7 @@ import java.util.Optional;
 import net.vaier.domain.BackupJob;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -107,8 +110,8 @@ class BackupRestControllerTest {
         @Override public Optional<BackupJob> getByName(String name) {
             return store.stream().filter(j -> j.name().equals(name)).findFirst();
         }
-        @Override public List<BackupJob> getByMachine(String machineName) {
-            return store.stream().filter(j -> j.machineName().equals(machineName)).toList();
+        @Override public List<BackupJob> getByMachine(MachineId machineId) {
+            return store.stream().filter(j -> j.machineId().equals(machineId)).toList();
         }
         @Override public void save(BackupJob j) { store.removeIf(x -> x.name().equals(j.name())); store.add(j); }
         @Override public void deleteByName(String name) { store.removeIf(j -> j.name().equals(name)); }
@@ -158,7 +161,7 @@ class BackupRestControllerTest {
     }
 
     private Machine machine(String name) {
-        return new Machine(MachineId.generate(), name, MachineType.UBUNTU_SERVER, null, null, null, null, null, null, null,
+        return new Machine(TestMachineIds.of(name), name, MachineType.UBUNTU_SERVER, null, null, null, null, null, null, null,
             null, "10.13.13.9", false, null, DeviceCategory.SERVER, null);
     }
 
@@ -170,7 +173,7 @@ class BackupRestControllerTest {
     }
 
     private BackupServer server() {
-        return new BackupServer("nas-borg", "NAS", "192.168.3.3", 8022,
+        return new BackupServer("nas-borg", TestMachineIds.of("NAS"), "192.168.3.3", 8022,
             "borg", "home/borg/backups", "/volume1/docker/borg", false);
     }
 
@@ -179,7 +182,7 @@ class BackupRestControllerTest {
     }
 
     private BackupJob job() {
-        return new BackupJob("colina-home", "Colina 27", "nas-borg",
+        return new BackupJob("colina-home", TestMachineIds.of("Colina 27"), "nas-borg",
             List.of("/home/geir"), List.of(), 7, 4, 6, "zstd,6", true, false);
     }
 
@@ -448,11 +451,11 @@ class BackupRestControllerTest {
         repositories.save(repo());
         backupServers.save(server());
         jobs.save(job());
-        when(checkPrerequisites.checkBorg("Colina 27"))
+        when(checkPrerequisites.checkBorg(TestMachineIds.of("Colina 27")))
             .thenReturn(new BorgAvailability(true, Optional.of(new BorgVersion(1, 2, 8)), true));
-        when(checkPrerequisites.checkNas("nas-borg", "Colina 27"))
+        when(checkPrerequisites.checkNas("nas-borg", TestMachineIds.of("Colina 27")))
             .thenReturn(new RepoReachability(true));
-        when(checkPrerequisites.checkServerAuth("nas-borg", "Colina 27", Optional.of(new BorgVersion(1, 2, 8))))
+        when(checkPrerequisites.checkServerAuth("nas-borg", TestMachineIds.of("Colina 27"), Optional.of(new BorgVersion(1, 2, 8))))
             .thenReturn(new ServerBorgAuth(true, Optional.of(new BorgVersion(1, 4, 3)), true));
 
         ResponseEntity<BackupRestController.ProvisionCheckResponse> response =
@@ -477,11 +480,11 @@ class BackupRestControllerTest {
         repositories.save(repo());
         backupServers.save(server());
         jobs.save(job());
-        when(checkPrerequisites.checkBorg("Colina 27"))
+        when(checkPrerequisites.checkBorg(TestMachineIds.of("Colina 27")))
             .thenReturn(new BorgAvailability(true, Optional.of(new BorgVersion(1, 2, 8)), true));
-        when(checkPrerequisites.checkNas("nas-borg", "Colina 27"))
+        when(checkPrerequisites.checkNas("nas-borg", TestMachineIds.of("Colina 27")))
             .thenReturn(new RepoReachability(true));
-        when(checkPrerequisites.checkServerAuth("nas-borg", "Colina 27", Optional.of(new BorgVersion(1, 2, 8))))
+        when(checkPrerequisites.checkServerAuth("nas-borg", TestMachineIds.of("Colina 27"), Optional.of(new BorgVersion(1, 2, 8))))
             .thenReturn(new ServerBorgAuth(false, Optional.empty(), false));
 
         BackupRestController.ProvisionCheckResponse body =
@@ -501,7 +504,7 @@ class BackupRestControllerTest {
 
     /** The same job with "Back up as root" on. */
     private BackupJob rootJob() {
-        return new BackupJob("colina-home", "Colina 27", "nas-borg",
+        return new BackupJob("colina-home", TestMachineIds.of("Colina 27"), "nas-borg",
             List.of("/home/geir"), List.of(), 7, 4, 6, "zstd,6", true, true);
     }
 
@@ -509,6 +512,7 @@ class BackupRestControllerTest {
     void saveJobPersistsBackupAsRootAndReturnsItOnTheJob() {
         repositories.save(repo());
         backupServers.save(server());
+        when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
 
         ResponseEntity<BackupRestController.JobResponse> response = controller.saveJob("colina-home",
             new BackupRestController.JobRequest("Colina 27", "nas-borg", List.of("/home/geir"),
@@ -520,11 +524,31 @@ class BackupRestControllerTest {
         assertThat(jobs.getByName("colina-home").orElseThrow().backupAsRoot()).isTrue();
     }
 
+    /**
+     * The dead-job bug, closed at the door. Two jobs — {@code NUC 02} and {@code NUC02} — ran nightly for
+     * months against machines in no registry, because a job stored whatever machine name it was handed. A job
+     * now holds a machine's identity, and an identity can only come from a machine that exists.
+     */
+    @Test
+    void saveJobForAMachineTheFleetDoesNotHaveIsRefused() {
+        repositories.save(repo());
+        backupServers.save(server());
+        when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
+
+        assertThatThrownBy(() -> controller.saveJob("nuc02",
+            new BackupRestController.JobRequest("NUC02", "nas-borg", List.of("/home/geir"),
+                List.of(), 7, 4, 6, "zstd,6", true, false)))
+            .isInstanceOf(NotFoundException.class)
+            .hasMessageContaining("NUC02");
+        assertThat(jobs.getByName("nuc02")).isEmpty();
+    }
+
     /** Opting out is just as explicit — and is the default a job is created with. */
     @Test
     void saveJobWithoutBackupAsRootKeepsTheJobRunningAsTheSshUser() {
         repositories.save(repo());
         backupServers.save(server());
+        when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
 
         ResponseEntity<BackupRestController.JobResponse> response = controller.saveJob("colina-home",
             new BackupRestController.JobRequest("Colina 27", "nas-borg", List.of("/home/geir"),
@@ -543,12 +567,12 @@ class BackupRestControllerTest {
         repositories.save(repo());
         backupServers.save(server());
         jobs.save(rootJob());
-        when(checkPrerequisites.checkBorg("Colina 27"))
+        when(checkPrerequisites.checkBorg(TestMachineIds.of("Colina 27")))
             .thenReturn(new BorgAvailability(true, Optional.of(new BorgVersion(1, 2, 8)), true));
-        when(checkPrerequisites.checkNas("nas-borg", "Colina 27")).thenReturn(new RepoReachability(true));
-        when(checkPrerequisites.checkServerAuth("nas-borg", "Colina 27", Optional.of(new BorgVersion(1, 2, 8))))
+        when(checkPrerequisites.checkNas("nas-borg", TestMachineIds.of("Colina 27"))).thenReturn(new RepoReachability(true));
+        when(checkPrerequisites.checkServerAuth("nas-borg", TestMachineIds.of("Colina 27"), Optional.of(new BorgVersion(1, 2, 8))))
             .thenReturn(new ServerBorgAuth(true, Optional.of(new BorgVersion(1, 4, 3)), true));
-        when(checkPrerequisites.checkRootBorg("Colina 27"))
+        when(checkPrerequisites.checkRootBorg(TestMachineIds.of("Colina 27")))
             .thenReturn(new CheckBackupPrerequisitesUseCase.RootBorgAvailability(true));
 
         BackupRestController.ProvisionCheckResponse body =
@@ -564,12 +588,12 @@ class BackupRestControllerTest {
         repositories.save(repo());
         backupServers.save(server());
         jobs.save(rootJob());
-        when(checkPrerequisites.checkBorg("Colina 27"))
+        when(checkPrerequisites.checkBorg(TestMachineIds.of("Colina 27")))
             .thenReturn(new BorgAvailability(true, Optional.of(new BorgVersion(1, 2, 8)), true));
-        when(checkPrerequisites.checkNas("nas-borg", "Colina 27")).thenReturn(new RepoReachability(true));
-        when(checkPrerequisites.checkServerAuth("nas-borg", "Colina 27", Optional.of(new BorgVersion(1, 2, 8))))
+        when(checkPrerequisites.checkNas("nas-borg", TestMachineIds.of("Colina 27"))).thenReturn(new RepoReachability(true));
+        when(checkPrerequisites.checkServerAuth("nas-borg", TestMachineIds.of("Colina 27"), Optional.of(new BorgVersion(1, 2, 8))))
             .thenReturn(new ServerBorgAuth(true, Optional.of(new BorgVersion(1, 4, 3)), true));
-        when(checkPrerequisites.checkRootBorg("Colina 27"))
+        when(checkPrerequisites.checkRootBorg(TestMachineIds.of("Colina 27")))
             .thenReturn(new CheckBackupPrerequisitesUseCase.RootBorgAvailability(false));
 
         BackupRestController.ProvisionCheckResponse body =
@@ -588,10 +612,10 @@ class BackupRestControllerTest {
         repositories.save(repo());
         backupServers.save(server());
         jobs.save(job());
-        when(checkPrerequisites.checkBorg("Colina 27"))
+        when(checkPrerequisites.checkBorg(TestMachineIds.of("Colina 27")))
             .thenReturn(new BorgAvailability(true, Optional.of(new BorgVersion(1, 2, 8)), true));
-        when(checkPrerequisites.checkNas("nas-borg", "Colina 27")).thenReturn(new RepoReachability(true));
-        when(checkPrerequisites.checkServerAuth("nas-borg", "Colina 27", Optional.of(new BorgVersion(1, 2, 8))))
+        when(checkPrerequisites.checkNas("nas-borg", TestMachineIds.of("Colina 27"))).thenReturn(new RepoReachability(true));
+        when(checkPrerequisites.checkServerAuth("nas-borg", TestMachineIds.of("Colina 27"), Optional.of(new BorgVersion(1, 2, 8))))
             .thenReturn(new ServerBorgAuth(true, Optional.of(new BorgVersion(1, 4, 3)), true));
 
         BackupRestController.ProvisionCheckResponse body =
@@ -629,11 +653,11 @@ class BackupRestControllerTest {
         repositories.save(repo());
         backupServers.save(server());
         jobs.save(job());
-        when(checkPrerequisites.checkBorg("Colina 27"))
+        when(checkPrerequisites.checkBorg(TestMachineIds.of("Colina 27")))
             .thenReturn(new BorgAvailability(false, Optional.empty(), false));
-        when(checkPrerequisites.checkNas("nas-borg", "Colina 27"))
+        when(checkPrerequisites.checkNas("nas-borg", TestMachineIds.of("Colina 27")))
             .thenReturn(new RepoReachability(false));
-        when(checkPrerequisites.checkServerAuth("nas-borg", "Colina 27", Optional.empty()))
+        when(checkPrerequisites.checkServerAuth("nas-borg", TestMachineIds.of("Colina 27"), Optional.empty()))
             .thenReturn(new ServerBorgAuth(false, Optional.empty(), false));
 
         BackupRestController.ProvisionCheckResponse body =
@@ -653,7 +677,7 @@ class BackupRestControllerTest {
     void provisionInitRuns() {
         repositories.save(repo());
         jobs.save(job());
-        when(initBackupRepository.initRepo("nas-borg", "Colina 27"))
+        when(initBackupRepository.initRepo("nas-borg", TestMachineIds.of("Colina 27")))
             .thenReturn(new RepoInitResult(true, false, "Repository initialised"));
 
         ResponseEntity<BackupRestController.ProvisionInitResponse> response =
@@ -663,7 +687,7 @@ class BackupRestControllerTest {
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().initialized()).isTrue();
         assertThat(response.getBody().alreadyExisted()).isFalse();
-        verify(initBackupRepository).initRepo("nas-borg", "Colina 27");
+        verify(initBackupRepository).initRepo("nas-borg", TestMachineIds.of("Colina 27"));
     }
 
     @Test
@@ -694,7 +718,7 @@ class BackupRestControllerTest {
         repositories.save(repo());
         backupServers.save(server());
         jobs.save(job());
-        when(prepareBackupClient.prepareClient("Colina 27"))
+        when(prepareBackupClient.prepareClient(TestMachineIds.of("Colina 27")))
             .thenReturn(new PrepareResult(false, false, true, "Preparing client on Colina 27", null));
 
         ResponseEntity<BackupRestController.PrepareClientResponse> response =
@@ -705,13 +729,13 @@ class BackupRestControllerTest {
         assertThat(response.getBody().started()).isTrue();
         assertThat(response.getBody().scriptOnly()).isFalse();
         assertThat(response.getBody().stagedScriptPath()).isNull();
-        verify(prepareBackupClient).prepareClient("Colina 27");
+        verify(prepareBackupClient).prepareClient(TestMachineIds.of("Colina 27"));
     }
 
     @Test
     void prepareClientScriptOnlyCarriesTheStagedPath() {
         jobs.save(job());
-        when(prepareBackupClient.prepareClient("Colina 27"))
+        when(prepareBackupClient.prepareClient(TestMachineIds.of("Colina 27")))
             .thenReturn(new PrepareResult(false, true, false,
                 "Vaier cannot gain root over SSH on Colina 27. The prepare-client script has been placed at "
                     + "/home/geir/.vaier-backup/prepare-client-Colina-27.sh — run: sudo bash "
@@ -738,7 +762,7 @@ class BackupRestControllerTest {
     @Test
     void prepareClientStatusReturnsStateAndLogTail() {
         jobs.save(job());
-        when(prepareBackupClient.prepareClientStatus("Colina 27"))
+        when(prepareBackupClient.prepareClientStatus(TestMachineIds.of("Colina 27")))
             .thenReturn(new PrepareStatus(PrepareState.SUCCESS, "==> Vaier Backup client setup complete."));
 
         ResponseEntity<BackupRestController.PrepareClientStatusResponse> response =
@@ -748,7 +772,7 @@ class BackupRestControllerTest {
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().state()).isEqualTo("SUCCESS");
         assertThat(response.getBody().logTail()).contains("setup complete");
-        verify(prepareBackupClient).prepareClientStatus("Colina 27");
+        verify(prepareBackupClient).prepareClientStatus(TestMachineIds.of("Colina 27"));
     }
 
     @Test
@@ -776,6 +800,8 @@ class BackupRestControllerTest {
 
     @Test
     void putThenGetServerRoundTrips() {
+        when(getMachines.getAllMachines()).thenReturn(List.of(machine("NAS")));
+
         controller.saveServer("nas-borg", new BackupRestController.ServerRequest(
             "NAS", "192.168.3.3", 8022, "borg", "home/borg/backups", "/volume1/docker/borg", true));
 
@@ -791,6 +817,8 @@ class BackupRestControllerTest {
 
     @Test
     void saveServerDefaultsSshPortWhenOmitted() {
+        when(getMachines.getAllMachines()).thenReturn(List.of(machine("NAS")));
+
         controller.saveServer("nas-borg", new BackupRestController.ServerRequest(
             "NAS", "192.168.3.3", null, null, null, "/volume1/docker/borg", true));
 
@@ -919,7 +947,7 @@ class BackupRestControllerTest {
     void authorizeReturns200WithResult() {
         backupServers.save(server());
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
-        when(authorizeBackupClient.authorizeClient("nas-borg", "Colina 27"))
+        when(authorizeBackupClient.authorizeClient("nas-borg", TestMachineIds.of("Colina 27")))
             .thenReturn(new AuthorizeResult(true, false, true, "Client key authorized on nas-borg"));
 
         ResponseEntity<BackupRestController.AuthorizeResponse> response =
@@ -931,7 +959,7 @@ class BackupRestControllerTest {
         assertThat(response.getBody().alreadyTrusted()).isFalse();
         // Slice 8: the host-key pin outcome is surfaced to the UI.
         assertThat(response.getBody().hostKeyPinned()).isTrue();
-        verify(authorizeBackupClient).authorizeClient("nas-borg", "Colina 27");
+        verify(authorizeBackupClient).authorizeClient("nas-borg", TestMachineIds.of("Colina 27"));
     }
 
     @Test
@@ -963,7 +991,7 @@ class BackupRestControllerTest {
     void protectPathsCreatesTheRepositoryAndJobThenReturnsTheJob() {
         backupServers.save(server());
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
-        when(readier.readyForBackup("Colina 27"))
+        when(readier.readyForBackup(TestMachineIds.of("Colina 27")))
             .thenReturn(new ReadyingOutcome(true, false, null, "Preparing client on Colina 27"));
 
         ResponseEntity<BackupRestController.ProtectPathsResponse> response = controller.protectPaths("Colina 27",
@@ -1010,7 +1038,7 @@ class BackupRestControllerTest {
         // object of the response.
         backupServers.save(server());
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
-        when(readier.readyForBackup("Colina 27"))
+        when(readier.readyForBackup(TestMachineIds.of("Colina 27")))
             .thenReturn(new ReadyingOutcome(true, false, null,
                 "Preparing client on Colina 27 — you'll be notified when it finishes."));
 
@@ -1024,7 +1052,7 @@ class BackupRestControllerTest {
         assertThat(response.getBody().provisioning().scriptOnly()).isFalse();
         assertThat(response.getBody().provisioning().stagedScriptPath()).isNull();
         assertThat(response.getBody().provisioning().message()).contains("Preparing client");
-        verify(readier).readyForBackup("Colina 27");
+        verify(readier).readyForBackup(TestMachineIds.of("Colina 27"));
     }
 
     @Test
@@ -1051,7 +1079,7 @@ class BackupRestControllerTest {
         // succeeds and the paths are saved; the failure reason rides on the provisioning object.
         backupServers.save(server());
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
-        when(readier.readyForBackup("Colina 27"))
+        when(readier.readyForBackup(TestMachineIds.of("Colina 27")))
             .thenReturn(new ReadyingOutcome(false, false, null,
                 "Automatic provisioning could not run: ssh: connection reset"));
 
@@ -1096,7 +1124,7 @@ class BackupRestControllerTest {
     void unprotectPathsRemovesSomeAndReturnsTheUpdatedJob() {
         backupServers.save(server());
         repositories.save(repo());
-        jobs.save(new BackupJob("colina-home", "Colina 27", "nas-borg",
+        jobs.save(new BackupJob("colina-home", TestMachineIds.of("Colina 27"), "nas-borg",
             List.of("/home/geir", "/etc/nginx"), List.of(), 7, 4, 6, "zstd,6", true, false));
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
 
@@ -1116,7 +1144,7 @@ class BackupRestControllerTest {
         // response must show the change — the same call used to answer 200 with a completely untouched job.
         backupServers.save(server());
         repositories.save(repo());
-        jobs.save(new BackupJob("colina-home", "Colina 27", "nas-borg",
+        jobs.save(new BackupJob("colina-home", TestMachineIds.of("Colina 27"), "nas-borg",
             List.of("/home"), List.of(), 7, 4, 6, "zstd,6", true, false));
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
 
@@ -1187,5 +1215,26 @@ class BackupRestControllerTest {
             "ghost", new BackupRestController.ProtectPathsRequest(List.of("/home/geir")));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    /**
+     * The lookup that resolves a posted machine name to the identity a job is STORED under must use the same
+     * rule the uniqueness guard uses. {@code Machine.nameIsTaken} treats "colina 27" as already taken by
+     * "Colina 27" — so a lookup that answered "no such machine" for it would refuse a name on creation for
+     * colliding with one it then could not find, which is the worst of both.
+     */
+    @Test
+    void saveJobResolvesTheMachineByTheDomainsNameRule_notByExactEquality() {
+        repositories.save(repo());
+        backupServers.save(server());
+        when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
+
+        ResponseEntity<BackupRestController.JobResponse> response = controller.saveJob("colina-home",
+            new BackupRestController.JobRequest("  colina 27 ", "nas-borg", List.of("/home/geir"),
+                List.of(), 7, 4, 6, "zstd,6", true, false));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(jobs.getByName("colina-home").orElseThrow().machineId())
+            .isEqualTo(TestMachineIds.of("Colina 27"));
     }
 }

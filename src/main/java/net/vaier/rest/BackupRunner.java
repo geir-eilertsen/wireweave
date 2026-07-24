@@ -24,6 +24,7 @@ import net.vaier.domain.BorgCommand;
 import net.vaier.domain.BorgVersion;
 import net.vaier.domain.CommandResult;
 import net.vaier.domain.Machine;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.port.ForPublishingEvents;
 import net.vaier.domain.port.ForRecordingBackupRuns;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -156,18 +157,21 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
      * or an SSH error) is recorded {@code FAILED} rather than left as a phantom RUNNING run.
      */
     public BackupRun runJob(BackupJob job, BackupRepository repo, String runId) {
-        Optional<Machine> machine = findMachine(job.machineName());
+        Optional<Machine> machine = findMachine(job.machineId());
         if (machine.isEmpty()) {
+            // The job names its machine by identity, so there is no name left to print for a machine that is
+            // gone — and that is the honest report: this job points at a machine this fleet no longer has.
             return recorded(BackupRun.failed(job, runId, clock.instant(),
-                "No machine named " + job.machineName()));
+                "Backup job " + job.name() + " points at a machine that is no longer in the fleet"));
         }
+        String machineName = machine.get().name();
         if (!machine.get().effectiveSshAccess()) {
             return recorded(BackupRun.failed(job, runId, clock.instant(),
-                "SSH access is disabled for " + job.machineName()));
+                "SSH access is disabled for " + machineName));
         }
-        if (credentials.getHostCredential(machine.get().name()).isEmpty()) {
+        if (credentials.getHostCredential(machineName).isEmpty()) {
             return recorded(BackupRun.failed(job, runId, clock.instant(),
-                "No stored credential for " + job.machineName()));
+                "No stored credential for " + machineName));
         }
         Optional<BackupServer> server = findServer(repo.serverName());
         if (server.isEmpty()) {
@@ -181,16 +185,16 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
         // front and refuses clearly. A probe EXCEPTION is treated as "couldn't verify" and we proceed to
         // launch anyway (a flaky probe must never block a working host — the run itself still settles cleanly
         // if borg really is missing); only a definite non-borg result blocks the run.
-        if (borgDefinitelyMissing(machine.get().name())) {
-            return recorded(BackupRun.borgMissing(job, runId, clock.instant()));
+        if (borgDefinitelyMissing(machineName)) {
+            return recorded(BackupRun.borgMissing(job, runId, clock.instant(), machineName));
         }
 
         // The run reads the passphrase from a provisioned 0600 file via BORG_PASSCOMMAND, so make sure that
         // file exists before launching (write-if-absent) — a run must never fail merely because the pass
         // file was never provisioned. Best-effort: if this cannot run, the launch still proceeds and a
         // genuine auth failure settles the run FAILED on poll.
-        String workDir = workDirResolver.workDirFor(machine.get().name());
-        ensurePassFile(machine.get().name(), repo, workDir);
+        String workDir = workDirResolver.workDirFor(machine.get().id(), machineName);
+        ensurePassFile(machineName, repo, workDir);
 
         // A "Back up as root" run needs the SSH user's home: under sudo, ssh runs as root and reads /root/.ssh/,
         // which holds neither the borg client key nor the pinned server host key. (HOME alone cannot fix that --
@@ -198,20 +202,20 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
         // absolute literals under this home, via BORG_RSH.) If the home cannot be resolved, REFUSE the run rather
         // than launching it to die at the backup server hours later with a host-key/publickey error. A normal job
         // never needs a home, so it is unaffected.
-        Optional<String> sshHome = workDirResolver.homeFor(machine.get().name());
+        Optional<String> sshHome = workDirResolver.homeFor(machine.get().id(), machineName);
         if (job.backupAsRoot() && sshHome.isEmpty()) {
             return recorded(BackupRun.failed(job, runId, clock.instant(),
-                "Could not resolve the SSH user's home on " + job.machineName()
+                "Could not resolve the SSH user's home on " + machineName
                     + ", which a back-up-as-root run needs as HOME"));
         }
 
         BorgCommand.BuiltCommand command = BorgCommand.detachedRun(server.get(), job, repo, runId, workDir,
             sshHome.orElse(""));
         log.info("Launching backup job {} on {}: {}",
-            LogSafe.forLog(job.name()), LogSafe.forLog(machine.get().name()), command.redacted());
+            LogSafe.forLog(job.name()), LogSafe.forLog(machineName), command.redacted());
         Instant startedAt = clock.instant();
         try {
-            CommandResult result = remoteCommand.run(machine.get().name(), command.exec());
+            CommandResult result = remoteCommand.run(machineName, command.exec());
             if (result.timedOut() || result.exitCode() != 0
                 || result.stdout() == null || !result.stdout().contains("STARTED")) {
                 return recorded(BackupRun.failed(job, runId, startedAt,
@@ -220,7 +224,7 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
             return recorded(BackupRun.started(job, runId, startedAt));
         } catch (Exception e) {
             log.debug("Backup job {} on {} failed to launch: {}",
-                LogSafe.forLog(job.name()), LogSafe.forLog(machine.get().name()), e.getMessage());
+                LogSafe.forLog(job.name()), LogSafe.forLog(machineName), e.getMessage());
             return recorded(BackupRun.failed(job, runId, startedAt,
                 "Backup command failed: " + e.getMessage()));
         }
@@ -294,7 +298,7 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
                 LogSafe.forLog(repositoryName));
             return List.of();
         }
-        Optional<Machine> machine = findMachine(job.get().machineName());
+        Optional<Machine> machine = findMachine(job.get().machineId());
         if (machine.isEmpty() || !machine.get().effectiveSshAccess()
             || credentials.getHostCredential(machine.get().name()).isEmpty()) {
             log.debug("Cannot list archives for repository {}: machine or credential unavailable",
@@ -302,7 +306,7 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
             return List.of();
         }
         // borg list unlocks the repo via BORG_PASSCOMMAND too, so ensure the pass file is provisioned first.
-        String workDir = workDirResolver.workDirFor(machine.get().name());
+        String workDir = workDirResolver.workDirFor(machine.get().id(), machine.get().name());
         ensurePassFile(machine.get().name(), repo.get(), workDir);
         BorgCommand.BuiltCommand command = BorgCommand.listArchives(server.get(), repo.get(), workDir);
         log.info("Listing archives for repository {} on {}: {}",
@@ -331,8 +335,16 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
      */
     @Override
     public List<Archive> listMachineArchives(String machineName) {
+        // The Explorer still browses by name while jobs are keyed by identity, so the crossing happens here,
+        // at the driving edge, against the same machine registry every other guard in this class uses.
+        Optional<MachineId> machineId = machines.getAllMachines().stream()
+            .filter(m -> Machine.hasSameName(m.name(), machineName)).map(Machine::id).findFirst();
+        if (machineId.isEmpty()) {
+            log.debug("No archives for machine {}: no such machine", LogSafe.forLog(machineName));
+            return List.of();
+        }
         Optional<BackupJob> job = jobs.getBackupJobs().stream()
-            .filter(j -> j.machineName().equals(machineName)).findFirst();
+            .filter(j -> j.machineId().equals(machineId.get())).findFirst();
         if (job.isEmpty()) {
             log.debug("No archives for machine {}: it has no backup job", LogSafe.forLog(machineName));
             return List.of();
@@ -370,14 +382,14 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
 
     private void pollRun(BackupRun run) {
         try {
-            Optional<Machine> machine = findMachine(run.machineName());
+            Optional<Machine> machine = findMachine(run.machineId());
             if (machine.isEmpty() || !machine.get().effectiveSshAccess()
                 || credentials.getHostCredential(machine.get().name()).isEmpty()) {
                 log.debug("Cannot poll backup {} for job {}: machine or credential unavailable; leaving RUNNING",
                     LogSafe.forLog(run.runId()), LogSafe.forLog(run.jobName()));
                 return;
             }
-            String workDir = workDirResolver.workDirFor(run.machineName());
+            String workDir = workDirResolver.workDirFor(machine.get().id(), machine.get().name());
             CommandResult poll = remoteCommand.run(machine.get().name(),
                 BorgCommand.pollStatus(run.runId(), workDir));
             if (poll.timedOut() || poll.exitCode() != 0) {
@@ -393,7 +405,7 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
                 recorded(terminal);
                 log.info("Backup {} for job {} finished with exit {}",
                     LogSafe.forLog(run.runId()), LogSafe.forLog(run.jobName()), exitCode.get());
-                alertOnTransition(terminal);
+                alertOnTransition(terminal, machine.get().name());
                 // The run settled this tick: push an SSE event so the browser re-fetches this job's outcome
                 // (it never polls). Only on an actual settle, never every tick.
                 publishRunSettled(terminal);
@@ -419,11 +431,11 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
      * itself all-clear a previously failing job. Steady nightly failures produce NONE and stay quiet. A
      * notification failure is swallowed so it can never break the poll sweep.
      */
-    private void alertOnTransition(BackupRun terminal) {
+    private void alertOnTransition(BackupRun terminal, String machineLabel) {
         try {
             switch (failureTracker.update(terminal.jobName(), terminal.isFailure())) {
-                case CROSSED_TO_FAILING -> backupNotifier.notifyAdminsOfBackupFailure(terminal);
-                case CROSSED_TO_HEALTHY -> backupNotifier.notifyAdminsOfBackupRecovery(terminal);
+                case CROSSED_TO_FAILING -> backupNotifier.notifyAdminsOfBackupFailure(terminal, machineLabel);
+                case CROSSED_TO_HEALTHY -> backupNotifier.notifyAdminsOfBackupRecovery(terminal, machineLabel);
                 case NONE -> { /* no boundary crossed; stay quiet */ }
             }
         } catch (Exception e) {
@@ -491,9 +503,13 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
         }
     }
 
-    private Optional<Machine> findMachine(String name) {
+    /**
+     * The machine a job or run points at, resolved by identity. A record that named its machine could be
+     * orphaned by a rename; an id cannot be, so a miss here means one thing only — the machine is gone.
+     */
+    private Optional<Machine> findMachine(MachineId machineId) {
         return machines.getAllMachines().stream()
-            .filter(m -> m.name().equals(name))
+            .filter(m -> m.id().equals(machineId))
             .findFirst();
     }
 

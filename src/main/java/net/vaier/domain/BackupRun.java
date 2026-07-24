@@ -20,6 +20,8 @@ import java.util.List;
  * never reached borg at all.
  *
  * @param runId          a unique id for this run
+ * @param machineId      the identity of the machine the run ran on, copied from the job — never its display
+ *                       name, so a machine renamed mid-flight is still the machine the poll settles
  * @param exitCode       borg's exit code, or null while running / when a guard stopped the run
  * @param archiveName    the archive-name expression the run created under (borg expands it host-side)
  * @param summary        a short human-readable outcome note (never contains the passphrase)
@@ -28,7 +30,7 @@ public record BackupRun(
     String runId,
     String jobName,
     String repositoryName,
-    String machineName,
+    MachineId machineId,
     BackupRunStatus status,
     Instant startedAt,
     Instant finishedAt,
@@ -54,7 +56,7 @@ public record BackupRun(
 
     /** Open a run for {@code job} in {@code RUNNING}, before any outcome exists. */
     public static BackupRun started(BackupJob job, String runId, Instant now) {
-        return new BackupRun(runId, job.name(), job.repositoryName(), job.machineName(),
+        return new BackupRun(runId, job.name(), job.repositoryName(), job.machineId(),
             BackupRunStatus.RUNNING, now, null, null, job.archiveNameTemplate(), null);
     }
 
@@ -64,7 +66,7 @@ public record BackupRun(
      */
     public static BackupRun fromExitCode(BackupJob job, String runId, Instant startedAt, Instant now,
                                          int exitCode, String summary) {
-        return new BackupRun(runId, job.name(), job.repositoryName(), job.machineName(),
+        return new BackupRun(runId, job.name(), job.repositoryName(), job.machineId(),
             statusFor(exitCode, summary), startedAt, now, exitCode, job.archiveNameTemplate(), summary);
     }
 
@@ -99,7 +101,7 @@ public record BackupRun(
      * its summary.
      */
     public static BackupRun failed(BackupJob job, String runId, Instant now, String reason) {
-        return new BackupRun(runId, job.name(), job.repositoryName(), job.machineName(),
+        return new BackupRun(runId, job.name(), job.repositoryName(), job.machineId(),
             BackupRunStatus.FAILED, now, now, null, null, reason);
     }
 
@@ -120,9 +122,13 @@ public record BackupRun(
      * message: it tells the operator a fix exists and makes finding it their problem. So it names where they
      * already are — the machine's Backup entry — which is also where {@link #needsClientReadying()} puts the
      * action that does it for them.
+     *
+     * <p>{@code machineLabel} is how to call the machine in front of a person. The run itself holds only the
+     * machine's {@link MachineId}, which is the right key and the wrong thing to read; the caller has already
+     * resolved the machine to reach it, so it supplies the name rather than making this entity look one up.
      */
-    public static BackupRun borgMissing(BackupJob job, String runId, Instant now) {
-        return failed(job, runId, now, BORG_MISSING + job.machineName()
+    public static BackupRun borgMissing(BackupJob job, String runId, Instant now, String machineLabel) {
+        return failed(job, runId, now, BORG_MISSING + machineLabel
             + " — nothing else is wrong. Open this machine's Backup entry and choose "
             + "“Get this machine ready”, and Vaier will install it.");
     }
@@ -144,7 +150,7 @@ public record BackupRun(
      * and {@code summary}. This is the wither a poll uses to promote an in-flight run to its outcome.
      */
     public BackupRun completedFrom(int exitCode, Instant now, String summary) {
-        return new BackupRun(runId, jobName, repositoryName, machineName, statusFor(exitCode, summary),
+        return new BackupRun(runId, jobName, repositoryName, machineId, statusFor(exitCode, summary),
             startedAt, now, exitCode, archiveName, summary);
     }
 
@@ -155,7 +161,7 @@ public record BackupRun(
      * instant and {@code summary}.
      */
     public BackupRun asUnknown(Instant now, String summary) {
-        return new BackupRun(runId, jobName, repositoryName, machineName, BackupRunStatus.UNKNOWN,
+        return new BackupRun(runId, jobName, repositoryName, machineId, BackupRunStatus.UNKNOWN,
             startedAt, now, null, archiveName, summary);
     }
 
@@ -239,15 +245,20 @@ public record BackupRun(
      * {@code INCOMPLETE} run says so rather than "failed": in an inbox, "failed" reads as "the backup did not
      * run" and would be dismissed as noise on a job that visibly runs every night — whereas "incomplete" is
      * the one word that makes an operator open it. Which word to use is the entity's call, not the mailer's.
+     *
+     * <p><b>Why the machine arrives as an argument.</b> A run is keyed by {@link MachineId} so a rename cannot
+     * orphan it — but a UUID in an inbox tells an operator nothing. The name is presentation, and the caller
+     * has it (it just resolved the machine in order to reach it), so it is passed in rather than looked up
+     * here: an entity that reached for a registry to render a subject line would be an entity with a port.
      */
-    public String failureSubject() {
+    public String failureSubject(String machineLabel) {
         String what = status == BackupRunStatus.INCOMPLETE ? "Backup incomplete: " : "Backup failed: ";
-        return "[Vaier] " + what + jobName + " on " + machineName;
+        return "[Vaier] " + what + jobName + " on " + machineLabel;
     }
 
     /** Subject line for the admin all-clear, sent once when a previously failing job succeeds again. */
-    public String recoverySubject() {
-        return "[Vaier] Backup recovered: " + jobName + " on " + machineName;
+    public String recoverySubject(String machineLabel) {
+        return "[Vaier] Backup recovered: " + jobName + " on " + machineLabel;
     }
 
     /**
@@ -255,11 +266,13 @@ public record BackupRun(
      * and the {@code summary} tail (never the passphrase), ending with a link to the Vaier UI built from
      * {@code baseDomain} (omitted when it is null or blank). Rendering lives here on the entity, mirroring
      * {@link RemoteDiskUsage#pressureBody}; the notification service only sequences the SMTP send.
+     * {@code machineLabel} is the machine's display name, supplied for the same reason as in
+     * {@link #failureSubject}.
      */
-    public String failureBody(String baseDomain) {
+    public String failureBody(String machineLabel, String baseDomain) {
         StringBuilder body = new StringBuilder();
         body.append("Backup job: ").append(jobName).append("\n");
-        body.append("Machine: ").append(machineName).append("\n");
+        body.append("Machine: ").append(machineLabel).append("\n");
         body.append("Repository: ").append(repositoryName).append("\n");
         body.append("Status: ").append(status).append("\n");
         body.append("Exit code: ").append(exitCode != null ? exitCode : "unknown").append("\n");
@@ -283,7 +296,7 @@ public record BackupRun(
     }
 
     /** Body for the all-clear email; same shape as {@link #failureBody}, reused as {@code RemoteDiskUsage} does. */
-    public String recoveryBody(String baseDomain) {
-        return failureBody(baseDomain);
+    public String recoveryBody(String machineLabel, String baseDomain) {
+        return failureBody(machineLabel, baseDomain);
     }
 }

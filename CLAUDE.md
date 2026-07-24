@@ -82,6 +82,24 @@ Application services must never import from an unrelated use case interface just
 - Springdoc OpenAPI 2.7.0 for API documentation
 - Argon2-JVM for password hashing
 
+## Import types, never write them fully qualified
+
+Every type reference in Java source is an unqualified name backed by an `import`. Never write
+`net.vaier.domain.MachineId machineId`, `java.util.Optional<String>`, or
+`org.mockito.Mockito.mock(...)` inline — **including in tests**, and including a type used exactly once.
+
+A fully-qualified name inline is almost always a shortcut taken by whoever was editing: it lets a
+mechanical find-and-replace land without also touching the import block. The cost lands on every later
+reader, and it makes the import block stop being a truthful summary of what a file depends on — which is
+the first thing you read when judging whether a class sits on the right side of a port.
+
+A handful of pre-existing inline FQNs remain in the codebase (e.g. `TerminalService`,
+`MachineSshTargetAdapter`). They are debt, not precedent: convert them when you are already editing that
+line, and never add new ones.
+
+Two narrow exceptions: an unavoidable name collision between two imported types, and a fully-qualified
+name inside a Javadoc `{@link}` where the type is not otherwise imported.
+
 ## CI/CD
 
 GitHub Actions:

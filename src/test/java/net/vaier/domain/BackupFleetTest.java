@@ -16,7 +16,7 @@ class BackupFleetTest {
 
     @Test
     void doesNotNeedBackupServer_onceOneExists() {
-        BackupServer server = new BackupServer("nas-borg", "nas", "192.168.3.50",
+        BackupServer server = new BackupServer("nas-borg", TestMachineIds.of("nas"), "192.168.3.50",
             8022, "borg", null, "/volume1/docker/borg", true);
         assertThat(new BackupFleet(List.of(server)).needsBackupServer()).isFalse();
     }

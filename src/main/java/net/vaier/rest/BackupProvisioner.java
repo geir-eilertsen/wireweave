@@ -22,6 +22,7 @@ import net.vaier.domain.BorgVersion;
 import net.vaier.domain.CommandResult;
 import net.vaier.domain.HostCredentialView;
 import net.vaier.domain.Machine;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.port.ForPersistingBackupJobs;
 import net.vaier.domain.port.ForPersistingBackupRepositories;
 import net.vaier.domain.port.ForPersistingBackupServers;
@@ -34,6 +35,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 
 /**
  * Guided-provisioning orchestrator for fleet backups, kept separate from {@link BackupRunner} so the
@@ -78,8 +80,12 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
     /** A launched detached run Vaier is waiting to settle: the host, its run id, and its work dir. */
     private record InFlightRun(String host, String runId, String workDir) {}
 
-    /** machineName -> the in-flight prepare the backend sweep polls until it settles, then publishes over SSE. */
-    private final Map<String, InFlightRun> inFlightPrepares = new ConcurrentHashMap<>();
+    /**
+     * {@link MachineId} -> the in-flight prepare the backend sweep polls until it settles, then publishes
+     * over SSE. Keyed by identity: a machine renamed mid-install would otherwise never have its entry found
+     * again, and the install would settle into silence.
+     */
+    private final Map<MachineId, InFlightRun> inFlightPrepares = new ConcurrentHashMap<>();
 
     /** serverName -> the in-flight provision the backend sweep polls until it settles, then publishes over SSE. */
     private final Map<String, InFlightRun> inFlightProvisions = new ConcurrentHashMap<>();
@@ -103,14 +109,15 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
     }
 
     @Override
-    public BorgAvailability checkBorg(String machineName) {
-        Optional<Machine> machine = reachableMachine(machineName);
+    public BorgAvailability checkBorg(MachineId machineId) {
+        Optional<Machine> machine = reachableMachine(machineId);
         if (machine.isEmpty()) {
             return new BorgAvailability(false, Optional.empty(), false);
         }
+        String machineName = machine.get().name();
         log.info("Checking borg availability on {}", LogSafe.forLog(machineName));
         try {
-            CommandResult result = remoteCommand.run(machine.get().name(), BorgCommand.versionProbe());
+            CommandResult result = remoteCommand.run(machineName, BorgCommand.versionProbe());
             if (result.timedOut() || result.exitCode() != 0) {
                 return new BorgAvailability(false, Optional.empty(), false);
             }
@@ -131,14 +138,15 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
      * guarded-out host, a timeout, or a thrown SSH error all report a negative — never an optimistic yes.
      */
     @Override
-    public RootBorgAvailability checkRootBorg(String machineName) {
-        Optional<Machine> machine = reachableMachine(machineName);
+    public RootBorgAvailability checkRootBorg(MachineId machineId) {
+        Optional<Machine> machine = reachableMachine(machineId);
         if (machine.isEmpty()) {
             return new RootBorgAvailability(false);
         }
+        String machineName = machine.get().name();
         log.info("Checking whether borg can run as root on {}", LogSafe.forLog(machineName));
         try {
-            CommandResult result = remoteCommand.run(machine.get().name(),
+            CommandResult result = remoteCommand.run(machineName,
                 BorgClientSetupScript.rootBorgProbe());
             boolean canRunAsRoot = !result.timedOut()
                 && BorgClientSetupScript.parseRootBorg(result.stdout());
@@ -151,7 +159,7 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
     }
 
     @Override
-    public RepoReachability checkNas(String repositoryName, String machineName) {
+    public RepoReachability checkNas(String repositoryName, MachineId machineId) {
         Optional<BackupRepository> repo = findRepository(repositoryName);
         if (repo.isEmpty()) {
             return new RepoReachability(false);
@@ -160,14 +168,15 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
         if (server.isEmpty()) {
             return new RepoReachability(false);
         }
-        Optional<Machine> machine = reachableMachine(machineName);
+        Optional<Machine> machine = reachableMachine(machineId);
         if (machine.isEmpty()) {
             return new RepoReachability(false);
         }
+        String machineName = machine.get().name();
         log.info("Checking NAS reachability of repository {} from {}",
             LogSafe.forLog(repositoryName), LogSafe.forLog(machineName));
         try {
-            CommandResult result = remoteCommand.run(machine.get().name(),
+            CommandResult result = remoteCommand.run(machineName,
                 BorgCommand.reachabilityProbe(server.get()));
             boolean reachable = !result.timedOut() && BorgCommand.parseReachability(result.stdout());
             return new RepoReachability(reachable);
@@ -179,7 +188,7 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
     }
 
     @Override
-    public ServerBorgAuth checkServerAuth(String repositoryName, String machineName,
+    public ServerBorgAuth checkServerAuth(String repositoryName, MachineId machineId,
                                           Optional<BorgVersion> clientBorgVersion) {
         Optional<BackupRepository> repo = findRepository(repositoryName);
         if (repo.isEmpty()) {
@@ -189,25 +198,25 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
         if (server.isEmpty()) {
             return new ServerBorgAuth(false, Optional.empty(), false);
         }
-        Optional<Machine> machine = reachableMachine(machineName);
+        Optional<Machine> machine = reachableMachine(machineId);
         if (machine.isEmpty()) {
             return new ServerBorgAuth(false, Optional.empty(), false);
         }
+        String machineName = machine.get().name();
         // The server's borg version is DERIVED, not probed: a managed server's restricted forced-command key
         // makes `borg --version` over SSH impossible, but because Vaier stood it up we know the pinned image's
         // borg. An adopted server is unknown — and compatibility then fails closed (never optimistically true).
         Optional<BorgVersion> serverVersion = server.get().managed()
             ? Optional.of(BorgServerImage.borgVersion()) : Optional.empty();
-        String host = machine.get().name();
-        String workDir = workDirResolver.workDirFor(host);
+        String workDir = workDirResolver.workDirFor(machine.get().id(), machineName);
         log.info("Checking borg auth to backup server {} from {} (borg info on the repo URL)",
             LogSafe.forLog(server.get().name()), LogSafe.forLog(machineName));
         try {
             // Ensure the pass file so BORG_PASSCOMMAND resolves, then run `borg info` for THIS repo — the same
             // path a real run takes, so it validates auth AND the per-repo restriction, not just a version.
             BorgCommand.BuiltCommand ensure = BorgCommand.ensurePassFile(repo.get(), workDir);
-            remoteCommand.run(host, ensure.exec());
-            CommandResult result = remoteCommand.run(host,
+            remoteCommand.run(machineName, ensure.exec());
+            CommandResult result = remoteCommand.run(machineName,
                 BorgCommand.serverAuthProbe(server.get(), repo.get(), workDir));
             if (result.timedOut()) {
                 return new ServerBorgAuth(false, serverVersion, false);
@@ -231,7 +240,7 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
     }
 
     @Override
-    public RepoInitResult initRepo(String repositoryName, String machineName) {
+    public RepoInitResult initRepo(String repositoryName, MachineId machineId) {
         Optional<BackupRepository> repo = findRepository(repositoryName);
         if (repo.isEmpty()) {
             return new RepoInitResult(false, false, "No repository named " + repositoryName);
@@ -240,13 +249,13 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
         if (server.isEmpty()) {
             return new RepoInitResult(false, false, "No backup server named " + repo.get().serverName());
         }
-        Optional<Machine> machine = reachableMachine(machineName);
+        Optional<Machine> machine = reachableMachine(machineId);
         if (machine.isEmpty()) {
             return new RepoInitResult(false, false,
-                "Machine " + machineName + " is unknown, has SSH disabled, or has no stored credential");
+                "The machine to initialise from is unknown, has SSH disabled, or has no stored credential");
         }
         String host = machine.get().name();
-        String workDir = workDirResolver.workDirFor(host);
+        String workDir = workDirResolver.workDirFor(machine.get().id(), host);
         try {
             // Provision the pass file first so borg init can read the passphrase from it via BORG_PASSCOMMAND.
             BorgCommand.BuiltCommand writePass = BorgCommand.writePassFile(repo.get(), workDir);
@@ -290,12 +299,11 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
         if (server.isEmpty()) {
             return new ProvisionResult(false, false, false, "No backup server named " + serverName, null);
         }
-        String machineName = server.get().machineName();
-        Optional<Machine> machine = reachableMachine(machineName);
+        Optional<Machine> machine = reachableMachine(server.get().machineId());
         if (machine.isEmpty()) {
             // The host is unknown, SSH-disabled, or has no stored credential: Vaier cannot SSH in to stage the
             // script, so tell the operator to download it from the UI rather than failing opaquely.
-            return new ProvisionResult(false, true, false, "Machine " + machineName
+            return new ProvisionResult(false, true, false, "The machine hosting " + serverName
                 + " is unknown, has SSH disabled, or has no stored credential — download the setup script from"
                 + " the UI and run it on the host with sudo.", null);
         }
@@ -306,14 +314,14 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
                 // No usable docker CLI over SSH (the Synology case). Vaier CAN ssh in, so it stages the setup
                 // script on the host and hands the operator the one command to run — never a curl of a
                 // setup.sh that sits behind admin auth.
-                return stageSetupScript(server.get(), host);
+                return stageSetupScript(server.get(), machine.get());
             }
             // Launch detached: the setup's `docker compose up -d` pulls a ~100 MB image and would blow the
             // 20 s SSH exec cap if run synchronously. nohup it, write the exit code/output to per-run files,
             // and return as soon as STARTED is echoed — status is polled from those files.
             String script = BorgServerSetupScript.generate(server.get(), ownerUserFor(server.get()));
             String runId = server.get().provisionRunId();
-            String workDir = workDirResolver.workDirFor(host);
+            String workDir = workDirResolver.workDirFor(machine.get().id(), host);
             String launch = BorgServerSetupScript.detachedLaunch(script, runId, workDir);
             log.info("Launching detached provisioning of backup server {} on {}",
                 LogSafe.forLog(serverName), LogSafe.forLog(host));
@@ -342,8 +350,10 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
      * SSH exception — it degrades to {@code scriptOnly} with a null path and a message telling the operator to
      * download the script from the UI instead. Never throws.
      */
-    private ProvisionResult stageSetupScript(BackupServer server, String host) {
-        String stagedPath = workDirResolver.workDirFor(host) + "/" + server.name() + "-borg-setup.sh";
+    private ProvisionResult stageSetupScript(BackupServer server, Machine machine) {
+        String host = machine.name();
+        String stagedPath = workDirResolver.workDirFor(machine.id(), host) + "/" + server.name()
+            + "-borg-setup.sh";
         try {
             String script = BorgServerSetupScript.generate(server, ownerUserFor(server));
             String stage = BorgServerSetupScript.stageScript(script, stagedPath);
@@ -374,13 +384,13 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
         if (server.isEmpty()) {
             return new ProvisionStatus(ProvisionState.RUNNING, "");
         }
-        Optional<Machine> machine = reachableMachine(server.get().machineName());
+        Optional<Machine> machine = reachableMachine(server.get().machineId());
         if (machine.isEmpty()) {
             return new ProvisionStatus(ProvisionState.RUNNING, "");
         }
         String host = machine.get().name();
         String runId = server.get().provisionRunId();
-        String workDir = workDirResolver.workDirFor(host);
+        String workDir = workDirResolver.workDirFor(machine.get().id(), host);
         try {
             CommandResult poll = remoteCommand.run(host, BorgCommand.pollStatus(runId, workDir));
             if (poll.timedOut() || poll.exitCode() != 0) {
@@ -401,14 +411,14 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
     }
 
     @Override
-    public PrepareResult prepareClient(String machineName) {
-        Optional<Machine> machine = reachableMachine(machineName);
+    public PrepareResult prepareClient(MachineId machineId) {
+        Optional<Machine> machine = reachableMachine(machineId);
         if (machine.isEmpty()) {
             // Unknown, SSH-disabled, or no stored credential: Vaier cannot SSH in to install, so tell the
             // operator to run the script on the host rather than failing opaquely.
-            return new PrepareResult(false, true, false, "Machine " + machineName
-                + " is unknown, has SSH disabled, or has no stored credential — download the prepare-client"
-                + " script from the UI and run it on the host with sudo.", null);
+            return new PrepareResult(false, true, false, "That machine is unknown, has SSH disabled, or has"
+                + " no stored credential — download the prepare-client script from the UI and run it on the"
+                + " host with sudo.", null);
         }
         String host = machine.get().name();
         try {
@@ -416,14 +426,14 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
             // it, Vaier runs the script itself; without it, it degrades to staging the script for the operator.
             CommandResult probe = remoteCommand.run(host, BorgClientSetupScript.passwordlessSudoProbe());
             if (probe.timedOut() || !BorgClientSetupScript.parsePasswordlessSudo(probe.stdout())) {
-                return stagePrepareScript(host, machineName);
+                return stagePrepareScript(machine.get());
             }
             // Launch detached: an apt/dnf install can blow the 20 s SSH exec cap. The client helper runs the
             // script under `sudo -n bash`, writes the exit code/output to per-run files, and returns as soon
             // as STARTED is echoed — status is polled from those files exactly like server provisioning.
             String script = BorgClientSetupScript.generate();
-            String runId = prepareRunId(machineName);
-            String workDir = workDirResolver.workDirFor(host);
+            String runId = prepareRunId(machineId);
+            String workDir = workDirResolver.workDirFor(machineId, host);
             String launch = BorgClientSetupScript.detachedLaunch(script, runId, workDir);
             log.info("Launching detached borg-client install on {}", LogSafe.forLog(host));
             CommandResult result = remoteCommand.run(host, launch);
@@ -431,7 +441,7 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
                 && result.stdout() != null && result.stdout().contains("STARTED")) {
                 // Register the launched install so the backend sweep settles it and pushes an SSE event —
                 // the frontend never polls, it just listens on the backups stream.
-                inFlightPrepares.put(machineName, new InFlightRun(host, runId, workDir));
+                inFlightPrepares.put(machineId, new InFlightRun(host, runId, workDir));
                 return new PrepareResult(false, false, true,
                     "Preparing client on " + host + " — you'll be notified when it finishes.", null);
             }
@@ -452,8 +462,10 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
      * Owns its own error handling so a staging failure never propagates: on any error it degrades to
      * {@code scriptOnly} with a null path and a "download it" message. Never throws.
      */
-    private PrepareResult stagePrepareScript(String host, String machineName) {
-        String stagedPath = workDirResolver.workDirFor(host) + "/" + prepareRunId(machineName) + ".sh";
+    private PrepareResult stagePrepareScript(Machine machine) {
+        String host = machine.name();
+        String stagedPath = workDirResolver.workDirFor(machine.id(), host) + "/"
+            + prepareRunId(machine.id()) + ".sh";
         try {
             String script = BorgClientSetupScript.generate();
             String stage = BorgServerSetupScript.stageScript(script, stagedPath);
@@ -478,14 +490,14 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
     }
 
     @Override
-    public PrepareStatus prepareClientStatus(String machineName) {
-        Optional<Machine> machine = reachableMachine(machineName);
+    public PrepareStatus prepareClientStatus(MachineId machineId) {
+        Optional<Machine> machine = reachableMachine(machineId);
         if (machine.isEmpty()) {
             return new PrepareStatus(PrepareState.RUNNING, "");
         }
         String host = machine.get().name();
-        String runId = prepareRunId(machineName);
-        String workDir = workDirResolver.workDirFor(host);
+        String runId = prepareRunId(machineId);
+        String workDir = workDirResolver.workDirFor(machineId, host);
         try {
             CommandResult poll = remoteCommand.run(host, BorgCommand.pollStatus(runId, workDir));
             if (poll.timedOut() || poll.exitCode() != 0) {
@@ -513,28 +525,28 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
      * {@code prepare-client-settled} SSE event).
      */
     @Override
-    public ReadyingOutcome readyForBackup(String machineName) {
+    public ReadyingOutcome readyForBackup(MachineId machineId) {
         try {
             // Trust the key on the machine's backup server first, so the install has somewhere to authenticate.
             // The server is resolved via the machine's freshly-created job -> repository -> server; when it
             // cannot be resolved yet (no repo on a server) the authorize is skipped rather than guessed.
-            serverForMachine(machineName)
-                .ifPresent(serverName -> authorizeClient(serverName, machineName));
-            PrepareResult prepare = prepareClient(machineName);
+            serverForMachine(machineId)
+                .ifPresent(serverName -> authorizeClient(serverName, machineId));
+            PrepareResult prepare = prepareClient(machineId);
             return new ReadyingOutcome(prepare.started(), prepare.scriptOnly(),
                 prepare.stagedScriptPath(), prepare.message());
         } catch (Exception e) {
             log.debug("Readying {} for its first back-up failed transiently: {}",
-                LogSafe.forLog(machineName), e.getMessage());
+                machineId, e.getMessage());
             return new ReadyingOutcome(false, false, null,
                 "Automatic provisioning could not run: " + e.getMessage());
         }
     }
 
     /** The backup server a machine backs up to, via its job's repository — empty when none is resolvable yet. */
-    private Optional<String> serverForMachine(String machineName) {
+    private Optional<String> serverForMachine(MachineId machineId) {
         return jobs.getAll().stream()
-            .filter(j -> j.machineName().equals(machineName))
+            .filter(j -> j.machineId().equals(machineId))
             .map(BackupJob::repositoryName)
             .flatMap(repoName -> findRepository(repoName).stream())
             .map(BackupRepository::serverName)
@@ -545,12 +557,43 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
      * The backend sweep that settles launched client-prepares: for each in-flight install it reads the host's
      * {@code .rc} file over SSH (backend polling is fine — the <em>frontend</em> never polls) and, when the
      * install has finished, publishes a {@link #PREPARE_SETTLED_EVENT} on the {@link #BACKUPS_TOPIC} SSE topic
-     * keyed by {@code machineName} and drops the entry so it never re-publishes. A still-running install or a
+     * carrying the machine's {@code machineId} and {@code machineName}, and drops the entry so it never
+     * re-publishes. A still-running install or a
      * transient poll failure leaves the entry for the next sweep. Never throws.
      */
     @Scheduled(fixedDelay = SWEEP_INTERVAL_MS)
     public void pollInFlightPrepares() {
-        sweepInFlight(inFlightPrepares, PREPARE_SETTLED_EVENT, "machineName", "prepare");
+        // The map is keyed by identity, so the name the browser is still keyed by is resolved once, here,
+        // from the machine registry — and the id rides along so the browser can stop needing the name.
+        sweepInFlight(inFlightPrepares, PREPARE_SETTLED_EVENT, "prepare", this::machineFieldsFor);
+    }
+
+    /**
+     * The machine's current name, or empty when it has left the fleet. This is a <em>lookup key</em> — the
+     * credential vault is still keyed by name — and deliberately not {@link #machineIdOnTheWire}, whose
+     * fallback is a rendered string that could only ever miss.
+     */
+    private Optional<String> machineNameFor(MachineId machineId) {
+        return machines.getAllMachines().stream()
+            .filter(m -> m.id().equals(machineId))
+            .map(Machine::name)
+            .findFirst();
+    }
+
+    /**
+     * The id fields of a settled prepare's SSE payload, following the same convention every REST DTO in this
+     * slice follows: the machine's identity in {@code machineId}, its display name in {@code machineName},
+     * and {@code null} there when the machine has left the fleet mid-install. Never an id in the name field
+     * — that conflation is the thing being removed, and this payload was the last place still doing it.
+     *
+     * <p>Deliberately not {@link Machine#labelFor}: this is data the browser matches on, not prose. A
+     * sentence here would match nothing while looking like a name.
+     */
+    private String machineFieldsFor(MachineId machineId) {
+        String name = machineNameFor(machineId)
+            .map(n -> "\"" + jsonEscape(n) + "\"")
+            .orElse("null");
+        return "\"machineId\":\"" + jsonEscape(machineId.value()) + "\",\"machineName\":" + name;
     }
 
     /**
@@ -562,7 +605,8 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
      */
     @Scheduled(fixedDelay = SWEEP_INTERVAL_MS)
     public void pollInFlightProvisions() {
-        sweepInFlight(inFlightProvisions, PROVISION_SETTLED_EVENT, "serverName", "provision");
+        sweepInFlight(inFlightProvisions, PROVISION_SETTLED_EVENT, "provision",
+            serverName -> "\"serverName\":\"" + jsonEscape(serverName) + "\"");
     }
 
     /**
@@ -572,14 +616,16 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
      * (state SUCCESS/FAILED). A still-running run or a transient poll failure leaves the entry for the next
      * sweep; a publish failure is swallowed. Never throws — one bad entry can never stall the sweep.
      */
-    private void sweepInFlight(Map<String, InFlightRun> inFlight, String eventName, String idKey, String label) {
-        for (Map.Entry<String, InFlightRun> entry : inFlight.entrySet()) {
-            settleIfDone(inFlight, entry.getKey(), entry.getValue(), eventName, idKey, label);
+    private <K> void sweepInFlight(Map<K, InFlightRun> inFlight, String eventName, String label,
+                                   Function<K, String> renderIdFields) {
+        for (Map.Entry<K, InFlightRun> entry : inFlight.entrySet()) {
+            settleIfDone(inFlight, entry.getKey(), entry.getValue(), eventName, label, renderIdFields);
         }
     }
 
-    private void settleIfDone(Map<String, InFlightRun> inFlight, String id, InFlightRun run,
-                              String eventName, String idKey, String label) {
+    private <K> void settleIfDone(Map<K, InFlightRun> inFlight, K id, InFlightRun run,
+                                  String eventName, String label,
+                                  Function<K, String> renderIdFields) {
         try {
             CommandResult poll = remoteCommand.run(run.host(), BorgCommand.pollStatus(run.runId(), run.workDir()));
             if (poll.timedOut() || poll.exitCode() != 0) {
@@ -591,17 +637,16 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
             }
             inFlight.remove(id);
             String state = exitCode.get() == 0 ? "SUCCESS" : "FAILED";
-            events.publish(BACKUPS_TOPIC, eventName, settledJson(idKey, id, state));
-            log.info("borg {} on {} settled {}", label, LogSafe.forLog(id), state);
+            events.publish(BACKUPS_TOPIC, eventName, settledJson(renderIdFields.apply(id), state));
+            log.info("borg {} on {} settled {}", label, LogSafe.forLog(String.valueOf(id)), state);
         } catch (Exception e) {
-            log.debug("Sweeping in-flight {} on {} failed transiently: {}",
-                label, LogSafe.forLog(id), e.getMessage());
+            log.debug("Sweeping in-flight {} failed transiently: {}", label, e.getMessage());
         }
     }
 
-    /** The SSE payload for a settled run: {@code {"<idKey>":"…","state":"SUCCESS"}} (JSON-escaped). */
-    private static String settledJson(String idKey, String idValue, String state) {
-        return "{\"" + idKey + "\":\"" + jsonEscape(idValue) + "\",\"state\":\"" + state + "\"}";
+    /** The SSE payload for a settled run: {@code {<idFields>,"state":"SUCCESS"}}. The fields are pre-escaped. */
+    private static String settledJson(String idFields, String state) {
+        return "{" + idFields + ",\"state\":\"" + state + "\"}";
     }
 
     /** Escape a value for embedding in a double-quoted JSON string (backslash and double quote). */
@@ -609,28 +654,36 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
-    /** A deterministic per-machine run id for the prepare-client detached run's rc/log/sh files. */
-    private static String prepareRunId(String machineName) {
-        return "prepare-client-" + machineName.replaceAll("[^A-Za-z0-9._-]", "-");
+    /**
+     * A deterministic per-machine run id for the prepare-client detached run's rc/log/sh files.
+     *
+     * <p>Derived from the machine's <em>identity</em>, not its name: the id names on-host files that a launch
+     * writes and a later status poll reads back, and a machine renamed between the two would have looked for
+     * a run that no longer existed anywhere. A UUID is less legible on the host than a name was; a run that
+     * cannot be found at all is worse. Already safe for a filename and a shell word, so nothing is stripped.
+     */
+    private static String prepareRunId(MachineId machineId) {
+        return "prepare-client-" + machineId.value();
     }
 
     @Override
-    public AuthorizeResult authorizeClient(String serverName, String machineName) {
+    public AuthorizeResult authorizeClient(String serverName, MachineId machineId) {
         Optional<BackupServer> server = findServer(serverName);
         if (server.isEmpty()) {
             return new AuthorizeResult(false, false, false, "No backup server named " + serverName);
         }
         // The client runs keygen; the server's own machine hosts authorized_keys. Both must be reachable,
         // and they are normally distinct hosts (client vs NAS).
-        Optional<Machine> client = reachableMachine(machineName);
+        Optional<Machine> client = reachableMachine(machineId);
         if (client.isEmpty()) {
-            return new AuthorizeResult(false, false, false, "Machine " + machineName
+            return new AuthorizeResult(false, false, false, "That machine"
                 + " is unknown, has SSH disabled, or has no stored credential");
         }
-        Optional<Machine> serverMachine = reachableMachine(server.get().machineName());
+        String machineName = client.get().name();
+        Optional<Machine> serverMachine = reachableMachine(server.get().machineId());
         if (serverMachine.isEmpty()) {
-            return new AuthorizeResult(false, false, false, "Backup server machine "
-                + server.get().machineName()
+            return new AuthorizeResult(false, false, false, "The machine hosting backup server "
+                + serverName
                 + " is unknown, has SSH disabled, or has no stored credential");
         }
         // Locate authorized_keys up front: a blank serverDataPath makes this throw, and we must surface it
@@ -663,7 +716,7 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
             // Step 3 (server's machine): idempotent, newline-safe upsert of a RESTRICTED entry — the key is
             // confined to just the repositories this machine backs up to on this server (never a bare key,
             // which would grant a full shell as the borg user and let one client wipe every repo).
-            List<String> repoPaths = restrictPathsFor(machineName, server.get());
+            List<String> repoPaths = restrictPathsFor(machineId, server.get());
             boolean fellBackToRoot = repoPaths.isEmpty();
             // Never write an unrestricted key and never emit a bare --restrict-to-path: with no repo yet,
             // confine the key to the server's repository root and tell the operator to re-authorize later.
@@ -735,7 +788,11 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
      * (the operator-runs-the-script case, where Vaier isn't SSHing in anyway).
      */
     private String ownerUserFor(BackupServer server) {
-        return credentials.getHostCredential(server.machineName())
+        // The vault is still reached by name, so the server's machine id is resolved back to one first — and
+        // when there is no name (the machine has left the fleet) there is nothing to look up, so the server's
+        // own borgUser stands rather than a vault probe that could only miss.
+        return machineNameFor(server.machineId())
+            .flatMap(credentials::getHostCredential)
             .map(HostCredentialView::username)
             .orElse(server.borgUser());
     }
@@ -762,9 +819,9 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
      * and dedupes for a deterministic, idempotent entry line. Empty when no repository on this server is yet
      * targeted by a job on this machine (the orchestrator then falls back to the repository root).
      */
-    private List<String> restrictPathsFor(String machineName, BackupServer server) {
+    private List<String> restrictPathsFor(MachineId machineId, BackupServer server) {
         List<String> targetedRepoNames = jobs.getAll().stream()
-            .filter(j -> j.machineName().equals(machineName))
+            .filter(j -> j.machineId().equals(machineId))
             .map(BackupJob::repositoryName)
             .toList();
         return repositories.getAll().stream()
@@ -777,13 +834,12 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
     }
 
     /** A machine that is known, SSH-enabled and has a stored credential — otherwise empty (guarded out). */
-    private Optional<Machine> reachableMachine(String machineName) {
+    private Optional<Machine> reachableMachine(MachineId machineId) {
         Optional<Machine> machine = machines.getAllMachines().stream()
-            .filter(m -> m.name().equals(machineName)).findFirst();
+            .filter(m -> m.id().equals(machineId)).findFirst();
         if (machine.isEmpty() || !machine.get().effectiveSshAccess()
             || credentials.getHostCredential(machine.get().name()).isEmpty()) {
-            log.debug("Cannot provision via {}: machine unknown, SSH disabled, or no credential",
-                LogSafe.forLog(machineName));
+            log.debug("Cannot provision via {}: machine unknown, SSH disabled, or no credential", machineId);
             return Optional.empty();
         }
         return machine;

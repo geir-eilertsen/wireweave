@@ -10,8 +10,8 @@ public interface NotifyAdminsOfBackupServerDownUseCase {
      * The {@code cause} (REFUSED vs UNREACHABLE) is carried through so the email can say whether it is the
      * borg container or the whole host that vanished.
      */
-    void notifyAdminsOfBackupServerDown(BackupServer server, ProbeResult cause);
+    void notifyAdminsOfBackupServerDown(BackupServer server, String machineLabel, ProbeResult cause);
 
     /** Tell admins a previously down Backup server is reachable again — the all-clear. */
-    void notifyAdminsOfBackupServerRecovered(BackupServer server);
+    void notifyAdminsOfBackupServerRecovered(BackupServer server, String machineLabel);
 }

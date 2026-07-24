@@ -8,6 +8,7 @@ import net.vaier.domain.BackupRepository;
 import net.vaier.domain.BackupServer;
 import net.vaier.domain.BorgCommand;
 import net.vaier.domain.CommandResult;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.MountedArchive;
 import net.vaier.domain.NotFoundException;
 import net.vaier.domain.SshTarget;
@@ -15,6 +16,7 @@ import net.vaier.domain.port.ForMountingArchives;
 import net.vaier.domain.port.ForPersistingBackupJobs;
 import net.vaier.domain.port.ForPersistingBackupRepositories;
 import net.vaier.domain.port.ForPersistingBackupServers;
+import net.vaier.domain.port.ForResolvingMachineIds;
 import net.vaier.domain.port.ForResolvingSshTargets;
 import net.vaier.domain.port.ForRunningSshCommands;
 import org.springframework.stereotype.Component;
@@ -59,6 +61,7 @@ public class BorgArchiveMountAdapter implements ForMountingArchives {
     private final ForPersistingBackupJobs jobs;
     private final ForPersistingBackupRepositories repositories;
     private final ForPersistingBackupServers servers;
+    private final ForResolvingMachineIds machineIds;
     private final Clock clock;
 
     /** Live mounts by mountpoint → when each was last browsed, so the sweep can release the idle ones. */
@@ -70,22 +73,27 @@ public class BorgArchiveMountAdapter implements ForMountingArchives {
     public BorgArchiveMountAdapter(ForResolvingSshTargets sshTargets, ForRunningSshCommands ssh,
                                    BackupWorkDirResolver workDirResolver, ForPersistingBackupJobs jobs,
                                    ForPersistingBackupRepositories repositories,
-                                   ForPersistingBackupServers servers, Clock clock) {
+                                   ForPersistingBackupServers servers, ForResolvingMachineIds machineIds,
+                                   Clock clock) {
         this.sshTargets = sshTargets;
         this.ssh = ssh;
         this.workDirResolver = workDirResolver;
         this.jobs = jobs;
         this.repositories = repositories;
         this.servers = servers;
+        this.machineIds = machineIds;
         this.clock = clock;
     }
 
     @Override
     public MountedArchive mount(String machineName, String archiveId) {
-        // MountedArchive.under validates the archive id (opaque hex) before any connection is opened.
-        String workDir = workDirResolver.workDirFor(machineName);
-        MountedArchive mounted = MountedArchive.under(workDir, archiveId);
+        // The target is resolved FIRST because it carries the machine's identity, and identity is what the
+        // job store and the work-dir cache are keyed by. Taking the id from the same resolution that opens
+        // the connection is what makes it impossible to mount one machine's archive using another's job.
         SshTarget target = sshTargets.resolve(machineName);
+        // MountedArchive.under validates the archive id (opaque hex) before any connection is opened.
+        String workDir = workDirResolver.workDirFor(target.machineId(), machineName);
+        MountedArchive mounted = MountedArchive.under(workDir, archiveId);
 
         if (!isAlreadyMounted(target, mounted)) {
             mountCold(machineName, target, mounted, workDir, archiveId);
@@ -112,7 +120,7 @@ public class BorgArchiveMountAdapter implements ForMountingArchives {
      */
     private void mountCold(String machineName, SshTarget target, MountedArchive mounted, String workDir,
                            String archiveId) {
-        BackupJob job = firstJobFor(machineName);
+        BackupJob job = firstJobFor(target.machineId(), machineName);
         BackupRepository repo = repositoryFor(job);
         BackupServer server = serverFor(repo);
 
@@ -126,8 +134,8 @@ public class BorgArchiveMountAdapter implements ForMountingArchives {
         ssh.run(target, mount.exec());
     }
 
-    private BackupJob firstJobFor(String machineName) {
-        return jobs.getByMachine(machineName).stream().findFirst()
+    private BackupJob firstJobFor(MachineId machineId, String machineName) {
+        return jobs.getByMachine(machineId).stream().findFirst()
             .orElseThrow(() -> new NotFoundException(
                 "Cannot browse the past of " + machineName + ": it has no backup job, so no archives"));
     }
@@ -186,8 +194,10 @@ public class BorgArchiveMountAdapter implements ForMountingArchives {
     public void reconcileMounts() {
         // Distinct backed-up machines: a machine may have more than one job, but its mounts all live under
         // the one work dir, so probe each machine once.
-        for (String machineName : jobs.getAll().stream().map(BackupJob::machineName).distinct().toList()) {
-            adoptOrphanMountsOn(machineName);
+        for (MachineId machineId : jobs.getAll().stream().map(BackupJob::machineId).distinct().toList()) {
+            // A job whose machine no longer exists has nothing to reconcile — and nothing to reach it by.
+            machineIds.nameForId(machineId)
+                .ifPresent(machineName -> adoptOrphanMountsOn(machineId, machineName));
         }
     }
 
@@ -197,9 +207,9 @@ public class BorgArchiveMountAdapter implements ForMountingArchives {
      * racing a mount the current process just made). Best-effort per machine: an unreachable host is skipped,
      * never allowed to break the reconcile of the rest of the fleet.
      */
-    private void adoptOrphanMountsOn(String machineName) {
+    private void adoptOrphanMountsOn(MachineId machineId, String machineName) {
         try {
-            String workDir = workDirResolver.workDirFor(machineName);
+            String workDir = workDirResolver.workDirFor(machineId, machineName);
             SshTarget target = sshTargets.resolve(machineName);
             CommandResult result = ssh.run(target, BorgCommand.listArchiveMounts(workDir));
             for (String mountpoint : BorgCommand.parseArchiveMounts(result.stdout())) {

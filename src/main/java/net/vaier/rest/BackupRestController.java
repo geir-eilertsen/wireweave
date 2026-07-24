@@ -38,6 +38,9 @@ import net.vaier.domain.BackupRun;
 import net.vaier.domain.BackupRunStatus;
 import net.vaier.domain.BackupServer;
 import net.vaier.domain.BorgVersion;
+import net.vaier.domain.Machine;
+import net.vaier.domain.MachineId;
+import net.vaier.domain.NotFoundException;
 import net.vaier.domain.Unprotection;
 import net.vaier.domain.port.ForReadyingBackupClients.ReadyingOutcome;
 import net.vaier.domain.port.ForSubscribingToEvents;
@@ -163,13 +166,13 @@ public class BackupRestController {
     @GetMapping("/backup-servers")
     public ResponseEntity<List<ServerResponse>> listServers() {
         return ResponseEntity.ok(getBackupServers.getBackupServers().stream()
-            .map(ServerResponse::from).toList());
+            .map(this::toResponse).toList());
     }
 
     @GetMapping("/backup-servers/{name}")
     public ResponseEntity<ServerResponse> getServer(@PathVariable String name) {
         return findServer(name)
-            .map(server -> ResponseEntity.ok(ServerResponse.from(server)))
+            .map(server -> ResponseEntity.ok(toResponse(server)))
             .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
@@ -179,10 +182,14 @@ public class BackupRestController {
         log.info("Saving backup server {}", LogSafe.forLog(name));
         // A null sshPort defaults to the borg-server convention; bad input surfaces as a 400 from the record.
         int sshPort = request.sshPort() != null ? request.sshPort() : BackupServer.DEFAULT_SSH_PORT;
-        BackupServer server = new BackupServer(name, request.machineName(), request.host(), sshPort,
+        // The browser names a machine; the store keys one. Resolving here means a server can never be saved
+        // against a machine that does not exist — which is how two backup jobs came to run nightly against
+        // machines in no registry at all.
+        Machine machine = machineNamed(request.machineName());
+        BackupServer server = new BackupServer(name, machine.id(), request.host(), sshPort,
             request.borgUser(), request.baseRepoPath(), request.serverDataPath(), request.managed());
         saveBackupServer.saveBackupServer(server);
-        return ResponseEntity.ok(ServerResponse.from(server));
+        return ResponseEntity.ok(toResponse(server));
     }
 
     @DeleteMapping("/backup-servers/{name}")
@@ -248,17 +255,47 @@ public class BackupRestController {
     @PostMapping("/backup-servers/{name}/authorize/{machineName}")
     public ResponseEntity<AuthorizeResponse> authorizeClient(@PathVariable String name,
                                                              @PathVariable String machineName) {
-        if (findServer(name).isEmpty() || !machineExists(machineName)) {
+        Optional<Machine> machine = findMachineNamed(machineName);
+        if (findServer(name).isEmpty() || machine.isEmpty()) {
             return ResponseEntity.notFound().build();
         }
         log.info("Authorizing backup client {} on server {}",
             LogSafe.forLog(machineName), LogSafe.forLog(name));
-        AuthorizeResult result = authorizeBackupClient.authorizeClient(name, machineName);
+        AuthorizeResult result = authorizeBackupClient.authorizeClient(name, machine.get().id());
         return ResponseEntity.ok(AuthorizeResponse.from(result));
     }
 
-    private boolean machineExists(String machineName) {
-        return getMachines.getAllMachines().stream().anyMatch(m -> m.name().equals(machineName));
+    /**
+     * The machine the browser named, or empty — the controller's own 404, never a use case's problem.
+     *
+     * <p>Matching is {@link Machine#hasSameName}'s rule, not {@code equals}. This lookup is what mints the
+     * {@code machineId} a job or server is <em>stored</em> under, and the uniqueness guard that refuses a
+     * duplicate name uses the same rule: a name rejected at creation for colliding with one that could not
+     * then find it would be the worst of both.
+     */
+    private Optional<Machine> findMachineNamed(String machineName) {
+        return getMachines.getAllMachines().stream()
+            .filter(m -> Machine.hasSameName(m.name(), machineName)).findFirst();
+    }
+
+    /** As {@link #findMachineNamed}, but for the write paths where an unknown machine is a 404, not a null. */
+    private Machine machineNamed(String machineName) {
+        return findMachineNamed(machineName)
+            .orElseThrow(() -> new NotFoundException("Machine not found: " + machineName));
+    }
+
+    /**
+     * What to call a machine in a response body. The browser is still keyed by name while the stores are
+     * keyed by identity, so every response resolves the id back once, here at the driving edge. A record
+     * pointing at a machine that has left the fleet answers {@code null} rather than a stale name — "this
+     * job's machine is gone" is a fact the UI should be able to show, not one to paper over.
+     */
+    private String machineNameOf(MachineId machineId) {
+        return getMachines.getAllMachines().stream()
+            .filter(m -> m.id().equals(machineId))
+            .map(Machine::name)
+            .findFirst()
+            .orElse(null);
     }
 
     // --- Backup repositories ---
@@ -339,7 +376,7 @@ public class BackupRestController {
 
     /** A job with its latest run's status attached, or {@code null} status when it has never run. */
     private JobResponse withLastRun(BackupJob job) {
-        return JobResponse.from(job, getBackupRuns.latestForJob(job.name())
+        return JobResponse.from(job, machineNameOf(job.machineId()), getBackupRuns.latestForJob(job.name())
             .map(BackupRun::status).map(Enum::name).orElse(null));
     }
 
@@ -347,12 +384,13 @@ public class BackupRestController {
     public ResponseEntity<JobResponse> saveJob(@PathVariable String name,
                                                @RequestBody JobRequest request) {
         log.info("Saving backup job {}", LogSafe.forLog(name));
-        BackupJob job = new BackupJob(name, request.machineName(), request.repositoryName(),
+        Machine machine = machineNamed(request.machineName());
+        BackupJob job = new BackupJob(name, machine.id(), request.repositoryName(),
             request.sourcePaths(), request.excludes(),
             request.keepDaily(), request.keepWeekly(), request.keepMonthly(),
             request.compression(), request.enabled(), request.backupAsRoot());
         saveBackupJob.saveBackupJob(job);
-        return ResponseEntity.ok(JobResponse.from(job));
+        return ResponseEntity.ok(JobResponse.from(job, machine.name()));
     }
 
     @DeleteMapping("/backup-jobs/{name}")
@@ -380,15 +418,16 @@ public class BackupRestController {
     @PostMapping("/machines/{machine}/backup/paths")
     public ResponseEntity<ProtectPathsResponse> protectPaths(@PathVariable String machine,
                                                     @RequestBody ProtectPathsRequest request) {
-        if (!machineExists(machine)) {
+        Optional<Machine> target = findMachineNamed(machine);
+        if (target.isEmpty()) {
             return ResponseEntity.notFound().build();
         }
         log.info("Backing up {} paths on machine {}",
             request.paths() == null ? 0 : request.paths().size(), LogSafe.forLog(machine));
-        ProtectionOutcome outcome = protectMachinePaths.protect(machine, request.paths());
+        ProtectionOutcome outcome = protectMachinePaths.protect(target.get(), request.paths());
         ProvisioningResponse provisioning = outcome.readying() == null
             ? null : ProvisioningResponse.from(outcome.readying());
-        return ResponseEntity.ok(ProtectPathsResponse.from(outcome.job(), provisioning));
+        return ResponseEntity.ok(ProtectPathsResponse.from(outcome.job(), target.get().name(), provisioning));
     }
 
     /**
@@ -406,16 +445,17 @@ public class BackupRestController {
     @DeleteMapping("/machines/{machine}/backup/paths")
     public ResponseEntity<UnprotectPathsResponse> unprotectPaths(@PathVariable String machine,
                                                                  @RequestBody ProtectPathsRequest request) {
-        if (!machineExists(machine)) {
+        Optional<Machine> target = findMachineNamed(machine);
+        if (target.isEmpty()) {
             return ResponseEntity.<UnprotectPathsResponse>notFound().build();
         }
         log.info("Stopping backup of {} paths on machine {}",
             request.paths() == null ? 0 : request.paths().size(), LogSafe.forLog(machine));
-        Unprotection outcome = protectMachinePaths.unprotect(machine, request.paths());
+        Unprotection outcome = protectMachinePaths.unprotect(target.get().id(), request.paths());
         if (outcome.jobDeleted()) {
             return ResponseEntity.noContent().build();
         }
-        return ResponseEntity.ok(UnprotectPathsResponse.from(outcome));
+        return ResponseEntity.ok(UnprotectPathsResponse.from(outcome, target.get().name()));
     }
 
     // --- Backup runs ---
@@ -437,14 +477,15 @@ public class BackupRestController {
             return ResponseEntity.notFound().build();
         }
         BackupRun run = runBackupJob.runJob(job.get(), repo.get());
-        return ResponseEntity.status(HttpStatus.ACCEPTED).body(RunResponse.from(run));
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+            .body(RunResponse.from(run, machineNameOf(run.machineId())));
     }
 
     /** The latest run for the named job, or {@code 404} when it has never run (matches the CRUD lookups). */
     @GetMapping("/backup-jobs/{name}/runs")
     public ResponseEntity<RunResponse> getRuns(@PathVariable String name) {
         return getBackupRuns.latestForJob(name)
-            .map(run -> ResponseEntity.ok(RunResponse.from(run)))
+            .map(run -> ResponseEntity.ok(RunResponse.from(run, machineNameOf(run.machineId()))))
             .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
@@ -468,19 +509,19 @@ public class BackupRestController {
             return ResponseEntity.notFound().build();
         }
         log.info("Checking backup prerequisites for job {}", LogSafe.forLog(name));
-        BorgAvailability borg = checkBackupPrerequisites.checkBorg(job.get().machineName());
+        BorgAvailability borg = checkBackupPrerequisites.checkBorg(job.get().machineId());
         RepoReachability nas = checkBackupPrerequisites.checkNas(job.get().repositoryName(),
-            job.get().machineName());
+            job.get().machineId());
         // The decisive probe: authenticate to the server and compare versions, threading the client's own
         // borg version in so compatibility is judged against a real server version — not assumed.
         ServerBorgAuth auth = checkBackupPrerequisites.checkServerAuth(job.get().repositoryName(),
-            job.get().machineName(), borg.version());
+            job.get().machineId(), borg.version());
         // "Back up as root" is only a prerequisite for a job that asked for it: a job with the toggle off does
         // not need the sudo grant and must never be shown as failing a check it will never use — so it is not
         // even probed (no pointless SSH round trip).
         boolean backupAsRoot = job.get().backupAsRoot();
         boolean rootBorgOk = backupAsRoot
-            && checkBackupPrerequisites.checkRootBorg(job.get().machineName()).canRunAsRoot();
+            && checkBackupPrerequisites.checkRootBorg(job.get().machineId()).canRunAsRoot();
         return ResponseEntity.ok(ProvisionCheckResponse.from(borg, nas, auth, backupAsRoot, rootBorgOk));
     }
 
@@ -503,14 +544,14 @@ public class BackupRestController {
         }
         log.info("Initialising backup repository {} from job {}",
             LogSafe.forLog(name), LogSafe.forLog(host.get().name()));
-        RepoInitResult result = initBackupRepository.initRepo(name, host.get().machineName());
+        RepoInitResult result = initBackupRepository.initRepo(name, host.get().machineId());
         return ResponseEntity.ok(ProvisionInitResponse.from(result));
     }
 
     /**
      * Prepare a job's client host by installing borg on it (the fix for the {@code exit 127} / {@code borg:
      * not found} run failure). The panel acts from a job's readiness view and the job knows its machine, so
-     * this is job-scoped: it resolves {@code job.machineName()} and runs {@link PrepareBackupClientUseCase}.
+     * this is job-scoped: it resolves {@code job.machineId()} and runs {@link PrepareBackupClientUseCase}.
      * {@code 404} when the job is unknown; otherwise {@code 200} with the outcome — {@code started} (poll the
      * status endpoint) or {@code scriptOnly} (run the staged {@code sudo bash <path>}). Never fails opaquely.
      */
@@ -521,7 +562,7 @@ public class BackupRestController {
             return ResponseEntity.notFound().build();
         }
         log.info("Preparing backup client for job {}", LogSafe.forLog(name));
-        PrepareResult result = prepareBackupClient.prepareClient(job.get().machineName());
+        PrepareResult result = prepareBackupClient.prepareClient(job.get().machineId());
         return ResponseEntity.ok(PrepareClientResponse.from(result));
     }
 
@@ -537,7 +578,7 @@ public class BackupRestController {
         if (job.isEmpty()) {
             return ResponseEntity.notFound().build();
         }
-        PrepareStatus status = prepareBackupClient.prepareClientStatus(job.get().machineName());
+        PrepareStatus status = prepareBackupClient.prepareClientStatus(job.get().machineId());
         return ResponseEntity.ok(PrepareClientStatusResponse.from(status));
     }
 
@@ -571,6 +612,10 @@ public class BackupRestController {
      * derived through it ({@link BackupRepository#repoPathOn}); when the server is unknown the raw stored
      * override (which may be null) is returned rather than failing.
      */
+    private ServerResponse toResponse(BackupServer s) {
+        return ServerResponse.from(s, machineNameOf(s.machineId()));
+    }
+
     private RepositoryResponse toResponse(BackupRepository r) {
         String effectivePath = findServer(r.serverName())
             .map(r::repoPathOn)
@@ -585,15 +630,22 @@ public class BackupRestController {
      * Create/update a backup server (the name is the path variable). A null {@code sshPort} defaults to the
      * borg-server convention. The server carries no secret, so every field round-trips.
      */
+    /** {@code machineName} names an existing machine; an unknown one is a 404, never a stored dangling name. */
     record ServerRequest(String machineName, String host, Integer sshPort, String borgUser,
                          String baseRepoPath, String serverDataPath, boolean managed) {}
 
-    /** The backup server as returned to the browser (servers hold no secrets). */
-    record ServerResponse(String name, String machineName, String host, int sshPort, String borgUser,
-                          String baseRepoPath, String serverDataPath, boolean managed) {
-        static ServerResponse from(BackupServer s) {
-            return new ServerResponse(s.name(), s.machineName(), s.host(), s.sshPort(), s.borgUser(),
-                s.baseRepoPath(), s.serverDataPath(), s.managed());
+    /**
+     * The backup server as returned to the browser (servers hold no secrets).
+     *
+     * <p>It carries both {@code machineId} — what the store actually keys on — and {@code machineName},
+     * resolved for display and {@code null} when the machine has left the fleet. The browser still speaks
+     * names; the id is here so it can stop.
+     */
+    record ServerResponse(String name, String machineId, String machineName, String host, int sshPort,
+                          String borgUser, String baseRepoPath, String serverDataPath, boolean managed) {
+        static ServerResponse from(BackupServer s, String machineName) {
+            return new ServerResponse(s.name(), s.machineId().value(), machineName, s.host(), s.sshPort(),
+                s.borgUser(), s.baseRepoPath(), s.serverDataPath(), s.managed());
         }
     }
 
@@ -672,12 +724,14 @@ public class BackupRestController {
      * populated only on a machine's FIRST back-up — when the job was newly created and Vaier readied the host
      * automatically — and is {@code null} when the job already existed (adding paths never re-provisions).
      */
-    record ProtectPathsResponse(String name, String machineName, String repositoryName, List<String> sourcePaths,
+    record ProtectPathsResponse(String name, String machineId, String machineName, String repositoryName,
+                                List<String> sourcePaths,
                                 List<String> excludes, int keepDaily, int keepWeekly, int keepMonthly,
                                 String compression, boolean enabled, boolean backupAsRoot,
                                 ProvisioningResponse provisioning) {
-        static ProtectPathsResponse from(BackupJob j, ProvisioningResponse provisioning) {
-            return new ProtectPathsResponse(j.name(), j.machineName(), j.repositoryName(), j.sourcePaths(),
+        static ProtectPathsResponse from(BackupJob j, String machineName, ProvisioningResponse provisioning) {
+            return new ProtectPathsResponse(j.name(), j.machineId().value(), machineName, j.repositoryName(),
+                j.sourcePaths(),
                 j.excludes(), j.keepDaily(), j.keepWeekly(), j.keepMonthly(), j.compression(), j.enabled(),
                 j.backupAsRoot(), provisioning);
         }
@@ -705,9 +759,9 @@ public class BackupRestController {
      * the same statement, and the browser must never turn the first into the second.
      */
     record UnprotectPathsResponse(boolean changed, List<String> stopped, JobResponse job) {
-        static UnprotectPathsResponse from(Unprotection outcome) {
+        static UnprotectPathsResponse from(Unprotection outcome, String machineName) {
             return new UnprotectPathsResponse(outcome.changed(), outcome.stopped(),
-                outcome.job() == null ? null : JobResponse.from(outcome.job()));
+                outcome.job() == null ? null : JobResponse.from(outcome.job(), machineName));
         }
     }
 
@@ -723,15 +777,17 @@ public class BackupRestController {
      * stay distinguishable from an outcome, since "no run yet" is not success and a tree that coloured it
      * green would be lying about untested data.
      */
-    record JobResponse(String name, String machineName, String repositoryName, List<String> sourcePaths,
+    record JobResponse(String name, String machineId, String machineName, String repositoryName,
+                       List<String> sourcePaths,
                        List<String> excludes, int keepDaily, int keepWeekly, int keepMonthly,
                        String compression, boolean enabled, boolean backupAsRoot, String lastRunStatus) {
-        static JobResponse from(BackupJob j) {
-            return from(j, null);
+        static JobResponse from(BackupJob j, String machineName) {
+            return from(j, machineName, null);
         }
 
-        static JobResponse from(BackupJob j, String lastRunStatus) {
-            return new JobResponse(j.name(), j.machineName(), j.repositoryName(), j.sourcePaths(),
+        static JobResponse from(BackupJob j, String machineName, String lastRunStatus) {
+            return new JobResponse(j.name(), j.machineId().value(), machineName, j.repositoryName(),
+                j.sourcePaths(),
                 j.excludes(), j.keepDaily(), j.keepWeekly(), j.keepMonthly(), j.compression(), j.enabled(),
                 j.backupAsRoot(), lastRunStatus);
         }
@@ -787,12 +843,14 @@ public class BackupRestController {
      * browser's: the shell offers "Get this machine ready" from this flag rather than pattern-matching the
      * summary, so the rule stays in {@link BackupRun} and cannot break the day the wording changes.
      */
-    record RunResponse(String runId, String jobName, String machineName, String repositoryName,
+    record RunResponse(String runId, String jobName, String machineId, String machineName,
+                       String repositoryName,
                        BackupRunStatus status, Instant startedAt, Instant finishedAt, Integer exitCode,
                        String archiveName, String summary, String diagnostics,
                        boolean needsClientReadying) {
-        static RunResponse from(BackupRun r) {
-            return new RunResponse(r.runId(), r.jobName(), r.machineName(), r.repositoryName(),
+        static RunResponse from(BackupRun r, String machineName) {
+            return new RunResponse(r.runId(), r.jobName(), r.machineId().value(), machineName,
+                r.repositoryName(),
                 r.status(), r.startedAt(), r.finishedAt(), r.exitCode(), r.archiveName(), r.summary(),
                 r.diagnostics(), r.needsClientReadying());
         }

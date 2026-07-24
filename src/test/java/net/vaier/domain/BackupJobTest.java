@@ -16,7 +16,7 @@ class BackupJobTest {
     private static final LocalDate TODAY = LocalDate.of(2026, 7, 8);
 
     private BackupJob job(String name) {
-        return new BackupJob(name, "Colina 27", "nas-borg",
+        return new BackupJob(name, TestMachineIds.of("Colina 27"), "nas-borg",
             List.of("/home/geir"), List.of(), 7, 4, 6, "zstd,6", true, false);
     }
 
@@ -26,9 +26,9 @@ class BackupJobTest {
      */
     @Test
     void backupAsRoot_isCarriedOnTheJob_andIsOptIn() {
-        BackupJob asUser = new BackupJob("colina-home", "Colina 27", "nas-borg",
+        BackupJob asUser = new BackupJob("colina-home", TestMachineIds.of("Colina 27"), "nas-borg",
             List.of("/home/geir"), List.of(), 7, 4, 6, "zstd,6", true, false);
-        BackupJob asRoot = new BackupJob("colina-home", "Colina 27", "nas-borg",
+        BackupJob asRoot = new BackupJob("colina-home", TestMachineIds.of("Colina 27"), "nas-borg",
             List.of("/home/geir"), List.of(), 7, 4, 6, "zstd,6", true, true);
 
         assertThat(asUser.backupAsRoot()).isFalse();
@@ -41,7 +41,7 @@ class BackupJobTest {
 
     /** A job protecting {@code sources} with {@code excludes} — the two fields this flow maintains. */
     private BackupJob job(List<String> sources, List<String> excludes) {
-        return new BackupJob("colina-home", "Colina 27", "nas-borg",
+        return new BackupJob("colina-home", TestMachineIds.of("Colina 27"), "nas-borg",
             sources, excludes, 7, 4, 6, "zstd,6", true, false);
     }
 
@@ -176,7 +176,7 @@ class BackupJobTest {
     }
 
     private BackupJob disabledJob() {
-        return new BackupJob("colina-home", "Colina 27", "nas-borg",
+        return new BackupJob("colina-home", TestMachineIds.of("Colina 27"), "nas-borg",
             List.of("/home/geir"), List.of(), 7, 4, 6, "zstd,6", false, false);
     }
 
@@ -260,13 +260,13 @@ class BackupJobTest {
         var readier = org.mockito.Mockito.mock(net.vaier.domain.port.ForReadyingBackupClients.class);
         var expected = new net.vaier.domain.port.ForReadyingBackupClients.ReadyingOutcome(
             true, false, null, "Preparing client on Colina 27");
-        org.mockito.Mockito.when(readier.readyForBackup("Colina 27")).thenReturn(expected);
+        org.mockito.Mockito.when(readier.readyForBackup(TestMachineIds.of("Colina 27"))).thenReturn(expected);
 
         Optional<net.vaier.domain.port.ForReadyingBackupClients.ReadyingOutcome> result =
             job("colina-home").readyClientHostForFirstBackup(true, readier);
 
         assertThat(result).contains(expected);
-        org.mockito.Mockito.verify(readier).readyForBackup("Colina 27");
+        org.mockito.Mockito.verify(readier).readyForBackup(TestMachineIds.of("Colina 27"));
     }
 
     @Test
@@ -289,11 +289,11 @@ class BackupJobTest {
         // The operator's very first selection becomes the job's whole protected set — nothing more, nothing
         // less — and it arrives normalized, so a child selected alongside its parent does not survive as a
         // redundant second source path.
-        BackupJob first = BackupJob.firstFor("colina-27", "Colina 27", "nas-borg",
+        BackupJob first = BackupJob.firstFor("colina-27", TestMachineIds.of("Colina 27"), "nas-borg",
             List.of("/home/geir", "/home/geir/docs", "/etc/nginx"));
 
         assertThat(first.name()).isEqualTo("colina-27");
-        assertThat(first.machineName()).isEqualTo("Colina 27");
+        assertThat(first.machineId()).isEqualTo(TestMachineIds.of("Colina 27"));
         assertThat(first.repositoryName()).isEqualTo("nas-borg");
         assertThat(first.sourcePaths()).containsExactly("/home/geir", "/etc/nginx");
         assertThat(first.excludes()).isEmpty();
@@ -303,7 +303,7 @@ class BackupJobTest {
     void firstFor_carriesTheRetentionAndCompressionDefaultsAJobIsBornWith() {
         // These defaults ARE the job's, not the caller's: a first back-up keeps a week of dailies, a month of
         // weeklies and half a year of monthlies, compressed the way every job compresses by default.
-        BackupJob first = BackupJob.firstFor("colina-27", "Colina 27", "nas-borg", List.of("/home/geir"));
+        BackupJob first = BackupJob.firstFor("colina-27", TestMachineIds.of("Colina 27"), "nas-borg", List.of("/home/geir"));
 
         assertThat(first.keepDaily()).isEqualTo(7);
         assertThat(first.keepWeekly()).isEqualTo(4);
@@ -315,7 +315,7 @@ class BackupJobTest {
     void firstFor_isScheduledFromTheStart_butNeverEscalatesToRootOnItsOwn() {
         // Selecting data means "back this up nightly", so the job is enabled immediately. Running borg as root
         // is a separate, deliberate opt-in — a first job must never grant itself that.
-        BackupJob first = BackupJob.firstFor("colina-27", "Colina 27", "nas-borg", List.of("/home/geir"));
+        BackupJob first = BackupJob.firstFor("colina-27", TestMachineIds.of("Colina 27"), "nas-borg", List.of("/home/geir"));
 
         assertThat(first.enabled()).isTrue();
         assertThat(first.backupAsRoot()).isFalse();

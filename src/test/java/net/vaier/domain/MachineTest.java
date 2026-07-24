@@ -1,5 +1,6 @@
 package net.vaier.domain;
 
+import java.util.Optional;
 import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
 import org.junit.jupiter.api.Test;
 
@@ -216,5 +217,41 @@ class MachineTest {
     void vaierServer_honoursExplicitOverride() {
         assertThat(Machine.vaierServer(MachineId.generate(), false).effectiveSshAccess()).isFalse();
         assertThat(Machine.vaierServer(MachineId.generate(), true).effectiveSshAccess()).isTrue();
+    }
+
+    // --- what to call a machine in something a person reads -------------------------------------------
+
+    /**
+     * A machine's name is a label, and a record keyed by identity outlives it. What to call the machine
+     * when the fleet still has it is easy; what to call it when the fleet does not is a decision, and one
+     * that was being made four different ways — in the recovery sheet, in two admin emails and in a DTO.
+     * It lives here so those four say the same thing.
+     */
+    @Test
+    void labelFor_isTheMachinesNameWhenTheFleetStillHasIt() {
+        MachineId id = MachineId.generate();
+
+        assertThat(Machine.labelFor(id, Optional.of("Colina 27"))).isEqualTo("Colina 27");
+    }
+
+    @Test
+    void labelFor_saysTheMachineIsGone_andStillNamesIt_whenTheFleetDoesNot() {
+        // Not blank, and not a bare UUID. A person reading an alert or a recovery sheet has to be able to
+        // tell "this record points at a machine you no longer have" from "this record is fine" — and then
+        // has to be able to act on it, which needs the id.
+        MachineId id = MachineId.of("636a121f-1da5-4b02-9b3a-1e80256e0a07");
+
+        String label = Machine.labelFor(id, Optional.empty());
+
+        assertThat(label).contains("no longer");
+        assertThat(label).contains("636a121f-1da5-4b02-9b3a-1e80256e0a07");
+    }
+
+    /** A blank stored name is no name at all — it must not render as an empty label. */
+    @Test
+    void labelFor_treatsABlankNameAsNoName() {
+        MachineId id = MachineId.generate();
+
+        assertThat(Machine.labelFor(id, Optional.of("  "))).contains("no longer");
     }
 }

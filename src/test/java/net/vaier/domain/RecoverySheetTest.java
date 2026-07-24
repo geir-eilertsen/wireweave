@@ -1,6 +1,8 @@
 package net.vaier.domain;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -20,7 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class RecoverySheetTest {
 
     private BackupServer server() {
-        return new BackupServer("nas-borg", "NAS", "192.168.3.3", 8022,
+        return new BackupServer("nas-borg", TestMachineIds.of("NAS"), "192.168.3.3", 8022,
             "borg", "home/borg/backups", "/volume1/docker/borg", false);
     }
 
@@ -29,9 +31,24 @@ class RecoverySheetTest {
     }
 
     private BackupJob job(String name, String machine, String repo) {
-        return new BackupJob(name, machine, repo, List.of("/home/geir"), List.of(), 7, 4, 6, "zstd,6",
-            true, false);
+        return new BackupJob(name, TestMachineIds.of(machine), repo, List.of("/home/geir"), List.of(),
+            7, 4, 6, "zstd,6", true, false);
     }
+
+    /**
+     * What the fleet's machines are called. The stores key on identity so a rename cannot orphan them, but
+     * this page is read by someone who has just lost their fleet and has to recognise their own machines —
+     * so the caller supplies the names rather than the sheet holding a copy that could go stale.
+     */
+    private static Map<MachineId, String> names(String... machineNames) {
+        Map<MachineId, String> map = new LinkedHashMap<>();
+        map.put(TestMachineIds.of("NAS"), "NAS");
+        for (String name : machineNames) {
+            map.put(TestMachineIds.of(name), name);
+        }
+        return map;
+    }
+
 
     @Test
     void eachRepositoryAppears_withTheMachineItHolds_itsAddressAndItsPassphrase() {
@@ -39,7 +56,7 @@ class RecoverySheetTest {
         // even though you are holding them.
         String sheet = RecoverySheet.render(server(),
             List.of(repo("Apalveien-5", "s3cr3t-one")),
-            List.of(job("Apalveien-5", "Apalveien 5", "Apalveien-5")), "AAAAkey==");
+            List.of(job("Apalveien-5", "Apalveien 5", "Apalveien-5")), names("Apalveien 5"), "AAAAkey==");
 
         assertThat(sheet).contains("Apalveien 5");
         assertThat(sheet).contains("ssh://borg@192.168.3.3:8022/home/borg/backups/Apalveien-5");
@@ -50,7 +67,7 @@ class RecoverySheetTest {
     void itCarriesTheCommandThatReadsThem_soNoVaierIsNeededToRecover() {
         // A passphrase with no instructions is a puzzle handed to someone on their worst day.
         String sheet = RecoverySheet.render(server(), List.of(repo("Apalveien-5", "p")),
-            List.of(job("Apalveien-5", "Apalveien 5", "Apalveien-5")), "AAAAkey==");
+            List.of(job("Apalveien-5", "Apalveien 5", "Apalveien-5")), names("Apalveien 5"), "AAAAkey==");
 
         assertThat(sheet).contains("borg list");
         assertThat(sheet).contains("borg extract");
@@ -61,7 +78,7 @@ class RecoverySheetTest {
     void itCarriesTheConfigKeyToo_becauseARestoredVaierCannotReadItsOwnSecretsWithoutIt() {
         // The archives open with the passphrases alone. But restoring Vaier itself from one of them yields a
         // config store whose credentials, AWS secret and passphrases are all ciphertext — this is the key.
-        String sheet = RecoverySheet.render(server(), List.of(repo("r", "p")), List.of(), "AAAAkey==");
+        String sheet = RecoverySheet.render(server(), List.of(repo("r", "p")), List.of(), names(), "AAAAkey==");
 
         assertThat(sheet).contains("AAAAkey==");
     }
@@ -70,7 +87,7 @@ class RecoverySheetTest {
     void aRepositoryWithNoStoredPassphrase_saysSo_ratherThanPrintingABlank() {
         // A blank in this column would read as "no passphrase needed", which would send someone away from
         // the one repository that actually needs attention.
-        String sheet = RecoverySheet.render(server(), List.of(repo("orphan", null)), List.of(), "k");
+        String sheet = RecoverySheet.render(server(), List.of(repo("orphan", null)), List.of(), names(), "k");
 
         assertThat(sheet.toLowerCase()).contains("not stored");
     }
@@ -79,7 +96,7 @@ class RecoverySheetTest {
     void aRepositoryNoMachineClaims_isStillOnTheSheet() {
         // Unclaimed stores hold real archives — a renamed machine's leftovers. Leaving them off would mean
         // the sheet quietly omits data that still exists.
-        String sheet = RecoverySheet.render(server(), List.of(repo("NUC-02", "p")), List.of(), "k");
+        String sheet = RecoverySheet.render(server(), List.of(repo("NUC-02", "p")), List.of(), names(), "k");
 
         assertThat(sheet).contains("NUC-02");
     }
@@ -88,7 +105,7 @@ class RecoverySheetTest {
     void itWarnsAboutTheDecryptedCopy_notAboutWhereTheKitIsKept() {
         // The kit itself is meant to live on fleet machines — encrypted, which is what makes that safe. What
         // must not linger is THIS, the decrypted contents: every key to every backup, in the clear.
-        String sheet = RecoverySheet.render(server(), List.of(repo("r", "p")), List.of(), "k");
+        String sheet = RecoverySheet.render(server(), List.of(repo("r", "p")), List.of(), names(), "k");
 
         assertThat(sheet.toLowerCase()).contains("in the clear");
         assertThat(sheet.toLowerCase()).contains("delete");
@@ -97,7 +114,7 @@ class RecoverySheetTest {
     @Test
     void itIsPlainText_becauseItIsReadInATerminalAfterOpenssl() {
         // Not a page: whoever reads this has lost their fleet and is piping openssl into less.
-        String sheet = RecoverySheet.render(server(), List.of(repo("r", "p")), List.of(), "k");
+        String sheet = RecoverySheet.render(server(), List.of(repo("r", "p")), List.of(), names(), "k");
 
         assertThat(sheet).doesNotContain("<");
         assertThat(sheet).doesNotContain("&amp;");
@@ -105,7 +122,7 @@ class RecoverySheetTest {
 
     @Test
     void withNoBackupServerThereIsNothingToRecover_andItSaysThat() {
-        String sheet = RecoverySheet.render(null, List.of(), List.of(), "k");
+        String sheet = RecoverySheet.render(null, List.of(), List.of(), names(), "k");
 
         assertThat(sheet.toLowerCase()).contains("no backup server");
     }

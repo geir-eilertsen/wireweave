@@ -1,6 +1,7 @@
 package net.vaier.application;
 
 import net.vaier.domain.BorgVersion;
+import net.vaier.domain.MachineId;
 
 import java.util.Optional;
 
@@ -17,14 +18,14 @@ import java.util.Optional;
  */
 public interface CheckBackupPrerequisitesUseCase {
 
-    /** Whether borg is installed on {@code machineName}, and if so its version and whether it is supported. */
-    BorgAvailability checkBorg(String machineName);
+    /** Whether borg is installed on {@code machineId}, and if so its version and whether it is supported. */
+    BorgAvailability checkBorg(MachineId machineId);
 
-    /** Whether {@code machineName} can reach the NAS borg port of the repository named {@code repositoryName}. */
-    RepoReachability checkNas(String repositoryName, String machineName);
+    /** Whether {@code machineId} can reach the NAS borg port of the repository named {@code repositoryName}. */
+    RepoReachability checkNas(String repositoryName, MachineId machineId);
 
     /**
-     * The decisive check the wizard was missing: from {@code machineName}, actually authenticate to the
+     * The decisive check the wizard was missing: from {@code machineId}, actually authenticate to the
      * repository's Backup server (SSH + {@code borg --version}) rather than merely seeing the port open. It
      * reports whether the client's key is trusted ({@code borgAuthOk}), the server's borg version, and —
      * given the client's own borg version ({@code clientBorgVersion}, from {@link #checkBorg}) — whether the
@@ -32,17 +33,17 @@ public interface CheckBackupPrerequisitesUseCase {
      * NAS port open can still fail {@code Permission denied (publickey)}, and a borg-1.x client cannot talk to
      * a borg-2.x server. Never throws: a guarded-out host or a failed probe comes back as a negative result.
      */
-    ServerBorgAuth checkServerAuth(String repositoryName, String machineName,
+    ServerBorgAuth checkServerAuth(String repositoryName, MachineId machineId,
                                    Optional<BorgVersion> clientBorgVersion);
 
     /**
-     * Whether {@code machineName} can actually run <b>borg as root</b> — the prerequisite for a job with
+     * Whether {@code machineId} can actually run <b>borg as root</b> — the prerequisite for a job with
      * <em>Back up as root</em> on. Probes {@code sudo -n borg --version}, which succeeds only when the sudoers
      * grant is installed (see {@code BorgClientSetupScript}) and borg is where sudo can find it. Only
      * meaningful for a job that has opted in; a job with the toggle off is not failing this check, it simply
      * does not need it. Never throws: a guarded-out host or a failed probe reports a negative.
      */
-    RootBorgAvailability checkRootBorg(String machineName);
+    RootBorgAvailability checkRootBorg(MachineId machineId);
 
     /**
      * The borg found on a host: {@code installed} is false when borg is absent or the probe could not be

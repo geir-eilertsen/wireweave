@@ -1,7 +1,9 @@
 package net.vaier.adapter.driven;
 
+import java.nio.file.Files;
 import net.vaier.domain.BackupRun;
 import net.vaier.domain.BackupRunStatus;
+import net.vaier.domain.TestMachineIds;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -24,7 +26,7 @@ class BackupRunFileAdapterTest {
     }
 
     private BackupRun run(String runId, String jobName, BackupRunStatus status, Integer exitCode) {
-        return new BackupRun(runId, jobName, "nas-borg", "Colina 27", status,
+        return new BackupRun(runId, jobName, "nas-borg", TestMachineIds.of("Colina 27"), status,
             Instant.parse("2026-07-08T02:00:00Z"),
             status.isTerminal() ? Instant.parse("2026-07-08T02:05:00Z") : null,
             exitCode, "{hostname}-{now:%Y-%m-%dT%H:%M:%S}", "Backup completed");
@@ -65,6 +67,26 @@ class BackupRunFileAdapterTest {
 
     @Test
     void getAll_emptyWhenFileMissing() {
+        assertThat(adapter.getAll()).isEmpty();
+    }
+
+    /**
+     * A run whose stored machine id is unreadable is skipped <b>loudly</b>. A run that cannot name its
+     * machine can never be polled to a conclusion, so an in-flight {@code RUNNING} run would sit unresolved
+     * forever while the job read as having never run — a backup tool's worst kind of quiet.
+     */
+    @Test
+    void getAll_skipsARunWithAnUnreadableMachineId() throws Exception {
+        Files.writeString(tempDir.resolve("backup-runs.yml"), """
+            runs:
+            - runId: run-1
+              jobName: colina-home
+              repositoryName: nas-borg
+              machineId: Colina 27
+              status: RUNNING
+              startedAt: 2026-07-08T02:00:00Z
+            """);
+
         assertThat(adapter.getAll()).isEmpty();
     }
 }

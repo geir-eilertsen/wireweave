@@ -29,6 +29,8 @@ import java.util.Optional;
  * the command line is {@link BorgCommand}'s decision; the sudoers grant that permits it is installed by
  * {@link BorgClientSetupScript}). It is <b>opt-in</b>: a job never escalates to root on its own.
  *
+ * @param machineId   the identity of the machine whose data this job backs up — never its display name,
+ *                    so renaming the machine leaves the job pointing at the same host
  * @param sourcePaths the paths on the machine to back up (at least one)
  * @param excludes    borg {@code --exclude} patterns (may be empty)
  * @param keepDaily   daily archives to keep on prune (≥ 0)
@@ -40,7 +42,7 @@ import java.util.Optional;
  */
 public record BackupJob(
     String name,
-    String machineName,
+    MachineId machineId,
     String repositoryName,
     List<String> sourcePaths,
     List<String> excludes,
@@ -59,8 +61,8 @@ public record BackupJob(
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("Backup job name must not be blank");
         }
-        if (machineName == null || machineName.isBlank()) {
-            throw new IllegalArgumentException("Backup job machineName must not be blank");
+        if (machineId == null) {
+            throw new IllegalArgumentException("Backup job machineId must not be null");
         }
         if (repositoryName == null || repositoryName.isBlank()) {
             throw new IllegalArgumentException("Backup job repositoryName must not be blank");
@@ -92,9 +94,9 @@ public record BackupJob(
      * <p>{@link #backupAsRoot()} is deliberately {@code false}: running borg as root is an opt-in the operator
      * makes later, never something a job grants itself the moment it is created.
      */
-    public static BackupJob firstFor(String name, String machineName, String repositoryName,
+    public static BackupJob firstFor(String name, MachineId machineId, String repositoryName,
                                      Collection<String> paths) {
-        return new BackupJob(name, machineName, repositoryName,
+        return new BackupJob(name, machineId, repositoryName,
             SourcePaths.of(List.of()).protecting(paths).paths(), List.of(),
             7, 4, 6, DEFAULT_COMPRESSION, true, false);
     }
@@ -107,13 +109,13 @@ public record BackupJob(
      * which deletes the job rather than saving an empty one.
      */
     public BackupJob withSourcePaths(List<String> newSourcePaths) {
-        return new BackupJob(name, machineName, repositoryName, newSourcePaths, excludes,
+        return new BackupJob(name, machineId, repositoryName, newSourcePaths, excludes,
             keepDaily, keepWeekly, keepMonthly, compression, enabled, backupAsRoot);
     }
 
     /** A copy of this job protecting {@code newSourcePaths} except for {@code newExcludes}. */
     private BackupJob withProtection(SourcePaths newSourcePaths, Excludes newExcludes) {
-        return new BackupJob(name, machineName, repositoryName, newSourcePaths.paths(),
+        return new BackupJob(name, machineId, repositoryName, newSourcePaths.paths(),
             newExcludes.patterns(), keepDaily, keepWeekly, keepMonthly, compression, enabled, backupAsRoot);
     }
 
@@ -268,6 +270,6 @@ public record BackupJob(
         }
         // The port guarantees a non-null outcome; ofNullable degrades a (contract-breaking) null to "no
         // outcome" rather than a surprise NPE that would fail the back-up.
-        return Optional.ofNullable(readier.readyForBackup(machineName));
+        return Optional.ofNullable(readier.readyForBackup(machineId));
     }
 }

@@ -317,4 +317,25 @@ class MachineRestControllerTest {
 
         verify(setDiskWatchUseCase).setDiskWatch("NAS", "/", false, null);
     }
+
+    /**
+     * The nudges endpoint resolves its {@code {machine}} path variable by name, so it must use the rule the
+     * uniqueness guard uses — the same drift that was fixed in the backup controller. A name
+     * {@code Machine.nameIsTaken} would refuse as a duplicate must not 404 here.
+     */
+    @Test
+    void nudgesResolveTheMachineByTheDomainsNameRule_notByExactEquality() {
+        Machine colina = new Machine(mid("Colina 27"), "Colina 27", MachineType.UBUNTU_SERVER, "pk",
+            "10.13.13.3/32", null, null, null, null, null, null, null, true, null,
+            DeviceCategory.SERVER, null);
+        when(getMachinesUseCase.getAllMachines()).thenReturn(List.of(colina));
+        when(getVaierServerUseCase.getVaierServerMachine())
+            .thenReturn(Machine.vaierServer(MachineId.generate(), null));
+        when(getPublishableServicesUseCase.getPublishableServices()).thenReturn(List.of());
+        when(getBackupJobsUseCase.getBackupJobs()).thenReturn(List.of());
+        when(getBackupServersUseCase.getBackupServers()).thenReturn(List.of());
+
+        // A name the uniqueness guard would call the same machine must not 404 here.
+        assertThat(controller.nudges("  colina 27 ")).isNotNull();
+    }
 }

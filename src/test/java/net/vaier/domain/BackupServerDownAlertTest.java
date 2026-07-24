@@ -12,14 +12,17 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class BackupServerDownAlertTest {
 
+    /** What the server's machine is called — presentation, supplied by the caller, never held on the record. */
+    private static final String MACHINE = "NAS";
+
     private BackupServer server() {
-        return new BackupServer("nas-borg", "NAS", "192.168.3.3", 8022,
+        return new BackupServer("nas-borg", TestMachineIds.of("NAS"), "192.168.3.3", 8022,
             "borg", "home/borg/backups", "/volume1/docker/borg", false);
     }
 
     @Test
     void downBodyNamesTheContainerWhenRefused() {
-        String body = server().downBody("example.com", ProbeResult.REFUSED);
+        String body = server().downBody(MACHINE, "example.com", ProbeResult.REFUSED);
 
         // REFUSED = host alive, nothing listening → the container is down, not the host.
         assertThat(body).contains("borg server container is down");
@@ -29,7 +32,7 @@ class BackupServerDownAlertTest {
 
     @Test
     void downBodyNamesUnreachabilityWhenUnreachable() {
-        String body = server().downBody("example.com", ProbeResult.UNREACHABLE);
+        String body = server().downBody(MACHINE, "example.com", ProbeResult.UNREACHABLE);
 
         // UNREACHABLE = host down / network / tunnel → name the host, not the container.
         assertThat(body).contains("192.168.3.3 is unreachable");
@@ -38,7 +41,7 @@ class BackupServerDownAlertTest {
 
     @Test
     void downBodyContainsHostAndBaseDomainLink() {
-        String body = server().downBody("example.com", ProbeResult.REFUSED);
+        String body = server().downBody(MACHINE, "example.com", ProbeResult.REFUSED);
 
         assertThat(body).contains("192.168.3.3");
         assertThat(body).contains("vaier.example.com");
@@ -53,7 +56,7 @@ class BackupServerDownAlertTest {
 
     @Test
     void recoveryBodyContainsHostAndBaseDomainLink() {
-        String body = server().recoveryBody("example.com");
+        String body = server().recoveryBody(MACHINE, "example.com");
 
         assertThat(body).contains("192.168.3.3");
         assertThat(body).contains("vaier.example.com");

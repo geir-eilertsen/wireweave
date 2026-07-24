@@ -1,5 +1,7 @@
 package net.vaier.domain.port;
 
+import net.vaier.domain.MachineId;
+
 /**
  * A driven port the domain calls to <em>ready</em> a machine's host for backups — the infrastructure side of
  * the decision the {@link net.vaier.domain.BackupJob} makes on a machine's FIRST back-up: trust the machine's
@@ -16,10 +18,10 @@ package net.vaier.domain.port;
 public interface ForReadyingBackupClients {
 
     /**
-     * Ready {@code machineName}'s host for backups: authorize its key on its backup server, then launch the
+     * Ready {@code machineId}'s host for backups: authorize its key on its backup server, then launch the
      * detached borg-client install. Never throws — a failure is reported in the outcome's {@code message}.
      */
-    ReadyingOutcome readyForBackup(String machineName);
+    ReadyingOutcome readyForBackup(MachineId machineId);
 
     /**
      * The outcome of readying a host (never a secret): {@code started} when the borg-client install launched

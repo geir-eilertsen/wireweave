@@ -1,5 +1,10 @@
 package net.vaier.application.service;
 
+import net.vaier.domain.DeviceCategory;
+import net.vaier.domain.Machine;
+import net.vaier.domain.MachineId;
+import net.vaier.domain.MachineType;
+import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.BackupJob;
 import net.vaier.domain.BackupRepository;
 import net.vaier.domain.BackupRun;
@@ -65,8 +70,8 @@ class BackupServiceTest {
         @Override public Optional<BackupJob> getByName(String name) {
             return store.stream().filter(j -> j.name().equals(name)).findFirst();
         }
-        @Override public List<BackupJob> getByMachine(String machineName) {
-            return store.stream().filter(j -> j.machineName().equals(machineName)).toList();
+        @Override public List<BackupJob> getByMachine(MachineId machineId) {
+            return store.stream().filter(j -> j.machineId().equals(machineId)).toList();
         }
         @Override public void save(BackupJob j) { store.removeIf(x -> x.name().equals(j.name())); store.add(j); }
         @Override public void deleteByName(String name) { store.removeIf(j -> j.name().equals(name)); }
@@ -91,8 +96,18 @@ class BackupServiceTest {
         service = new BackupService(repositories, servers, jobs, runs, readier);
     }
 
+    /**
+     * A machine whose id is derived from its name, so the job the service creates and the assertions that
+     * read it back agree about which machine is meant without threading a generated id through the test.
+     */
+    private Machine machine(String name) {
+        return new Machine(TestMachineIds.of(name), name,
+            MachineType.UBUNTU_SERVER, null, null, null, null, null, null, null, null,
+            null, false, null, DeviceCategory.SERVER, null);
+    }
+
     private BackupServer server() {
-        return new BackupServer("nas-borg", "NAS", "192.168.3.3", 8022,
+        return new BackupServer("nas-borg", TestMachineIds.of("NAS"), "192.168.3.3", 8022,
             "borg", "home/borg/backups", "/volume1/docker/borg", true);
     }
 
@@ -101,7 +116,7 @@ class BackupServiceTest {
     }
 
     private BackupJob job() {
-        return new BackupJob("colina-home", "Colina 27", "nas-borg",
+        return new BackupJob("colina-home", TestMachineIds.of("Colina 27"), "nas-borg",
             List.of("/home/geir"), List.of(), 7, 4, 6, "zstd,6", true, false);
     }
 
@@ -134,7 +149,7 @@ class BackupServiceTest {
     @Test
     void savingABackupServerWithTheSameNameReplacesIt() {
         service.saveBackupServer(server());
-        BackupServer moved = new BackupServer("nas-borg", "NAS", "192.168.3.9", 8022,
+        BackupServer moved = new BackupServer("nas-borg", TestMachineIds.of("NAS"), "192.168.3.9", 8022,
             "borg", "home/borg/backups", "/volume1/docker/borg", true);
         service.saveBackupServer(moved);
 
@@ -161,13 +176,13 @@ class BackupServiceTest {
         assertThat(service.getBackupServers()).containsExactly(server());
 
         // (b) re-saving the SAME-named server (an edit) still replaces in place.
-        BackupServer moved = new BackupServer("nas-borg", "NAS", "192.168.3.9", 8022,
+        BackupServer moved = new BackupServer("nas-borg", TestMachineIds.of("NAS"), "192.168.3.9", 8022,
             "borg", "home/borg/backups", "/volume1/docker/borg", true);
         service.saveBackupServer(moved);
         assertThat(service.getBackupServers()).containsExactly(moved);
 
         // (a) a second, differently-named server is rejected and not stored.
-        BackupServer another = new BackupServer("other-borg", "Other", "192.168.3.4", 8022,
+        BackupServer another = new BackupServer("other-borg", TestMachineIds.of("Other"), "192.168.3.4", 8022,
             "borg", "home/borg/backups", "/volume1/docker/borg", true);
         assertThatThrownBy(() -> service.saveBackupServer(another))
             .isInstanceOf(IllegalArgumentException.class)
@@ -192,7 +207,7 @@ class BackupServiceTest {
     void protectGetsOrCreatesRepositoryAndJobWithABackendPassphrase() {
         service.saveBackupServer(server());
 
-        BackupJob created = service.protect("Colina 27", List.of("/home/geir")).job();
+        BackupJob created = service.protect(machine("Colina 27"), List.of("/home/geir")).job();
 
         // The repository is created by the machine's sanitized name, on the single server, with a strong
         // backend-generated passphrase (never taken from a client).
@@ -200,7 +215,7 @@ class BackupServiceTest {
         assertThat(repo.serverName()).isEqualTo("nas-borg");
         assertThat(repo.passphrase()).matches("[A-Za-z0-9]{32}");
         // The job is created for the machine, referencing that repository, with the retention defaults.
-        assertThat(created.machineName()).isEqualTo("Colina 27");
+        assertThat(created.machineId()).isEqualTo(TestMachineIds.of("Colina 27"));
         assertThat(created.repositoryName()).isEqualTo("Colina-27");
         assertThat(created.sourcePaths()).containsExactly("/home/geir");
         assertThat(created.keepDaily()).isEqualTo(7);
@@ -210,9 +225,9 @@ class BackupServiceTest {
     @Test
     void protectReusesTheExistingRepositoryAndJobForTheMachine() {
         service.saveBackupServer(server());
-        service.protect("Colina 27", List.of("/home/geir"));
+        service.protect(machine("Colina 27"), List.of("/home/geir"));
 
-        service.protect("Colina 27", List.of("/etc/nginx"));
+        service.protect(machine("Colina 27"), List.of("/etc/nginx"));
 
         // Still exactly one repository and one job — the second call folds into the same job.
         assertThat(repositories.getAll()).hasSize(1);
@@ -230,10 +245,10 @@ class BackupServiceTest {
         service.saveBackupServer(server());
         repositories.store.add(new BackupRepository("Colina-27", "nas-borg", null,
             "theRealPassphraseThatSealsTheRepo", false));
-        jobs.store.add(new BackupJob("Colina-27", "Colina 27", "Colina 27",
+        jobs.store.add(new BackupJob("Colina-27", TestMachineIds.of("Colina 27"), "Colina 27",
             List.of("/home/geir"), List.of(), 7, 4, 6, "zstd,6", true, false));
 
-        service.protect("Colina 27", List.of("/etc/nginx"));
+        service.protect(machine("Colina 27"), List.of("/etc/nginx"));
 
         // The repository's passphrase is untouched, and there is still exactly one repository.
         assertThat(repositories.getByName("Colina-27").orElseThrow().passphrase())
@@ -246,14 +261,14 @@ class BackupServiceTest {
         // The first back-up creates the job, and the newly-created job decides its host must be readied: the
         // service passes the driven port in, the domain calls it, and the outcome rides back on the result.
         service.saveBackupServer(server());
-        when(readier.readyForBackup("Colina 27"))
+        when(readier.readyForBackup(TestMachineIds.of("Colina 27")))
             .thenReturn(new ReadyingOutcome(true, false, null, "Preparing client on Colina 27"));
 
-        var outcome = service.protect("Colina 27", List.of("/home/geir"));
+        var outcome = service.protect(machine("Colina 27"), List.of("/home/geir"));
 
         assertThat(outcome.readying()).isNotNull();
         assertThat(outcome.readying().started()).isTrue();
-        verify(readier).readyForBackup("Colina 27");
+        verify(readier).readyForBackup(TestMachineIds.of("Colina 27"));
     }
 
     @Test
@@ -261,11 +276,11 @@ class BackupServiceTest {
         // Adding paths to an existing job must never re-ready a provisioned host: the port is not called and
         // the result carries no readying outcome.
         service.saveBackupServer(server());
-        when(readier.readyForBackup("Colina 27"))
+        when(readier.readyForBackup(TestMachineIds.of("Colina 27")))
             .thenReturn(new ReadyingOutcome(true, false, null, "Preparing client on Colina 27"));
-        service.protect("Colina 27", List.of("/home/geir"));   // first back-up (readies)
+        service.protect(machine("Colina 27"), List.of("/home/geir"));   // first back-up (readies)
 
-        var second = service.protect("Colina 27", List.of("/etc/nginx"));   // adding paths (must not re-ready)
+        var second = service.protect(machine("Colina 27"), List.of("/etc/nginx"));   // adding paths (must not re-ready)
 
         assertThat(second.readying()).isNull();
         // Exactly one readying across both calls — the second never re-readies.
@@ -274,7 +289,7 @@ class BackupServiceTest {
 
     @Test
     void protectWithoutABackupServerConflicts() {
-        assertThatThrownBy(() -> service.protect("Colina 27", List.of("/home/geir")))
+        assertThatThrownBy(() -> service.protect(machine("Colina 27"), List.of("/home/geir")))
             .isInstanceOf(net.vaier.domain.ConflictException.class)
             .hasMessageContaining("Designate a backup server");
         assertThat(jobs.getAll()).isEmpty();
@@ -284,9 +299,9 @@ class BackupServiceTest {
     @Test
     void unprotectEmptyingTheJobDeletesItButKeepsTheRepository() {
         service.saveBackupServer(server());
-        service.protect("Colina 27", List.of("/home/geir"));
+        service.protect(machine("Colina 27"), List.of("/home/geir"));
 
-        Unprotection result = service.unprotect("Colina 27", List.of("/home/geir"));
+        Unprotection result = service.unprotect(TestMachineIds.of("Colina 27"), List.of("/home/geir"));
 
         assertThat(result.jobDeleted()).isTrue();
         assertThat(result.job()).isNull();
@@ -296,7 +311,7 @@ class BackupServiceTest {
 
     @Test
     void unprotectForAMachineWithNoJobIsANoOp() {
-        Unprotection result = service.unprotect("Colina 27", List.of("/home/geir"));
+        Unprotection result = service.unprotect(TestMachineIds.of("Colina 27"), List.of("/home/geir"));
 
         assertThat(result.changed()).isFalse();
         assertThat(result.job()).isNull();
@@ -307,27 +322,27 @@ class BackupServiceTest {
         // The reported bug, at the service seam: /home stays protected, so the only way to really stop backing
         // the logs folder up is an exclude — and the job that comes back must be the one that was stored.
         service.saveBackupServer(server());
-        service.protect("Colina 27", List.of("/home"));
+        service.protect(machine("Colina 27"), List.of("/home"));
 
-        Unprotection result = service.unprotect("Colina 27", List.of("/home/openhab/userdata/logs"));
+        Unprotection result = service.unprotect(TestMachineIds.of("Colina 27"), List.of("/home/openhab/userdata/logs"));
 
         assertThat(result.changed()).isTrue();
         assertThat(result.job().sourcePaths()).containsExactly("/home");
         assertThat(result.job().excludes()).containsExactly("/home/openhab/userdata/logs");
-        assertThat(jobs.getByMachine("Colina 27").getFirst().excludes())
+        assertThat(jobs.getByMachine(TestMachineIds.of("Colina 27")).getFirst().excludes())
             .containsExactly("/home/openhab/userdata/logs");
     }
 
     @Test
     void unprotectSomethingNothingProtectsChangesNothing_andDoesNotEvenTouchTheStore() {
         service.saveBackupServer(server());
-        service.protect("Colina 27", List.of("/home"));
-        BackupJob before = jobs.getByMachine("Colina 27").getFirst();
+        service.protect(machine("Colina 27"), List.of("/home"));
+        BackupJob before = jobs.getByMachine(TestMachineIds.of("Colina 27")).getFirst();
 
-        Unprotection result = service.unprotect("Colina 27", List.of("/var/log"));
+        Unprotection result = service.unprotect(TestMachineIds.of("Colina 27"), List.of("/var/log"));
 
         assertThat(result.changed()).isFalse();
-        assertThat(jobs.getByMachine("Colina 27").getFirst()).isEqualTo(before);
+        assertThat(jobs.getByMachine(TestMachineIds.of("Colina 27")).getFirst()).isEqualTo(before);
     }
 
     @Test
@@ -335,12 +350,12 @@ class BackupServiceTest {
         // Stop backing up X, then back up X: the folder must end up genuinely protected, not shielded on
         // screen while every borg run walks past it.
         service.saveBackupServer(server());
-        service.protect("Colina 27", List.of("/home"));
-        service.unprotect("Colina 27", List.of("/home/openhab/userdata/logs"));
+        service.protect(machine("Colina 27"), List.of("/home"));
+        service.unprotect(TestMachineIds.of("Colina 27"), List.of("/home/openhab/userdata/logs"));
 
-        service.protect("Colina 27", List.of("/home/openhab/userdata/logs"));
+        service.protect(machine("Colina 27"), List.of("/home/openhab/userdata/logs"));
 
-        BackupJob job = jobs.getByMachine("Colina 27").getFirst();
+        BackupJob job = jobs.getByMachine(TestMachineIds.of("Colina 27")).getFirst();
         assertThat(job.excludes()).isEmpty();
         assertThat(job.protectedPaths().covers("/home/openhab/userdata/logs")).isTrue();
     }

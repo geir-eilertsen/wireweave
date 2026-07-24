@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.domain.BackupJob;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.port.ForPersistingBackupJobs;
 import org.springframework.stereotype.Component;
 import org.yaml.snakeyaml.DumperOptions;
@@ -20,6 +21,12 @@ import org.yaml.snakeyaml.Yaml;
  * File-backed store for fleet-backup {@link BackupJob} definitions: one entry per job in
  * {@code backup-jobs.yml}, keyed on {@code name}. Jobs hold no secrets, so every field is stored in
  * the clear; the {@code sourcePaths} and {@code excludes} list fields are serialized as YAML lists.
+ *
+ * <p>A job names its machine by {@code machineId}, never by display name. An entry whose id is missing or
+ * unreadable is skipped <b>loudly</b>, for the same reason as {@code DiskWatchFileAdapter}: a job that
+ * quietly fails to load is a machine that silently stops being backed up, and nothing else in Vaier would
+ * ever say so. (Two dead jobs against machines in no registry — {@code NUC 02} and {@code NUC02} — are what
+ * name-keying cost here.)
  */
 @Component
 @Slf4j
@@ -65,8 +72,8 @@ public class BackupJobFileAdapter implements ForPersistingBackupJobs {
     }
 
     @Override
-    public synchronized List<BackupJob> getByMachine(String machineName) {
-        return getAll().stream().filter(j -> j.machineName().equals(machineName)).toList();
+    public synchronized List<BackupJob> getByMachine(MachineId machineId) {
+        return getAll().stream().filter(j -> j.machineId().equals(machineId)).toList();
     }
 
     @Override
@@ -86,7 +93,7 @@ public class BackupJobFileAdapter implements ForPersistingBackupJobs {
 
     private BackupJob deserialize(Map<?, ?> m) {
         String name = asString(m.get("name"));
-        String machineName = asString(m.get("machineName"));
+        String rawMachineId = asString(m.get("machineId"));
         String repositoryName = asString(m.get("repositoryName"));
         List<String> sourcePaths = asStringList(m.get("sourcePaths"));
         List<String> excludes = asStringList(m.get("excludes"));
@@ -98,13 +105,23 @@ public class BackupJobFileAdapter implements ForPersistingBackupJobs {
         // Absent in every job file written before "Back up as root" existed -> false. A job is never escalated
         // to root merely because a new key appeared in the schema; opting in is always an explicit act.
         boolean backupAsRoot = m.get("backupAsRoot") instanceof Boolean r && r;
-        if (name == null || machineName == null || repositoryName == null
+        if (name == null || repositoryName == null
             || sourcePaths.isEmpty() || keepDaily == null || keepWeekly == null || keepMonthly == null) {
             log.warn("Skipping malformed backup-job entry in {}", FILE_NAME);
             return null;
         }
+        MachineId machineId;
         try {
-            return new BackupJob(name, machineName, repositoryName, sourcePaths, excludes,
+            machineId = MachineId.of(rawMachineId);
+        } catch (IllegalArgumentException e) {
+            // Loud, not quiet: this job now backs up nothing, and a machine that stops being backed up is
+            // exactly the failure a backup tool must never keep to itself.
+            log.error("Skipping backup-job entry '{}' in {} with an unusable machineId: {}",
+                name.replaceAll("[\\r\\n]+", "_"), FILE_NAME, e.getMessage());
+            return null;
+        }
+        try {
+            return new BackupJob(name, machineId, repositoryName, sourcePaths, excludes,
                 keepDaily, keepWeekly, keepMonthly, compression, enabled, backupAsRoot);
         } catch (IllegalArgumentException e) {
             log.warn("Skipping invalid backup-job entry '{}' in {}: {}",
@@ -126,7 +143,7 @@ public class BackupJobFileAdapter implements ForPersistingBackupJobs {
         for (BackupJob j : jobs) {
             Map<String, Object> entry = new LinkedHashMap<>();
             entry.put("name", j.name());
-            entry.put("machineName", j.machineName());
+            entry.put("machineId", j.machineId().value());
             entry.put("repositoryName", j.repositoryName());
             entry.put("sourcePaths", new ArrayList<>(j.sourcePaths()));
             entry.put("excludes", new ArrayList<>(j.excludes()));

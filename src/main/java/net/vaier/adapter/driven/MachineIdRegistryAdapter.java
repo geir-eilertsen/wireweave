@@ -55,6 +55,27 @@ public class MachineIdRegistryAdapter implements ForResolvingMachineIds {
             .findFirst();
     }
 
+    @Override
+    public Optional<String> nameForId(MachineId machineId) {
+        if (machineId == null) {
+            return Optional.empty();
+        }
+        if (vaierServerMachineId().filter(machineId::isSameAs).isPresent()) {
+            return Optional.of(LanAnchor.VAIER_SERVER_NAME);
+        }
+        Optional<String> peer = forGettingPeerConfigurations.getAllPeerConfigs().stream()
+            .filter(p -> machineId.isSameAs(p.machineId()))
+            .map(ForGettingPeerConfigurations.PeerConfiguration::name)
+            .findFirst();
+        if (peer.isPresent()) {
+            return peer;
+        }
+        return forPersistingLanServers.getAll().stream()
+            .filter(s -> machineId.isSameAs(s.machineId()))
+            .map(LanServer::name)
+            .findFirst();
+    }
+
     /**
      * The Vaier server's configured id, or empty when it has not been assigned one yet. Empty rather
      * than minted: assigning identity is not a lookup's job, and a read that quietly created a machine

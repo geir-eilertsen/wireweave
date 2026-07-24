@@ -1786,24 +1786,35 @@ missing or malformed does not load, rather than coming back as a stranger to its
 - Disk watches keyed by `MachineId`, with the file adapter refusing an unreadable id **loudly** (its
   fallback is watched-at-the-global-threshold, so a silent miss reverts a disk to a threshold nobody chose).
 - `GET /machines` and `/machines/vaier-server` expose `id`.
-- `ForResolvingMachineIds` + `MachineIdRegistryAdapter` — the single name→id seam. **Scaffolding**; see below.
+- `ForResolvingMachineIds` + `MachineIdRegistryAdapter` — the single name↔id seam, in both directions
+  (`idForName` for callers holding what an operator typed, `nameForId` for callers holding an identity and
+  needing something to show a person). **Scaffolding**; see below.
+- **Backup group.** `BackupJob`/`BackupRun`/`BackupServer` hold a `MachineId`; the three file adapters store
+  `machineId:` and skip an unreadable one **loudly**, because a job that quietly fails to load is a machine
+  that silently stops being backed up. `BackupWorkDirResolver`'s `$HOME` cache is keyed by identity, and
+  `BackupJobProtectedPathsAdapter` crosses name→id through the one seam. The provisioning use cases
+  (`checkBorg`, `checkNas`, `checkServerAuth`, `checkRootBorg`, `initRepo`, `prepareClient`,
+  `authorizeClient`, `readyForBackup`) all take a `MachineId`, and `prepareRunId` derives the on-host
+  `.rc`/`.log` filenames from it, so a rename mid-install cannot strand a run nobody can find again.
+  - **A machine's name is presentation, so it is passed in, never held.** `BackupRun.failureSubject/Body`,
+    `BackupServer.downBody/recoveryBody`, `BackupRun.borgMissing` and `RecoverySheet.render` take a display
+    label from the caller that has already resolved the machine. A UUID in an inbox — or on the survival kit
+    an operator reads after losing their fleet — would be the one thing that made it useless.
+  - **REST DTOs carry both.** Job/run/server responses expose `machineId` *and* a resolved `machineName`
+    (null once the machine has left the fleet), and requests still accept a `machineName`, resolved at the
+    controller. That keeps this slice backend-only — the browser is entirely name-keyed and flips in the
+    driving-edge slice, for which the `machineId` field is already in place. An unknown machine name on a
+    write is now a `404`, which is the door the two dead `NUC 02`/`NUC02` jobs walked through.
 
 #### Remaining
 
-1. **Backup group** (one session). `BackupJob`/`BackupRun`/`BackupServer` `machineName` → `machineId`, plus
-   `BackupJobProtectedPathsAdapter` and `BackupWorkDirResolver`'s home cache. Measured: re-keying the three
-   records alone yields ~90 main-source compile errors (`BackupRestController` 26, `BackupRunner` 18,
-   `BackupProvisioner` 14), and roughly 200 test errors behind them. Not subdividable — the three records
-   reference each other (`BackupRun.from(job, …)` copies the machine through). Decide first whether the
-   backup REST DTOs keep exposing `machineName` for display (resolved at the controller, as
-   `HostCredentialRestController` now does) or expose `machineId` and let the browser resolve from
-   `/machines`; the second is cleaner and fits step 3.
-2. **SFTP root cache** — `CachingSftpRootAdapter`'s in-memory map. Small and independent of everything else.
-3. **Driving edge** — `/machines/{id}/…` and the frontend using ids. **Blocked by step 1**: `BorgArchiveMountAdapter`
-   and `BackupRunner` still call `sshTargets.resolve(job.machineName())`, so the SSH path cannot go id-native
-   until backups hold ids. Once it does, `ForResolvingMachineIds`, `MachineIdRegistryAdapter`,
-   `Machine.nameIsTaken` and `Machine.hasSameName` all delete in one commit — and machine names stop needing
-   to be unique at all.
+1. **SFTP root cache** — `CachingSftpRootAdapter`'s in-memory map. Small and independent of everything else.
+2. **Driving edge** — `/machines/{id}/…` and the frontend using ids. No longer blocked: the backup records
+   hold ids now, so what is left is `ForResolvingSshTargets.resolve` and `RunRemoteCommandUseCase.run` taking
+   a `MachineId` rather than a name, and the Explorer's coordinates carrying ids. Once that lands,
+   `ForResolvingMachineIds`, `MachineIdRegistryAdapter`, `Machine.nameIsTaken` and `Machine.hasSameName` all
+   delete in one commit — and machine names stop needing to be unique at all. The `machineName` parameter on
+   `BackupWorkDirResolver` and the `machineLabel` arguments on the alert renderers go at the same time.
 
 #### Working method (proven across the slices above)
 

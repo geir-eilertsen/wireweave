@@ -4,6 +4,7 @@ import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
 
 import java.util.Collection;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Unified read projection for every machine Vaier manages — both WireGuard peers
@@ -172,5 +173,23 @@ public record Machine(
             return false;
         }
         return a.trim().equalsIgnoreCase(b.trim());
+    }
+
+    /**
+     * What to call the machine {@code machineId} in something a person reads — an admin email, the
+     * recovery sheet — given the name the fleet currently has for it, if any.
+     *
+     * <p>Records are keyed by identity so a rename cannot orphan them, which means a record can outlive the
+     * machine it points at. What to say then is a decision, not a formatting detail: it must be
+     * distinguishable from a real name (or an operator reads past it), and it must still carry the id (or an
+     * operator who notices cannot act on it). It lives here because it was being answered four different
+     * ways — in the recovery sheet, in two admin alerts and in a REST DTO.
+     *
+     * <p>Not for machine-readable fields. A DTO or an SSE payload wants {@code null} or the raw id, never
+     * this prose; those callers deliberately do not come here.
+     */
+    public static String labelFor(MachineId machineId, Optional<String> name) {
+        return name.filter(n -> !n.isBlank()).orElseGet(() ->
+            "a machine no longer in this fleet (" + (machineId == null ? "unknown id" : machineId.value()) + ")");
     }
 }

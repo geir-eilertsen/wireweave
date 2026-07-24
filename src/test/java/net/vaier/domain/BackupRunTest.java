@@ -10,8 +10,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class BackupRunTest {
 
+    /**
+     * What the machine is called, supplied by the caller. A run is keyed by identity — the name is only ever
+     * presentation, so the entity is given it rather than holding it.
+     */
+    private static final String MACHINE = "Colina 27";
+
     private BackupJob job() {
-        return new BackupJob("colina-home", "Colina 27", "nas-borg",
+        return new BackupJob("colina-home", TestMachineIds.of("Colina 27"), "nas-borg",
             List.of("/home/geir"), List.of(), 7, 4, 6, "zstd,6", true, false);
     }
 
@@ -109,10 +115,10 @@ class BackupRunTest {
         BackupRun failed = BackupRun.fromExitCode(job(), "run-1", start, end, 2,
             "borg: repository is locked\nterminating");
 
-        assertThat(failed.failureSubject())
+        assertThat(failed.failureSubject(MACHINE))
             .isEqualTo("[Vaier] Backup failed: colina-home on Colina 27");
 
-        String body = failed.failureBody("example.com");
+        String body = failed.failureBody(MACHINE, "example.com");
         assertThat(body).contains("colina-home");        // job
         assertThat(body).contains("Colina 27");          // machine
         assertThat(body).contains("nas-borg");           // repository
@@ -128,9 +134,9 @@ class BackupRunTest {
         Instant end = Instant.parse("2026-07-08T02:40:00Z");
         BackupRun ok = BackupRun.fromExitCode(job(), "run-2", start, end, 0, "12 files, 3 GB");
 
-        assertThat(ok.recoverySubject())
+        assertThat(ok.recoverySubject(MACHINE))
             .isEqualTo("[Vaier] Backup recovered: colina-home on Colina 27");
-        assertThat(ok.recoveryBody("example.com"))
+        assertThat(ok.recoveryBody(MACHINE, "example.com"))
             .contains("colina-home").contains("Colina 27").contains("vaier.example.com");
     }
 
@@ -362,9 +368,9 @@ class BackupRunTest {
 
         // "failed" would be a lie (there IS an archive) and "warning" was the lie we are fixing. The subject
         // says the one thing that matters in a notification list: this backup did not get everything.
-        assertThat(run.failureSubject())
+        assertThat(run.failureSubject(MACHINE))
             .isEqualTo("[Vaier] Backup incomplete: colina-home on Colina 27");
-        String body = run.failureBody("example.com");
+        String body = run.failureBody(MACHINE, "example.com");
         assertThat(body).contains("2 files could not be read");
         assertThat(body).contains("are NOT in the archive");
         assertThat(body).contains("/home/nut-http/logs/a.log");
@@ -379,8 +385,8 @@ class BackupRunTest {
 
         BackupRun failed = BackupRun.fromExitCode(job(), "run-i8", start, end, 2, "borg: repository is locked");
 
-        assertThat(failed.failureSubject()).isEqualTo("[Vaier] Backup failed: colina-home on Colina 27");
-        assertThat(failed.failureBody("example.com")).doesNotContain("could not be read");
+        assertThat(failed.failureSubject(MACHINE)).isEqualTo("[Vaier] Backup failed: colina-home on Colina 27");
+        assertThat(failed.failureBody(MACHINE, "example.com")).doesNotContain("could not be read");
     }
 
     // --- the one failure the operator can fix from where they are standing ------------------------------
@@ -390,7 +396,7 @@ class BackupRunTest {
         // This failure is not like the others: the host is fine, the credential is fine, the repository is
         // fine — borg simply is not installed there yet, and Vaier can install it. Whether a failure means
         // that is the domain's call, so the UI never has to read the message and guess.
-        BackupRun run = BackupRun.borgMissing(job(), "run-b1", Instant.parse("2026-07-23T00:12:10Z"));
+        BackupRun run = BackupRun.borgMissing(job(), "run-b1", Instant.parse("2026-07-23T00:12:10Z"), MACHINE);
 
         assertThat(run.status()).isEqualTo(BackupRunStatus.FAILED);
         assertThat(run.needsClientReadying()).isTrue();
@@ -402,7 +408,7 @@ class BackupRunTest {
         // It used to say "run Prepare client" — a button on a page that was deleted when the Explorer
         // absorbed it. A message pointing at a control nobody can find is worse than no message: it tells
         // the operator the fix is their fault to find.
-        BackupRun run = BackupRun.borgMissing(job(), "run-b2", Instant.parse("2026-07-23T00:12:10Z"));
+        BackupRun run = BackupRun.borgMissing(job(), "run-b2", Instant.parse("2026-07-23T00:12:10Z"), MACHINE);
 
         assertThat(run.summary()).doesNotContain("run Prepare client");
         assertThat(run.summary()).as("it names where the operator already is").contains("Backup");

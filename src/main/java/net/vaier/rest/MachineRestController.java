@@ -102,7 +102,9 @@ public class MachineRestController {
     public List<NudgeResponse> nudges(@PathVariable String machine) {
         List<Machine> machines = getMachinesUseCase.getAllMachines();
         Machine target = machines.stream()
-            .filter(m -> m.name().equals(machine))
+            // Machine.hasSameName, not equals: the uniqueness guard that refuses a duplicate name uses it,
+            // so a name it would call the same machine must not 404 here.
+            .filter(m -> Machine.hasSameName(m.name(), machine))
             .findFirst()
             .orElseThrow(() -> new NotFoundException("Machine not found: " + machine));
 
@@ -113,11 +115,11 @@ public class MachineRestController {
 
         int publishableCount = (int) getPublishableServicesUseCase.getPublishableServices().stream()
             .filter(s -> s.ownerMachineName(vaierServerName, lanServerNameByAddress)
-                .map(machine::equals).orElse(false))
+                .map(owner -> Machine.hasSameName(owner, target.name())).orElse(false))
             .count();
         boolean hasCredential = hasStoredCredential(machine);
         boolean alreadyProtected = getBackupJobsUseCase.getBackupJobs().stream()
-            .anyMatch(j -> machine.equals(j.machineName()));
+            .anyMatch(j -> target.id().equals(j.machineId()));
         BackupFleet fleet = new BackupFleet(getBackupServersUseCase.getBackupServers());
         Map<String, Reachability> lanReachability = target.lanAddress() == null ? Map.of()
             : Map.of(target.lanAddress(), getLanServerReachabilityUseCase.getReachability(target.lanAddress()));

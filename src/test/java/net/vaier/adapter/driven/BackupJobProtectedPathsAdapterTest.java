@@ -1,8 +1,11 @@
 package net.vaier.adapter.driven;
 
+import net.vaier.domain.MachineId;
+import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.BackupJob;
 import net.vaier.domain.ProtectedPaths;
 import net.vaier.domain.port.ForPersistingBackupJobs;
+import net.vaier.domain.port.ForResolvingMachineIds;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -20,8 +23,8 @@ class BackupJobProtectedPathsAdapterTest {
         @Override public Optional<BackupJob> getByName(String name) {
             return store.stream().filter(j -> j.name().equals(name)).findFirst();
         }
-        @Override public List<BackupJob> getByMachine(String machineName) {
-            return store.stream().filter(j -> j.machineName().equals(machineName)).toList();
+        @Override public List<BackupJob> getByMachine(MachineId machineId) {
+            return store.stream().filter(j -> j.machineId().equals(machineId)).toList();
         }
         @Override public void save(BackupJob j) { store.removeIf(x -> x.name().equals(j.name())); store.add(j); }
         @Override public void deleteByName(String name) { store.removeIf(j -> j.name().equals(name)); }
@@ -33,11 +36,19 @@ class BackupJobProtectedPathsAdapterTest {
     @BeforeEach
     void setUp() {
         jobs = new InMemoryJobs();
-        adapter = new BackupJobProtectedPathsAdapter(jobs);
+        // The Explorer asks by name; the store is keyed by identity. The stub is the one seam that crosses.
+        adapter = new BackupJobProtectedPathsAdapter(jobs, new ForResolvingMachineIds() {
+            @Override public Optional<MachineId> idForName(String machineName) {
+                return Optional.of(TestMachineIds.of(machineName));
+            }
+            @Override public Optional<String> nameForId(MachineId machineId) {
+                return Optional.empty();
+            }
+        });
     }
 
     private BackupJob job(String name, List<String> sources, List<String> excludes) {
-        return new BackupJob(name, "Apalveien 5", "apalveien-5", sources, excludes,
+        return new BackupJob(name, TestMachineIds.of("Apalveien 5"), "apalveien-5", sources, excludes,
             7, 4, 6, "zstd,6", true, false);
     }
 

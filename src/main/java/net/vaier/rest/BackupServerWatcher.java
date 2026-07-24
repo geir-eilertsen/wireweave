@@ -2,9 +2,11 @@ package net.vaier.rest;
 
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.application.GetBackupServersUseCase;
+import net.vaier.application.GetMachinesUseCase;
 import net.vaier.application.NotifyAdminsOfBackupServerDownUseCase;
 import net.vaier.domain.BackupServer;
 import net.vaier.domain.BackupServerHealthTracker;
+import net.vaier.domain.Machine;
 import net.vaier.domain.port.ForProbingTcp;
 import net.vaier.domain.port.ForProbingTcp.ProbeResult;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -44,14 +46,17 @@ public class BackupServerWatcher {
     private static final int PROBE_TIMEOUT_MS = 2000;
 
     private final GetBackupServersUseCase backupServers;
+    private final GetMachinesUseCase machines;
     private final ForProbingTcp probe;
     private final NotifyAdminsOfBackupServerDownUseCase notifier;
     private final BackupServerHealthTracker tracker = new BackupServerHealthTracker();
 
     public BackupServerWatcher(GetBackupServersUseCase backupServers,
+                               GetMachinesUseCase machines,
                                ForProbingTcp probe,
                                NotifyAdminsOfBackupServerDownUseCase notifier) {
         this.backupServers = backupServers;
+        this.machines = machines;
         this.probe = probe;
         this.notifier = notifier;
     }
@@ -73,15 +78,29 @@ public class BackupServerWatcher {
             return;
         }
         boolean healthy = result == ProbeResult.CONNECTED;
+        String machineLabel = machineLabelFor(server);
         switch (tracker.update(server.name(), healthy)) {
             case CROSSED_TO_DOWN -> notifyQuietly(
-                () -> notifier.notifyAdminsOfBackupServerDown(server, result),
+                () -> notifier.notifyAdminsOfBackupServerDown(server, machineLabel, result),
                 "down alert for backup server " + server.name());
             case CROSSED_TO_HEALTHY -> notifyQuietly(
-                () -> notifier.notifyAdminsOfBackupServerRecovered(server),
+                () -> notifier.notifyAdminsOfBackupServerRecovered(server, machineLabel),
                 "recovery alert for backup server " + server.name());
             case NONE -> { /* no boundary crossed; stay quiet */ }
         }
+    }
+
+    /**
+     * What to call the server's machine in an email. The server holds its machine's identity, which is the
+     * right key and an unreadable thing to put in an inbox — so the name is resolved here, at the driving
+     * edge, and what to say when there is no name to resolve is {@link Machine#labelFor}'s decision, shared
+     * with every other thing a person reads.
+     */
+    private String machineLabelFor(BackupServer server) {
+        return Machine.labelFor(server.machineId(), machines.getAllMachines().stream()
+            .filter(m -> m.id().equals(server.machineId()))
+            .map(Machine::name)
+            .findFirst());
     }
 
     /** Run a notification, swallowing any failure so one bad send can never break the rest of the sweep. */
