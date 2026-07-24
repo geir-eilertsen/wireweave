@@ -145,4 +145,43 @@ class BackupServerWatcherTest {
 
         verify(probe, never()).probe(any(), anyInt(), anyInt());
     }
+
+    // --- resolving what to CALL the machine must never be able to break the sweep ----------------------
+
+    /**
+     * The regression this guards. The machine registry reads WireGuard by shelling into a container, so it
+     * throws whenever that container is restarting — an ordinary state of a fleet. Resolving a machine's
+     * display name is a cosmetic step for an email; it must never take the sweep down with it, and above all
+     * it must never lose the down-alert it was only ever there to decorate.
+     */
+    @Test
+    void aMachineRegistryThatThrows_neitherBreaksTheSweepNorSwallowsTheAlert() {
+        when(servers.getBackupServers()).thenReturn(List.of(server("nas-borg")));
+        when(probe.probe(eq("192.168.3.3"), eq(8022), anyInt())).thenReturn(ProbeResult.REFUSED);
+        when(machines.getAllMachines()).thenThrow(new RuntimeException("wireguard container restarting"));
+
+        org.assertj.core.api.Assertions.assertThatCode(() -> {
+            watcher.checkBackupServers();   // strike 1
+            watcher.checkBackupServers();   // strike 2, crosses to down
+        }).doesNotThrowAnyException();
+
+        // The alert still goes out — naming the machine as unresolvable beats not alerting at all.
+        verify(notifier).notifyAdminsOfBackupServerDown(any(), any(), eq(ProbeResult.REFUSED));
+    }
+
+    /**
+     * And it is not paid at all on a quiet sweep. A healthy server crosses no boundary, so there is no email
+     * to name a machine for — reading the whole machine registry (a container exec) every five minutes to
+     * decorate an alert that is not being sent is work for nothing.
+     */
+    @Test
+    void aQuietSweep_neverReadsTheMachineRegistry() {
+        when(servers.getBackupServers()).thenReturn(List.of(server("nas-borg")));
+        when(probe.probe(eq("192.168.3.3"), eq(8022), anyInt())).thenReturn(ProbeResult.CONNECTED);
+
+        watcher.checkBackupServers();
+        watcher.checkBackupServers();
+
+        verify(machines, never()).getAllMachines();
+    }
 }

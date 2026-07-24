@@ -581,6 +581,21 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
     }
 
     /**
+     * As {@link #machineNameFor}, but for the settle sweep, where it must not throw. The sweep removes the
+     * in-flight entry before it publishes, so anything that throws in between loses the event for good — the
+     * install finished and the browser waits forever. The registry reads WireGuard by shelling into a
+     * container and fails whenever that container restarts, which is an ordinary state of a fleet.
+     */
+    private Optional<String> machineNameForQuietly(MachineId machineId) {
+        try {
+            return machineNameFor(machineId);
+        } catch (Exception e) {
+            log.debug("Could not resolve a name for machine {} while settling: {}", machineId, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /**
      * The id fields of a settled prepare's SSE payload, following the same convention every REST DTO in this
      * slice follows: the machine's identity in {@code machineId}, its display name in {@code machineName},
      * and {@code null} there when the machine has left the fleet mid-install. Never an id in the name field
@@ -590,7 +605,7 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
      * sentence here would match nothing while looking like a name.
      */
     private String machineFieldsFor(MachineId machineId) {
-        String name = machineNameFor(machineId)
+        String name = machineNameForQuietly(machineId)
             .map(n -> "\"" + jsonEscape(n) + "\"")
             .orElse("null");
         return "\"machineId\":\"" + jsonEscape(machineId.value()) + "\",\"machineName\":" + name;

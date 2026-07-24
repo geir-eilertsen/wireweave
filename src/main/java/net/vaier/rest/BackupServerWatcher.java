@@ -12,6 +12,8 @@ import net.vaier.domain.port.ForProbingTcp.ProbeResult;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.util.Optional;
+
 /**
  * Sweeps every configured {@link BackupServer} and emails admins when one crosses from healthy to down (or
  * back). Vaier owns fleet backup, so a vanished Backup server deserves its own alert rather than surfacing
@@ -78,13 +80,16 @@ public class BackupServerWatcher {
             return;
         }
         boolean healthy = result == ProbeResult.CONNECTED;
-        String machineLabel = machineLabelFor(server);
+        // The machine label is resolved INSIDE the notify lambdas, not before the switch: it is only needed
+        // when an email is actually being sent, and reading the machine registry means shelling into the
+        // WireGuard container. Doing it eagerly cost that on every quiet sweep and — because it sits
+        // outside notifyQuietly's guard — let a restarting container take the whole sweep down.
         switch (tracker.update(server.name(), healthy)) {
             case CROSSED_TO_DOWN -> notifyQuietly(
-                () -> notifier.notifyAdminsOfBackupServerDown(server, machineLabel, result),
+                () -> notifier.notifyAdminsOfBackupServerDown(server, machineLabelFor(server), result),
                 "down alert for backup server " + server.name());
             case CROSSED_TO_HEALTHY -> notifyQuietly(
-                () -> notifier.notifyAdminsOfBackupServerRecovered(server, machineLabel),
+                () -> notifier.notifyAdminsOfBackupServerRecovered(server, machineLabelFor(server)),
                 "recovery alert for backup server " + server.name());
             case NONE -> { /* no boundary crossed; stay quiet */ }
         }
@@ -95,12 +100,25 @@ public class BackupServerWatcher {
      * right key and an unreadable thing to put in an inbox — so the name is resolved here, at the driving
      * edge, and what to say when there is no name to resolve is {@link Machine#labelFor}'s decision, shared
      * with every other thing a person reads.
+     *
+     * <p>Never throws. The registry reads WireGuard by shelling into a container, so it fails whenever that
+     * container is restarting — an ordinary state of a fleet. Losing a <em>down alert</em> because the
+     * cosmetic step that names its machine failed would be absurd, so an unreadable registry degrades to the
+     * same label a departed machine gets and the email goes out regardless.
      */
     private String machineLabelFor(BackupServer server) {
-        return Machine.labelFor(server.machineId(), machines.getAllMachines().stream()
-            .filter(m -> m.id().equals(server.machineId()))
-            .map(Machine::name)
-            .findFirst());
+        Optional<String> name;
+        try {
+            name = machines.getAllMachines().stream()
+                .filter(m -> m.id().equals(server.machineId()))
+                .map(Machine::name)
+                .findFirst();
+        } catch (Exception e) {
+            log.debug("Could not resolve the name of backup server {}'s machine: {}",
+                LogSafe.forLog(server.name()), e.getMessage());
+            name = Optional.empty();
+        }
+        return Machine.labelFor(server.machineId(), name);
     }
 
     /** Run a notification, swallowing any failure so one bad send can never break the rest of the sweep. */

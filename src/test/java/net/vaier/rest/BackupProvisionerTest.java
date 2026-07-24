@@ -1382,4 +1382,27 @@ class BackupProvisionerTest {
             .thenReturn(new CommandResult(0, "STARTED 7788\n", "", false, "SHA256:x"));
         assertThat(provisioner.prepareClient(TestMachineIds.of("Colina 27")).started()).isTrue();
     }
+
+    /**
+     * The settle sweep removes the in-flight entry before it publishes, so anything that throws between the
+     * two loses the event permanently — the install finished and the browser waits forever. Naming the
+     * machine reads the registry, which shells into the WireGuard container and fails whenever it restarts.
+     * That must degrade, not throw.
+     */
+    @Test
+    void thePrepareSettleEventStillPublishes_whenTheMachineRegistryThrowsWhileNamingIt() {
+        launchPrepare();
+        when(runner.run(eq("Colina 27"), contains(".rc")))
+            .thenReturn(new CommandResult(0, "DONE 0\n", "", false, "SHA256:x"));
+        when(machines.getAllMachines()).thenThrow(new RuntimeException("wireguard container restarting"));
+
+        provisioner.pollInFlightPrepares();
+
+        org.mockito.ArgumentCaptor<String> data = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(events).publish(eq("backups"), eq("prepare-client-settled"), data.capture());
+        assertThat(data.getValue())
+            .contains("\"machineId\":\"" + TestMachineIds.of("Colina 27").value() + "\"")
+            .contains("\"machineName\":null")
+            .contains("SUCCESS");
+    }
 }
