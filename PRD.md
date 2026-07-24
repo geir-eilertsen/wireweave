@@ -1814,12 +1814,29 @@ missing or malformed does not load, rather than coming back as a stranger to its
 
 #### Remaining
 
-1. **Driving edge** — `/machines/{id}/…` and the frontend using ids. No longer blocked: the backup records
-   hold ids now, so what is left is `ForResolvingSshTargets.resolve` and `RunRemoteCommandUseCase.run` taking
-   a `MachineId` rather than a name, and the Explorer's coordinates carrying ids. Once that lands,
-   `ForResolvingMachineIds`, `MachineIdRegistryAdapter`, `Machine.nameIsTaken` and `Machine.hasSameName` all
-   delete in one commit — and machine names stop needing to be unique at all. The `machineName` parameter on
-   `BackupWorkDirResolver` and the `machineLabel` arguments on the alert renderers go at the same time.
+This was written as one step. Scoping it showed it is two, and the seam between them is worth keeping:
+one is backend-only, the other changes what the browser depends on.
+
+1. **The SSH path goes id-native** (backend only, no contract moves). `ForResolvingSshTargets.resolve` and
+   `RunRemoteCommandUseCase.run` take a `MachineId`; `SshAddress.of` matches by id rather than name, which
+   needs the Vaier server's own id to recognise itself (it compares against `LanAnchor.VAIER_SERVER_NAME`
+   today). Eleven `resolve` call sites (`ExplorerService` ×3, `TerminalService` ×3, `BorgArchiveMountAdapter`
+   ×3, `MachineService`, `SurvivalKitKeeperAdapter`) and five `run` callers (`BackupWorkDirResolver`,
+   `BackupProvisioner`, `RemoteDiskWatcher`, `SelfUpgradeRunner`, `BackupRunner`). Controllers keep taking
+   names and resolve at the edge, so the REST contract does not move. This is where the `machineName`
+   parameter on `BackupWorkDirResolver` dies.
+2. **The driving edge** — `/machines/{id}/…`, the Explorer's coordinates carrying ids, and the frontend.
+   Only this one is a breaking change. It deletes `ForResolvingMachineIds`, `MachineIdRegistryAdapter`,
+   `Machine.nameIsTaken` and `Machine.hasSameName` in one commit — and machine names stop needing to be
+   unique at all. The `machineLabel` arguments on the alert renderers **stay**: a name is presentation and is
+   still passed in, only now resolved from an id the caller already holds.
+
+**A hazard this refactor creates, found twice in production.** Identity-keying turns field accesses into
+*lookups*, and a lookup can fail — the machine registry reads WireGuard by shelling into a container that
+restarts. Two scheduled sweeps were taken down by it: `BackupServerWatcher`, and `BackupProvisioner`'s settle
+sweep, which loses its event permanently because it clears the in-flight entry before publishing. Anything on
+a scheduled path that now looks a name up where it used to read a field needs a guard, and where the answer
+only decorates a message it must degrade rather than throw.
 
 #### Working method (proven across the slices above)
 
