@@ -1800,6 +1800,12 @@ missing or malformed does not load, rather than coming back as a stranger to its
     `BackupServer.downBody/recoveryBody`, `BackupRun.borgMissing` and `RecoverySheet.render` take a display
     label from the caller that has already resolved the machine. A UUID in an inbox — or on the survival kit
     an operator reads after losing their fleet — would be the one thing that made it useless.
+  - **SFTP root cache.** `CachingSftpRootAdapter` remembers a machine's jail under its `MachineId`, taken
+    from the `SshTarget` that reached it. Name-keying here was the dangerous kind: a name is reusable, so one
+    machine's jail could be served to another that later took its name — silently rewriting every path Vaier
+    shows for it, in both directions. A target with no identity (a pre-registration credential test against a
+    bare address) is probed each time rather than cached against a null. `ForResolvingSftpRoots`' javadoc had
+    said outright that "Vaier's canonical identity for a machine is its name"; it no longer does.
   - **REST DTOs carry both.** Job/run/server responses expose `machineId` *and* a resolved `machineName`
     (null once the machine has left the fleet), and requests still accept a `machineName`, resolved at the
     controller. That keeps this slice backend-only — the browser is entirely name-keyed and flips in the
@@ -1808,8 +1814,7 @@ missing or malformed does not load, rather than coming back as a stranger to its
 
 #### Remaining
 
-1. **SFTP root cache** — `CachingSftpRootAdapter`'s in-memory map. Small and independent of everything else.
-2. **Driving edge** — `/machines/{id}/…` and the frontend using ids. No longer blocked: the backup records
+1. **Driving edge** — `/machines/{id}/…` and the frontend using ids. No longer blocked: the backup records
    hold ids now, so what is left is `ForResolvingSshTargets.resolve` and `RunRemoteCommandUseCase.run` taking
    a `MachineId` rather than a name, and the Explorer's coordinates carrying ids. Once that lands,
    `ForResolvingMachineIds`, `MachineIdRegistryAdapter`, `Machine.nameIsTaken` and `Machine.hasSameName` all

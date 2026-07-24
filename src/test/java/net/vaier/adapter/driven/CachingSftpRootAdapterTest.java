@@ -122,13 +122,19 @@ class CachingSftpRootAdapterTest {
 
     @Test
     void rootFor_remembersPerMachine_notFleetWide() {
-        execHomeIs("/home/geir");
-        sftpHomeIs("/home/geir");
-        assertThat(adapter.rootFor("Apalveien 5", NAS).jailed()).isFalse();
+        // Two genuinely different machines. (This used to be one machine called two things, which under
+        // name-keying looked like two — and under identity-keying is correctly one.)
+        SshTarget apalveien = SshTarget.on("10.13.13.6",
+            new HostCredential(mid("Apalveien 5"), "geir", AuthMethod.PASSWORD, "pw", null, false),
+            "SHA256:pinned");
+        doReturn(new CommandResult(0, "/home/geir", "", false, "SHA256:pinned"))
+            .when(forRunningSshCommands).run(eq(apalveien), any());
+        when(forBrowsingRemoteFiles.home(eq(apalveien))).thenReturn("/home/geir");
+        assertThat(adapter.rootFor("Apalveien 5", apalveien).jailed()).isFalse();
 
-        when(forRunningSshCommands.run(any(), any()))
-            .thenReturn(new CommandResult(0, "/volume1/homes/geir", "", false, "SHA256:pinned"));
-        when(forBrowsingRemoteFiles.home(any())).thenReturn("/homes/geir");
+        doReturn(new CommandResult(0, "/volume1/homes/geir", "", false, "SHA256:pinned"))
+            .when(forRunningSshCommands).run(eq(NAS), any());
+        when(forBrowsingRemoteFiles.home(eq(NAS))).thenReturn("/homes/geir");
 
         // One machine's jail must never be pinned onto another's paths.
         assertThat(adapter.rootFor("NAS", NAS).path()).isEqualTo("/volume1");
@@ -229,5 +235,62 @@ class CachingSftpRootAdapterTest {
         when(forBrowsingRemoteFiles.firstDirectory(any(), any())).thenReturn(Optional.empty());
 
         assertThat(adapter.rootFor("NAS", NAS)).isEqualTo(SftpRoot.NONE);
+    }
+
+    // --- what the answer is remembered under ------------------------------------------------------------
+
+    /**
+     * The root is remembered under the machine's <b>identity</b>, not its name. A rename is an edit to a
+     * label — it must not throw away a root the machine already answered, because doing so costs two SSH
+     * connections to a host on the far side of a VPN on the operator's very next directory click.
+     */
+    @Test
+    void rootFor_remembersUnderTheMachinesIdentity_soARenameDoesNotReprobe() {
+        execHomeIs("/volume1/homes/geir");
+        sftpHomeIs("/homes/geir");
+
+        SftpRoot before = adapter.rootFor("NAS", NAS);
+        SftpRoot afterRename = adapter.rootFor("Synology", NAS);   // same machine, new label
+
+        assertThat(afterRename).isEqualTo(before);
+        verify(forRunningSshCommands, times(1)).run(any(), any());
+    }
+
+    /**
+     * And the dangerous direction: a name is reusable, so two machines can wear the same one at different
+     * times. A cache keyed on the name would serve the first machine's jail for the second — silently
+     * rewriting every path Vaier shows for it, in both directions. Keyed on identity, they cannot collide.
+     */
+    @Test
+    void rootFor_neverServesOneMachinesRootToAnother_thatLaterTookItsName() {
+        SshTarget other = SshTarget.on("10.13.13.4",
+            new HostCredential(mid("Roon server"), "geir", AuthMethod.PASSWORD, "pw", null, false),
+            "SHA256:pinned");
+        execHomeIs("/volume1/homes/geir");
+        sftpHomeIs("/homes/geir");
+        assertThat(adapter.rootFor("NAS", NAS).jailed()).isTrue();
+
+        // A different machine, now bearing the same name. It has its own root, and must be asked for it.
+        doReturn(new CommandResult(0, "/home/geir", "", false, "SHA256:pinned"))
+            .when(forRunningSshCommands).run(eq(other), any());
+        when(forBrowsingRemoteFiles.home(eq(other))).thenReturn("/home/geir");
+
+        assertThat(adapter.rootFor("NAS", other).jailed()).isFalse();
+    }
+
+    /**
+     * A target with no identity is a pre-registration credential test against a bare address. There is
+     * nothing to remember it under, so it is probed each time rather than cached against a null.
+     */
+    @Test
+    void rootFor_aTargetWithNoIdentity_isNeverCached() {
+        SshTarget unregistered = new SshTarget("10.13.13.99", 22, "geir", AuthMethod.PASSWORD, "pw", null, null);
+        execHomeIs("/home/geir");
+        sftpHomeIs("/home/geir");
+
+        adapter.rootFor("a host being added", unregistered);
+        adapter.rootFor("a host being added", unregistered);
+
+        verify(forRunningSshCommands, times(2)).run(any(), any());
     }
 }

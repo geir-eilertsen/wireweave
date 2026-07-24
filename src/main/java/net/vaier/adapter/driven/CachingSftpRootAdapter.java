@@ -3,6 +3,7 @@ package net.vaier.adapter.driven;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.domain.CommandResult;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.SftpRoot;
 import net.vaier.domain.SshHome;
 import net.vaier.domain.SshTarget;
@@ -44,18 +45,30 @@ public class CachingSftpRootAdapter implements ForResolvingSftpRoots {
     private final ForRunningSshCommands forRunningSshCommands;
     private final ForBrowsingRemoteFiles forBrowsingRemoteFiles;
 
-    /** machineName -> the root its SFTP subsystem is chrooted into (often {@link SftpRoot#NONE}). */
-    private final Map<String, SftpRoot> roots = new ConcurrentHashMap<>();
+    /**
+     * {@link MachineId} -> the root its SFTP subsystem is chrooted into (often {@link SftpRoot#NONE}).
+     *
+     * <p>Keyed by identity, not by name. A name is reusable, so two machines can wear the same one at
+     * different times — and a jail served to the wrong machine silently rewrites every path Vaier shows for
+     * it, in both directions. Identity also means a rename keeps the root: the answer is about the machine,
+     * and re-earning it costs two SSH connections to a host on the far side of a VPN.
+     */
+    private final Map<MachineId, SftpRoot> roots = new ConcurrentHashMap<>();
 
     @Override
     public SftpRoot rootFor(String machineName, SshTarget target) {
-        SftpRoot cached = roots.get(machineName);
+        MachineId machineId = target.machineId();
+        SftpRoot cached = machineId == null ? null : roots.get(machineId);
         if (cached != null) {
             return cached;
         }
         return probe(machineName, target)
             .map(root -> {
-                roots.put(machineName, root);
+                // A target with no identity is a pre-registration credential test against a bare address:
+                // there is nothing to remember it under, so it is asked again next time.
+                if (machineId != null) {
+                    roots.put(machineId, root);
+                }
                 return root;
             })
             // Deliberately NOT cached: the machine could not be reached, and a blip must never brand it.
