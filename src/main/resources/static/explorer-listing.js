@@ -57,7 +57,7 @@
             if (at) params.set('at', at);
             const query = params.toString();
             try {
-                const res = await fetch('/machines/' + encodeURIComponent(machine) + '/files'
+                const res = await fetch('/machines/' + encodeURIComponent(window.vaierMachineIdOf(machine)) + '/files'
                     + (query ? '?' + query : ''));
                 if (ticket !== inFlight) return { stale: true };
 

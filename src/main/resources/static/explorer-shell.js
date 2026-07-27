@@ -481,7 +481,7 @@
         if (held && held.state === 'loading') return;
         S.disks.set(machine, { state: 'loading', filesystems: null, error: null });
         try {
-            const res = await fetch('/machines/' + encodeURIComponent(machine) + '/disk');
+            const res = await fetch('/machines/' + encodeURIComponent(midOf(machine)) + '/disk');
             const body = await res.json();
             if (res.ok) {
                 S.disks.set(machine, { state: 'ready', filesystems: body, error: null });
@@ -508,7 +508,7 @@
         if (held && (held.state === 'loading' || held.state === 'ready')) return;   // once per machine
         S.archives.set(machine, { state: 'loading', list: [], error: null });
         try {
-            const res = await fetch('/machines/' + encodeURIComponent(machine) + '/archives');
+            const res = await fetch('/machines/' + encodeURIComponent(midOf(machine)) + '/archives');
             S.archives.set(machine, { state: 'ready', list: res.ok ? await res.json() : [], error: null });
         } catch (e) {
             S.archives.set(machine, { state: 'ready', list: [], error: null });
@@ -527,7 +527,7 @@
         if (held && (held.state === 'loading' || held.state === 'ready')) return;   // once per machine
         S.nudges.set(machine, { state: 'loading', list: [] });
         try {
-            const res = await fetch('/machines/' + encodeURIComponent(machine) + '/nudges', { cache: 'no-store' });
+            const res = await fetch('/machines/' + encodeURIComponent(midOf(machine)) + '/nudges', { cache: 'no-store' });
             S.nudges.set(machine, { state: 'ready', list: res.ok ? await res.json() : [] });
         } catch (e) {
             S.nudges.set(machine, { state: 'ready', list: [] });
@@ -1378,7 +1378,7 @@
     // the server refuses; on success the fleet reloads so the files/shell/disk entries appear or vanish with it.
     async function toggleSshAccess(machine, enabled, checkbox) {
         checkbox.disabled = true;
-        const ok = await patchJson('/machines/' + encodeURIComponent(machine) + '/ssh-access', { enabled },
+        const ok = await patchJson('/machines/' + encodeURIComponent(midOf(machine)) + '/ssh-access', { enabled },
             'Could not update SSH access.');
         if (!ok) { checkbox.checked = !enabled; checkbox.disabled = false; return; }
         await loadFleet();
@@ -2594,7 +2594,7 @@
         document.addEventListener('keydown', onKey);
         username.focus();
 
-        fetch('/machines/' + encodeURIComponent(machine) + '/ssh-credential').then(async (r) => {
+        fetch('/machines/' + encodeURIComponent(midOf(machine)) + '/ssh-credential').then(async (r) => {
             if (r.status === 404) { status.textContent = 'No credential stored yet.'; return; }
             if (!r.ok) { status.textContent = 'Could not read the credential status.'; return; }
             const v = await r.json();
@@ -2611,7 +2611,7 @@
             if (!secret.trim()) { toast('Enter the ' + (method.value === 'PRIVATE_KEY' ? 'private key' : 'password') + '.'); return; }
             ok.disabled = true;
             try {
-                const r = await fetch('/machines/' + encodeURIComponent(machine) + '/ssh-credential', {
+                const r = await fetch('/machines/' + encodeURIComponent(midOf(machine)) + '/ssh-credential', {
                     method: 'PUT', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username: username.value.trim(), authMethod: method.value,
                         secret: secret, passphrase: passphrase.value || null }),
@@ -2628,7 +2628,7 @@
                 + 'until you set one again.', 'Delete');
             if (!sure) return;
             try {
-                const r = await fetch('/machines/' + encodeURIComponent(machine) + '/ssh-credential', { method: 'DELETE' });
+                const r = await fetch('/machines/' + encodeURIComponent(midOf(machine)) + '/ssh-credential', { method: 'DELETE' });
                 if (!r.ok && r.status !== 204) { toast('Could not delete the credential.'); return; }
                 toast('SSH credential deleted.');
                 close(); await loadFleet(); render();
@@ -3300,7 +3300,7 @@
     // email and this pane can never disagree, because only one of them ever decides.
     async function saveWatch(machine, mountPoint, watched, thresholdPercent) {
         try {
-            const res = await fetch('/machines/' + encodeURIComponent(machine) + '/disk/watch', {
+            const res = await fetch('/machines/' + encodeURIComponent(midOf(machine)) + '/disk/watch', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mountPoint, watched, thresholdPercent })
@@ -5180,8 +5180,11 @@
         at = arguments.length >= 3 ? at : S.at;
         const params = new URLSearchParams({ path: entry.path });
         if (at) params.set('at', at);
+        // What to call the machine in the filename when the download is a whole root, which has no
+        // basename of its own. The path names it by identity; this is only for the person saving it.
+        params.set('name', machine);
         const a = document.createElement('a');
-        a.href = '/machines/' + encodeURIComponent(machine) + '/files/download?' + params.toString();
+        a.href = '/machines/' + encodeURIComponent(midOf(machine)) + '/files/download?' + params.toString();
         // A folder arrives as a zip; the server sets the real filename, this is just the browser's hint.
         a.download = entry.directory ? entry.name + '.zip' : entry.name;
         document.body.appendChild(a);
@@ -5204,7 +5207,7 @@
         const ok = await confirmTyped('Delete this ' + what + '?', body, machine, 'Delete');
         if (!ok) return;
         try {
-            const res = await fetch('/machines/' + encodeURIComponent(machine)
+            const res = await fetch('/machines/' + encodeURIComponent(midOf(machine))
                 + '/files?path=' + encodeURIComponent(entry.path), { method: 'DELETE' });
             if (!res.ok) {
                 const err = await res.json().catch(() => null);
@@ -5369,7 +5372,8 @@
         const input = document.createElement('input');
         input.type = 'hidden';
         input.name = 'selection';
-        input.value = JSON.stringify(sel.map((s) => ({ machine: s.machine, path: s.path, at: s.at || null })));
+        input.value = JSON.stringify(sel.map((s) => ({
+            machineId: midOf(s.machine), machine: s.machine, path: s.path, at: s.at || null })));
         form.appendChild(input);
         document.body.appendChild(form);
         form.submit();
@@ -5396,7 +5400,7 @@
         for (const [machine, items] of groups) {
             const paths = items.map((i) => i.path);
             try {
-                const res = await fetch('/machines/' + encodeURIComponent(machine) + '/backup/paths', {
+                const res = await fetch('/machines/' + encodeURIComponent(midOf(machine)) + '/backup/paths', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ paths: paths }),
@@ -5478,7 +5482,7 @@
         for (const [machine, items] of groups) {
             const paths = items.map((i) => i.path);
             try {
-                const res = await fetch('/machines/' + encodeURIComponent(machine) + '/backup/paths', {
+                const res = await fetch('/machines/' + encodeURIComponent(midOf(machine)) + '/backup/paths', {
                     method: 'DELETE',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ paths: paths }),
@@ -5525,7 +5529,7 @@
         for (const [machine, its] of groups) {
             for (const s of its) {
                 try {
-                    const res = await fetch('/machines/' + encodeURIComponent(machine)
+                    const res = await fetch('/machines/' + encodeURIComponent(midOf(machine))
                         + '/files?path=' + encodeURIComponent(s.path), { method: 'DELETE' });
                     if (!res.ok) failed++;
                 } catch (e) { failed++; }
@@ -5600,8 +5604,10 @@
             const res = await fetch('/transfers', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sourceMachine: item.machine, sourcePath: item.path, at: item.at || null,
-                                       destMachine: destMachine, destPath: destPath }),
+                body: JSON.stringify({
+                    sourceMachineId: midOf(item.machine), sourceMachine: item.machine,
+                    sourcePath: item.path, at: item.at || null,
+                    destMachineId: midOf(destMachine), destMachine: destMachine, destPath: destPath }),
             });
             if (!res.ok) {
                 const err = await res.json().catch(() => null);
@@ -5986,6 +5992,22 @@
     }
 
     // --- the fleet, and the stream that keeps it honest ---------------------------------------------------
+
+    /**
+     * The identity of the machine the tree calls `name`. Every backend path is keyed by identity now, so
+     * this is the browser's single name -> id crossing, mirroring the one the backend deleted.
+     *
+     * It is a lookup by name, so it inherits the ambiguity names have: once names stop needing to be unique
+     * it picks whichever machine is listed first. That is why it is one function and not twenty call sites —
+     * when the tree carries ids of its own, this is the only thing that has to go.
+     */
+    function midOf(name) {
+        const m = (S.machines || []).find((x) => x.name === name);
+        return m ? m.id : name;
+    }
+    // The listing reader and the terminal dock are separate classic scripts, so the one crossing is
+    // shared the way everything else is here — through the global scope those scripts already use.
+    window.vaierMachineIdOf = midOf;
 
     async function loadFleet() {
         try {

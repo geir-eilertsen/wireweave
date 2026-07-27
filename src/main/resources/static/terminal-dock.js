@@ -150,7 +150,7 @@
         const { id, machine } = state;
         const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         // The pane id names the machine's tmux session, so this pane's reconnects reattach to the same shell.
-        const url = `${proto}//${window.location.host}/machines/${encodeURIComponent(machine)}`
+        const url = `${proto}//${window.location.host}/machines/${encodeURIComponent(window.vaierMachineIdOf(machine))}`
             + `/terminal?pane=${encodeURIComponent(state.paneId)}`;
         const ws = new WebSocket(url);
         ws.binaryType = 'arraybuffer';
@@ -882,7 +882,8 @@
             el.appendChild(statusButton('Reconnect', () => { setStatus(id, null); retry(); }));
         } else if (code === 4403 && machineName) {
             el.appendChild(statusButton('Clear pinned key & retry', async () => {
-                await fetch(`/machines/${encodeURIComponent(machineName)}/host-key`, { method: 'DELETE' });
+                await fetch(`/machines/${encodeURIComponent(window.vaierMachineIdOf(machineName))}/host-key`,
+                    { method: 'DELETE' });
                 closeShell(id);
                 open(machineName);
             }));
