@@ -5,11 +5,12 @@ import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.application.DiscoverVaierServerContainersUseCase;
 import net.vaier.application.GetSelfUpgradeStatusUseCase;
+import net.vaier.application.GetVaierServerUseCase;
 import net.vaier.application.RunRemoteCommandUseCase;
 import net.vaier.application.UpgradeVaierUseCase;
 import net.vaier.domain.CommandResult;
 import net.vaier.domain.DockerService;
-import net.vaier.domain.LanAnchor;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.SelfUpgrade;
 import net.vaier.domain.SelfUpgradeScript;
 import net.vaier.domain.SelfUpgradeStatus;
@@ -34,11 +35,24 @@ public class SelfUpgradeRunner implements UpgradeVaierUseCase, GetSelfUpgradeSta
 
     private final DiscoverVaierServerContainersUseCase containers;
     private final RunRemoteCommandUseCase remoteCommand;
+    private final GetVaierServerUseCase vaierServer;
 
     public SelfUpgradeRunner(DiscoverVaierServerContainersUseCase containers,
-                             RunRemoteCommandUseCase remoteCommand) {
+                             RunRemoteCommandUseCase remoteCommand,
+                             GetVaierServerUseCase vaierServer) {
         this.containers = containers;
         this.remoteCommand = remoteCommand;
+        this.vaierServer = vaierServer;
+    }
+
+    /**
+     * The Vaier server's own identity. It is the one machine that cannot be found by searching the machine
+     * stores — it is neither a peer nor a LAN server — so it is asked for rather than looked up. Resolved
+     * per call rather than held: this component outlives a config reload, and an id cached here would go on
+     * addressing a machine the config no longer describes.
+     */
+    private MachineId vaierServerId() {
+        return vaierServer.getVaierServerMachine().id();
     }
 
     @Override
@@ -54,7 +68,7 @@ public class SelfUpgradeRunner implements UpgradeVaierUseCase, GetSelfUpgradeSta
     @Override
     public SelfUpgradeStatus lastUpgrade() {
         try {
-            CommandResult result = remoteCommand.run(LanAnchor.VAIER_SERVER_NAME, SelfUpgradeScript.readResult());
+            CommandResult result = remoteCommand.run(vaierServerId(), SelfUpgradeScript.readResult());
             return SelfUpgradeStatus.parse(result.stdout());
         } catch (Exception e) {
             log.debug("Could not read the last self-upgrade result: {}", e.getMessage());
@@ -84,7 +98,7 @@ public class SelfUpgradeRunner implements UpgradeVaierUseCase, GetSelfUpgradeSta
 
         Optional<SelfUpgradeScript.ComposeLocation> at;
         try {
-            CommandResult labels = remoteCommand.run(LanAnchor.VAIER_SERVER_NAME,
+            CommandResult labels = remoteCommand.run(vaierServerId(),
                 SelfUpgradeScript.inspectComposeLabels(self.get().containerId()));
             at = SelfUpgradeScript.parseComposeLabels(labels.stdout());
         } catch (Exception e) {
@@ -99,14 +113,14 @@ public class SelfUpgradeRunner implements UpgradeVaierUseCase, GetSelfUpgradeSta
             SelfUpgradeScript.DEFAULT_HEALTH_TIMEOUT_SECONDS);
         String path = SelfUpgradeScript.scriptPathFor(at.get().workingDir(), runId);
         try {
-            CommandResult staged = remoteCommand.run(LanAnchor.VAIER_SERVER_NAME,
+            CommandResult staged = remoteCommand.run(vaierServerId(),
                 SelfUpgradeScript.stage(script, path));
             if (staged.exitCode() != 0) {
                 return failed(runId, "could-not-stage-script");
             }
             // From here the host owns it. This process is about to be replaced, so nothing after this line
             // can be relied on to run — which is why the script, not Vaier, decides how the upgrade ends.
-            remoteCommand.run(LanAnchor.VAIER_SERVER_NAME, SelfUpgradeScript.launch(at.get().workingDir(), runId));
+            remoteCommand.run(vaierServerId(), SelfUpgradeScript.launch(at.get().workingDir(), runId));
             log.info("Vaier self-upgrade {} launched on its own host", runId);
             return new SelfUpgradeStatus(runId, SelfUpgradeStatus.Outcome.NONE, null, "started");
         } catch (Exception e) {

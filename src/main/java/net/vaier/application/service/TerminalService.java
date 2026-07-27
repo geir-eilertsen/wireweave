@@ -16,6 +16,7 @@ import net.vaier.domain.AuthMethod;
 import net.vaier.domain.CommandResult;
 import net.vaier.domain.HostCredential;
 import net.vaier.domain.HostCredentialView;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.PasswordPrompt;
 import net.vaier.domain.PersistentShell;
 import net.vaier.domain.SshCredentialDraft;
@@ -98,7 +99,7 @@ public class TerminalService implements
 
     @Override
     public OpenedTerminal openTerminal(String machineName, String paneId, SshOutputListener onOutput) {
-        SshTarget target = forResolvingSshTargets.resolve(machineName);
+        SshTarget target = forResolvingSshTargets.resolve(machineIdOf(machineName));
         // Probe first (a normal exec run, the same host-key trust as any command): is tmux installed on
         // this machine, and does the pane's session already exist? The domain reads it into a truthful
         // continuity, so the reconnect banner can say "reattached" only when it really was. This first
@@ -124,7 +125,8 @@ public class TerminalService implements
         // whose key no longer matches is not something they can act on from here — and leaving the session
         // behind on an unreachable host is no worse than the state we were already in. Log and move on.
         try {
-            forRunningSshCommands.run(forResolvingSshTargets.resolve(machineName), PersistentShell.endCommand(paneId));
+            forRunningSshCommands.run(forResolvingSshTargets.resolve(machineIdOf(machineName)),
+                PersistentShell.endCommand(paneId));
             log.info("Ended terminal session {} on {}", PersistentShell.sessionName(paneId), machineName);
         } catch (RuntimeException e) {
             log.warn("Could not end terminal session {} on {}: {}",
@@ -133,8 +135,8 @@ public class TerminalService implements
     }
 
     @Override
-    public CommandResult run(String machineName, String command) {
-        SshTarget target = forResolvingSshTargets.resolve(machineName);
+    public CommandResult run(MachineId machineId, String command) {
+        SshTarget target = forResolvingSshTargets.resolve(machineId);
         // Same host-key trust as the shell path: a changed key throws HostKeyMismatchException.
         CommandResult result = forRunningSshCommands.run(target, command);
 

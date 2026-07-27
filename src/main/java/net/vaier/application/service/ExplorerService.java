@@ -18,7 +18,10 @@ import net.vaier.domain.port.ForBrowsingRemoteFiles;
 import net.vaier.domain.port.ForBrowsingRemoteFiles.DirectoryListing;
 import net.vaier.domain.port.ForBrowsingRemoteFiles.RemoteStat;
 import net.vaier.domain.port.ForMountingArchives;
+import net.vaier.domain.MachineId;
+import net.vaier.domain.NotFoundException;
 import net.vaier.domain.port.ForReadingProtectedPaths;
+import net.vaier.domain.port.ForResolvingMachineIds;
 import net.vaier.domain.port.ForResolvingSftpRoots;
 import net.vaier.domain.port.ForResolvingSshTargets;
 import net.vaier.domain.port.ForTrackingHostKeys;
@@ -48,6 +51,7 @@ public class ExplorerService
     implements BrowseFilesUseCase, ResolveFileCoordinateUseCase, DownloadFileUseCase, DeleteFileUseCase {
 
     private final ForResolvingSshTargets forResolvingSshTargets;
+    private final ForResolvingMachineIds forResolvingMachineIds;
     private final ForBrowsingRemoteFiles forBrowsingRemoteFiles;
     private final ForTrackingHostKeys forTrackingHostKeys;
     private final ForResolvingSftpRoots forResolvingSftpRoots;
@@ -61,7 +65,7 @@ public class ExplorerService
         // the past: a climb above the root is refused before slice D does anything.
         String requested = path == null || path.isBlank() ? null : FileEntry.normalisePath(path);
 
-        SshTarget target = forResolvingSshTargets.resolve(machineName);
+        SshTarget target = forResolvingSshTargets.resolve(machineIdOf(machineName));
         SftpRoot root = forResolvingSftpRoots.rootFor(machineName, target);
 
         // Present or past, the service maps a requested coordinate down to the real machine path SFTP must be
@@ -124,7 +128,7 @@ public class ExplorerService
     @Override
     public ResolvedFileCoordinate resolve(String machineName, String path, String at) {
         String requested = FileEntry.normalisePath(path);
-        SshTarget target = forResolvingSshTargets.resolve(machineName);
+        SshTarget target = forResolvingSshTargets.resolve(machineIdOf(machineName));
         SftpRoot root = forResolvingSftpRoots.rootFor(machineName, target);
         return new ResolvedFileCoordinate(target, sftpPathFor(machineName, root, requested, at));
     }
@@ -153,7 +157,7 @@ public class ExplorerService
     @Override
     public void delete(String machineName, String path) {
         String requested = FileEntry.normalisePath(path);
-        SshTarget target = forResolvingSshTargets.resolve(machineName);
+        SshTarget target = forResolvingSshTargets.resolve(machineIdOf(machineName));
         SftpRoot root = forResolvingSftpRoots.rootFor(machineName, target);
 
         forBrowsingRemoteFiles.delete(target, root.toDeletableJailPath(requested));
@@ -320,5 +324,16 @@ public class ExplorerService
      */
     private void pinOnFirstUse(SshTarget target, String presentedFingerprint) {
         target.pinOnFirstUse(presentedFingerprint, forTrackingHostKeys);
+    }
+
+    /**
+     * The identity of the machine the browser named. The Explorer's coordinates still arrive as names, and
+     * the SSH path is keyed by identity — this is the one place that crossing happens, so a rename can never
+     * strand a browse. It goes away with the coordinates themselves when the driving edge addresses machines
+     * by id.
+     */
+    private MachineId machineIdOf(String machineName) {
+        return forResolvingMachineIds.idForName(machineName)
+            .orElseThrow(() -> new NotFoundException("Machine not found: " + machineName));
     }
 }

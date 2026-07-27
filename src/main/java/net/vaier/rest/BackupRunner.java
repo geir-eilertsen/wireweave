@@ -185,7 +185,7 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
         // front and refuses clearly. A probe EXCEPTION is treated as "couldn't verify" and we proceed to
         // launch anyway (a flaky probe must never block a working host — the run itself still settles cleanly
         // if borg really is missing); only a definite non-borg result blocks the run.
-        if (borgDefinitelyMissing(machineName)) {
+        if (borgDefinitelyMissing(machine.get())) {
             return recorded(BackupRun.borgMissing(job, runId, clock.instant(), machineName));
         }
 
@@ -193,8 +193,8 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
         // file exists before launching (write-if-absent) — a run must never fail merely because the pass
         // file was never provisioned. Best-effort: if this cannot run, the launch still proceeds and a
         // genuine auth failure settles the run FAILED on poll.
-        String workDir = workDirResolver.workDirFor(machine.get().id(), machineName);
-        ensurePassFile(machineName, repo, workDir);
+        String workDir = workDirResolver.workDirFor(machine.get().id());
+        ensurePassFile(machine.get(), repo, workDir);
 
         // A "Back up as root" run needs the SSH user's home: under sudo, ssh runs as root and reads /root/.ssh/,
         // which holds neither the borg client key nor the pinned server host key. (HOME alone cannot fix that --
@@ -202,7 +202,7 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
         // absolute literals under this home, via BORG_RSH.) If the home cannot be resolved, REFUSE the run rather
         // than launching it to die at the backup server hours later with a host-key/publickey error. A normal job
         // never needs a home, so it is unaffected.
-        Optional<String> sshHome = workDirResolver.homeFor(machine.get().id(), machineName);
+        Optional<String> sshHome = workDirResolver.homeFor(machine.get().id());
         if (job.backupAsRoot() && sshHome.isEmpty()) {
             return recorded(BackupRun.failed(job, runId, clock.instant(),
                 "Could not resolve the SSH user's home on " + machineName
@@ -215,7 +215,7 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
             LogSafe.forLog(job.name()), LogSafe.forLog(machineName), command.redacted());
         Instant startedAt = clock.instant();
         try {
-            CommandResult result = remoteCommand.run(machineName, command.exec());
+            CommandResult result = remoteCommand.run(machine.get().id(), command.exec());
             if (result.timedOut() || result.exitCode() != 0
                 || result.stdout() == null || !result.stdout().contains("STARTED")) {
                 return recorded(BackupRun.failed(job, runId, startedAt,
@@ -306,13 +306,13 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
             return List.of();
         }
         // borg list unlocks the repo via BORG_PASSCOMMAND too, so ensure the pass file is provisioned first.
-        String workDir = workDirResolver.workDirFor(machine.get().id(), machine.get().name());
-        ensurePassFile(machine.get().name(), repo.get(), workDir);
+        String workDir = workDirResolver.workDirFor(machine.get().id());
+        ensurePassFile(machine.get(), repo.get(), workDir);
         BorgCommand.BuiltCommand command = BorgCommand.listArchives(server.get(), repo.get(), workDir);
         log.info("Listing archives for repository {} on {}: {}",
             LogSafe.forLog(repositoryName), LogSafe.forLog(machine.get().name()), command.redacted());
         try {
-            CommandResult result = remoteCommand.run(machine.get().name(), command.exec());
+            CommandResult result = remoteCommand.run(machine.get().id(), command.exec());
             if (result.timedOut() || result.exitCode() != 0) {
                 log.debug("borg list for repository {} on {} failed (exit={}, timedOut={})",
                     LogSafe.forLog(repositoryName), LogSafe.forLog(machine.get().name()),
@@ -389,8 +389,8 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
                     LogSafe.forLog(run.runId()), LogSafe.forLog(run.jobName()));
                 return;
             }
-            String workDir = workDirResolver.workDirFor(machine.get().id(), machine.get().name());
-            CommandResult poll = remoteCommand.run(machine.get().name(),
+            String workDir = workDirResolver.workDirFor(machine.get().id());
+            CommandResult poll = remoteCommand.run(machine.get().id(),
                 BorgCommand.pollStatus(run.runId(), workDir));
             if (poll.timedOut() || poll.exitCode() != 0) {
                 log.debug("Poll of backup {} on {} failed (exit={}, timedOut={}); leaving RUNNING",
@@ -400,7 +400,7 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
             }
             Optional<Integer> exitCode = BorgCommand.parsePoll(poll.stdout());
             if (exitCode.isPresent()) {
-                String summary = fetchSummary(machine.get().name(), run.runId(), exitCode.get(), workDir);
+                String summary = fetchSummary(machine.get(), run.runId(), exitCode.get(), workDir);
                 BackupRun terminal = run.completedFrom(exitCode.get(), clock.instant(), summary);
                 recorded(terminal);
                 log.info("Backup {} for job {} finished with exit {}",
@@ -468,10 +468,16 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
-    /** The tail of the run's on-host log for the summary, or a generic note if it cannot be read. */
-    private String fetchSummary(String machineName, String runId, int exitCode, String workDir) {
+    /**
+     * The tail of the run's on-host log for the summary, or a generic note if it cannot be read.
+     *
+     * <p>Takes the whole {@link Machine} rather than an id and a name: it needs the id to reach the host and
+     * the name to say which host in a log line, and passing them separately would be two parameters that
+     * must describe one machine with nothing enforcing it. Same for the two helpers below.
+     */
+    private String fetchSummary(Machine machine, String runId, int exitCode, String workDir) {
         try {
-            CommandResult logTail = remoteCommand.run(machineName, BorgCommand.fetchLog(runId, workDir));
+            CommandResult logTail = remoteCommand.run(machine.id(), BorgCommand.fetchLog(runId, workDir));
             if (!logTail.timedOut() && logTail.exitCode() == 0
                 && logTail.stdout() != null && !logTail.stdout().isBlank()) {
                 return logTail.stdout().strip();
@@ -483,22 +489,22 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
     }
 
     /**
-     * Whether a pre-flight {@code borg --version} probe on {@code machineName} <em>definitely</em> shows borg
+     * Whether a pre-flight {@code borg --version} probe on {@code machine} <em>definitely</em> shows borg
      * is absent: a clean, non-timed-out run that either exits non-zero or whose output does not parse as a
      * borg version (a {@code borg: not found} / exit 127). A timeout or a thrown SSH error is <em>not</em> a
      * definite absence — it returns false so the run still launches (the run settles cleanly if borg really is
      * missing), so a flaky probe never blocks a working host. Never throws.
      */
-    private boolean borgDefinitelyMissing(String machineName) {
+    private boolean borgDefinitelyMissing(Machine machine) {
         try {
-            CommandResult probe = remoteCommand.run(machineName, BorgCommand.versionProbe());
+            CommandResult probe = remoteCommand.run(machine.id(), BorgCommand.versionProbe());
             if (probe.timedOut()) {
                 return false;
             }
             return probe.exitCode() != 0 || BorgVersion.parse(probe.stdout()).isEmpty();
         } catch (Exception e) {
             log.debug("borg version probe on {} threw; proceeding to launch: {}",
-                LogSafe.forLog(machineName), e.getMessage());
+                LogSafe.forLog(machine.name()), e.getMessage());
             return false;
         }
     }
@@ -521,21 +527,21 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
     }
 
     /**
-     * Write-if-absent the repository's passphrase file on {@code machineName} so borg can read it via
+     * Write-if-absent the repository's passphrase file on {@code machine} so borg can read it via
      * {@code BORG_PASSCOMMAND}. Best-effort and never throwing: any failure is logged at {@code debug} and
      * the caller proceeds — a genuinely missing secret surfaces as a normal FAILED run on poll, never as an
      * exception. Only the {@link BorgCommand.BuiltCommand#redacted() redacted} form is logged so the
      * plaintext never reaches the log.
      */
-    private void ensurePassFile(String machineName, BackupRepository repo, String workDir) {
+    private void ensurePassFile(Machine machine, BackupRepository repo, String workDir) {
         try {
             BorgCommand.BuiltCommand ensure = BorgCommand.ensurePassFile(repo, workDir);
             log.debug("Ensuring backup passphrase file for repository {} on {}: {}",
-                LogSafe.forLog(repo.name()), LogSafe.forLog(machineName), ensure.redacted());
-            remoteCommand.run(machineName, ensure.exec());
+                LogSafe.forLog(repo.name()), LogSafe.forLog(machine.name()), ensure.redacted());
+            remoteCommand.run(machine.id(), ensure.exec());
         } catch (Exception e) {
             log.debug("Could not ensure passphrase file for repository {} on {}: {}",
-                LogSafe.forLog(repo.name()), LogSafe.forLog(machineName), e.getMessage());
+                LogSafe.forLog(repo.name()), LogSafe.forLog(machine.name()), e.getMessage());
         }
     }
 

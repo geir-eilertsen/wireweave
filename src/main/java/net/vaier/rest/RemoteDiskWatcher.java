@@ -100,7 +100,7 @@ public class RemoteDiskWatcher {
             return;
         }
         try {
-            CommandResult result = remoteCommand.run(machine.name(), RemoteDiskUsage.DF_COMMAND);
+            CommandResult result = remoteCommand.run(machine.id(), RemoteDiskUsage.DF_COMMAND);
             if (result.timedOut() || result.exitCode() != 0) {
                 log.debug("Remote df on {} failed (exit={}, timedOut={}); skipping",
                         machine.name(), result.exitCode(), result.timedOut());

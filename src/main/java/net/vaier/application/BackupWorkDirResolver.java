@@ -9,6 +9,7 @@ import net.vaier.domain.SshTarget;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -68,17 +69,17 @@ public class BackupWorkDirResolver {
      * a timeout, a non-zero exit, a blank or non-absolute {@code $HOME}, or an SSH error — so a run is
      * never blocked and a blip never sticks.
      *
-     * <p>The machine arrives as both its {@code machineId} (which keys the cache) and its {@code machineName}
-     * (which is still how the SSH command path addresses a host). The two must describe one machine; every
-     * caller takes them from a single resolved {@link Machine} or {@link SshTarget}, never from two lookups.
-     * The name parameter goes away when the SSH path itself becomes id-native.
+     * <p>The machine arrives as its {@code machineId} and nothing else. It used to arrive as a name too,
+     * because the SSH command path addressed hosts by name and the two had to be carried together from one
+     * resolved {@link Machine} or {@link SshTarget} — an invariant no signature could enforce. Now that the
+     * command path is id-native there is one parameter and nothing left to keep in agreement.
      *
      * <p>There is deliberately no {@code workDirFor(Machine)} convenience overload. Two ways to ask the same
      * question is what this refactor is removing, and a test that mocks this class would silently get {@code
      * null} from whichever overload it did not stub.
      */
-    public String workDirFor(MachineId machineId, String machineName) {
-        return homeFor(machineId, machineName).map(home -> home + "/.vaier-backup").orElse(FALLBACK_WORK_DIR);
+    public String workDirFor(MachineId machineId) {
+        return homeFor(machineId).map(home -> home + "/.vaier-backup").orElse(FALLBACK_WORK_DIR);
     }
 
     /**
@@ -98,39 +99,28 @@ public class BackupWorkDirResolver {
      * than guessed. A missing home does not degrade an as-root run, it breaks it — the run cannot even name the
      * key and the host pin — so the orchestration must refuse the run instead. Never throws.
      */
-    public java.util.Optional<String> homeFor(MachineId machineId, String machineName) {
+    public Optional<String> homeFor(MachineId machineId) {
         String cached = homeCache.get(machineId);
         if (cached != null) {
-            return java.util.Optional.of(cached);
+            return Optional.of(cached);
         }
         try {
-            CommandResult result = remoteCommand.run(machineName, HOME_PROBE);
+            CommandResult result = remoteCommand.run(machineId, HOME_PROBE);
             // What counts as a usable $HOME is the domain's rule, held once on SshHome: a probe that timed
             // out, exited non-zero, or answered blank or relative has told Vaier nothing about this machine.
-            java.util.Optional<String> home = SshHome.in(result);
+            Optional<String> home = SshHome.in(result);
             if (home.isPresent()) {
                 homeCache.put(machineId, home.get());
                 return home;
             }
         } catch (Exception e) {
-            log.debug("Could not resolve $HOME on {} for backup work dir: {}",
-                forLog(machineName), e.getMessage());
+            // The id, not a name: a MachineId is a validated UUID, so unlike an operator-editable display
+            // name it cannot carry newlines into a log line and forge an entry.
+            log.debug("Could not resolve $HOME on machine {} for backup work dir: {}",
+                machineId, e.getMessage());
         }
         // Deliberately NOT cached: a transient probe failure must never poison the cache.
-        return java.util.Optional.empty();
+        return Optional.empty();
     }
 
-    /**
-     * Render a machine name safe for a single log line: collapse CR/LF and other ISO control characters to
-     * spaces so a hand-edited name can never forge a multiline log entry. Mirrors the {@code rest/}-layer
-     * {@code LogSafe}, kept local so this application component carries no dependency into the web layer.
-     */
-    private static String forLog(String name) {
-        if (name == null) {
-            return "null";
-        }
-        StringBuilder sb = new StringBuilder(name.length());
-        name.codePoints().forEach(c -> sb.appendCodePoint(Character.isISOControl(c) ? ' ' : c));
-        return sb.toString();
-    }
 }

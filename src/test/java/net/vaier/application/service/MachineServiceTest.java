@@ -8,8 +8,10 @@ import net.vaier.domain.DiskUnreadableException;
 import net.vaier.domain.DiskWatch;
 import net.vaier.domain.LanServer;
 import net.vaier.domain.Machine;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.MachineType;
 import net.vaier.domain.SshTarget;
+import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.VpnClient;
 import net.vaier.domain.port.ForGettingLanServers;
 import net.vaier.domain.port.ForGettingLanServers.LanServerView;
@@ -19,6 +21,7 @@ import net.vaier.domain.port.ForGettingVpnClients;
 import net.vaier.domain.port.ForPersistingAppConfiguration;
 import net.vaier.domain.port.ForPersistingDiskWatches;
 import net.vaier.domain.port.ForPersistingLanServers;
+import net.vaier.domain.port.ForResolvingMachineIds;
 import net.vaier.domain.port.ForResolvingServerLanCidr;
 import net.vaier.domain.port.ForResolvingSshTargets;
 import net.vaier.domain.port.ForRunningSshCommands;
@@ -50,8 +53,8 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class MachineServiceTest {
 
-    private static net.vaier.domain.MachineId mid(String name) {
-        return net.vaier.domain.TestMachineIds.of(name);
+    private static MachineId mid(String name) {
+        return TestMachineIds.of(name);
     }
 
     @Mock ForGettingPeerConfigurations forGettingPeerConfigurations;
@@ -66,7 +69,7 @@ class MachineServiceTest {
     @Mock ForTrackingHostKeys forTrackingHostKeys;
     @Mock ForPersistingDiskWatches forPersistingDiskWatches;
     @Mock ConfigResolver configResolver;
-    @Mock net.vaier.domain.port.ForResolvingMachineIds forResolvingMachineIds;
+    @Mock ForResolvingMachineIds forResolvingMachineIds;
 
     MachineService service;
 
@@ -81,8 +84,8 @@ class MachineServiceTest {
             forResolvingServerLanCidr, forUpdatingPeerConfigurations, forPersistingLanServers,
             forPersistingAppConfiguration, forResolvingSshTargets, forRunningSshCommands,
             forTrackingHostKeys, forPersistingDiskWatches, forResolvingMachineIds, configResolver);
-        lenient().when(forResolvingMachineIds.idForName(org.mockito.ArgumentMatchers.anyString()))
-            .thenAnswer(i -> java.util.Optional.of(mid(i.getArgument(0))));
+        lenient().when(forResolvingMachineIds.idForName(anyString()))
+            .thenAnswer(i -> Optional.of(mid(i.getArgument(0))));
         lenient().when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of());
         lenient().when(forGettingVpnClients.getClients()).thenReturn(List.of());
         lenient().when(forGettingLanServers.getAll()).thenReturn(List.of());
@@ -301,8 +304,8 @@ class MachineServiceTest {
     @Test
     void setMachineSshAccess_unknownMachine_throwsNotFound() {
         lenient().when(forPersistingLanServers.getAll()).thenReturn(List.of());
-        lenient().when(forResolvingMachineIds.idForName(org.mockito.ArgumentMatchers.anyString()))
-            .thenAnswer(i -> java.util.Optional.of(mid(i.getArgument(0))));
+        lenient().when(forResolvingMachineIds.idForName(anyString()))
+            .thenAnswer(i -> Optional.of(mid(i.getArgument(0))));
         lenient().when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of());
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.setMachineSshAccess("ghost", true))
@@ -358,7 +361,7 @@ class MachineServiceTest {
     void diskUsage_readsEveryRealFilesystem_notJustRoot() {
         // The #325 regression test at the service seam: /volume1 must come back, and the pseudo-filesystems
         // and the aufs aliases must not.
-        when(forResolvingSshTargets.resolve("NAS")).thenReturn(UNPINNED);
+        when(forResolvingSshTargets.resolve(mid("NAS"))).thenReturn(UNPINNED);
         when(forRunningSshCommands.run(UNPINNED, "df -P"))
             .thenReturn(new CommandResult(0, NAS_DF, "", false, null));
         when(configResolver.getDiskMonitorThresholdPercent()).thenReturn(85);
@@ -372,7 +375,7 @@ class MachineServiceTest {
 
     @Test
     void diskUsage_carriesTheSizeAndFreeSpace_soAPercentageMeansSomething() {
-        when(forResolvingSshTargets.resolve("NAS")).thenReturn(UNPINNED);
+        when(forResolvingSshTargets.resolve(mid("NAS"))).thenReturn(UNPINNED);
         when(forRunningSshCommands.run(any(), anyString()))
             .thenReturn(new CommandResult(0, NAS_DF, "", false, null));
         when(configResolver.getDiskMonitorThresholdPercent()).thenReturn(85);
@@ -389,7 +392,7 @@ class MachineServiceTest {
 
     @Test
     void diskUsage_readsDfOverTheSameSshExecPortEveryOtherCommandUses() {
-        when(forResolvingSshTargets.resolve("Apalveien 5")).thenReturn(UNPINNED);
+        when(forResolvingSshTargets.resolve(mid("Apalveien 5"))).thenReturn(UNPINNED);
         when(forRunningSshCommands.run(UNPINNED, "df -P"))
             .thenReturn(new CommandResult(0, LINUX_DF, "", false, null));
         when(configResolver.getDiskMonitorThresholdPercent()).thenReturn(80);
@@ -411,7 +414,7 @@ class MachineServiceTest {
     void diskUsage_asksTheDomainWhetherEachFilesystemBreaches_neverRecomputesIt() {
         // The predicate is RemoteDiskUsage.breaches — the same one the alert email is sent from. A second
         // comparison here would be a second definition of "under pressure", and they would drift.
-        when(forResolvingSshTargets.resolve("Colina 27")).thenReturn(UNPINNED);
+        when(forResolvingSshTargets.resolve(mid("Colina 27"))).thenReturn(UNPINNED);
         when(forRunningSshCommands.run(any(), anyString()))
             .thenReturn(new CommandResult(0,
                 "Filesystem 1024-blocks Used Available Capacity Mounted on\n"
@@ -429,7 +432,7 @@ class MachineServiceTest {
     void diskUsage_appliesEachFilesystemsOwnWatch_muteAndOwnThreshold() {
         // The NAS's / is 88% by design. Given its own 95% threshold it is not a breach; /volume2 is muted
         // and never breaches whatever it reads; /volume1 has no watch, so it is watched at the global 85%.
-        when(forResolvingSshTargets.resolve("NAS")).thenReturn(UNPINNED);
+        when(forResolvingSshTargets.resolve(mid("NAS"))).thenReturn(UNPINNED);
         when(forRunningSshCommands.run(any(), anyString()))
             .thenReturn(new CommandResult(0, NAS_DF, "", false, null));
         when(configResolver.getDiskMonitorThresholdPercent()).thenReturn(85);
@@ -455,7 +458,7 @@ class MachineServiceTest {
     void diskUsage_pinsTheHostKeyOnFirstUse_likeEveryOtherSshPath() {
         // A machine may have its disk read before a terminal was ever opened on it, so this connect is
         // where an unpinned host gets pinned — trust-on-first-use, exactly as the shell and SFTP paths do.
-        when(forResolvingSshTargets.resolve("Apalveien 5")).thenReturn(UNPINNED);
+        when(forResolvingSshTargets.resolve(mid("Apalveien 5"))).thenReturn(UNPINNED);
         when(forRunningSshCommands.run(any(), anyString()))
             .thenReturn(new CommandResult(0, LINUX_DF, "", false, "SHA256:abc"));
         when(configResolver.getDiskMonitorThresholdPercent()).thenReturn(80);
@@ -470,7 +473,7 @@ class MachineServiceTest {
     void diskUsage_thatCannotBeRead_saysSo_ratherThanReportingAnEmptyDisk() {
         // df failed (a sleeping machine, a df that exited non-zero). "Cannot tell" must never render as
         // 0% — a disk Vaier could not read is not a disk with room on it.
-        when(forResolvingSshTargets.resolve("nas")).thenReturn(UNPINNED);
+        when(forResolvingSshTargets.resolve(mid("nas"))).thenReturn(UNPINNED);
         when(forRunningSshCommands.run(any(), anyString()))
             .thenReturn(new CommandResult(1, "", "df: command not found", false, null));
 
@@ -485,7 +488,7 @@ class MachineServiceTest {
     void diskUsage_withNoRealFilesystemAtAll_saysSo_ratherThanShowingAnEmptyList() {
         // A df that ran but yielded nothing Vaier recognises is "cannot tell", not "this machine has no
         // disks". An empty list would render as a machine with nothing to watch — the #325 silence again.
-        when(forResolvingSshTargets.resolve("nas")).thenReturn(UNPINNED);
+        when(forResolvingSshTargets.resolve(mid("nas"))).thenReturn(UNPINNED);
         when(forRunningSshCommands.run(any(), anyString()))
             .thenReturn(new CommandResult(0, "Filesystem 1024-blocks Used Available Capacity Mounted on",
                 "", false, null));

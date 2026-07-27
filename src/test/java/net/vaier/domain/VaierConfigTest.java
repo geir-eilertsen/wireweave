@@ -157,4 +157,37 @@ class VaierConfigTest {
         assertThat(VaierConfig.builder().smtpHost("smtp.example.com").build().isSmtpConfigured()).isFalse();
         assertThat(VaierConfig.builder().build().isSmtpConfigured()).isFalse();
     }
+
+    // --- the Vaier server's own identity ---------------------------------------------------------------
+
+    /**
+     * The Vaier server is neither a peer nor a LAN server, so its {@link MachineId} has nowhere to live but
+     * here. Reading it back was being hand-rolled in three places — the id registry, the machine service and
+     * (now) the SSH address resolution — each with its own idea of what an unusable value means.
+     */
+    @Test
+    void vaierServerIdentity_readsTheStoredId() {
+        VaierConfig config = VaierConfig.builder()
+            .vaierServerMachineId("c0355605-e5a0-419a-8943-fdc5ec209958").build();
+
+        assertThat(config.vaierServerIdentity())
+            .contains(MachineId.of("c0355605-e5a0-419a-8943-fdc5ec209958"));
+    }
+
+    @Test
+    void vaierServerIdentity_isEmptyWhenNoneHasBeenAssignedYet() {
+        assertThat(VaierConfig.builder().build().vaierServerIdentity()).isEmpty();
+    }
+
+    /**
+     * Empty, never a substitute. An id read, never minted — a config whose id was hand-edited into nonsense
+     * must not quietly become a different machine, and deciding to assign a new one is not a read's job.
+     */
+    @Test
+    void vaierServerIdentity_isEmptyWhenTheStoredValueIsUnusable() {
+        assertThat(VaierConfig.builder().vaierServerMachineId("1-1-1-1-1").build()
+            .vaierServerIdentity()).isEmpty();
+        assertThat(VaierConfig.builder().vaierServerMachineId("  ").build()
+            .vaierServerIdentity()).isEmpty();
+    }
 }

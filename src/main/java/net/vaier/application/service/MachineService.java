@@ -108,7 +108,7 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
      */
     @Override
     public List<MachineFilesystemUco> getDiskUsage(String machineName) {
-        SshTarget target = forResolvingSshTargets.resolve(machineName);
+        SshTarget target = forResolvingSshTargets.resolve(machineIdOf(machineName));
         CommandResult result = forRunningSshCommands.run(target, RemoteDiskUsage.DF_COMMAND);
         target.pinOnFirstUse(result.hostKeyFingerprint(), forTrackingHostKeys);
 

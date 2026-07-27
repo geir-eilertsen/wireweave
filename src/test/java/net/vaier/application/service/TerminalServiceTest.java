@@ -7,17 +7,26 @@ import net.vaier.domain.CommandResult;
 import net.vaier.domain.HostCredential;
 import net.vaier.domain.HostCredentialView;
 import net.vaier.domain.LanAnchor;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.NoHostCredentialException;
 import net.vaier.domain.NotFoundException;
 import net.vaier.domain.PersistentShell;
+import net.vaier.domain.SshAuthException;
+import net.vaier.domain.SshConnectException;
+import net.vaier.domain.SshCredentialDraft;
+import net.vaier.domain.SshCredentialVerification;
 import net.vaier.domain.SshTarget;
+import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.port.ForOpeningSshSessions;
 import net.vaier.domain.port.ForOpeningSshSessions.SshOutputListener;
 import net.vaier.domain.port.ForOpeningSshSessions.SshSession;
 import net.vaier.domain.port.ForPersistingHostCredentials;
+import net.vaier.domain.port.ForResolvingMachineIds;
 import net.vaier.domain.port.ForResolvingSshTargets;
 import net.vaier.domain.port.ForRunningSshCommands;
 import net.vaier.domain.port.ForTrackingHostKeys;
+import net.vaier.domain.port.ForVerifyingSshCredentials;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -33,6 +42,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -41,8 +51,8 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class TerminalServiceTest {
 
-    private static net.vaier.domain.MachineId mid(String name) {
-        return net.vaier.domain.TestMachineIds.of(name);
+    private static MachineId mid(String name) {
+        return TestMachineIds.of(name);
     }
 
     @Mock ForPersistingHostCredentials forPersistingHostCredentials;
@@ -50,18 +60,18 @@ class TerminalServiceTest {
     @Mock ForOpeningSshSessions forOpeningSshSessions;
     @Mock ForRunningSshCommands forRunningSshCommands;
     @Mock ForTrackingHostKeys forTrackingHostKeys;
-    @Mock net.vaier.domain.port.ForVerifyingSshCredentials forVerifyingSshCredentials;
-    @Mock net.vaier.domain.port.ForResolvingMachineIds forResolvingMachineIds;
+    @Mock ForVerifyingSshCredentials forVerifyingSshCredentials;
+    @Mock ForResolvingMachineIds forResolvingMachineIds;
 
     /**
      * Every machine named in these tests resolves to its own stable id. The service crosses from the
      * name a REST path carries to the identity its stores are keyed by, so without this the crossing
      * fails and nothing downstream is exercised — the seam is background here, not the subject.
      */
-    @org.junit.jupiter.api.BeforeEach
+    @BeforeEach
     void namesResolveToIds() {
         lenient().when(forResolvingMachineIds.idForName(anyString()))
-            .thenAnswer(i -> java.util.Optional.of(mid(i.getArgument(0))));
+            .thenAnswer(i -> Optional.of(mid(i.getArgument(0))));
     }
     @Mock SshOutputListener onOutput;
     @Mock SshSession sshSession;
@@ -74,7 +84,7 @@ class TerminalServiceTest {
 
     /** Stub the resolver port: a machine now becomes an SshTarget in one place (MachineSshTargetAdapter). */
     private void machineResolvesTo(String machine, String host, String pinnedFingerprint) {
-        when(forResolvingSshTargets.resolve(machine))
+        when(forResolvingSshTargets.resolve(mid(machine)))
             .thenReturn(SshTarget.on(host, passwordCred(machine), pinnedFingerprint));
     }
 
@@ -82,7 +92,7 @@ class TerminalServiceTest {
 
     @Test
     void saveHostCredential_persistsViaPort() {
-        service.saveHostCredential("nas", new net.vaier.domain.SshCredentialDraft(
+        service.saveHostCredential("nas", new SshCredentialDraft(
             "admin", AuthMethod.PASSWORD, "s3cret", null));
 
         verify(forPersistingHostCredentials).save(new HostCredential(
@@ -111,11 +121,11 @@ class TerminalServiceTest {
     void verifySshCredential_success_isAuthenticatedWithFingerprint_andPersistsNothing() {
         // The probe reaches the host and the credential authenticates; the fingerprint is returned for
         // display only. A pre-registration test must never write to the vault or pin a host key.
-        net.vaier.domain.SshCredentialDraft draft =
-            new net.vaier.domain.SshCredentialDraft("root", AuthMethod.PASSWORD, "pw", null);
+        SshCredentialDraft draft =
+            new SshCredentialDraft("root", AuthMethod.PASSWORD, "pw", null);
         when(forVerifyingSshCredentials.probe(any())).thenReturn("SHA256:abc");
 
-        net.vaier.domain.SshCredentialVerification result =
+        SshCredentialVerification result =
             service.verify("192.168.3.50", 22, draft);
 
         assertThat(result.reachable()).isTrue();
@@ -133,12 +143,12 @@ class TerminalServiceTest {
 
     @Test
     void verifySshCredential_wrongSecret_isNotAuthenticated_andPersistsNothing() {
-        net.vaier.domain.SshCredentialDraft draft =
-            new net.vaier.domain.SshCredentialDraft("root", AuthMethod.PASSWORD, "wrong", null);
+        SshCredentialDraft draft =
+            new SshCredentialDraft("root", AuthMethod.PASSWORD, "wrong", null);
         when(forVerifyingSshCredentials.probe(any()))
-            .thenThrow(new net.vaier.domain.SshAuthException("rejected"));
+            .thenThrow(new SshAuthException("rejected"));
 
-        net.vaier.domain.SshCredentialVerification result =
+        SshCredentialVerification result =
             service.verify("192.168.3.50", 22, draft);
 
         assertThat(result.reachable()).isTrue();
@@ -149,12 +159,12 @@ class TerminalServiceTest {
 
     @Test
     void verifySshCredential_unreachableHost_isNotReachable_andPersistsNothing() {
-        net.vaier.domain.SshCredentialDraft draft =
-            new net.vaier.domain.SshCredentialDraft("root", AuthMethod.PASSWORD, "pw", null);
+        SshCredentialDraft draft =
+            new SshCredentialDraft("root", AuthMethod.PASSWORD, "pw", null);
         when(forVerifyingSshCredentials.probe(any()))
-            .thenThrow(new net.vaier.domain.SshConnectException("no route to host"));
+            .thenThrow(new SshConnectException("no route to host"));
 
-        net.vaier.domain.SshCredentialVerification result =
+        SshCredentialVerification result =
             service.verify("192.168.3.50", 22, draft);
 
         assertThat(result.reachable()).isFalse();
@@ -241,7 +251,7 @@ class TerminalServiceTest {
 
     @Test
     void openTerminal_noCredential_throwsNoHostCredential_andDoesNotOpen() {
-        when(forResolvingSshTargets.resolve("nuc")).thenThrow(new NoHostCredentialException("nuc"));
+        when(forResolvingSshTargets.resolve(mid("nuc"))).thenThrow(new NoHostCredentialException("nuc"));
 
         assertThatThrownBy(() -> service.openTerminal("nuc", "pane1", onOutput))
             .isInstanceOf(NoHostCredentialException.class);
@@ -250,7 +260,7 @@ class TerminalServiceTest {
 
     @Test
     void openTerminal_unknownMachine_throwsNotFound() {
-        when(forResolvingSshTargets.resolve("ghost"))
+        when(forResolvingSshTargets.resolve(mid("ghost")))
             .thenThrow(new NotFoundException("Machine not found: ghost"));
 
         assertThatThrownBy(() -> service.openTerminal("ghost", "pane1", onOutput))
@@ -271,11 +281,11 @@ class TerminalServiceTest {
         when(forRunningSshCommands.run(any(), any()))
             .thenReturn(new CommandResult(0, "hello", "", false, "SHA256:pinned"));
 
-        CommandResult result = service.run("nuc", "echo hello");
+        CommandResult result = service.run(mid("nuc"), "echo hello");
 
         assertThat(result.stdout()).isEqualTo("hello");
         ArgumentCaptor<SshTarget> target = ArgumentCaptor.forClass(SshTarget.class);
-        verify(forRunningSshCommands).run(target.capture(), org.mockito.ArgumentMatchers.eq("echo hello"));
+        verify(forRunningSshCommands).run(target.capture(), eq("echo hello"));
         assertThat(target.getValue().host()).isEqualTo("10.13.13.9");
         assertThat(target.getValue().pinnedFingerprint()).isEqualTo("SHA256:pinned");
         verify(forTrackingHostKeys, never()).pin(any(), any()); // already pinned → no re-pin
@@ -287,7 +297,7 @@ class TerminalServiceTest {
         when(forRunningSshCommands.run(any(), any()))
             .thenReturn(new CommandResult(0, "ok", "", false, "SHA256:fresh"));
 
-        service.run("nuc", "echo ok");
+        service.run(mid("nuc"), "echo ok");
 
         ArgumentCaptor<SshTarget> target = ArgumentCaptor.forClass(SshTarget.class);
         verify(forRunningSshCommands).run(target.capture(), any());
@@ -297,9 +307,9 @@ class TerminalServiceTest {
 
     @Test
     void run_noCredential_throwsNoHostCredential_andDoesNotRun() {
-        when(forResolvingSshTargets.resolve("nuc")).thenThrow(new NoHostCredentialException("nuc"));
+        when(forResolvingSshTargets.resolve(mid("nuc"))).thenThrow(new NoHostCredentialException("nuc"));
 
-        assertThatThrownBy(() -> service.run("nuc", "echo hi"))
+        assertThatThrownBy(() -> service.run(mid("nuc"), "echo hi"))
             .isInstanceOf(NoHostCredentialException.class);
         verify(forRunningSshCommands, never()).run(any(), any());
     }
@@ -398,7 +408,7 @@ class TerminalServiceTest {
     void endTerminal_unreachableHost_doesNotThrow() {
         // Ending a shell is best-effort cleanup on a close path — a host that is down or has no credential
         // must not surface an error to the operator, who has already closed the pane and moved on.
-        when(forResolvingSshTargets.resolve("nuc")).thenThrow(new NoHostCredentialException("nuc"));
+        when(forResolvingSshTargets.resolve(mid("nuc"))).thenThrow(new NoHostCredentialException("nuc"));
 
         assertThatCode(() -> service.endTerminal("nuc", "pane1")).doesNotThrowAnyException();
         verify(forRunningSshCommands, never()).run(any(), any());

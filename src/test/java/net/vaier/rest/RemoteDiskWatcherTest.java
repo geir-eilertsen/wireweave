@@ -1,6 +1,7 @@
 package net.vaier.rest;
 
 import net.vaier.domain.MachineId;
+import net.vaier.domain.TestMachineIds;
 import net.vaier.application.GetDiskWatchesUseCase;
 import net.vaier.application.GetHostCredentialUseCase;
 import net.vaier.application.GetMachinesUseCase;
@@ -44,8 +45,8 @@ import static org.mockito.Mockito.when;
 
 class RemoteDiskWatcherTest {
 
-    private static net.vaier.domain.MachineId mid(String name) {
-        return net.vaier.domain.TestMachineIds.of(name);
+    private static MachineId mid(String name) {
+        return TestMachineIds.of(name);
     }
 
     GetMachinesUseCase machines;
@@ -109,10 +110,10 @@ class RemoteDiskWatcherTest {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("nas")));
         hasCredential("nas");
 
-        when(runner.run(eq("nas"), any())).thenReturn(df(50));
+        when(runner.run(eq(mid("nas")), any())).thenReturn(df(50));
         watcher.checkRemoteDiskUsage(); // baseline below
 
-        when(runner.run(eq("nas"), any())).thenReturn(df(90));
+        when(runner.run(eq(mid("nas")), any())).thenReturn(df(90));
         watcher.checkRemoteDiskUsage(); // crosses above
 
         verify(notifier).notifyAdminsOfRemoteDiskPressure(any(RemoteDiskUsage.class), eq(85));
@@ -124,9 +125,9 @@ class RemoteDiskWatcherTest {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("nas")));
         hasCredential("nas");
 
-        when(runner.run(eq("nas"), any())).thenReturn(df(50));
+        when(runner.run(eq(mid("nas")), any())).thenReturn(df(50));
         watcher.checkRemoteDiskUsage();
-        when(runner.run(eq("nas"), any())).thenReturn(df(90));
+        when(runner.run(eq(mid("nas")), any())).thenReturn(df(90));
         watcher.checkRemoteDiskUsage(); // one alert
         watcher.checkRemoteDiskUsage(); // still above, no new alert
 
@@ -138,9 +139,9 @@ class RemoteDiskWatcherTest {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("nas")));
         hasCredential("nas");
 
-        when(runner.run(eq("nas"), any())).thenReturn(df(90));
+        when(runner.run(eq(mid("nas")), any())).thenReturn(df(90));
         watcher.checkRemoteDiskUsage(); // baseline above
-        when(runner.run(eq("nas"), any())).thenReturn(df(50));
+        when(runner.run(eq(mid("nas")), any())).thenReturn(df(50));
         watcher.checkRemoteDiskUsage(); // crosses below
 
         verify(notifier).notifyAdminsOfRemoteDiskRecovery(any(RemoteDiskUsage.class), eq(85));
@@ -174,7 +175,7 @@ class RemoteDiskWatcherTest {
     void execFailure_timedOut_doesNotAlert() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("nas")));
         hasCredential("nas");
-        when(runner.run(eq("nas"), any()))
+        when(runner.run(eq(mid("nas")), any()))
             .thenReturn(new CommandResult(-1, "", "", true, "SHA256:abc"));
 
         watcher.checkRemoteDiskUsage();
@@ -188,7 +189,7 @@ class RemoteDiskWatcherTest {
     void execFailure_nonZeroExit_doesNotAlert() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("nas")));
         hasCredential("nas");
-        when(runner.run(eq("nas"), any()))
+        when(runner.run(eq(mid("nas")), any()))
             .thenReturn(new CommandResult(127, "", "df: not found", false, "SHA256:abc"));
 
         watcher.checkRemoteDiskUsage();
@@ -200,7 +201,7 @@ class RemoteDiskWatcherTest {
     void execFailure_unparseableOutput_doesNotAlert() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("nas")));
         hasCredential("nas");
-        when(runner.run(eq("nas"), any()))
+        when(runner.run(eq(mid("nas")), any()))
             .thenReturn(new CommandResult(0, "totally not df output", "", false, "SHA256:abc"));
 
         watcher.checkRemoteDiskUsage();
@@ -212,7 +213,7 @@ class RemoteDiskWatcherTest {
     void runnerThrowing_doesNotPropagate_andSkipsMachine() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("nas")));
         hasCredential("nas");
-        when(runner.run(eq("nas"), any())).thenThrow(new RuntimeException("unreachable"));
+        when(runner.run(eq(mid("nas")), any())).thenThrow(new RuntimeException("unreachable"));
 
         org.assertj.core.api.Assertions.assertThatCode(() -> watcher.checkRemoteDiskUsage())
             .doesNotThrowAnyException();
@@ -227,7 +228,7 @@ class RemoteDiskWatcherTest {
         // A steady 1%/h climb, well below the 85 level: 74 → 75 → 76 (runway 24h) → 77 (runway 23h, crosses).
         int[] series = {74, 75, 76, 77, 78};
         for (int used : series) {
-            when(runner.run(eq("nas"), any())).thenReturn(df(used));
+            when(runner.run(eq(mid("nas")), any())).thenReturn(df(used));
             watcher.checkRemoteDiskUsage();
             clock.advance(Duration.ofHours(1));
         }
@@ -244,12 +245,12 @@ class RemoteDiskWatcherTest {
 
         // Climb below the level threshold until the early warning fires...
         for (int used : new int[]{74, 75, 76, 77}) {
-            when(runner.run(eq("nas"), any())).thenReturn(df(used));
+            when(runner.run(eq(mid("nas")), any())).thenReturn(df(used));
             watcher.checkRemoteDiskUsage();
             clock.advance(Duration.ofHours(1));
         }
         // ...then space is freed (sharp drop) while still below threshold → genuine recovery.
-        when(runner.run(eq("nas"), any())).thenReturn(df(50));
+        when(runner.run(eq(mid("nas")), any())).thenReturn(df(50));
         watcher.checkRemoteDiskUsage();
 
         org.mockito.ArgumentCaptor<DiskFillForecastCleared> cleared =
@@ -266,13 +267,13 @@ class RemoteDiskWatcherTest {
 
         // Climb below threshold until the early warning fires...
         for (int used : new int[]{74, 75, 76, 77}) {
-            when(runner.run(eq("nas"), any())).thenReturn(df(used));
+            when(runner.run(eq(mid("nas")), any())).thenReturn(df(used));
             watcher.checkRemoteDiskUsage();
             clock.advance(Duration.ofHours(1));
         }
         // ...then it crosses the level threshold → the disk-pressure alert speaks; the forecast clear
         // must be suppressed so admins aren't double-paged at the same poll.
-        when(runner.run(eq("nas"), any())).thenReturn(df(90));
+        when(runner.run(eq(mid("nas")), any())).thenReturn(df(90));
         watcher.checkRemoteDiskUsage();
 
         verify(notifier).notifyAdminsOfRemoteDiskPressure(any(RemoteDiskUsage.class), eq(85));
@@ -285,7 +286,7 @@ class RemoteDiskWatcherTest {
         hasCredential("nas");
 
         // Every poll fails; a failed df must record no sample, so a forecast can never form.
-        when(runner.run(eq("nas"), any()))
+        when(runner.run(eq(mid("nas")), any()))
             .thenReturn(new CommandResult(-1, "", "", true, "SHA256:abc"));
         for (int i = 0; i < 5; i++) {
             watcher.checkRemoteDiskUsage();
@@ -301,11 +302,11 @@ class RemoteDiskWatcherTest {
         // the root one. The command lives on RemoteDiskUsage, next to the parser that reads it.
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("nas")));
         hasCredential("nas");
-        lenient().when(runner.run(eq("nas"), any())).thenReturn(df(10));
+        lenient().when(runner.run(eq(mid("nas")), any())).thenReturn(df(10));
 
         watcher.checkRemoteDiskUsage();
 
-        verify(runner).run(eq("nas"), eq("df -P"));
+        verify(runner).run(eq(mid("nas")), eq("df -P"));
     }
 
     // --- every watched filesystem, not just the root one (#325) -----------------------------------------
@@ -342,9 +343,9 @@ class RemoteDiskWatcherTest {
         when(diskWatches.getDiskWatches()).thenReturn(new DiskWatches(List.of(
             new DiskWatch(mid("NAS"), "/", true, 95))));      // the DSM system partition, given its own threshold
 
-        when(runner.run(eq("NAS"), any())).thenReturn(nasDf(39));
+        when(runner.run(eq(mid("NAS")), any())).thenReturn(nasDf(39));
         watcher.checkRemoteDiskUsage();                   // baseline: nothing breaches
-        when(runner.run(eq("NAS"), any())).thenReturn(nasDf(91));
+        when(runner.run(eq(mid("NAS")), any())).thenReturn(nasDf(91));
         watcher.checkRemoteDiskUsage();                   // /volume1 crosses
 
         ArgumentCaptor<RemoteDiskUsage> alerted = ArgumentCaptor.forClass(RemoteDiskUsage.class);
@@ -362,9 +363,9 @@ class RemoteDiskWatcherTest {
         when(diskWatches.getDiskWatches()).thenReturn(new DiskWatches(List.of(
             new DiskWatch(mid("NAS"), "/", true, 95))));
 
-        when(runner.run(eq("NAS"), any())).thenReturn(nasDf(39));
+        when(runner.run(eq(mid("NAS")), any())).thenReturn(nasDf(39));
         watcher.checkRemoteDiskUsage();
-        when(runner.run(eq("NAS"), any())).thenReturn(nasDf(91));
+        when(runner.run(eq(mid("NAS")), any())).thenReturn(nasDf(91));
         watcher.checkRemoteDiskUsage();
 
         ArgumentCaptor<RemoteDiskUsage> alerted = ArgumentCaptor.forClass(RemoteDiskUsage.class);
@@ -382,7 +383,7 @@ class RemoteDiskWatcherTest {
         when(diskWatches.getDiskWatches()).thenReturn(new DiskWatches(List.of(
             new DiskWatch(mid("NAS"), "/", true, 95))));
 
-        when(runner.run(eq("NAS"), any())).thenReturn(nasDf(39));
+        when(runner.run(eq(mid("NAS")), any())).thenReturn(nasDf(39));
         watcher.checkRemoteDiskUsage();
         watcher.checkRemoteDiskUsage();
 
@@ -398,9 +399,9 @@ class RemoteDiskWatcherTest {
             new DiskWatch(mid("NAS"), "/volume1", false, null),
             new DiskWatch(mid("NAS"), "/volume2", false, null))));
 
-        when(runner.run(eq("NAS"), any())).thenReturn(nasDf(20));
+        when(runner.run(eq(mid("NAS")), any())).thenReturn(nasDf(20));
         watcher.checkRemoteDiskUsage();
-        when(runner.run(eq("NAS"), any())).thenReturn(nasDf(100));
+        when(runner.run(eq(mid("NAS")), any())).thenReturn(nasDf(100));
         watcher.checkRemoteDiskUsage();
 
         verify(notifier, never()).notifyAdminsOfRemoteDiskPressure(any(), anyInt());
@@ -413,9 +414,9 @@ class RemoteDiskWatcherTest {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("NAS")));
         hasCredential("NAS");
         // No watches at all — /volume1 has never been configured. It is watched anyway, at the global 85%.
-        when(runner.run(eq("NAS"), any())).thenReturn(nasDf(39));
+        when(runner.run(eq(mid("NAS")), any())).thenReturn(nasDf(39));
         watcher.checkRemoteDiskUsage();                   // baseline
-        when(runner.run(eq("NAS"), any())).thenReturn(nasDf(91));
+        when(runner.run(eq(mid("NAS")), any())).thenReturn(nasDf(91));
         watcher.checkRemoteDiskUsage();                   // /volume1 crosses
 
         ArgumentCaptor<RemoteDiskUsage> alerted = ArgumentCaptor.forClass(RemoteDiskUsage.class);
@@ -430,11 +431,11 @@ class RemoteDiskWatcherTest {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("NAS")));
         hasCredential("NAS");
 
-        when(runner.run(eq("NAS"), any())).thenReturn(nasDf(50, 39));
+        when(runner.run(eq(mid("NAS")), any())).thenReturn(nasDf(50, 39));
         watcher.checkRemoteDiskUsage();     // baseline: both below
-        when(runner.run(eq("NAS"), any())).thenReturn(nasDf(90, 39));
+        when(runner.run(eq(mid("NAS")), any())).thenReturn(nasDf(90, 39));
         watcher.checkRemoteDiskUsage();     // / crosses above → alerts
-        when(runner.run(eq("NAS"), any())).thenReturn(nasDf(90, 91));
+        when(runner.run(eq(mid("NAS")), any())).thenReturn(nasDf(90, 91));
         watcher.checkRemoteDiskUsage();     // /volume1 crosses above → must ALSO alert
 
         // Keyed on the machine alone, the tracker would already be "in pressure" from / and would swallow
@@ -456,7 +457,7 @@ class RemoteDiskWatcherTest {
 
         // /volume1 climbs 1%/h toward full while / sits at its usual 88%.
         for (int used : new int[]{74, 75, 76, 77, 78}) {
-            when(runner.run(eq("NAS"), any())).thenReturn(nasDf(used));
+            when(runner.run(eq(mid("NAS")), any())).thenReturn(nasDf(used));
             watcher.checkRemoteDiskUsage();
             clock.advance(Duration.ofHours(1));
         }
@@ -477,7 +478,7 @@ class RemoteDiskWatcherTest {
             new DiskWatch(mid("NAS"), "/volume2", false, null))));
 
         for (int used : new int[]{74, 75, 76, 77, 78}) {
-            when(runner.run(eq("NAS"), any())).thenReturn(nasDf(used));
+            when(runner.run(eq(mid("NAS")), any())).thenReturn(nasDf(used));
             watcher.checkRemoteDiskUsage();
             clock.advance(Duration.ofHours(1));
         }
@@ -492,9 +493,9 @@ class RemoteDiskWatcherTest {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("NAS")));
         hasCredential("NAS");
 
-        when(runner.run(eq("NAS"), any())).thenReturn(nasDf(50, 39));
+        when(runner.run(eq(mid("NAS")), any())).thenReturn(nasDf(50, 39));
         watcher.checkRemoteDiskUsage();
-        when(runner.run(eq("NAS"), any())).thenReturn(nasDf(50, 91));
+        when(runner.run(eq(mid("NAS")), any())).thenReturn(nasDf(50, 91));
         watcher.checkRemoteDiskUsage();
 
         // /volume1 crosses once. Its eight aufs aliases carry the identical reading — if they were real

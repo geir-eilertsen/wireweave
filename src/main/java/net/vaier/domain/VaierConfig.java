@@ -39,6 +39,26 @@ public class VaierConfig {
      */
     private String vaierServerMachineId;
 
+    /**
+     * The Vaier server's own identity, or empty when it has not been assigned one yet or the stored value
+     * is unusable.
+     *
+     * <p>Empty, never a substitute, and never minted here. A hand-edited id that no longer parses must not
+     * quietly become a <em>different</em> machine — everything keyed to the old one would be orphaned in
+     * silence — and deciding to assign a fresh id is a write, which is not a read's business. The one
+     * caller that may mint (`MachineService`, on first use) does so explicitly and persists it.
+     */
+    public Optional<MachineId> vaierServerIdentity() {
+        if (vaierServerMachineId == null || vaierServerMachineId.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(MachineId.of(vaierServerMachineId));
+        } catch (IllegalArgumentException e) {
+            return Optional.empty();
+        }
+    }
+
     /** The default host-disk alert threshold when none is configured: notify above 85% used. */
     public static final int DEFAULT_DISK_MONITOR_THRESHOLD_PERCENT = 85;
 

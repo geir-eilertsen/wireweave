@@ -37,61 +37,61 @@ class BackupWorkDirResolverTest {
     @Test
     void resolvesHomeIntoDotVaierBackup() {
         // The SSH user's $HOME is writable by that user, so the run's work dir is <home>/.vaier-backup.
-        when(remoteCommand.run(eq("Colina 27"), any())).thenReturn(ok("/home/geir"));
+        when(remoteCommand.run(eq(id("Colina 27")), any())).thenReturn(ok("/home/geir"));
 
-        assertThat(resolver.workDirFor(id("Colina 27"), "Colina 27")).isEqualTo("/home/geir/.vaier-backup");
+        assertThat(resolver.workDirFor(id("Colina 27"))).isEqualTo("/home/geir/.vaier-backup");
     }
 
     @Test
     void probesTheHomeVariableOverSsh() {
-        when(remoteCommand.run(eq("Colina 27"), any())).thenReturn(ok("/home/geir"));
+        when(remoteCommand.run(eq(id("Colina 27")), any())).thenReturn(ok("/home/geir"));
 
-        resolver.workDirFor(id("Colina 27"), "Colina 27");
+        resolver.workDirFor(id("Colina 27"));
 
         // The probe prints $HOME with no trailing newline so the resolved path is exact.
-        verify(remoteCommand).run(eq("Colina 27"), eq(BackupWorkDirResolver.HOME_PROBE));
+        verify(remoteCommand).run(eq(id("Colina 27")), eq(BackupWorkDirResolver.HOME_PROBE));
     }
 
     @Test
     void cachesAResolvedHomeSoASecondCallDoesNotReprobe() {
-        when(remoteCommand.run(eq("Colina 27"), any())).thenReturn(ok("/home/geir"));
+        when(remoteCommand.run(eq(id("Colina 27")), any())).thenReturn(ok("/home/geir"));
 
-        assertThat(resolver.workDirFor(id("Colina 27"), "Colina 27")).isEqualTo("/home/geir/.vaier-backup");
-        assertThat(resolver.workDirFor(id("Colina 27"), "Colina 27")).isEqualTo("/home/geir/.vaier-backup");
+        assertThat(resolver.workDirFor(id("Colina 27"))).isEqualTo("/home/geir/.vaier-backup");
+        assertThat(resolver.workDirFor(id("Colina 27"))).isEqualTo("/home/geir/.vaier-backup");
 
-        verify(remoteCommand, times(1)).run(eq("Colina 27"), any());
+        verify(remoteCommand, times(1)).run(eq(id("Colina 27")), any());
     }
 
     @Test
     void fallsBackToTmpWhenProbeTimesOut() {
-        when(remoteCommand.run(eq("Colina 27"), any()))
+        when(remoteCommand.run(eq(id("Colina 27")), any()))
             .thenReturn(new CommandResult(-1, "", "timeout", true, null));
 
-        assertThat(resolver.workDirFor(id("Colina 27"), "Colina 27")).isEqualTo(BackupWorkDirResolver.FALLBACK_WORK_DIR);
+        assertThat(resolver.workDirFor(id("Colina 27"))).isEqualTo(BackupWorkDirResolver.FALLBACK_WORK_DIR);
         assertThat(BackupWorkDirResolver.FALLBACK_WORK_DIR).isEqualTo("/tmp/vaier-backup");
     }
 
     @Test
     void fallsBackToTmpWhenProbeExitsNonZero() {
-        when(remoteCommand.run(eq("Colina 27"), any()))
+        when(remoteCommand.run(eq(id("Colina 27")), any()))
             .thenReturn(new CommandResult(1, "", "boom", false, "SHA256:x"));
 
-        assertThat(resolver.workDirFor(id("Colina 27"), "Colina 27")).isEqualTo(BackupWorkDirResolver.FALLBACK_WORK_DIR);
+        assertThat(resolver.workDirFor(id("Colina 27"))).isEqualTo(BackupWorkDirResolver.FALLBACK_WORK_DIR);
     }
 
     @Test
     void fallsBackToTmpWhenStdoutIsBlank() {
-        when(remoteCommand.run(eq("Colina 27"), any())).thenReturn(ok("   "));
+        when(remoteCommand.run(eq(id("Colina 27")), any())).thenReturn(ok("   "));
 
-        assertThat(resolver.workDirFor(id("Colina 27"), "Colina 27")).isEqualTo(BackupWorkDirResolver.FALLBACK_WORK_DIR);
+        assertThat(resolver.workDirFor(id("Colina 27"))).isEqualTo(BackupWorkDirResolver.FALLBACK_WORK_DIR);
     }
 
     @Test
     void fallsBackToTmpWhenStdoutIsNotAnAbsolutePath() {
         // A non-absolute stdout (e.g. a stray "STARTED 1234" or an unexpanded var) must not become a work dir.
-        when(remoteCommand.run(eq("Colina 27"), any())).thenReturn(ok("STARTED 1234"));
+        when(remoteCommand.run(eq(id("Colina 27")), any())).thenReturn(ok("STARTED 1234"));
 
-        assertThat(resolver.workDirFor(id("Colina 27"), "Colina 27")).isEqualTo(BackupWorkDirResolver.FALLBACK_WORK_DIR);
+        assertThat(resolver.workDirFor(id("Colina 27"))).isEqualTo(BackupWorkDirResolver.FALLBACK_WORK_DIR);
     }
 
     // --- homeFor: the SSH user's absolute home, which a "Back up as root" run must hand to sudo as HOME ---
@@ -103,19 +103,19 @@ class BackupWorkDirResolverTest {
      */
     @Test
     void homeForResolvesTheSshUsersAbsoluteHome() {
-        when(remoteCommand.run(eq("Colina 27"), any())).thenReturn(ok("/home/geir"));
+        when(remoteCommand.run(eq(id("Colina 27")), any())).thenReturn(ok("/home/geir"));
 
-        assertThat(resolver.homeFor(id("Colina 27"), "Colina 27")).contains("/home/geir");
+        assertThat(resolver.homeFor(id("Colina 27"))).contains("/home/geir");
     }
 
     @Test
     void homeForAndWorkDirForShareOneProbeAndOneCache() {
-        when(remoteCommand.run(eq("Colina 27"), any())).thenReturn(ok("/home/geir"));
+        when(remoteCommand.run(eq(id("Colina 27")), any())).thenReturn(ok("/home/geir"));
 
-        assertThat(resolver.workDirFor(id("Colina 27"), "Colina 27")).isEqualTo("/home/geir/.vaier-backup");
-        assertThat(resolver.homeFor(id("Colina 27"), "Colina 27")).contains("/home/geir");
+        assertThat(resolver.workDirFor(id("Colina 27"))).isEqualTo("/home/geir/.vaier-backup");
+        assertThat(resolver.homeFor(id("Colina 27"))).contains("/home/geir");
 
-        verify(remoteCommand, times(1)).run(eq("Colina 27"), any());
+        verify(remoteCommand, times(1)).run(eq(id("Colina 27")), any());
     }
 
     /**
@@ -126,32 +126,32 @@ class BackupWorkDirResolverTest {
      */
     @Test
     void homeForIsEmptyWhenItCannotBeResolved_neverAGuess() {
-        when(remoteCommand.run(eq("Colina 27"), any()))
+        when(remoteCommand.run(eq(id("Colina 27")), any()))
             .thenReturn(new CommandResult(-1, "", "timeout", true, null));
 
-        assertThat(resolver.homeFor(id("Colina 27"), "Colina 27")).isEmpty();
+        assertThat(resolver.homeFor(id("Colina 27"))).isEmpty();
         // And it certainly never passes off the /tmp work-dir fallback as a home — the work dir may fall back,
         // the home may not.
-        assertThat(resolver.workDirFor(id("Colina 27"), "Colina 27")).isEqualTo(BackupWorkDirResolver.FALLBACK_WORK_DIR);
-        assertThat(resolver.homeFor(id("Colina 27"), "Colina 27")).isNotEqualTo(
+        assertThat(resolver.workDirFor(id("Colina 27"))).isEqualTo(BackupWorkDirResolver.FALLBACK_WORK_DIR);
+        assertThat(resolver.homeFor(id("Colina 27"))).isNotEqualTo(
             java.util.Optional.of(BackupWorkDirResolver.FALLBACK_WORK_DIR));
     }
 
     @Test
     void homeForIsEmptyWhenTheProbeReturnsANonAbsolutePath() {
-        when(remoteCommand.run(eq("Colina 27"), any())).thenReturn(ok("STARTED 1234"));
+        when(remoteCommand.run(eq(id("Colina 27")), any())).thenReturn(ok("STARTED 1234"));
 
-        assertThat(resolver.homeFor(id("Colina 27"), "Colina 27")).isEmpty();
+        assertThat(resolver.homeFor(id("Colina 27"))).isEmpty();
     }
 
     @Test
     void fallbackIsNotCachedSoALaterProbeCanStillResolve() {
         // A transient failure must never poison the cache: after a fallback, a later successful probe resolves.
-        when(remoteCommand.run(eq("Colina 27"), any()))
+        when(remoteCommand.run(eq(id("Colina 27")), any()))
             .thenReturn(new CommandResult(-1, "", "timeout", true, null))
             .thenReturn(ok("/home/geir"));
 
-        assertThat(resolver.workDirFor(id("Colina 27"), "Colina 27")).isEqualTo(BackupWorkDirResolver.FALLBACK_WORK_DIR);
-        assertThat(resolver.workDirFor(id("Colina 27"), "Colina 27")).isEqualTo("/home/geir/.vaier-backup");
+        assertThat(resolver.workDirFor(id("Colina 27"))).isEqualTo(BackupWorkDirResolver.FALLBACK_WORK_DIR);
+        assertThat(resolver.workDirFor(id("Colina 27"))).isEqualTo("/home/geir/.vaier-backup");
     }
 }

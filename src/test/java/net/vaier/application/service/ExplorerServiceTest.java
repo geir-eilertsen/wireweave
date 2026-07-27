@@ -6,9 +6,11 @@ import net.vaier.domain.AuthMethod;
 import net.vaier.domain.CannotDeleteSftpRootException;
 import net.vaier.domain.FileEntry;
 import net.vaier.domain.HostCredential;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.NoHostCredentialException;
 import net.vaier.domain.NotFoundException;
 import net.vaier.domain.SshTarget;
+import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.PathOutsideSftpRootException;
 import net.vaier.domain.SftpRoot;
 import net.vaier.domain.Selection;
@@ -20,6 +22,7 @@ import net.vaier.domain.ProtectedPaths;
 import net.vaier.domain.SourcePaths;
 import net.vaier.domain.port.ForMountingArchives;
 import net.vaier.domain.port.ForReadingProtectedPaths;
+import net.vaier.domain.port.ForResolvingMachineIds;
 import net.vaier.domain.port.ForResolvingSftpRoots;
 import net.vaier.domain.port.ForResolvingSshTargets;
 import net.vaier.domain.port.ForTrackingHostKeys;
@@ -37,6 +40,7 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -59,11 +63,12 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class ExplorerServiceTest {
 
-    private static net.vaier.domain.MachineId mid(String name) {
-        return net.vaier.domain.TestMachineIds.of(name);
+    private static MachineId mid(String name) {
+        return TestMachineIds.of(name);
     }
 
     @Mock ForResolvingSshTargets forResolvingSshTargets;
+    @Mock ForResolvingMachineIds forResolvingMachineIds;
     @Mock ForBrowsingRemoteFiles forBrowsingRemoteFiles;
     @Mock ForTrackingHostKeys forTrackingHostKeys;
     @Mock ForResolvingSftpRoots forResolvingSftpRoots;
@@ -79,15 +84,25 @@ class ExplorerServiceTest {
             new HostCredential(mid("apalveien5"), "root", AuthMethod.PASSWORD, "pw", null, false), pinnedFingerprint);
     }
 
+    /**
+     * The machine is in the registry under the name the browser used. The Explorer's coordinates still
+     * arrive as names, so every browse crosses name→id once before it can resolve an SSH target.
+     */
+    private void knownMachine(String machine) {
+        lenient().when(forResolvingMachineIds.idForName(machine)).thenReturn(Optional.of(mid(machine)));
+    }
+
     private void machineResolves(String machine, String pinnedFingerprint) {
-        when(forResolvingSshTargets.resolve(machine)).thenReturn(target(pinnedFingerprint));
+        knownMachine(machine);
+        when(forResolvingSshTargets.resolve(mid(machine))).thenReturn(target(pinnedFingerprint));
         // Most of the fleet is not jailed, and on those machines nothing about a path changes.
         lenient().when(forResolvingSftpRoots.rootFor(eq(machine), any())).thenReturn(SftpRoot.NONE);
     }
 
     /** The NAS's shape: DSM chroots the SFTP subsystem into /volume1 and leaves the exec channel alone. */
     private void machineIsJailedIn(String machine, String rootPath) {
-        when(forResolvingSshTargets.resolve(machine)).thenReturn(target("SHA256:pinned"));
+        knownMachine(machine);
+        when(forResolvingSshTargets.resolve(mid(machine))).thenReturn(target("SHA256:pinned"));
         when(forResolvingSftpRoots.rootFor(eq(machine), any())).thenReturn(new SftpRoot(rootPath));
     }
 
@@ -193,15 +208,20 @@ class ExplorerServiceTest {
 
     @Test
     void listDirectory_unknownMachine_propagatesNotFound() {
-        when(forResolvingSshTargets.resolve("ghost")).thenThrow(new NotFoundException("Machine not found: ghost"));
+        // A name nobody in the fleet answers to. Now that the SSH path is keyed by identity, this fails at
+        // the name→id crossing, before Vaier has anything it could try to connect to.
+        when(forResolvingMachineIds.idForName("ghost")).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.listDirectory("ghost", "/"))
             .isInstanceOf(NotFoundException.class);
+        verify(forResolvingSshTargets, never()).resolve(any());
     }
 
     @Test
     void listDirectory_machineWithoutACredential_propagatesNoHostCredential() {
-        when(forResolvingSshTargets.resolve("apalveien5")).thenThrow(new NoHostCredentialException("apalveien5"));
+        knownMachine("apalveien5");
+        when(forResolvingSshTargets.resolve(mid("apalveien5")))
+            .thenThrow(new NoHostCredentialException("apalveien5"));
 
         assertThatThrownBy(() -> service.listDirectory("apalveien5", "/"))
             .isInstanceOf(NoHostCredentialException.class);
@@ -295,7 +315,8 @@ class ExplorerServiceTest {
 
     @Test
     void listDirectory_onAnUnprobeableMachine_leavesItsPathsAlone() {
-        when(forResolvingSshTargets.resolve("asleep")).thenReturn(target("SHA256:pinned"));
+        knownMachine("asleep");
+        when(forResolvingSshTargets.resolve(mid("asleep"))).thenReturn(target("SHA256:pinned"));
         when(forResolvingSftpRoots.rootFor(eq("asleep"), any())).thenReturn(SftpRoot.NONE);
         remoteAnswers(new DirectoryListing(List.of(), "SHA256:pinned"));
 

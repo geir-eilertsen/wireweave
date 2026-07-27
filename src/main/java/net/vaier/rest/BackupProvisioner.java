@@ -78,7 +78,7 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
     static final long SWEEP_INTERVAL_MS = 3000;
 
     /** A launched detached run Vaier is waiting to settle: the host, its run id, and its work dir. */
-    private record InFlightRun(String host, String runId, String workDir) {}
+    private record InFlightRun(MachineId machineId, String runId, String workDir) {}
 
     /**
      * {@link MachineId} -> the in-flight prepare the backend sweep polls until it settles, then publishes
@@ -117,7 +117,7 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
         String machineName = machine.get().name();
         log.info("Checking borg availability on {}", LogSafe.forLog(machineName));
         try {
-            CommandResult result = remoteCommand.run(machineName, BorgCommand.versionProbe());
+            CommandResult result = remoteCommand.run(machine.get().id(), BorgCommand.versionProbe());
             if (result.timedOut() || result.exitCode() != 0) {
                 return new BorgAvailability(false, Optional.empty(), false);
             }
@@ -146,7 +146,7 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
         String machineName = machine.get().name();
         log.info("Checking whether borg can run as root on {}", LogSafe.forLog(machineName));
         try {
-            CommandResult result = remoteCommand.run(machineName,
+            CommandResult result = remoteCommand.run(machine.get().id(),
                 BorgClientSetupScript.rootBorgProbe());
             boolean canRunAsRoot = !result.timedOut()
                 && BorgClientSetupScript.parseRootBorg(result.stdout());
@@ -176,7 +176,7 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
         log.info("Checking NAS reachability of repository {} from {}",
             LogSafe.forLog(repositoryName), LogSafe.forLog(machineName));
         try {
-            CommandResult result = remoteCommand.run(machineName,
+            CommandResult result = remoteCommand.run(machine.get().id(),
                 BorgCommand.reachabilityProbe(server.get()));
             boolean reachable = !result.timedOut() && BorgCommand.parseReachability(result.stdout());
             return new RepoReachability(reachable);
@@ -208,15 +208,15 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
         // borg. An adopted server is unknown — and compatibility then fails closed (never optimistically true).
         Optional<BorgVersion> serverVersion = server.get().managed()
             ? Optional.of(BorgServerImage.borgVersion()) : Optional.empty();
-        String workDir = workDirResolver.workDirFor(machine.get().id(), machineName);
+        String workDir = workDirResolver.workDirFor(machine.get().id());
         log.info("Checking borg auth to backup server {} from {} (borg info on the repo URL)",
             LogSafe.forLog(server.get().name()), LogSafe.forLog(machineName));
         try {
             // Ensure the pass file so BORG_PASSCOMMAND resolves, then run `borg info` for THIS repo — the same
             // path a real run takes, so it validates auth AND the per-repo restriction, not just a version.
             BorgCommand.BuiltCommand ensure = BorgCommand.ensurePassFile(repo.get(), workDir);
-            remoteCommand.run(machineName, ensure.exec());
-            CommandResult result = remoteCommand.run(machineName,
+            remoteCommand.run(machine.get().id(), ensure.exec());
+            CommandResult result = remoteCommand.run(machine.get().id(),
                 BorgCommand.serverAuthProbe(server.get(), repo.get(), workDir));
             if (result.timedOut()) {
                 return new ServerBorgAuth(false, serverVersion, false);
@@ -255,18 +255,18 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
                 "The machine to initialise from is unknown, has SSH disabled, or has no stored credential");
         }
         String host = machine.get().name();
-        String workDir = workDirResolver.workDirFor(machine.get().id(), host);
+        String workDir = workDirResolver.workDirFor(machine.get().id());
         try {
             // Provision the pass file first so borg init can read the passphrase from it via BORG_PASSCOMMAND.
             BorgCommand.BuiltCommand writePass = BorgCommand.writePassFile(repo.get(), workDir);
             log.info("Installing backup passphrase file for repository {} on {}: {}",
                 LogSafe.forLog(repositoryName), LogSafe.forLog(host), writePass.redacted());
-            remoteCommand.run(host, writePass.exec());
+            remoteCommand.run(machine.get().id(), writePass.exec());
 
             BorgCommand.BuiltCommand init = BorgCommand.init(server.get(), repo.get(), workDir);
             log.info("Initialising backup repository {} on {}: {}",
                 LogSafe.forLog(repositoryName), LogSafe.forLog(host), init.redacted());
-            CommandResult result = remoteCommand.run(host, init.exec());
+            CommandResult result = remoteCommand.run(machine.get().id(), init.exec());
             if (!result.timedOut() && result.exitCode() == 0) {
                 return new RepoInitResult(true, false, "Repository initialised");
             }
@@ -309,7 +309,7 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
         }
         String host = machine.get().name();
         try {
-            CommandResult probe = remoteCommand.run(host, BorgServerSetupScript.dockerAvailabilityProbe());
+            CommandResult probe = remoteCommand.run(machine.get().id(), BorgServerSetupScript.dockerAvailabilityProbe());
             if (probe.timedOut() || !BorgServerSetupScript.parseDockerAvailable(probe.stdout())) {
                 // No usable docker CLI over SSH (the Synology case). Vaier CAN ssh in, so it stages the setup
                 // script on the host and hands the operator the one command to run — never a curl of a
@@ -321,16 +321,16 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
             // and return as soon as STARTED is echoed — status is polled from those files.
             String script = BorgServerSetupScript.generate(server.get(), ownerUserFor(server.get()));
             String runId = server.get().provisionRunId();
-            String workDir = workDirResolver.workDirFor(machine.get().id(), host);
+            String workDir = workDirResolver.workDirFor(machine.get().id());
             String launch = BorgServerSetupScript.detachedLaunch(script, runId, workDir);
             log.info("Launching detached provisioning of backup server {} on {}",
                 LogSafe.forLog(serverName), LogSafe.forLog(host));
-            CommandResult result = remoteCommand.run(host, launch);
+            CommandResult result = remoteCommand.run(machine.get().id(), launch);
             if (!result.timedOut() && result.exitCode() == 0
                 && result.stdout() != null && result.stdout().contains("STARTED")) {
                 // Register the launched provision so the backend sweep settles it and pushes an SSE event —
                 // the frontend never polls, it just listens on the backups stream.
-                inFlightProvisions.put(serverName, new InFlightRun(host, runId, workDir));
+                inFlightProvisions.put(serverName, new InFlightRun(machine.get().id(), runId, workDir));
                 return new ProvisionResult(false, false, true, "Provisioning started on " + host
                     + " — you'll be notified when it finishes.", null);
             }
@@ -352,14 +352,14 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
      */
     private ProvisionResult stageSetupScript(BackupServer server, Machine machine) {
         String host = machine.name();
-        String stagedPath = workDirResolver.workDirFor(machine.id(), host) + "/" + server.name()
+        String stagedPath = workDirResolver.workDirFor(machine.id()) + "/" + server.name()
             + "-borg-setup.sh";
         try {
             String script = BorgServerSetupScript.generate(server, ownerUserFor(server));
             String stage = BorgServerSetupScript.stageScript(script, stagedPath);
             log.info("Staging the setup script for backup server {} on {}",
                 LogSafe.forLog(server.name()), LogSafe.forLog(host));
-            CommandResult result = remoteCommand.run(host, stage);
+            CommandResult result = remoteCommand.run(machine.id(), stage);
             Optional<String> confirmed = (!result.timedOut() && result.exitCode() == 0)
                 ? BorgServerSetupScript.parseStagedPath(result.stdout())
                 : Optional.empty();
@@ -390,9 +390,9 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
         }
         String host = machine.get().name();
         String runId = server.get().provisionRunId();
-        String workDir = workDirResolver.workDirFor(machine.get().id(), host);
+        String workDir = workDirResolver.workDirFor(machine.get().id());
         try {
-            CommandResult poll = remoteCommand.run(host, BorgCommand.pollStatus(runId, workDir));
+            CommandResult poll = remoteCommand.run(machine.get().id(), BorgCommand.pollStatus(runId, workDir));
             if (poll.timedOut() || poll.exitCode() != 0) {
                 // A transient poll failure must not be read as a settled outcome — keep waiting.
                 return new ProvisionStatus(ProvisionState.RUNNING, "");
@@ -402,7 +402,7 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
                 return new ProvisionStatus(ProvisionState.RUNNING, "");
             }
             ProvisionState state = exitCode.get() == 0 ? ProvisionState.SUCCESS : ProvisionState.FAILED;
-            return new ProvisionStatus(state, fetchLogTail(host, runId, workDir));
+            return new ProvisionStatus(state, fetchLogTail(machine.get().id(), runId, workDir));
         } catch (Exception e) {
             log.debug("Provision status poll of {} on {} failed transiently: {}",
                 LogSafe.forLog(serverName), LogSafe.forLog(host), e.getMessage());
@@ -424,7 +424,7 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
         try {
             // The install needs root, but Vaier SSHes as a non-root user. Probe for passwordless sudo: with
             // it, Vaier runs the script itself; without it, it degrades to staging the script for the operator.
-            CommandResult probe = remoteCommand.run(host, BorgClientSetupScript.passwordlessSudoProbe());
+            CommandResult probe = remoteCommand.run(machine.get().id(), BorgClientSetupScript.passwordlessSudoProbe());
             if (probe.timedOut() || !BorgClientSetupScript.parsePasswordlessSudo(probe.stdout())) {
                 return stagePrepareScript(machine.get());
             }
@@ -433,15 +433,15 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
             // as STARTED is echoed — status is polled from those files exactly like server provisioning.
             String script = BorgClientSetupScript.generate();
             String runId = prepareRunId(machineId);
-            String workDir = workDirResolver.workDirFor(machineId, host);
+            String workDir = workDirResolver.workDirFor(machineId);
             String launch = BorgClientSetupScript.detachedLaunch(script, runId, workDir);
             log.info("Launching detached borg-client install on {}", LogSafe.forLog(host));
-            CommandResult result = remoteCommand.run(host, launch);
+            CommandResult result = remoteCommand.run(machineId, launch);
             if (!result.timedOut() && result.exitCode() == 0
                 && result.stdout() != null && result.stdout().contains("STARTED")) {
                 // Register the launched install so the backend sweep settles it and pushes an SSE event —
                 // the frontend never polls, it just listens on the backups stream.
-                inFlightPrepares.put(machineId, new InFlightRun(host, runId, workDir));
+                inFlightPrepares.put(machineId, new InFlightRun(machineId, runId, workDir));
                 return new PrepareResult(false, false, true,
                     "Preparing client on " + host + " — you'll be notified when it finishes.", null);
             }
@@ -464,13 +464,13 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
      */
     private PrepareResult stagePrepareScript(Machine machine) {
         String host = machine.name();
-        String stagedPath = workDirResolver.workDirFor(machine.id(), host) + "/"
+        String stagedPath = workDirResolver.workDirFor(machine.id()) + "/"
             + prepareRunId(machine.id()) + ".sh";
         try {
             String script = BorgClientSetupScript.generate();
             String stage = BorgServerSetupScript.stageScript(script, stagedPath);
             log.info("Staging the prepare-client script on {}", LogSafe.forLog(host));
-            CommandResult result = remoteCommand.run(host, stage);
+            CommandResult result = remoteCommand.run(machine.id(), stage);
             Optional<String> confirmed = (!result.timedOut() && result.exitCode() == 0)
                 ? BorgServerSetupScript.parseStagedPath(result.stdout())
                 : Optional.empty();
@@ -497,9 +497,9 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
         }
         String host = machine.get().name();
         String runId = prepareRunId(machineId);
-        String workDir = workDirResolver.workDirFor(machineId, host);
+        String workDir = workDirResolver.workDirFor(machineId);
         try {
-            CommandResult poll = remoteCommand.run(host, BorgCommand.pollStatus(runId, workDir));
+            CommandResult poll = remoteCommand.run(machineId, BorgCommand.pollStatus(runId, workDir));
             if (poll.timedOut() || poll.exitCode() != 0) {
                 return new PrepareStatus(PrepareState.RUNNING, "");
             }
@@ -508,7 +508,7 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
                 return new PrepareStatus(PrepareState.RUNNING, "");
             }
             PrepareState state = exitCode.get() == 0 ? PrepareState.SUCCESS : PrepareState.FAILED;
-            return new PrepareStatus(state, fetchLogTail(host, runId, workDir));
+            return new PrepareStatus(state, fetchLogTail(machineId, runId, workDir));
         } catch (Exception e) {
             log.debug("Prepare-client status poll on {} failed transiently: {}",
                 LogSafe.forLog(host), e.getMessage());
@@ -642,7 +642,7 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
                                   String eventName, String label,
                                   Function<K, String> renderIdFields) {
         try {
-            CommandResult poll = remoteCommand.run(run.host(), BorgCommand.pollStatus(run.runId(), run.workDir()));
+            CommandResult poll = remoteCommand.run(run.machineId(), BorgCommand.pollStatus(run.runId(), run.workDir()));
             if (poll.timedOut() || poll.exitCode() != 0) {
                 return;
             }
@@ -713,7 +713,7 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
         String serverHost = serverMachine.get().name();
         try {
             // Step 1 (client): generate the key pair if absent and read the public key.
-            CommandResult keygen = remoteCommand.run(clientHost, BorgCommand.ensureClientKeyPair());
+            CommandResult keygen = remoteCommand.run(client.get().id(), BorgCommand.ensureClientKeyPair());
             if (keygen.timedOut() || keygen.exitCode() != 0) {
                 return new AuthorizeResult(false, false, false,
                     "Could not read the client key on " + machineName + ": " + summaryOf(keygen));
@@ -727,7 +727,7 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
             }
             // Step 2 (client): pin the server's host key BEFORE authorizing — a client that cannot verify the
             // server refuses to connect (stale pin) or has no pin to satisfy borg's non-interactive SSH.
-            boolean hostKeyPinned = pinServerHostKeyOnClient(server.get(), clientHost, serverHost, machineName);
+            boolean hostKeyPinned = pinServerHostKeyOnClient(server.get(), client.get().id(), serverMachine.get().id(), machineName);
             // Step 3 (server's machine): idempotent, newline-safe upsert of a RESTRICTED entry — the key is
             // confined to just the repositories this machine backs up to on this server (never a bare key,
             // which would grant a full shell as the borg user and let one client wipe every repo).
@@ -742,7 +742,7 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
             log.info("Authorizing backup client {} on backup server {} ({}), restricted to {}",
                 LogSafe.forLog(machineName), LogSafe.forLog(serverName), LogSafe.forLog(serverHost),
                 LogSafe.forLog(String.join(", ", restrictPaths)));
-            CommandResult append = remoteCommand.run(serverHost, authorize);
+            CommandResult append = remoteCommand.run(serverMachine.get().id(), authorize);
             if (append.timedOut() || append.exitCode() != 0) {
                 return new AuthorizeResult(false, false, hostKeyPinned,
                     "Could not trust the client key on " + serverName + ": " + summaryOf(append));
@@ -774,10 +774,10 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
      * nothing, or an SSH error each leave the pin unmade and the caller still authorizes the client key —
      * never writing anything but a real key into {@code known_hosts}.
      */
-    private boolean pinServerHostKeyOnClient(BackupServer server, String clientHost, String serverHost,
+    private boolean pinServerHostKeyOnClient(BackupServer server, MachineId clientId, MachineId serverId,
                                              String machineName) {
         try {
-            CommandResult read = remoteCommand.run(serverHost, BorgCommand.readServerHostKeys(server));
+            CommandResult read = remoteCommand.run(serverId, BorgCommand.readServerHostKeys(server));
             List<String> hostKeys = (read != null && !read.timedOut() && read.exitCode() == 0)
                 ? BorgCommand.parseHostKeys(read.stdout())
                 : List.of();
@@ -786,7 +786,7 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
                     LogSafe.forLog(server.name()), LogSafe.forLog(machineName));
                 return false;
             }
-            CommandResult pin = remoteCommand.run(clientHost, BorgCommand.pinHostKeys(server, hostKeys));
+            CommandResult pin = remoteCommand.run(clientId, BorgCommand.pinHostKeys(server, hostKeys));
             return pin != null && !pin.timedOut() && pin.exitCode() == 0
                 && BorgCommand.parsePinnedCount(pin.stdout()).isPresent();
         } catch (Exception e) {
@@ -813,9 +813,9 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
     }
 
     /** The tail of the provision run's on-host log, or a blank string when it cannot be read. */
-    private String fetchLogTail(String host, String runId, String workDir) {
+    private String fetchLogTail(MachineId machineId, String runId, String workDir) {
         try {
-            CommandResult logTail = remoteCommand.run(host, BorgCommand.fetchLog(runId, workDir));
+            CommandResult logTail = remoteCommand.run(machineId, BorgCommand.fetchLog(runId, workDir));
             if (!logTail.timedOut() && logTail.exitCode() == 0 && logTail.stdout() != null) {
                 return logTail.stdout().strip();
             }

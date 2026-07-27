@@ -67,7 +67,7 @@ public class BorgArchiveMountAdapter implements ForMountingArchives {
     /** Live mounts by mountpoint → when each was last browsed, so the sweep can release the idle ones. */
     private final Map<String, LiveMount> liveMounts = new ConcurrentHashMap<>();
 
-    private record LiveMount(String machineName, MountedArchive mounted, Instant lastAccess) {
+    private record LiveMount(MachineId machineId, MountedArchive mounted, Instant lastAccess) {
     }
 
     public BorgArchiveMountAdapter(ForResolvingSshTargets sshTargets, ForRunningSshCommands ssh,
@@ -90,15 +90,17 @@ public class BorgArchiveMountAdapter implements ForMountingArchives {
         // The target is resolved FIRST because it carries the machine's identity, and identity is what the
         // job store and the work-dir cache are keyed by. Taking the id from the same resolution that opens
         // the connection is what makes it impossible to mount one machine's archive using another's job.
-        SshTarget target = sshTargets.resolve(machineName);
+        MachineId machineId = machineIds.idForName(machineName)
+            .orElseThrow(() -> new NotFoundException("Machine not found: " + machineName));
+        SshTarget target = sshTargets.resolve(machineId);
         // MountedArchive.under validates the archive id (opaque hex) before any connection is opened.
-        String workDir = workDirResolver.workDirFor(target.machineId(), machineName);
+        String workDir = workDirResolver.workDirFor(machineId);
         MountedArchive mounted = MountedArchive.under(workDir, archiveId);
 
         if (!isAlreadyMounted(target, mounted)) {
-            mountCold(machineName, target, mounted, workDir, archiveId);
+            mountCold(machineId, machineName, target, mounted, workDir, archiveId);
         }
-        touch(machineName, mounted);
+        touch(machineId, mounted);
         return mounted;
     }
 
@@ -118,9 +120,9 @@ public class BorgArchiveMountAdapter implements ForMountingArchives {
      * {@code borg list} (the id keys the mountpoint; borg mounts by name), then mount it. Idempotent at the
      * command level too — {@link BorgCommand#mount} reuses an already-mounted mountpoint rather than failing.
      */
-    private void mountCold(String machineName, SshTarget target, MountedArchive mounted, String workDir,
-                           String archiveId) {
-        BackupJob job = firstJobFor(target.machineId(), machineName);
+    private void mountCold(MachineId machineId, String machineName, SshTarget target, MountedArchive mounted,
+                           String workDir, String archiveId) {
+        BackupJob job = firstJobFor(machineId, machineName);
         BackupRepository repo = repositoryFor(job);
         BackupServer server = serverFor(repo);
 
@@ -176,8 +178,8 @@ public class BorgArchiveMountAdapter implements ForMountingArchives {
         }
     }
 
-    private void touch(String machineName, MountedArchive mounted) {
-        liveMounts.put(mounted.mountpoint(), new LiveMount(machineName, mounted, clock.instant()));
+    private void touch(MachineId machineId, MountedArchive mounted) {
+        liveMounts.put(mounted.mountpoint(), new LiveMount(machineId, mounted, clock.instant()));
     }
 
     @Override
@@ -195,9 +197,12 @@ public class BorgArchiveMountAdapter implements ForMountingArchives {
         // Distinct backed-up machines: a machine may have more than one job, but its mounts all live under
         // the one work dir, so probe each machine once.
         for (MachineId machineId : jobs.getAll().stream().map(BackupJob::machineId).distinct().toList()) {
-            // A job whose machine no longer exists has nothing to reconcile — and nothing to reach it by.
-            machineIds.nameForId(machineId)
-                .ifPresent(machineName -> adoptOrphanMountsOn(machineId, machineName));
+            // The machine is reached by its identity, so a name is only what the log line calls it. It used
+            // to gate the whole reconcile, and the registry it comes from reads WireGuard by shelling into a
+            // container that restarts — so a machine could be skipped for the duration of a restart. A
+            // skipped reconcile leaves a live borg mount holding the repository lock, and the next backup run
+            // on that machine fails with a lock timeout, a symptom nowhere near its cause.
+            adoptOrphanMountsOn(machineId, machineIds.nameForId(machineId).orElse(machineId.value()));
         }
     }
 
@@ -209,11 +214,11 @@ public class BorgArchiveMountAdapter implements ForMountingArchives {
      */
     private void adoptOrphanMountsOn(MachineId machineId, String machineName) {
         try {
-            String workDir = workDirResolver.workDirFor(machineId, machineName);
-            SshTarget target = sshTargets.resolve(machineName);
+            String workDir = workDirResolver.workDirFor(machineId);
+            SshTarget target = sshTargets.resolve(machineId);
             CommandResult result = ssh.run(target, BorgCommand.listArchiveMounts(workDir));
             for (String mountpoint : BorgCommand.parseArchiveMounts(result.stdout())) {
-                LiveMount adopted = new LiveMount(machineName, new MountedArchive(mountpoint), clock.instant());
+                LiveMount adopted = new LiveMount(machineId, new MountedArchive(mountpoint), clock.instant());
                 if (liveMounts.putIfAbsent(mountpoint, adopted) == null) {
                     log.info("Adopted orphaned archive mount {} on {} for reaping", mountpoint, machineName);
                 }
@@ -243,19 +248,19 @@ public class BorgArchiveMountAdapter implements ForMountingArchives {
      */
     private void releaseMount(LiveMount live) {
         try {
-            SshTarget target = sshTargets.resolve(live.machineName());
+            SshTarget target = sshTargets.resolve(live.machineId());
             CommandResult result = ssh.run(target, BorgCommand.umount(live.mounted().mountpoint()));
             if (BorgCommand.parseUnmounted(result.stdout())) {
                 liveMounts.remove(live.mounted().mountpoint());
                 log.info("Released idle archive mount {} on {}", live.mounted().mountpoint(),
-                    live.machineName());
+                    live.machineId());
             } else {
                 log.warn("Idle archive mount {} on {} is still mounted after umount; keeping it tracked to "
-                    + "retry", live.mounted().mountpoint(), live.machineName());
+                    + "retry", live.mounted().mountpoint(), live.machineId());
             }
         } catch (RuntimeException e) {
             log.debug("Could not release idle mount {} on {}; keeping it tracked to retry: {}",
-                live.mounted().mountpoint(), live.machineName(), e.getMessage());
+                live.mounted().mountpoint(), live.machineId(), e.getMessage());
         }
     }
 }

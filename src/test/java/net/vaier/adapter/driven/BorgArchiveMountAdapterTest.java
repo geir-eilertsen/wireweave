@@ -94,8 +94,10 @@ class BorgArchiveMountAdapterTest {
         adapter = new BorgArchiveMountAdapter(sshTargets, ssh, workDirResolver, jobs, repositories, servers,
             machineIds, movingClock);
 
-        when(workDirResolver.workDirFor(MACHINE_ID, MACHINE)).thenReturn(WORK_DIR);
-        when(sshTargets.resolve(MACHINE)).thenReturn(target());
+        when(workDirResolver.workDirFor(MACHINE_ID)).thenReturn(WORK_DIR);
+        when(sshTargets.resolve(MACHINE_ID)).thenReturn(target());
+        // Both directions: the Explorer still names the machine, and the mount is keyed by its identity.
+        when(machineIds.idForName(MACHINE)).thenReturn(Optional.of(MACHINE_ID));
         when(machineIds.nameForId(MACHINE_ID)).thenReturn(Optional.of(MACHINE));
         when(jobs.getByMachine(MACHINE_ID)).thenReturn(List.of(job()));
         when(repositories.getAll()).thenReturn(List.of(repo()));
@@ -261,6 +263,35 @@ class BorgArchiveMountAdapterTest {
         adapter.reconcileMounts(); // adopts the orphan, last-accessed now (10:00:00)
 
         // It now ages out of the idle window and is released like any other tracked mount.
+        now.set(Instant.parse("2026-07-15T10:20:00Z"));
+        adapter.unmountIdle(Duration.ofMinutes(15).toMillis());
+        verify(ssh).run(any(), contains("borg umount '" + MOUNTPOINT + "'"));
+    }
+
+    /**
+     * The machine is reached by identity, so a display name that will not resolve costs a log line and
+     * nothing else. It used to cost the whole reconcile: the sweep skipped any machine whose name it could
+     * not look up, and the machine registry reads WireGuard by shelling into a container that restarts. A
+     * skipped reconcile leaves a live {@code borg mount} holding the repository lock, and the next backup
+     * run on that machine fails with a lock timeout — a failure whose cause is nowhere near its symptom.
+     */
+    @Test
+    void reconcileMounts_adoptsOrphans_evenWhenTheMachinesNameCannotBeResolved() {
+        when(jobs.getAll()).thenReturn(List.of(job()));
+        when(machineIds.nameForId(MACHINE_ID)).thenReturn(Optional.empty());
+        when(ssh.run(any(), any())).thenAnswer(inv -> {
+            String cmd = inv.getArgument(1);
+            if (cmd.contains("MOUNTS_LISTED")) {
+                return ok("MOUNT:" + MOUNTPOINT + "\nMOUNTS_LISTED");
+            }
+            if (cmd.contains("borg umount")) {
+                return ok("UNMOUNTED");
+            }
+            return ok("");
+        });
+
+        adapter.reconcileMounts();
+
         now.set(Instant.parse("2026-07-15T10:20:00Z"));
         adapter.unmountIdle(Duration.ofMinutes(15).toMillis());
         verify(ssh).run(any(), contains("borg umount '" + MOUNTPOINT + "'"));

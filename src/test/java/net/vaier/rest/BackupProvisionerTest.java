@@ -47,7 +47,7 @@ import static org.mockito.Mockito.when;
 class BackupProvisionerTest {
 
     private static net.vaier.domain.MachineId mid(String name) {
-        return net.vaier.domain.TestMachineIds.of(name);
+        return TestMachineIds.of(name);
     }
 
     GetMachinesUseCase machines;
@@ -100,7 +100,7 @@ class BackupProvisionerTest {
         workDirResolver = mock(BackupWorkDirResolver.class);
         events = mock(net.vaier.domain.port.ForPublishingEvents.class);
         // Default: resolve to the SSH user's home so existing assertions stay green.
-        when(workDirResolver.workDirFor(any(), any())).thenReturn("/home/geir/.vaier-backup");
+        when(workDirResolver.workDirFor(any())).thenReturn("/home/geir/.vaier-backup");
         // Default: the fleet knows the NAS, so a server's machineId resolves to the name the credential
         // vault is still keyed by. Tests that care about a client machine override this.
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("NAS")));
@@ -116,7 +116,7 @@ class BackupProvisionerTest {
     void checkBorgDetectsInstalledVersionAndSupport() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), contains("borg --version")))
+        when(runner.run(eq(mid("Colina 27")), contains("borg --version")))
             .thenReturn(new CommandResult(0, "borg 1.2.8\n", "", false, "SHA256:x"));
 
         BorgAvailability availability = provisioner.checkBorg(TestMachineIds.of("Colina 27"));
@@ -138,7 +138,7 @@ class BackupProvisionerTest {
     void checkRootBorgReportsOkWhenSudoCanRunBorg() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), contains("sudo -n borg --version")))
+        when(runner.run(eq(mid("Colina 27")), contains("sudo -n borg --version")))
             .thenReturn(new CommandResult(0, "ROOT_BORG_OK\n", "", false, "SHA256:x"));
 
         assertThat(provisioner.checkRootBorg(TestMachineIds.of("Colina 27")).canRunAsRoot()).isTrue();
@@ -148,7 +148,7 @@ class BackupProvisionerTest {
     void checkRootBorgReportsAbsentWhenTheSudoersGrantIsMissing() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), contains("sudo -n borg --version")))
+        when(runner.run(eq(mid("Colina 27")), contains("sudo -n borg --version")))
             .thenReturn(new CommandResult(0, "ROOT_BORG_ABSENT\n", "", false, "SHA256:x"));
 
         assertThat(provisioner.checkRootBorg(TestMachineIds.of("Colina 27")).canRunAsRoot()).isFalse();
@@ -167,7 +167,7 @@ class BackupProvisionerTest {
     void checkRootBorgReportsAbsentOnATimeout() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), contains("sudo -n borg --version")))
+        when(runner.run(eq(mid("Colina 27")), contains("sudo -n borg --version")))
             .thenReturn(new CommandResult(-1, "", "timeout", true, null));
 
         assertThat(provisioner.checkRootBorg(TestMachineIds.of("Colina 27")).canRunAsRoot()).isFalse();
@@ -178,7 +178,7 @@ class BackupProvisionerTest {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Apalveien 5")));
         hasCredential("Apalveien 5");
         // borg not on PATH: the shell exits non-zero with a command-not-found message.
-        when(runner.run(eq("Apalveien 5"), contains("borg --version")))
+        when(runner.run(eq(mid("Apalveien 5")), contains("borg --version")))
             .thenReturn(new CommandResult(127, "", "bash: borg: command not found", false, "SHA256:x"));
 
         BorgAvailability availability = provisioner.checkBorg(TestMachineIds.of("Apalveien 5"));
@@ -206,12 +206,12 @@ class BackupProvisionerTest {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
 
-        when(runner.run(eq("Colina 27"), contains("/dev/tcp/192.168.3.3/8022")))
+        when(runner.run(eq(mid("Colina 27")), contains("/dev/tcp/192.168.3.3/8022")))
             .thenReturn(new CommandResult(0, "NAS_OPEN\n", "", false, "SHA256:x"));
         RepoReachability open = provisioner.checkNas("nas-borg", TestMachineIds.of("Colina 27"));
         assertThat(open.reachable()).isTrue();
 
-        when(runner.run(eq("Colina 27"), contains("/dev/tcp/192.168.3.3/8022")))
+        when(runner.run(eq(mid("Colina 27")), contains("/dev/tcp/192.168.3.3/8022")))
             .thenReturn(new CommandResult(1, "NAS_CLOSED\n", "", false, "SHA256:x"));
         RepoReachability closed = provisioner.checkNas("nas-borg", TestMachineIds.of("Colina 27"));
         assertThat(closed.reachable()).isFalse();
@@ -259,7 +259,7 @@ class BackupProvisionerTest {
         when(repositories.getAll()).thenReturn(List.of(repo()));
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), any()))
+        when(runner.run(eq(mid("Colina 27")), any()))
             .thenReturn(new CommandResult(0, "", "", false, "SHA256:x"));
 
         RepoInitResult result = provisioner.initRepo("nas-borg", TestMachineIds.of("Colina 27"));
@@ -267,8 +267,8 @@ class BackupProvisionerTest {
         assertThat(result.initialized()).isTrue();
         assertThat(result.alreadyExisted()).isFalse();
         // The pass file is provisioned before init so borg can read the passphrase from it.
-        verify(runner).run(eq("Colina 27"), contains("printf %s"));
-        verify(runner).run(eq("Colina 27"), contains("borg init --encryption=repokey-blake2"));
+        verify(runner).run(eq(mid("Colina 27")), contains("printf %s"));
+        verify(runner).run(eq(mid("Colina 27")), contains("borg init --encryption=repokey-blake2"));
     }
 
     @Test
@@ -278,17 +278,17 @@ class BackupProvisionerTest {
         when(repositories.getAll()).thenReturn(List.of(repo()));
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(workDirResolver.workDirFor(TestMachineIds.of("Colina 27"), "Colina 27")).thenReturn("/home/geir/.vaier-backup");
-        when(runner.run(eq("Colina 27"), any()))
+        when(workDirResolver.workDirFor(TestMachineIds.of("Colina 27"))).thenReturn("/home/geir/.vaier-backup");
+        when(runner.run(eq(mid("Colina 27")), any()))
             .thenReturn(new CommandResult(0, "", "", false, "SHA256:x"));
 
         provisioner.initRepo("nas-borg", TestMachineIds.of("Colina 27"));
 
         // The pass-file write lands the secret under the resolved dir; borg init reads it back from the
         // same dir via BORG_PASSCOMMAND.
-        verify(runner).run(eq("Colina 27"),
+        verify(runner).run(eq(mid("Colina 27")),
             contains("printf %s 's3cr3t' > \"/home/geir/.vaier-backup/nas-borg.pass\""));
-        verify(runner).run(eq("Colina 27"),
+        verify(runner).run(eq(mid("Colina 27")),
             contains("BORG_PASSCOMMAND='cat /home/geir/.vaier-backup/nas-borg.pass'"));
     }
 
@@ -298,9 +298,9 @@ class BackupProvisionerTest {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
         // Pass-file write succeeds; borg init fails non-zero, but only because the repo already exists.
-        when(runner.run(eq("Colina 27"), contains("nas-borg.pass")))
+        when(runner.run(eq(mid("Colina 27")), contains("nas-borg.pass")))
             .thenReturn(new CommandResult(0, "", "", false, "SHA256:x"));
-        when(runner.run(eq("Colina 27"), contains("borg init")))
+        when(runner.run(eq(mid("Colina 27")), contains("borg init")))
             .thenReturn(new CommandResult(2, "",
                 "A repository already exists at ssh://borg@192.168.3.3:8022/./colina.", false, "SHA256:x"));
 
@@ -316,9 +316,9 @@ class BackupProvisionerTest {
         when(repositories.getAll()).thenReturn(List.of(repo()));
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), contains("nas-borg.pass")))
+        when(runner.run(eq(mid("Colina 27")), contains("nas-borg.pass")))
             .thenReturn(new CommandResult(0, "", "", false, "SHA256:x"));
-        when(runner.run(eq("Colina 27"), contains("borg init")))
+        when(runner.run(eq(mid("Colina 27")), contains("borg init")))
             .thenReturn(new CommandResult(2, "", "Connection refused", false, null));
 
         RepoInitResult result = provisioner.initRepo("nas-borg", TestMachineIds.of("Colina 27"));
@@ -346,10 +346,10 @@ class BackupProvisionerTest {
         // The Backup server's machine "NAS" is reachable, has a credential, and exposes docker over SSH.
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("NAS")));
         hasCredential("NAS");
-        when(runner.run(eq("NAS"), contains("command -v docker")))
+        when(runner.run(eq(mid("NAS")), contains("command -v docker")))
             .thenReturn(new CommandResult(0, "DOCKER_OK\n", "", false, "SHA256:x"));
         // The detached launcher echoes STARTED and returns immediately (the compose pull runs on in the bg).
-        when(runner.run(eq("NAS"), contains("nohup")))
+        when(runner.run(eq(mid("NAS")), contains("nohup")))
             .thenReturn(new CommandResult(0, "STARTED 4321\n", "", false, "SHA256:x"));
 
         ProvisionResult result = provisioner.provision("nas-borg");
@@ -359,18 +359,18 @@ class BackupProvisionerTest {
         assertThat(result.scriptOnly()).isFalse();
         assertThat(result.started()).isTrue();
         // A detached command was issued (nohup + STARTED); the image-pulling compose never ran synchronously.
-        verify(runner).run(eq("NAS"), contains("nohup"));
-        verify(runner, never()).run(eq("NAS"), contains("docker compose up -d"));
+        verify(runner).run(eq(mid("NAS")), contains("nohup"));
+        verify(runner, never()).run(eq(mid("NAS")), contains("docker compose up -d"));
     }
 
     @Test
     void provisionReportsFailedWhenTheLaunchNeverEchoesStarted() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("NAS")));
         hasCredential("NAS");
-        when(runner.run(eq("NAS"), contains("command -v docker")))
+        when(runner.run(eq(mid("NAS")), contains("command -v docker")))
             .thenReturn(new CommandResult(0, "DOCKER_OK\n", "", false, "SHA256:x"));
         // The launch fails to background (e.g. no base64 on the host): no STARTED line.
-        when(runner.run(eq("NAS"), contains("nohup")))
+        when(runner.run(eq(mid("NAS")), contains("nohup")))
             .thenReturn(new CommandResult(127, "", "base64: not found", false, "SHA256:x"));
 
         ProvisionResult result = provisioner.provision("nas-borg");
@@ -387,7 +387,7 @@ class BackupProvisionerTest {
     void provisionStatusReportsRunningWhileNoResultFile() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("NAS")));
         hasCredential("NAS");
-        when(runner.run(eq("NAS"), contains(".rc")))
+        when(runner.run(eq(mid("NAS")), contains(".rc")))
             .thenReturn(new CommandResult(0, "RUNNING\n", "", false, "SHA256:x"));
 
         ProvisionStatus status = provisioner.provisionStatus("nas-borg");
@@ -399,9 +399,9 @@ class BackupProvisionerTest {
     void provisionStatusReportsSuccessOnDoneZero() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("NAS")));
         hasCredential("NAS");
-        when(runner.run(eq("NAS"), contains(".rc")))
+        when(runner.run(eq(mid("NAS")), contains(".rc")))
             .thenReturn(new CommandResult(0, "DONE 0\n", "", false, "SHA256:x"));
-        when(runner.run(eq("NAS"), contains(".log")))
+        when(runner.run(eq(mid("NAS")), contains(".log")))
             .thenReturn(new CommandResult(0, "==> Vaier Backup server setup complete.\n", "", false, "SHA256:x"));
 
         ProvisionStatus status = provisioner.provisionStatus("nas-borg");
@@ -414,9 +414,9 @@ class BackupProvisionerTest {
     void provisionStatusReportsFailedOnDoneNonZeroWithLogTail() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("NAS")));
         hasCredential("NAS");
-        when(runner.run(eq("NAS"), contains(".rc")))
+        when(runner.run(eq(mid("NAS")), contains(".rc")))
             .thenReturn(new CommandResult(0, "DONE 1\n", "", false, "SHA256:x"));
-        when(runner.run(eq("NAS"), contains(".log")))
+        when(runner.run(eq(mid("NAS")), contains(".log")))
             .thenReturn(new CommandResult(0, "ERROR: user 'geir' does not exist\n", "", false, "SHA256:x"));
 
         ProvisionStatus status = provisioner.provisionStatus("nas-borg");
@@ -430,7 +430,7 @@ class BackupProvisionerTest {
         // A poll that times out or errors must not be read as a settled outcome — keep waiting.
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("NAS")));
         hasCredential("NAS");
-        when(runner.run(eq("NAS"), contains(".rc")))
+        when(runner.run(eq(mid("NAS")), contains(".rc")))
             .thenReturn(new CommandResult(255, "", "connection reset", true, null));
 
         ProvisionStatus status = provisioner.provisionStatus("nas-borg");
@@ -467,9 +467,9 @@ class BackupProvisionerTest {
         // operator to curl a setup.sh that sits behind admin auth.
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("NAS")));
         hasCredential("NAS");
-        when(runner.run(eq("NAS"), contains("command -v docker")))
+        when(runner.run(eq(mid("NAS")), contains("command -v docker")))
             .thenReturn(new CommandResult(0, "DOCKER_ABSENT\n", "", false, "SHA256:x"));
-        when(runner.run(eq("NAS"), contains("echo STAGED")))
+        when(runner.run(eq(mid("NAS")), contains("echo STAGED")))
             .thenReturn(new CommandResult(0,
                 "STAGED /home/geir/.vaier-backup/nas-borg-borg-setup.sh\n", "", false, "SHA256:x"));
 
@@ -484,9 +484,9 @@ class BackupProvisionerTest {
             .contains("/home/geir/.vaier-backup/nas-borg-borg-setup.sh")
             .contains("sudo bash");
         // The script was staged (base64-decoded onto the host); no compose and no detached launch ran.
-        verify(runner).run(eq("NAS"), contains("base64 -d"));
-        verify(runner, never()).run(eq("NAS"), contains("docker compose up -d"));
-        verify(runner, never()).run(eq("NAS"), contains("nohup"));
+        verify(runner).run(eq(mid("NAS")), contains("base64 -d"));
+        verify(runner, never()).run(eq(mid("NAS")), contains("docker compose up -d"));
+        verify(runner, never()).run(eq(mid("NAS")), contains("nohup"));
     }
 
     @Test
@@ -495,9 +495,9 @@ class BackupProvisionerTest {
         // further — scriptOnly with no staged path — and tell the operator to download the script. Never throw.
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("NAS")));
         hasCredential("NAS");
-        when(runner.run(eq("NAS"), contains("command -v docker")))
+        when(runner.run(eq(mid("NAS")), contains("command -v docker")))
             .thenReturn(new CommandResult(0, "DOCKER_ABSENT\n", "", false, "SHA256:x"));
-        when(runner.run(eq("NAS"), contains("echo STAGED")))
+        when(runner.run(eq(mid("NAS")), contains("echo STAGED")))
             .thenReturn(new CommandResult(1, "", "base64: not found", false, "SHA256:x"));
 
         ProvisionResult result = provisioner.provision("nas-borg");
@@ -505,7 +505,7 @@ class BackupProvisionerTest {
         assertThat(result.scriptOnly()).isTrue();
         assertThat(result.stagedScriptPath()).isNull();
         assertThat(result.message()).containsIgnoringCase("download");
-        verify(runner, never()).run(eq("NAS"), contains("docker compose up -d"));
+        verify(runner, never()).run(eq(mid("NAS")), contains("docker compose up -d"));
     }
 
     @Test
@@ -513,9 +513,9 @@ class BackupProvisionerTest {
         // An SSH error during staging must not propagate or read as a hard provision failure: still scriptOnly.
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("NAS")));
         hasCredential("NAS");
-        when(runner.run(eq("NAS"), contains("command -v docker")))
+        when(runner.run(eq(mid("NAS")), contains("command -v docker")))
             .thenReturn(new CommandResult(0, "DOCKER_ABSENT\n", "", false, "SHA256:x"));
-        when(runner.run(eq("NAS"), contains("echo STAGED")))
+        when(runner.run(eq(mid("NAS")), contains("echo STAGED")))
             .thenThrow(new RuntimeException("ssh: connection reset"));
 
         ProvisionResult result = provisioner.provision("nas-borg");
@@ -560,9 +560,9 @@ class BackupProvisionerTest {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27"), sshMachine("NAS")));
         hasCredential("Colina 27");
         hasCredential("NAS");
-        when(runner.run(eq("Colina 27"), contains("id_ed25519")))
+        when(runner.run(eq(mid("Colina 27")), contains("id_ed25519")))
             .thenReturn(new CommandResult(0, VALID_PUBKEY + "\n", "", false, "SHA256:x"));
-        when(runner.run(eq("NAS"), contains("authorized_keys")))
+        when(runner.run(eq(mid("NAS")), contains("authorized_keys")))
             .thenReturn(new CommandResult(0, "ADDED\n", "", false, "SHA256:x"));
 
         AuthorizeResult result = provisioner.authorizeClient("nas-borg", TestMachineIds.of("Colina 27"));
@@ -571,11 +571,11 @@ class BackupProvisionerTest {
         assertThat(result.alreadyTrusted()).isFalse();
         // Exactly two SSH calls, in order: keygen on the CLIENT, then authorize on the SERVER's machine.
         org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(runner);
-        inOrder.verify(runner).run(eq("Colina 27"), contains("ssh-keygen"));
-        inOrder.verify(runner).run(eq("NAS"), contains("authorized_keys"));
+        inOrder.verify(runner).run(eq(mid("Colina 27")), contains("ssh-keygen"));
+        inOrder.verify(runner).run(eq(mid("NAS")), contains("authorized_keys"));
         // The two hops target different machines: the key is never authorized on the client itself.
-        verify(runner, never()).run(eq("Colina 27"), contains("authorized_keys"));
-        verify(runner, never()).run(eq("NAS"), contains("ssh-keygen"));
+        verify(runner, never()).run(eq(mid("Colina 27")), contains("authorized_keys"));
+        verify(runner, never()).run(eq(mid("NAS")), contains("ssh-keygen"));
     }
 
     @Test
@@ -583,9 +583,9 @@ class BackupProvisionerTest {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27"), sshMachine("NAS")));
         hasCredential("Colina 27");
         hasCredential("NAS");
-        when(runner.run(eq("Colina 27"), contains("id_ed25519")))
+        when(runner.run(eq(mid("Colina 27")), contains("id_ed25519")))
             .thenReturn(new CommandResult(0, VALID_PUBKEY + "\n", "", false, "SHA256:x"));
-        when(runner.run(eq("NAS"), contains("authorized_keys")))
+        when(runner.run(eq(mid("NAS")), contains("authorized_keys")))
             .thenReturn(new CommandResult(0, "ALREADY\n", "", false, "SHA256:x"));
 
         AuthorizeResult result = provisioner.authorizeClient("nas-borg", TestMachineIds.of("Colina 27"));
@@ -642,14 +642,14 @@ class BackupProvisionerTest {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27"), sshMachine("NAS")));
         hasCredential("Colina 27");
         hasCredential("NAS");
-        when(runner.run(eq("Colina 27"), contains("id_ed25519")))
+        when(runner.run(eq(mid("Colina 27")), contains("id_ed25519")))
             .thenReturn(new CommandResult(0, "Permission denied (publickey).\n", "", false, "SHA256:x"));
 
         AuthorizeResult result = provisioner.authorizeClient("nas-borg", TestMachineIds.of("Colina 27"));
 
         assertThat(result.authorized()).isFalse();
         // Never touched authorized_keys on the server.
-        verify(runner, never()).run(eq("NAS"), any());
+        verify(runner, never()).run(eq(mid("NAS")), any());
     }
 
     @Test
@@ -657,13 +657,13 @@ class BackupProvisionerTest {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27"), sshMachine("NAS")));
         hasCredential("Colina 27");
         hasCredential("NAS");
-        when(runner.run(eq("Colina 27"), contains("id_ed25519")))
+        when(runner.run(eq(mid("Colina 27")), contains("id_ed25519")))
             .thenReturn(new CommandResult(255, "", "ssh-keygen: cannot write", false, "SHA256:x"));
 
         AuthorizeResult result = provisioner.authorizeClient("nas-borg", TestMachineIds.of("Colina 27"));
 
         assertThat(result.authorized()).isFalse();
-        verify(runner, never()).run(eq("NAS"), any());
+        verify(runner, never()).run(eq(mid("NAS")), any());
     }
 
     // --- Slice 5: server-side auth probe (kills the false all-green, survives the restricted key) ---
@@ -684,8 +684,8 @@ class BackupProvisionerTest {
     private void clientBorgInfoReturns(int exit, String stdout, String stderr) {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), any())).thenReturn(new CommandResult(0, "", "", false, "SHA256:x"));
-        when(runner.run(eq("Colina 27"), contains("borg info")))
+        when(runner.run(eq(mid("Colina 27")), any())).thenReturn(new CommandResult(0, "", "", false, "SHA256:x"));
+        when(runner.run(eq(mid("Colina 27")), contains("borg info")))
             .thenReturn(new CommandResult(exit, stdout, stderr, false, "SHA256:x"));
     }
 
@@ -705,8 +705,8 @@ class BackupProvisionerTest {
 
         assertThat(auth.authOk()).isTrue();
         // The retired `ssh ... borg --version` probe is never sent; the readiness probe is `borg info`.
-        verify(runner, never()).run(eq("Colina 27"), contains("borg --version"));
-        verify(runner).run(eq("Colina 27"), contains("borg info"));
+        verify(runner, never()).run(eq(mid("Colina 27")), contains("borg --version"));
+        verify(runner).run(eq(mid("Colina 27")), contains("borg info"));
     }
 
     @Test
@@ -798,9 +798,9 @@ class BackupProvisionerTest {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27"), sshMachine("NAS")));
         hasCredential("Colina 27");
         hasCredential("NAS");
-        when(runner.run(eq("Colina 27"), contains("id_ed25519")))
+        when(runner.run(eq(mid("Colina 27")), contains("id_ed25519")))
             .thenReturn(new CommandResult(0, VALID_PUBKEY + "\n", "", false, "SHA256:x"));
-        when(runner.run(eq("NAS"), contains("authorized_keys")))
+        when(runner.run(eq(mid("NAS")), contains("authorized_keys")))
             .thenReturn(new CommandResult(1, "", "cp: permission denied", false, "SHA256:x"));
 
         AuthorizeResult result = provisioner.authorizeClient("nas-borg", TestMachineIds.of("Colina 27"));
@@ -813,14 +813,14 @@ class BackupProvisionerTest {
 
     /** Capture the exact authorize command Vaier sends to the server's machine. */
     private String captureAuthorizeCommand() {
-        when(runner.run(eq("Colina 27"), contains("id_ed25519")))
+        when(runner.run(eq(mid("Colina 27")), contains("id_ed25519")))
             .thenReturn(new CommandResult(0, VALID_PUBKEY + "\n", "", false, "SHA256:x"));
-        when(runner.run(eq("NAS"), contains("authorized_keys")))
+        when(runner.run(eq(mid("NAS")), contains("authorized_keys")))
             .thenReturn(new CommandResult(0, "ADDED\n", "", false, "SHA256:x"));
         provisioner.authorizeClient("nas-borg", TestMachineIds.of("Colina 27"));
         // Slice 8 adds a host-key read to the server's machine too, so select the authorize command by content.
         org.mockito.ArgumentCaptor<String> cmd = org.mockito.ArgumentCaptor.forClass(String.class);
-        verify(runner, atLeastOnce()).run(eq("NAS"), cmd.capture());
+        verify(runner, atLeastOnce()).run(eq(mid("NAS")), cmd.capture());
         return cmd.getAllValues().stream()
             .filter(c -> c.contains("authorized_keys")).findFirst().orElseThrow();
     }
@@ -881,14 +881,14 @@ class BackupProvisionerTest {
         hasCredential("NAS");
         when(repositories.getAll()).thenReturn(List.of(derivedRepo("alpha", "nas-borg")));
         when(jobs.getAll()).thenReturn(List.of());   // no jobs on this machine
-        when(runner.run(eq("Colina 27"), contains("id_ed25519")))
+        when(runner.run(eq(mid("Colina 27")), contains("id_ed25519")))
             .thenReturn(new CommandResult(0, VALID_PUBKEY + "\n", "", false, "SHA256:x"));
-        when(runner.run(eq("NAS"), contains("authorized_keys")))
+        when(runner.run(eq(mid("NAS")), contains("authorized_keys")))
             .thenReturn(new CommandResult(0, "ADDED\n", "", false, "SHA256:x"));
 
         AuthorizeResult result = provisioner.authorizeClient("nas-borg", TestMachineIds.of("Colina 27"));
         org.mockito.ArgumentCaptor<String> cmd = org.mockito.ArgumentCaptor.forClass(String.class);
-        verify(runner, atLeastOnce()).run(eq("NAS"), cmd.capture());
+        verify(runner, atLeastOnce()).run(eq(mid("NAS")), cmd.capture());
         String authorize = cmd.getAllValues().stream()
             .filter(c -> c.contains("authorized_keys")).findFirst().orElseThrow();
 
@@ -908,9 +908,9 @@ class BackupProvisionerTest {
         hasCredential("NAS");
         when(repositories.getAll()).thenReturn(List.of(derivedRepo("alpha", "nas-borg")));
         when(jobs.getAll()).thenReturn(List.of(jobFor("j1", "Colina 27", "alpha")));
-        when(runner.run(eq("Colina 27"), contains("id_ed25519")))
+        when(runner.run(eq(mid("Colina 27")), contains("id_ed25519")))
             .thenReturn(new CommandResult(0, VALID_PUBKEY + "\n", "", false, "SHA256:x"));
-        when(runner.run(eq("NAS"), contains("authorized_keys")))
+        when(runner.run(eq(mid("NAS")), contains("authorized_keys")))
             .thenReturn(new CommandResult(0, "ALREADY\n", "", false, "SHA256:x"));
 
         AuthorizeResult result = provisioner.authorizeClient("nas-borg", TestMachineIds.of("Colina 27"));
@@ -933,13 +933,13 @@ class BackupProvisionerTest {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27"), sshMachine("NAS")));
         hasCredential("Colina 27");
         hasCredential("NAS");
-        when(runner.run(eq("Colina 27"), contains("id_ed25519")))
+        when(runner.run(eq(mid("Colina 27")), contains("id_ed25519")))
             .thenReturn(new CommandResult(0, VALID_PUBKEY + "\n", "", false, "SHA256:x"));
-        when(runner.run(eq("NAS"), contains("host_keys.pub")))
+        when(runner.run(eq(mid("NAS")), contains("host_keys.pub")))
             .thenReturn(new CommandResult(0, HOST_KEYS_FILE, "", false, "SHA256:x"));
-        when(runner.run(eq("Colina 27"), contains("known_hosts")))
+        when(runner.run(eq(mid("Colina 27")), contains("known_hosts")))
             .thenReturn(new CommandResult(0, "PINNED 2\n", "", false, "SHA256:x"));
-        when(runner.run(eq("NAS"), contains("authorized_keys")))
+        when(runner.run(eq(mid("NAS")), contains("authorized_keys")))
             .thenReturn(new CommandResult(0, "ADDED\n", "", false, "SHA256:x"));
 
         AuthorizeResult result = provisioner.authorizeClient("nas-borg", TestMachineIds.of("Colina 27"));
@@ -948,11 +948,11 @@ class BackupProvisionerTest {
         assertThat(result.hostKeyPinned()).isTrue();
         // The pin (client known_hosts) precedes the authorize (server authorized_keys), on different machines.
         org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(runner);
-        inOrder.verify(runner).run(eq("Colina 27"), contains("known_hosts"));
-        inOrder.verify(runner).run(eq("NAS"), contains("authorized_keys"));
+        inOrder.verify(runner).run(eq(mid("Colina 27")), contains("known_hosts"));
+        inOrder.verify(runner).run(eq(mid("NAS")), contains("authorized_keys"));
         // The host key is pinned on the client, never on the server; the key is authorized on the server only.
-        verify(runner, never()).run(eq("NAS"), contains("known_hosts"));
-        verify(runner, never()).run(eq("Colina 27"), contains("authorized_keys"));
+        verify(runner, never()).run(eq(mid("NAS")), contains("known_hosts"));
+        verify(runner, never()).run(eq(mid("Colina 27")), contains("authorized_keys"));
     }
 
     @Test
@@ -962,11 +962,11 @@ class BackupProvisionerTest {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27"), sshMachine("NAS")));
         hasCredential("Colina 27");
         hasCredential("NAS");
-        when(runner.run(eq("Colina 27"), contains("id_ed25519")))
+        when(runner.run(eq(mid("Colina 27")), contains("id_ed25519")))
             .thenReturn(new CommandResult(0, VALID_PUBKEY + "\n", "", false, "SHA256:x"));
-        when(runner.run(eq("NAS"), contains("host_keys.pub")))
+        when(runner.run(eq(mid("NAS")), contains("host_keys.pub")))
             .thenReturn(new CommandResult(1, "", "cat: host_keys.pub: No such file", false, "SHA256:x"));
-        when(runner.run(eq("NAS"), contains("authorized_keys")))
+        when(runner.run(eq(mid("NAS")), contains("authorized_keys")))
             .thenReturn(new CommandResult(0, "ADDED\n", "", false, "SHA256:x"));
 
         AuthorizeResult result = provisioner.authorizeClient("nas-borg", TestMachineIds.of("Colina 27"));
@@ -975,7 +975,7 @@ class BackupProvisionerTest {
         assertThat(result.hostKeyPinned()).isFalse();
         assertThat(result.message()).containsIgnoringCase("host key");
         // Never attempted to write known_hosts on the client — there was nothing valid to pin.
-        verify(runner, never()).run(eq("Colina 27"), contains("known_hosts"));
+        verify(runner, never()).run(eq(mid("Colina 27")), contains("known_hosts"));
     }
 
     @Test
@@ -984,18 +984,18 @@ class BackupProvisionerTest {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27"), sshMachine("NAS")));
         hasCredential("Colina 27");
         hasCredential("NAS");
-        when(runner.run(eq("Colina 27"), contains("id_ed25519")))
+        when(runner.run(eq(mid("Colina 27")), contains("id_ed25519")))
             .thenReturn(new CommandResult(0, VALID_PUBKEY + "\n", "", false, "SHA256:x"));
-        when(runner.run(eq("NAS"), contains("host_keys.pub")))
+        when(runner.run(eq(mid("NAS")), contains("host_keys.pub")))
             .thenReturn(new CommandResult(0, "Welcome to the NAS\n# not a key\n", "", false, "SHA256:x"));
-        when(runner.run(eq("NAS"), contains("authorized_keys")))
+        when(runner.run(eq(mid("NAS")), contains("authorized_keys")))
             .thenReturn(new CommandResult(0, "ADDED\n", "", false, "SHA256:x"));
 
         AuthorizeResult result = provisioner.authorizeClient("nas-borg", TestMachineIds.of("Colina 27"));
 
         assertThat(result.authorized()).isTrue();
         assertThat(result.hostKeyPinned()).isFalse();
-        verify(runner, never()).run(eq("Colina 27"), contains("known_hosts"));
+        verify(runner, never()).run(eq(mid("Colina 27")), contains("known_hosts"));
     }
 
     // --- Prepare client: install borg on a host that has none ---
@@ -1006,9 +1006,9 @@ class BackupProvisionerTest {
         // detached (an apt/dnf install can exceed the 20 s exec cap), and reports started.
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), contains("sudo -n true")))
+        when(runner.run(eq(mid("Colina 27")), contains("sudo -n true")))
             .thenReturn(new CommandResult(0, "SUDO_OK\n", "", false, "SHA256:x"));
-        when(runner.run(eq("Colina 27"), contains("nohup")))
+        when(runner.run(eq(mid("Colina 27")), contains("nohup")))
             .thenReturn(new CommandResult(0, "STARTED 7788\n", "", false, "SHA256:x"));
 
         var result = provisioner.prepareClient(TestMachineIds.of("Colina 27"));
@@ -1017,18 +1017,18 @@ class BackupProvisionerTest {
         assertThat(result.scriptOnly()).isFalse();
         assertThat(result.started()).isTrue();
         // A detached command ran under sudo; the install never ran synchronously.
-        verify(runner).run(eq("Colina 27"), contains("nohup"));
-        verify(runner).run(eq("Colina 27"), contains("sudo -n bash"));
-        verify(runner, never()).run(eq("Colina 27"), contains("apt-get install"));
+        verify(runner).run(eq(mid("Colina 27")), contains("nohup"));
+        verify(runner).run(eq(mid("Colina 27")), contains("sudo -n bash"));
+        verify(runner, never()).run(eq(mid("Colina 27")), contains("apt-get install"));
     }
 
     @Test
     void prepareClientReportsFailedWhenTheLaunchNeverEchoesStarted() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), contains("sudo -n true")))
+        when(runner.run(eq(mid("Colina 27")), contains("sudo -n true")))
             .thenReturn(new CommandResult(0, "SUDO_OK\n", "", false, "SHA256:x"));
-        when(runner.run(eq("Colina 27"), contains("nohup")))
+        when(runner.run(eq(mid("Colina 27")), contains("nohup")))
             .thenReturn(new CommandResult(127, "", "base64: not found", false, "SHA256:x"));
 
         var result = provisioner.prepareClient(TestMachineIds.of("Colina 27"));
@@ -1044,9 +1044,9 @@ class BackupProvisionerTest {
         // returns scriptOnly with the exact `sudo bash <path>` command — never a raw curl | sudo bash.
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), contains("sudo -n true")))
+        when(runner.run(eq(mid("Colina 27")), contains("sudo -n true")))
             .thenReturn(new CommandResult(0, "SUDO_ABSENT\n", "", false, "SHA256:x"));
-        when(runner.run(eq("Colina 27"), contains("echo STAGED")))
+        when(runner.run(eq(mid("Colina 27")), contains("echo STAGED")))
             .thenReturn(new CommandResult(0,
                 "STAGED /home/geir/.vaier-backup/prepare-client-Colina-27.sh\n", "", false, "SHA256:x"));
 
@@ -1060,17 +1060,17 @@ class BackupProvisionerTest {
             .contains("/home/geir/.vaier-backup/prepare-client-Colina-27.sh")
             .contains("sudo bash");
         // The script was staged (base64-decoded onto the host); no install and no detached launch ran.
-        verify(runner).run(eq("Colina 27"), contains("base64 -d"));
-        verify(runner, never()).run(eq("Colina 27"), contains("nohup"));
+        verify(runner).run(eq(mid("Colina 27")), contains("base64 -d"));
+        verify(runner, never()).run(eq(mid("Colina 27")), contains("nohup"));
     }
 
     @Test
     void prepareClientStagingFailureDegradesToScriptOnlyWithNoPath() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), contains("sudo -n true")))
+        when(runner.run(eq(mid("Colina 27")), contains("sudo -n true")))
             .thenReturn(new CommandResult(0, "SUDO_ABSENT\n", "", false, "SHA256:x"));
-        when(runner.run(eq("Colina 27"), contains("echo STAGED")))
+        when(runner.run(eq(mid("Colina 27")), contains("echo STAGED")))
             .thenReturn(new CommandResult(1, "", "base64: not found", false, "SHA256:x"));
 
         var result = provisioner.prepareClient(TestMachineIds.of("Colina 27"));
@@ -1108,16 +1108,16 @@ class BackupProvisionerTest {
         // host's .rc over SSH and publishes an SSE event when it settles, which the browser consumes.
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), contains("sudo -n true")))
+        when(runner.run(eq(mid("Colina 27")), contains("sudo -n true")))
             .thenReturn(new CommandResult(0, "SUDO_OK\n", "", false, "SHA256:x"));
-        when(runner.run(eq("Colina 27"), contains("nohup")))
+        when(runner.run(eq(mid("Colina 27")), contains("nohup")))
             .thenReturn(new CommandResult(0, "STARTED 7788\n", "", false, "SHA256:x"));
         var started = provisioner.prepareClient(TestMachineIds.of("Colina 27"));
         assertThat(started.started()).isTrue();
 
         // The install finished on the host (.rc has exit 0): the sweep publishes a settle event and does not
         // re-publish on the next sweep (the in-flight entry is cleared once settled).
-        when(runner.run(eq("Colina 27"), contains(".rc")))
+        when(runner.run(eq(mid("Colina 27")), contains(".rc")))
             .thenReturn(new CommandResult(0, "DONE 0\n", "", false, "SHA256:x"));
 
         provisioner.pollInFlightPrepares();
@@ -1135,9 +1135,9 @@ class BackupProvisionerTest {
     private void launchProvision() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("NAS")));
         hasCredential("NAS");
-        when(runner.run(eq("NAS"), contains("command -v docker")))
+        when(runner.run(eq(mid("NAS")), contains("command -v docker")))
             .thenReturn(new CommandResult(0, "DOCKER_OK\n", "", false, "SHA256:x"));
-        when(runner.run(eq("NAS"), contains("nohup")))
+        when(runner.run(eq(mid("NAS")), contains("nohup")))
             .thenReturn(new CommandResult(0, "STARTED 4321\n", "", false, "SHA256:x"));
         assertThat(provisioner.provision("nas-borg").started()).isTrue();
     }
@@ -1148,7 +1148,7 @@ class BackupProvisionerTest {
 
         // The setup finished on the host (.rc has exit 0): the sweep publishes a settle event and does not
         // re-publish on the next sweep (the in-flight entry is cleared once settled).
-        when(runner.run(eq("NAS"), contains(".rc")))
+        when(runner.run(eq(mid("NAS")), contains(".rc")))
             .thenReturn(new CommandResult(0, "DONE 0\n", "", false, "SHA256:x"));
 
         provisioner.pollInFlightProvisions();
@@ -1165,7 +1165,7 @@ class BackupProvisionerTest {
         launchProvision();
 
         // No .rc yet: the sweep must publish nothing and keep the entry for the next sweep.
-        when(runner.run(eq("NAS"), contains(".rc")))
+        when(runner.run(eq(mid("NAS")), contains(".rc")))
             .thenReturn(new CommandResult(0, "RUNNING\n", "", false, "SHA256:x"));
 
         provisioner.pollInFlightProvisions();
@@ -1176,7 +1176,7 @@ class BackupProvisionerTest {
     @Test
     void inFlightProvisionSweepSwallowsAPublisherError() {
         launchProvision();
-        when(runner.run(eq("NAS"), contains(".rc")))
+        when(runner.run(eq(mid("NAS")), contains(".rc")))
             .thenReturn(new CommandResult(0, "DONE 1\n", "", false, "SHA256:x"));
         org.mockito.Mockito.doThrow(new RuntimeException("sse down"))
             .when(events).publish(any(), any(), any());
@@ -1191,13 +1191,13 @@ class BackupProvisionerTest {
         launchProvision();
 
         // A poll that times out is not a settle: nothing is published and the entry stays in flight.
-        when(runner.run(eq("NAS"), contains(".rc")))
+        when(runner.run(eq(mid("NAS")), contains(".rc")))
             .thenReturn(new CommandResult(255, "", "connection reset", true, null));
         provisioner.pollInFlightProvisions();
         verify(events, never()).publish(any(), any(), any());
 
         // A later sweep with a real result settles it, proving it was still in flight.
-        when(runner.run(eq("NAS"), contains(".rc")))
+        when(runner.run(eq(mid("NAS")), contains(".rc")))
             .thenReturn(new CommandResult(0, "DONE 0\n", "", false, "SHA256:x"));
         provisioner.pollInFlightProvisions();
         verify(events, org.mockito.Mockito.times(1)).publish(
@@ -1208,14 +1208,14 @@ class BackupProvisionerTest {
     void inFlightPrepareStaysInFlightWhileTheInstallIsStillRunning_noSseEvent() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), contains("sudo -n true")))
+        when(runner.run(eq(mid("Colina 27")), contains("sudo -n true")))
             .thenReturn(new CommandResult(0, "SUDO_OK\n", "", false, "SHA256:x"));
-        when(runner.run(eq("Colina 27"), contains("nohup")))
+        when(runner.run(eq(mid("Colina 27")), contains("nohup")))
             .thenReturn(new CommandResult(0, "STARTED 7788\n", "", false, "SHA256:x"));
         provisioner.prepareClient(TestMachineIds.of("Colina 27"));
 
         // No .rc yet: the sweep must publish nothing and keep the entry for the next sweep.
-        when(runner.run(eq("Colina 27"), contains(".rc")))
+        when(runner.run(eq(mid("Colina 27")), contains(".rc")))
             .thenReturn(new CommandResult(0, "RUNNING\n", "", false, "SHA256:x"));
 
         provisioner.pollInFlightPrepares();
@@ -1227,9 +1227,9 @@ class BackupProvisionerTest {
     void prepareClientStatusReportsSuccessOnDoneZeroWithLogTail() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), contains(".rc")))
+        when(runner.run(eq(mid("Colina 27")), contains(".rc")))
             .thenReturn(new CommandResult(0, "DONE 0\n", "", false, "SHA256:x"));
-        when(runner.run(eq("Colina 27"), contains(".log")))
+        when(runner.run(eq(mid("Colina 27")), contains(".log")))
             .thenReturn(new CommandResult(0, "==> Vaier Backup client setup complete.\n", "", false, "SHA256:x"));
 
         var status = provisioner.prepareClientStatus(TestMachineIds.of("Colina 27"));
@@ -1243,7 +1243,7 @@ class BackupProvisionerTest {
     void prepareClientStatusLeavesRunningOnTransientPollFailure() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), contains(".rc")))
+        when(runner.run(eq(mid("Colina 27")), contains(".rc")))
             .thenReturn(new CommandResult(255, "", "connection reset", true, null));
 
         var status = provisioner.prepareClientStatus(TestMachineIds.of("Colina 27"));
@@ -1279,15 +1279,15 @@ class BackupProvisionerTest {
         when(repositories.getAll()).thenReturn(List.of(derivedRepo("Colina-27", "nas-borg")));
         when(jobs.getAll()).thenReturn(List.of(jobFor("Colina-27", "Colina 27", "Colina-27")));
         // authorize: keygen on the client, append on the server's machine
-        when(runner.run(eq("Colina 27"), contains("id_ed25519")))
+        when(runner.run(eq(mid("Colina 27")), contains("id_ed25519")))
             .thenReturn(new CommandResult(0,
                 "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyDataHere geir@colina\n", "", false, "SHA256:x"));
-        when(runner.run(eq("NAS"), contains("authorized_keys")))
+        when(runner.run(eq(mid("NAS")), contains("authorized_keys")))
             .thenReturn(new CommandResult(0, "ADDED\n", "", false, "SHA256:x"));
         // prepare: passwordless sudo present, detached install launches
-        when(runner.run(eq("Colina 27"), contains("sudo -n true")))
+        when(runner.run(eq(mid("Colina 27")), contains("sudo -n true")))
             .thenReturn(new CommandResult(0, "SUDO_OK\n", "", false, "SHA256:x"));
-        when(runner.run(eq("Colina 27"), contains("nohup")))
+        when(runner.run(eq(mid("Colina 27")), contains("nohup")))
             .thenReturn(new CommandResult(0, "STARTED 7788\n", "", false, "SHA256:x"));
 
         var outcome = provisioner.readyForBackup(TestMachineIds.of("Colina 27"));
@@ -1295,8 +1295,8 @@ class BackupProvisionerTest {
         assertThat(outcome.started()).isTrue();
         assertThat(outcome.scriptOnly()).isFalse();
         // The key was trusted on the server AND the install was launched on the client.
-        verify(runner).run(eq("NAS"), contains("authorized_keys"));
-        verify(runner).run(eq("Colina 27"), contains("nohup"));
+        verify(runner).run(eq(mid("NAS")), contains("authorized_keys"));
+        verify(runner).run(eq(mid("Colina 27")), contains("nohup"));
     }
 
     @Test
@@ -1339,7 +1339,7 @@ class BackupProvisionerTest {
     @Test
     void thePrepareSettleEventCarriesTheMachineIdAlongsideItsName() {
         launchPrepare();
-        when(runner.run(eq("Colina 27"), contains(".rc")))
+        when(runner.run(eq(mid("Colina 27")), contains(".rc")))
             .thenReturn(new CommandResult(0, "DONE 0\n", "", false, "SHA256:x"));
 
         provisioner.pollInFlightPrepares();
@@ -1359,7 +1359,7 @@ class BackupProvisionerTest {
     @Test
     void thePrepareSettleEventNamesNoMachine_whenItHasLeftTheFleetMidInstall() {
         launchPrepare();
-        when(runner.run(eq("Colina 27"), contains(".rc")))
+        when(runner.run(eq(mid("Colina 27")), contains(".rc")))
             .thenReturn(new CommandResult(0, "DONE 0\n", "", false, "SHA256:x"));
         when(machines.getAllMachines()).thenReturn(List.of());   // decommissioned while borg was installing
 
@@ -1376,9 +1376,9 @@ class BackupProvisionerTest {
     private void launchPrepare() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), contains("sudo -n true")))
+        when(runner.run(eq(mid("Colina 27")), contains("sudo -n true")))
             .thenReturn(new CommandResult(0, "SUDO_OK\n", "", false, "SHA256:x"));
-        when(runner.run(eq("Colina 27"), contains("nohup")))
+        when(runner.run(eq(mid("Colina 27")), contains("nohup")))
             .thenReturn(new CommandResult(0, "STARTED 7788\n", "", false, "SHA256:x"));
         assertThat(provisioner.prepareClient(TestMachineIds.of("Colina 27")).started()).isTrue();
     }
@@ -1392,7 +1392,7 @@ class BackupProvisionerTest {
     @Test
     void thePrepareSettleEventStillPublishes_whenTheMachineRegistryThrowsWhileNamingIt() {
         launchPrepare();
-        when(runner.run(eq("Colina 27"), contains(".rc")))
+        when(runner.run(eq(mid("Colina 27")), contains(".rc")))
             .thenReturn(new CommandResult(0, "DONE 0\n", "", false, "SHA256:x"));
         when(machines.getAllMachines()).thenThrow(new RuntimeException("wireguard container restarting"));
 

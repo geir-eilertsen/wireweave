@@ -38,6 +38,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -48,7 +49,7 @@ import static org.mockito.Mockito.when;
 class BackupRunnerTest {
 
     private static net.vaier.domain.MachineId mid(String name) {
-        return net.vaier.domain.TestMachineIds.of(name);
+        return TestMachineIds.of(name);
     }
 
     GetMachinesUseCase machines;
@@ -109,7 +110,7 @@ class BackupRunnerTest {
      * last-matching-stub rule lets the specific probe stub win.
      */
     private void borgPresentOn(String name) {
-        when(runner.run(eq(name), org.mockito.ArgumentMatchers.contains("borg --version")))
+        when(runner.run(eq(mid(name)), contains("borg --version")))
             .thenReturn(new CommandResult(0, "borg 1.2.8\n", "", false, "SHA256:x"));
     }
 
@@ -132,8 +133,8 @@ class BackupRunnerTest {
         workDirResolver = mock(BackupWorkDirResolver.class);
         events = mock(ForPublishingEvents.class);
         // Default: resolve to the SSH user's home so existing path assertions stay green.
-        when(workDirResolver.workDirFor(any(), any())).thenReturn("/home/geir/.vaier-backup");
-        when(workDirResolver.homeFor(any(), any())).thenReturn(Optional.of("/home/geir"));
+        when(workDirResolver.workDirFor(any())).thenReturn("/home/geir/.vaier-backup");
+        when(workDirResolver.homeFor(any())).thenReturn(Optional.of("/home/geir"));
         // Default: the repository's backup server is configured, so runs/lists reach the borg URL step.
         when(servers.getBackupServers()).thenReturn(List.of(server()));
         clock = Clock.fixed(Instant.parse("2026-07-08T02:00:00Z"), ZoneOffset.UTC);
@@ -146,15 +147,15 @@ class BackupRunnerTest {
         // Slice 3: runJob detaches borg with nohup and returns immediately once the host echoes STARTED.
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), any())).thenReturn(new CommandResult(0, "STARTED 1234", "", false, "SHA256:x"));
+        when(runner.run(eq(mid("Colina 27")), any())).thenReturn(new CommandResult(0, "STARTED 1234", "", false, "SHA256:x"));
         borgPresentOn("Colina 27");
 
         BackupRun run = backupRunner.runJob(job(), repo(), "run-1");
 
         // The detached command sent over SSH still carries the borg create for this repo, backgrounded.
-        verify(runner).run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains(
+        verify(runner).run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains(
             "nohup sh -c \""));
-        verify(runner).run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains(
+        verify(runner).run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains(
             "'ssh://borg@192.168.3.3:8022/./colina'::'{hostname}-{now:%Y-%m-%dT%H:%M:%S}'"));
         // The run is recorded RUNNING; polling resolves it later.
         assertThat(run.status()).isEqualTo(BackupRunStatus.RUNNING);
@@ -179,14 +180,14 @@ class BackupRunnerTest {
     void runJobForABackupAsRootJobLaunchesBorgUnderSudoWithTheSshUsersHome() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), any())).thenReturn(new CommandResult(0, "STARTED 1234", "", false, "SHA256:x"));
+        when(runner.run(eq(mid("Colina 27")), any())).thenReturn(new CommandResult(0, "STARTED 1234", "", false, "SHA256:x"));
         borgPresentOn("Colina 27");
 
         BackupRun run = backupRunner.runJob(rootJob(), repo(), "run-1");
 
-        verify(runner).run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains(
+        verify(runner).run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains(
             "sudo -n HOME='/home/geir' BORG_BASE_DIR='/home/geir/.vaier-backup/root'"));
-        verify(runner).run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("borg create"));
+        verify(runner).run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("borg create"));
         assertThat(run.status()).isEqualTo(BackupRunStatus.RUNNING);
     }
 
@@ -200,16 +201,16 @@ class BackupRunnerTest {
     void runJobRefusesABackupAsRootJobWhenTheSshHomeCannotBeResolved() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), any())).thenReturn(new CommandResult(0, "STARTED 1234", "", false, "SHA256:x"));
+        when(runner.run(eq(mid("Colina 27")), any())).thenReturn(new CommandResult(0, "STARTED 1234", "", false, "SHA256:x"));
         borgPresentOn("Colina 27");
-        when(workDirResolver.homeFor(TestMachineIds.of("Colina 27"), "Colina 27")).thenReturn(Optional.empty());
+        when(workDirResolver.homeFor(TestMachineIds.of("Colina 27"))).thenReturn(Optional.empty());
 
         BackupRun run = backupRunner.runJob(rootJob(), repo(), "run-1");
 
         assertThat(run.status()).isEqualTo(BackupRunStatus.FAILED);
         assertThat(run.summary()).containsIgnoringCase("home");
         // Never launched: no sudo, no borg, nothing.
-        verify(runner, never()).run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("nohup"));
+        verify(runner, never()).run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("nohup"));
     }
 
     /** A NORMAL job with an unresolvable home still runs — it never needed a home, and /tmp is writable. */
@@ -217,14 +218,14 @@ class BackupRunnerTest {
     void runJobStillLaunchesANonRootJobWhenTheSshHomeCannotBeResolved() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), any())).thenReturn(new CommandResult(0, "STARTED 1234", "", false, "SHA256:x"));
+        when(runner.run(eq(mid("Colina 27")), any())).thenReturn(new CommandResult(0, "STARTED 1234", "", false, "SHA256:x"));
         borgPresentOn("Colina 27");
-        when(workDirResolver.homeFor(TestMachineIds.of("Colina 27"), "Colina 27")).thenReturn(Optional.empty());
+        when(workDirResolver.homeFor(TestMachineIds.of("Colina 27"))).thenReturn(Optional.empty());
 
         BackupRun run = backupRunner.runJob(job(), repo(), "run-1");
 
         assertThat(run.status()).isEqualTo(BackupRunStatus.RUNNING);
-        verify(runner).run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("nohup sh -c \""));
+        verify(runner).run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("nohup sh -c \""));
     }
 
     @Test
@@ -233,7 +234,7 @@ class BackupRunnerTest {
         // clock, so the controller never has to. It then delegates to the detached run and records RUNNING.
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), any())).thenReturn(new CommandResult(0, "STARTED 1234", "", false, "SHA256:x"));
+        when(runner.run(eq(mid("Colina 27")), any())).thenReturn(new CommandResult(0, "STARTED 1234", "", false, "SHA256:x"));
         borgPresentOn("Colina 27");
 
         BackupRun run = backupRunner.runJob(job(), repo());
@@ -252,7 +253,7 @@ class BackupRunnerTest {
         // would fail to unlock the repo. The write-if-absent SSH call precedes the detached launch.
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), any())).thenReturn(new CommandResult(0, "STARTED 1234", "", false, "SHA256:x"));
+        when(runner.run(eq(mid("Colina 27")), any())).thenReturn(new CommandResult(0, "STARTED 1234", "", false, "SHA256:x"));
         borgPresentOn("Colina 27");
 
         backupRunner.runJob(job(), repo(), "run-1");
@@ -260,10 +261,10 @@ class BackupRunnerTest {
         org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(runner);
         // First a write-if-absent of the pass file, then the detached launch — and the launch itself carries
         // no plaintext passphrase (only a BORG_PASSCOMMAND that reads the file).
-        inOrder.verify(runner).run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("printf %s"));
-        inOrder.verify(runner).run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("nohup sh -c \""));
+        inOrder.verify(runner).run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("printf %s"));
+        inOrder.verify(runner).run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("nohup sh -c \""));
         // The detached command uses BORG_PASSCOMMAND and never the plaintext.
-        verify(runner).run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("BORG_PASSCOMMAND"));
+        verify(runner).run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("BORG_PASSCOMMAND"));
     }
 
     @Test
@@ -273,20 +274,20 @@ class BackupRunnerTest {
         // the run reads BORG_PASSCOMMAND from <workDir>/<repo>.pass, so a mismatch would break the unlock.
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(workDirResolver.workDirFor(TestMachineIds.of("Colina 27"), "Colina 27")).thenReturn("/home/geir/.vaier-backup");
-        when(runner.run(eq("Colina 27"), any())).thenReturn(new CommandResult(0, "STARTED 1234", "", false, "SHA256:x"));
+        when(workDirResolver.workDirFor(TestMachineIds.of("Colina 27"))).thenReturn("/home/geir/.vaier-backup");
+        when(runner.run(eq(mid("Colina 27")), any())).thenReturn(new CommandResult(0, "STARTED 1234", "", false, "SHA256:x"));
         borgPresentOn("Colina 27");
 
         backupRunner.runJob(job(), repo(), "run-1");
 
         // The detached launch sets its work dir to the resolved home dir and reads its passcommand from
         // the pass file under it.
-        verify(runner).run(eq("Colina 27"),
+        verify(runner).run(eq(mid("Colina 27")),
             org.mockito.ArgumentMatchers.contains("W=/home/geir/.vaier-backup;"));
-        verify(runner).run(eq("Colina 27"),
+        verify(runner).run(eq(mid("Colina 27")),
             org.mockito.ArgumentMatchers.contains("cat /home/geir/.vaier-backup/nas-borg.pass"));
         // The pass-file ensure targets the same dir, so borg's passcommand reads the file the run wrote.
-        verify(runner).run(eq("Colina 27"),
+        verify(runner).run(eq(mid("Colina 27")),
             org.mockito.ArgumentMatchers.contains("/home/geir/.vaier-backup/nas-borg.pass\" ] ||"));
     }
 
@@ -295,7 +296,7 @@ class BackupRunnerTest {
         // A launch that never echoes STARTED (or exits non-zero) is a failed launch, not a RUNNING run.
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), any()))
+        when(runner.run(eq(mid("Colina 27")), any()))
             .thenReturn(new CommandResult(1, "", "nohup: cannot run", false, "SHA256:x"));
         // borg IS present, so the run gets past the fail-fast guard and it is the LAUNCH that fails here.
         borgPresentOn("Colina 27");
@@ -311,9 +312,9 @@ class BackupRunnerTest {
         seedRunning("run-1");
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("echo RUNNING")))
+        when(runner.run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("echo RUNNING")))
             .thenReturn(new CommandResult(0, "DONE 0\n", "", false, "SHA256:x"));
-        when(runner.run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("tail -c")))
+        when(runner.run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("tail -c")))
             .thenReturn(new CommandResult(0, "Archive: colina-...\nDeduplicated size: 3 GB", "", false, "SHA256:x"));
 
         backupRunner.pollRunningRuns();
@@ -330,7 +331,7 @@ class BackupRunnerTest {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
         // Poll times out (transient): the run must be left RUNNING for the next tick, not flipped to FAILED.
-        when(runner.run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("echo RUNNING")))
+        when(runner.run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("echo RUNNING")))
             .thenReturn(new CommandResult(-1, "", "timeout", true, null));
 
         backupRunner.pollRunningRuns();
@@ -349,9 +350,9 @@ class BackupRunnerTest {
             backupNotifier, configResolver, clock, workDirResolver, events);
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("echo RUNNING")))
+        when(runner.run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("echo RUNNING")))
             .thenReturn(new CommandResult(0, "DONE 0", "", false, "SHA256:x"));
-        when(runner.run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("tail -c")))
+        when(runner.run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("tail -c")))
             .thenReturn(new CommandResult(0, "ok", "", false, "SHA256:x"));
 
         restarted.pollRunningRuns();
@@ -366,7 +367,7 @@ class BackupRunnerTest {
         runs.record(BackupRun.started(job(), "run-1", Instant.parse("2026-07-07T00:00:00Z")));
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("echo RUNNING")))
+        when(runner.run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("echo RUNNING")))
             .thenReturn(new CommandResult(0, "RUNNING", "", false, "SHA256:x"));
 
         backupRunner.pollRunningRuns();
@@ -384,7 +385,7 @@ class BackupRunnerTest {
         hasCredential("Colina 27");
         String json = "{ \"archives\": [ "
             + "{ \"archive\": \"colina-x\", \"id\": \"abc\", \"time\": \"2024-06-01T12:00:00.000000\" } ] }";
-        when(runner.run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("borg list --json")))
+        when(runner.run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("borg list --json")))
             .thenReturn(new CommandResult(0, json, "", false, "SHA256:x"));
 
         List<Archive> archives = backupRunner.listArchives("nas-borg");
@@ -404,7 +405,7 @@ class BackupRunnerTest {
         String json = "{ \"archives\": [ "
             + "{ \"archive\": \"colina-old\", \"id\": \"a\", \"time\": \"2024-06-01T02:00:00.000000\" }, "
             + "{ \"archive\": \"colina-new\", \"id\": \"b\", \"time\": \"2024-06-03T02:00:00.000000\" } ] }";
-        when(runner.run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("borg list --json")))
+        when(runner.run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("borg list --json")))
             .thenReturn(new CommandResult(0, json, "", false, "SHA256:x"));
 
         List<Archive> archives = backupRunner.listMachineArchives("Colina 27");
@@ -433,7 +434,7 @@ class BackupRunnerTest {
         when(jobs.getBackupJobs()).thenReturn(List.of(job()));
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("borg list --json")))
+        when(runner.run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("borg list --json")))
             .thenReturn(new CommandResult(2, "", "Connection refused", false, null));
 
         assertThat(backupRunner.listArchives("nas-borg")).isEmpty();
@@ -470,7 +471,7 @@ class BackupRunnerTest {
         // reason and never launches (no nohup command is ever sent), so we don't waste a run + poll cycle.
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("borg --version")))
+        when(runner.run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("borg --version")))
             .thenReturn(new CommandResult(127, "", "bash: borg: command not found", false, "SHA256:x"));
 
         BackupRun run = backupRunner.runJob(job(), repo(), "run-1");
@@ -485,7 +486,7 @@ class BackupRunnerTest {
         assertThat(run.needsClientReadying())
             .as("the domain marks it as the one failure a single action fixes").isTrue();
         // Crucially: no detached launch happened — the run was refused before any borg was started.
-        verify(runner, never()).run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("nohup"));
+        verify(runner, never()).run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("nohup"));
     }
 
     @Test
@@ -494,18 +495,18 @@ class BackupRunnerTest {
         // to the launch (the run itself still settles cleanly if borg really is missing).
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("borg --version")))
+        when(runner.run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("borg --version")))
             .thenThrow(new RuntimeException("ssh: connection reset"));
         // Every other SSH call (pass-file ensure, detached launch) succeeds and confirms STARTED.
-        when(runner.run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("nohup")))
+        when(runner.run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("nohup")))
             .thenReturn(new CommandResult(0, "STARTED 9", "", false, "SHA256:x"));
-        when(runner.run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("printf %s")))
+        when(runner.run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("printf %s")))
             .thenReturn(new CommandResult(0, "", "", false, "SHA256:x"));
 
         BackupRun run = backupRunner.runJob(job(), repo(), "run-1");
 
         assertThat(run.status()).isEqualTo(BackupRunStatus.RUNNING);
-        verify(runner).run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("nohup"));
+        verify(runner).run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("nohup"));
     }
 
     @Test
@@ -561,7 +562,7 @@ class BackupRunnerTest {
         when(repositories.getBackupRepositories()).thenReturn(List.of(repo()));
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), any()))
+        when(runner.run(eq(mid("Colina 27")), any()))
             .thenReturn(new CommandResult(0, "STARTED 1", "", false, "SHA256:x"));
         borgPresentOn("Colina 27");
 
@@ -569,7 +570,7 @@ class BackupRunnerTest {
 
         // Exactly one launch, for the due job on its machine. (A run also ensures the pass file exists,
         // which is a separate SSH call, so the launch is asserted specifically by its detached shape.)
-        verify(runner, times(1)).run(eq("Colina 27"),
+        verify(runner, times(1)).run(eq(mid("Colina 27")),
             org.mockito.ArgumentMatchers.contains("nohup sh -c \""));
         assertThat(runs.latestForJob("colina-home").orElseThrow().status())
             .isEqualTo(BackupRunStatus.RUNNING);
@@ -600,9 +601,9 @@ class BackupRunnerTest {
     private void pollSettlesWith(String rc, String summary) {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("echo RUNNING")))
+        when(runner.run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("echo RUNNING")))
             .thenReturn(new CommandResult(0, "DONE " + rc + "\n", "", false, "SHA256:x"));
-        when(runner.run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("tail -c")))
+        when(runner.run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("tail -c")))
             .thenReturn(new CommandResult(0, summary, "", false, "SHA256:x"));
     }
 
@@ -645,7 +646,7 @@ class BackupRunnerTest {
         seedRunning("run-1");
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("echo RUNNING")))
+        when(runner.run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("echo RUNNING")))
             .thenReturn(new CommandResult(-1, "", "timeout", true, null));
 
         backupRunner.pollRunningRuns();
@@ -775,7 +776,7 @@ class BackupRunnerTest {
         seedRunning("run-1");
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
-        when(runner.run(eq("Colina 27"), org.mockito.ArgumentMatchers.contains("echo RUNNING")))
+        when(runner.run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("echo RUNNING")))
             .thenReturn(new CommandResult(0, "RUNNING", "", false, "SHA256:x"));
 
         backupRunner.pollRunningRuns();

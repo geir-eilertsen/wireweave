@@ -2,13 +2,15 @@ package net.vaier.adapter.driven;
 
 import lombok.RequiredArgsConstructor;
 import net.vaier.domain.HostCredential;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.NoHostCredentialException;
 import net.vaier.domain.SshAddress;
 import net.vaier.domain.SshTarget;
+import net.vaier.domain.VaierConfig;
 import net.vaier.domain.port.ForGettingPeerConfigurations;
 import net.vaier.domain.port.ForPersistingHostCredentials;
+import net.vaier.domain.port.ForPersistingAppConfiguration;
 import net.vaier.domain.port.ForPersistingLanServers;
-import net.vaier.domain.port.ForResolvingMachineIds;
 import net.vaier.domain.port.ForResolvingSshTargets;
 import net.vaier.domain.port.ForResolvingVaierServerSshAddress;
 import net.vaier.domain.port.ForTrackingHostKeys;
@@ -35,21 +37,25 @@ public class MachineSshTargetAdapter implements ForResolvingSshTargets {
     private final ForResolvingVaierServerSshAddress forResolvingVaierServerSshAddress;
     private final ForPersistingHostCredentials forPersistingHostCredentials;
     private final ForTrackingHostKeys forTrackingHostKeys;
-    private final ForResolvingMachineIds forResolvingMachineIds;
+    private final ForPersistingAppConfiguration forPersistingAppConfiguration;
 
     @Override
-    public SshTarget resolve(String machineName) {
+    public SshTarget resolve(MachineId machineId) {
         // Where a machine answers is a domain decision by machine kind — the adapter only hands the domain
-        // the stores it needs to make it.
-        String host = SshAddress.of(machineName,
-            forGettingPeerConfigurations, forPersistingLanServers, forResolvingVaierServerSshAddress);
-        // The vault and the host-key store are keyed by identity, while callers still arrive holding a
-        // name. This is the one place that crossing happens, so a rename can never strand a login.
-        net.vaier.domain.MachineId machineId = forResolvingMachineIds.idForName(machineName)
-            .orElseThrow(() -> new net.vaier.domain.NotFoundException("Machine not found: " + machineName));
+        // the stores it needs to make it, plus the Vaier server's own id, which is the one identity that
+        // lives in the Vaier config rather than in a machine store.
+        String host = SshAddress.of(machineId, forGettingPeerConfigurations, forPersistingLanServers,
+            forResolvingVaierServerSshAddress, vaierServerId());
         HostCredential credential = forPersistingHostCredentials.getByMachine(machineId)
-            .orElseThrow(() -> new NoHostCredentialException(machineName));
+            .orElseThrow(() -> new NoHostCredentialException(String.valueOf(machineId)));
         String pinned = forTrackingHostKeys.getFingerprint(machineId).orElse(null);
         return SshTarget.on(host, credential, pinned);
+    }
+
+    /** The Vaier server's stored identity, or null when it has not been assigned one — read, never minted. */
+    private MachineId vaierServerId() {
+        return forPersistingAppConfiguration.load()
+            .flatMap(VaierConfig::vaierServerIdentity)
+            .orElse(null);
     }
 }
