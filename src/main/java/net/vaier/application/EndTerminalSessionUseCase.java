@@ -1,5 +1,7 @@
 package net.vaier.application;
 
+import net.vaier.domain.MachineId;
+
 /**
  * End a pane's persistent shell for good — the counterpart to
  * {@link OpenTerminalSessionUseCase#openTerminal}.
@@ -14,6 +16,6 @@ package net.vaier.application;
  */
 public interface EndTerminalSessionUseCase {
 
-    /** End the persistent shell for {@code paneId} on {@code machineName}. Never throws. */
-    void endTerminal(String machineName, String paneId);
+    /** End the persistent shell for {@code paneId} on {@code machineId}. Never throws. */
+    void endTerminal(MachineId machineId, String paneId);
 }

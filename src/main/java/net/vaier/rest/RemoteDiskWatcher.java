@@ -96,7 +96,7 @@ public class RemoteDiskWatcher {
         if (!machine.effectiveSshAccess()) {
             return;
         }
-        if (credentials.getHostCredential(machine.name()).isEmpty()) {
+        if (credentials.getHostCredential(machine.id()).isEmpty()) {
             return;
         }
         try {

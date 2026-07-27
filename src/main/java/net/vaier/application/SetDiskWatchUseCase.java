@@ -1,5 +1,7 @@
 package net.vaier.application;
 
+import net.vaier.domain.MachineId;
+
 /**
  * Set whether Vaier watches one filesystem on one machine, and at what threshold (#325).
  *
@@ -10,9 +12,9 @@ package net.vaier.application;
 public interface SetDiskWatchUseCase {
 
     /**
-     * Watch or mute {@code mountPoint} on {@code machineName}, optionally at its own threshold.
+     * Watch or mute {@code mountPoint} on {@code machineId}, optionally at its own threshold.
      *
      * @param thresholdPercent this filesystem's own alert threshold (1–100), or null to use the global one
      */
-    void setDiskWatch(String machineName, String mountPoint, boolean watched, Integer thresholdPercent);
+    void setDiskWatch(MachineId machineId, String mountPoint, boolean watched, Integer thresholdPercent);
 }

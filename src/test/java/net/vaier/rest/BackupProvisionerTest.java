@@ -85,7 +85,7 @@ class BackupProvisionerTest {
     }
 
     private void hasCredential(String name) {
-        when(credentials.getHostCredential(name)).thenReturn(
+        when(credentials.getHostCredential(mid(name))).thenReturn(
             Optional.of(new HostCredentialView(mid(name), "root", AuthMethod.PASSWORD, true)));
     }
 
@@ -192,7 +192,7 @@ class BackupProvisionerTest {
     void checkBorgReportsNotInstalledWhenGuardsUnmet() {
         // No credential -> never contacts the host, reports not installed rather than throwing.
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
-        when(credentials.getHostCredential("Colina 27")).thenReturn(Optional.empty());
+        when(credentials.getHostCredential(mid("Colina 27"))).thenReturn(Optional.empty());
 
         BorgAvailability availability = provisioner.checkBorg(TestMachineIds.of("Colina 27"));
 
@@ -331,7 +331,7 @@ class BackupProvisionerTest {
     void initRepoGuardFailsWhenNoCredential() {
         when(repositories.getAll()).thenReturn(List.of(repo()));
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
-        when(credentials.getHostCredential("Colina 27")).thenReturn(Optional.empty());
+        when(credentials.getHostCredential(mid("Colina 27"))).thenReturn(Optional.empty());
 
         RepoInitResult result = provisioner.initRepo("nas-borg", TestMachineIds.of("Colina 27"));
 
@@ -444,7 +444,7 @@ class BackupProvisionerTest {
     void generateSetupScriptBakesTheOwnerUsernameFromTheCredential() {
         // Vaier SSHes to the NAS as the credential's user (e.g. geir, uid 1029) — the borg container must
         // chown its data to THAT user, so the generated script bakes it as the OWNER whose uid/gid it derives.
-        when(credentials.getHostCredential("NAS")).thenReturn(
+        when(credentials.getHostCredential(mid("NAS"))).thenReturn(
             Optional.of(new HostCredentialView(mid("NAS"), "geir", AuthMethod.PASSWORD, true)));
 
         Optional<String> script = provisioner.generateSetupScript("nas-borg");
@@ -528,7 +528,7 @@ class BackupProvisionerTest {
     @Test
     void provisionGuardReturnsScriptOnlyWhenNoCredentialAndMakesNoSshCall() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("NAS")));
-        when(credentials.getHostCredential("NAS")).thenReturn(Optional.empty());
+        when(credentials.getHostCredential(mid("NAS"))).thenReturn(Optional.empty());
 
         ProvisionResult result = provisioner.provision("nas-borg");
 
@@ -609,7 +609,7 @@ class BackupProvisionerTest {
     void authorizeGuardMakesNoSshCallWhenClientHasNoCredential() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27"), sshMachine("NAS")));
         hasCredential("NAS");
-        when(credentials.getHostCredential("Colina 27")).thenReturn(Optional.empty());
+        when(credentials.getHostCredential(mid("Colina 27"))).thenReturn(Optional.empty());
 
         AuthorizeResult result = provisioner.authorizeClient("nas-borg", TestMachineIds.of("Colina 27"));
 
@@ -784,7 +784,7 @@ class BackupProvisionerTest {
         // No credential for the client machine -> never contacts anything, reports a negative.
         when(repositories.getAll()).thenReturn(List.of(repo()));
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
-        when(credentials.getHostCredential("Colina 27")).thenReturn(Optional.empty());
+        when(credentials.getHostCredential(mid("Colina 27"))).thenReturn(Optional.empty());
 
         ServerBorgAuth auth = provisioner.checkServerAuth("nas-borg", TestMachineIds.of("Colina 27"), CLIENT_128);
 
@@ -1083,7 +1083,7 @@ class BackupProvisionerTest {
     @Test
     void prepareClientGuardReturnsScriptOnlyWhenNoCredentialAndMakesNoSshCall() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
-        when(credentials.getHostCredential("Colina 27")).thenReturn(Optional.empty());
+        when(credentials.getHostCredential(mid("Colina 27"))).thenReturn(Optional.empty());
 
         var result = provisioner.prepareClient(TestMachineIds.of("Colina 27"));
 
@@ -1257,7 +1257,7 @@ class BackupProvisionerTest {
         // The guards still short-circuit before any SSH call even though restrict-path computation was added.
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27"), sshMachine("NAS")));
         hasCredential("NAS");
-        when(credentials.getHostCredential("Colina 27")).thenReturn(Optional.empty());
+        when(credentials.getHostCredential(mid("Colina 27"))).thenReturn(Optional.empty());
         when(jobs.getAll()).thenReturn(List.of(jobFor("j1", "Colina 27", "alpha")));
 
         AuthorizeResult result = provisioner.authorizeClient("nas-borg", TestMachineIds.of("Colina 27"));
@@ -1304,7 +1304,7 @@ class BackupProvisionerTest {
         // No credential for the client: the guarded-out prepare degrades to scriptOnly and readying never
         // throws — a readying failure must never fail the back-up.
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
-        when(credentials.getHostCredential("Colina 27")).thenReturn(Optional.empty());
+        when(credentials.getHostCredential(mid("Colina 27"))).thenReturn(Optional.empty());
 
         var outcome = provisioner.readyForBackup(TestMachineIds.of("Colina 27"));
 

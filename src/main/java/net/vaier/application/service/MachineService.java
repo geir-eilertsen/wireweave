@@ -15,6 +15,7 @@ import net.vaier.domain.DiskWatches;
 import net.vaier.domain.LanAnchor;
 import net.vaier.domain.LanServer;
 import net.vaier.domain.Machine;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.NotFoundException;
 import net.vaier.domain.RemoteDiskUsage;
 import net.vaier.domain.SshTarget;
@@ -111,8 +112,10 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
      * read is not a machine with nothing to watch.
      */
     @Override
-    public List<MachineFilesystemUco> getDiskUsage(String machineName) {
-        SshTarget target = forResolvingSshTargets.resolve(machineIdOf(machineName));
+    public List<MachineFilesystemUco> getDiskUsage(MachineId machineId) {
+        // The rows carry a name because a person reads them; the machine is reached by identity.
+        String machineName = labelFor(machineId);
+        SshTarget target = forResolvingSshTargets.resolve(machineId);
         CommandResult result = forRunningSshCommands.run(target, RemoteDiskUsage.DF_COMMAND);
         target.pinOnFirstUse(result.hostKeyFingerprint(), forTrackingHostKeys);
 
@@ -133,7 +136,7 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
                 // One call, one verdict — the same RemoteDiskUsage.judge the scheduled watcher asks before it
                 // sends the alert email. Neither of them recombines "how full" with "how full is too full".
                 RemoteDiskUsage.DiskVerdict verdict =
-                    fs.judge(watches.forFilesystem(machineIdOf(machineName), fs.mountPoint()), globalThreshold);
+                    fs.judge(watches.forFilesystem(machineId, fs.mountPoint()), globalThreshold);
                 return new MachineFilesystemUco(machineName, fs.device(), fs.mountPoint(),
                     fs.sizeKb(), fs.usedKb(), fs.availableKb(), fs.sizeHuman(), fs.availableHuman(),
                     fs.usedPercent(), verdict.thresholdPercent(), verdict.watched(), verdict.breaching());
@@ -159,10 +162,10 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
      * Apalveien 5. The {@link DiskWatch} record validates itself; the service only persists it.
      */
     @Override
-    public void setDiskWatch(String machineName, String mountPoint, boolean watched,
+    public void setDiskWatch(MachineId machineId, String mountPoint, boolean watched,
                              Integer thresholdPercent) {
         forPersistingDiskWatches.save(
-            new DiskWatch(machineIdOf(machineName), mountPoint, watched, thresholdPercent));
+            new DiskWatch(machineId, mountPoint, watched, thresholdPercent));
     }
 
     @Override
@@ -216,12 +219,11 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
      * a brand-new Vaier reaches this path too, and the assignment is idempotent.
      */
     /**
-     * The identity of the machine named {@code machineName}. Disk watches hang off identity while REST
-     * paths still carry names; this crossing goes away with the paths.
+     * What to call a machine where a person will read it. Presentation only — nothing is found by it, and a
+     * machine whose name will not resolve is labelled by its identity rather than failing the read.
      */
-    private net.vaier.domain.MachineId machineIdOf(String machineName) {
-        return forResolvingMachineIds.idForName(machineName)
-            .orElseThrow(() -> new NotFoundException("Machine not found: " + machineName));
+    private String labelFor(MachineId machineId) {
+        return forResolvingMachineIds.nameForId(machineId).orElse(machineId.value());
     }
 
     private Machine vaierServerMachine() {
@@ -232,11 +234,12 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
 
 
     @Override
-    public boolean setMachineSshAccess(String machineName, boolean enabled) {
-        // A machine name is unique across all of Vaier (#284), so at most one machine matches.
+    public boolean setMachineSshAccess(MachineId machineId, boolean enabled) {
+        // At most one machine matches, because an id names exactly one — this used to lean on names being
+        // unique across all of Vaier (#284), which is the constraint the identity refactor removes.
         // The Vaier server is neither a peer nor a LAN server, so its override lives in the Vaier
         // config; route its write there (read-modify-write) rather than to a peer/LAN adapter (#311).
-        if (LanAnchor.VAIER_SERVER_NAME.equals(machineName)) {
+        if (machineId.isSameAs(forResolvingVaierServerIdentity.identity())) {
             VaierConfig config = forPersistingAppConfiguration.load().orElseGet(() -> VaierConfig.builder().build());
             forPersistingAppConfiguration.save(config.withVaierServerSshAccess(enabled));
             log.info("Set SSH access for the Vaier server to {}", enabled);
@@ -244,20 +247,22 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
         }
         // Otherwise resolve to a LAN server first, else a VPN peer; either way write an explicit
         // override via the owning store's driven port. The override wins, so effective == enabled.
-        Optional<LanServer> lanServer = LanServer.findByName(machineName, forPersistingLanServers.getAll());
+        Optional<LanServer> lanServer = forPersistingLanServers.getAll().stream()
+            .filter(server -> machineId.isSameAs(server.machineId()))
+            .findFirst();
         if (lanServer.isPresent()) {
             forPersistingLanServers.save(lanServer.get().withSshAccessOverride(enabled));
-            log.info("Set SSH access for LAN server {} to {}", machineName, enabled);
+            log.info("Set SSH access for LAN server {} to {}", lanServer.get().name(), enabled);
             return enabled;
         }
         Optional<PeerConfiguration> peer = forGettingPeerConfigurations.getAllPeerConfigs().stream()
-            .filter(p -> machineName.equals(p.name()))
+            .filter(p -> machineId.isSameAs(p.machineId()))
             .findFirst();
         if (peer.isPresent()) {
             forUpdatingPeerConfigurations.updateSshAccess(peer.get().id(), enabled);
-            log.info("Set SSH access for peer {} to {}", machineName, enabled);
+            log.info("Set SSH access for peer {} to {}", peer.get().name(), enabled);
             return enabled;
         }
-        throw new NotFoundException("Machine not found: " + machineName);
+        throw new NotFoundException("Machine not found: " + machineId);
     }
 }

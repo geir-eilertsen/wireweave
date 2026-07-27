@@ -64,20 +64,19 @@ public class TerminalService implements
     private final net.vaier.domain.port.ForResolvingMachineIds forResolvingMachineIds;
 
     @Override
-    public void saveHostCredential(String machineName, SshCredentialDraft draft) {
-        // The draft knows how to become a vault credential; the machine's identity is what it needs,
-        // and resolving a typed name to that identity is a driven-port lookup.
-        forPersistingHostCredentials.save(draft.forMachine(machineIdOf(machineName)));
+    public void saveHostCredential(MachineId machineId, SshCredentialDraft draft) {
+        // The draft knows how to become a vault credential; the machine's identity is what it needs, and
+        // the caller already holds it — so a credential can no longer be filed against the wrong machine
+        // by a name that was edited between the operator typing it and the save landing.
+        forPersistingHostCredentials.save(draft.forMachine(machineId));
     }
 
     /**
-     * The identity of the machine named {@code machineName}. The credential vault and the host-key store
-     * are keyed by identity while REST paths still carry names, so every write here crosses once, in one
-     * place, and refuses rather than guesses when the name matches nothing.
+     * What to call a machine in a log line. Presentation only — nothing is found by it, and a machine whose
+     * name cannot be resolved is logged by its identity rather than going unlogged or failing the operation.
      */
-    private net.vaier.domain.MachineId machineIdOf(String machineName) {
-        return forResolvingMachineIds.idForName(machineName)
-            .orElseThrow(() -> new net.vaier.domain.NotFoundException("Machine not found: " + machineName));
+    private String labelFor(MachineId machineId) {
+        return forResolvingMachineIds.nameForId(machineId).orElse(machineId.value());
     }
 
     @Override
@@ -88,18 +87,18 @@ public class TerminalService implements
     }
 
     @Override
-    public Optional<HostCredentialView> getHostCredential(String machineName) {
-        return forPersistingHostCredentials.getByMachine(machineIdOf(machineName)).map(HostCredential::toView);
+    public Optional<HostCredentialView> getHostCredential(MachineId machineId) {
+        return forPersistingHostCredentials.getByMachine(machineId).map(HostCredential::toView);
     }
 
     @Override
-    public void deleteHostCredential(String machineName) {
-        forPersistingHostCredentials.deleteByMachine(machineIdOf(machineName));
+    public void deleteHostCredential(MachineId machineId) {
+        forPersistingHostCredentials.deleteByMachine(machineId);
     }
 
     @Override
-    public OpenedTerminal openTerminal(String machineName, String paneId, SshOutputListener onOutput) {
-        SshTarget target = forResolvingSshTargets.resolve(machineIdOf(machineName));
+    public OpenedTerminal openTerminal(MachineId machineId, String paneId, SshOutputListener onOutput) {
+        SshTarget target = forResolvingSshTargets.resolve(machineId);
         // Probe first (a normal exec run, the same host-key trust as any command): is tmux installed on
         // this machine, and does the pane's session already exist? The domain reads it into a truthful
         // continuity, so the reconnect banner can say "reattached" only when it really was. This first
@@ -115,22 +114,22 @@ public class TerminalService implements
             target, PersistentShell.attachOrCreateCommand(paneId), onOutput);
 
         log.info("Opened {} terminal session to {} ({}) for pane {}",
-            continuity, machineName, target.host(), PersistentShell.sessionName(paneId));
+            continuity, labelFor(machineId), target.host(), PersistentShell.sessionName(paneId));
         return new OpenedTerminal(session, continuity);
     }
 
     @Override
-    public void endTerminal(String machineName, String paneId) {
+    public void endTerminal(MachineId machineId, String paneId) {
         // Best-effort: the operator has already closed the pane. A host that is down, has no credential, or
         // whose key no longer matches is not something they can act on from here — and leaving the session
         // behind on an unreachable host is no worse than the state we were already in. Log and move on.
         try {
-            forRunningSshCommands.run(forResolvingSshTargets.resolve(machineIdOf(machineName)),
+            forRunningSshCommands.run(forResolvingSshTargets.resolve(machineId),
                 PersistentShell.endCommand(paneId));
-            log.info("Ended terminal session {} on {}", PersistentShell.sessionName(paneId), machineName);
+            log.info("Ended terminal session {} on {}", PersistentShell.sessionName(paneId), labelFor(machineId));
         } catch (RuntimeException e) {
             log.warn("Could not end terminal session {} on {}: {}",
-                PersistentShell.sessionName(paneId), machineName, e.toString());
+                PersistentShell.sessionName(paneId), labelFor(machineId), e.toString());
         }
     }
 
@@ -145,9 +144,9 @@ public class TerminalService implements
     }
 
     @Override
-    public SendPasswordResult sendPassword(String machineName, SshSession session, String recentOutput) {
+    public SendPasswordResult sendPassword(MachineId machineId, SshSession session, String recentOutput) {
         try {
-            Optional<HostCredential> credential = forPersistingHostCredentials.getByMachine(machineIdOf(machineName));
+            Optional<HostCredential> credential = forPersistingHostCredentials.getByMachine(machineId);
             if (credential.isEmpty() || credential.get().authMethod() != AuthMethod.PASSWORD) {
                 return SendPasswordResult.NO_PASSWORD_CREDENTIAL;
             }
@@ -159,15 +158,15 @@ public class TerminalService implements
             return SendPasswordResult.SENT;
         } catch (RuntimeException e) {
             // Never surface the secret — log only the machine and the failure class.
-            log.warn("Failed to send stored password to {}: {}", machineName, e.getClass().getSimpleName());
+            log.warn("Failed to send stored password to {}: {}", labelFor(machineId), e.getClass().getSimpleName());
             return SendPasswordResult.FAILED;
         }
     }
 
     @Override
-    public void clearHostKey(String machineName) {
-        forTrackingHostKeys.clear(machineIdOf(machineName));
-        log.info("Cleared pinned host key for {}", machineName);
+    public void clearHostKey(MachineId machineId) {
+        forTrackingHostKeys.clear(machineId);
+        log.info("Cleared pinned host key for {}", labelFor(machineId));
     }
 
     /**

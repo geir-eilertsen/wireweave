@@ -15,6 +15,7 @@ import net.vaier.application.SetMachineSshAccessUseCase;
 import net.vaier.domain.BackupFleet;
 import net.vaier.domain.HostCredentialView;
 import net.vaier.domain.Machine;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.MachineNudge;
 import net.vaier.domain.MachineNudges;
 import net.vaier.domain.NotFoundException;
@@ -60,13 +61,13 @@ public class MachineRestController {
     @GetMapping
     public List<MachineResponse> list() {
         return getMachinesUseCase.getAllMachines().stream()
-            .map(m -> MachineResponse.from(m, hasStoredCredential(m.name())))
+            .map(m -> MachineResponse.from(m, hasStoredCredential(m.id())))
             .toList();
     }
 
     /** Whether a host SSH credential with a secret is stored for this machine. */
-    private boolean hasStoredCredential(String machine) {
-        return getHostCredentialUseCase.getHostCredential(machine)
+    private boolean hasStoredCredential(MachineId machineId) {
+        return getHostCredentialUseCase.getHostCredential(machineId)
             .map(HostCredentialView::hasSecret)
             .orElse(false);
     }
@@ -74,14 +75,14 @@ public class MachineRestController {
     /**
      * The Vaier server host as a machine (#311): its canonical name, effective SSH access, and
      * whether a host credential is stored for it. Feeds the dedicated Vaier-server card's SSH-access
-     * toggle and credential control. Writes reuse {@code /machines/{name}/ssh-access} and
-     * {@code /machines/{name}/ssh-credential} with the returned {@code name}.
+     * toggle and credential control. Writes reuse {@code /machines/{machineId}/ssh-access} and
+     * {@code /machines/{machineId}/ssh-credential} with the returned {@code name}.
      */
     @GetMapping("/vaier-server")
     public VaierServerResponse vaierServer() {
         Machine server = getVaierServerUseCase.getVaierServerMachine();
         return new VaierServerResponse(server.id().value(), server.name(), server.effectiveSshAccess(),
-            hasStoredCredential(server.name()));
+            hasStoredCredential(server.id()));
     }
 
     record VaierServerResponse(String id, String name, boolean sshAccess, boolean hasCredential) {}
@@ -96,17 +97,16 @@ public class MachineRestController {
      * anything is backed up, the backup fleet, reachability — and hands them to the pure-domain
      * {@link MachineNudges} assembler, which owns the decisions. No application service reaches across
      * domains to collect nudges, and none implements a driven port to expose them. 404 when no machine
-     * bears that name. A non-whitelisted path under {@code /machines}, so it is admin-gated automatically.
+     * has that id. A non-whitelisted path under {@code /machines}, so it is admin-gated automatically.
      */
-    @GetMapping("/{machine}/nudges")
-    public List<NudgeResponse> nudges(@PathVariable String machine) {
+    @GetMapping("/{machineId}/nudges")
+    public List<NudgeResponse> nudges(@PathVariable String machineId) {
         List<Machine> machines = getMachinesUseCase.getAllMachines();
+        MachineId id = MachineId.of(machineId);
         Machine target = machines.stream()
-            // Machine.hasSameName, not equals: the uniqueness guard that refuses a duplicate name uses it,
-            // so a name it would call the same machine must not 404 here.
-            .filter(m -> Machine.hasSameName(m.name(), machine))
+            .filter(m -> id.isSameAs(m.id()))
             .findFirst()
-            .orElseThrow(() -> new NotFoundException("Machine not found: " + machine));
+            .orElseThrow(() -> new NotFoundException("Machine not found: " + machineId));
 
         String vaierServerName = getVaierServerUseCase.getVaierServerMachine().name();
         Map<String, String> lanServerNameByAddress = machines.stream()
@@ -117,7 +117,7 @@ public class MachineRestController {
             .filter(s -> s.ownerMachineName(vaierServerName, lanServerNameByAddress)
                 .map(owner -> Machine.hasSameName(owner, target.name())).orElse(false))
             .count();
-        boolean hasCredential = hasStoredCredential(machine);
+        boolean hasCredential = hasStoredCredential(target.id());
         boolean alreadyProtected = getBackupJobsUseCase.getBackupJobs().stream()
             .anyMatch(j -> target.id().equals(j.machineId()));
         BackupFleet fleet = new BackupFleet(getBackupServersUseCase.getBackupServers());
@@ -143,11 +143,11 @@ public class MachineRestController {
      * later. Writes an explicit override and returns the resulting effective state. 404 (via
      * {@code NotFoundException}) when no machine bears that name. Admin-gated (non-whitelisted path).
      */
-    @PatchMapping("/{machine}/ssh-access")
-    public SshAccessResponse setSshAccess(@PathVariable String machine,
+    @PatchMapping("/{machineId}/ssh-access")
+    public SshAccessResponse setSshAccess(@PathVariable String machineId,
                                           @RequestBody SshAccessRequest request) {
         boolean enabled = request != null && request.enabled();
-        boolean effective = setMachineSshAccessUseCase.setMachineSshAccess(machine, enabled);
+        boolean effective = setMachineSshAccessUseCase.setMachineSshAccess(MachineId.of(machineId), enabled);
         return new SshAccessResponse(effective);
     }
 
@@ -158,15 +158,15 @@ public class MachineRestController {
      * the 2.3 GB DSM system partition (88% by design) while {@code /volume1} — 11.6 TB, every borg backup —
      * was invisible. So this returns <b>every</b> real filesystem.
      *
-     * <p>A sibling of {@code /machines/{machine}/files}: a non-whitelisted path under {@code /machines}, so
+     * <p>A sibling of {@code /machines/{machineId}/files}: a non-whitelisted path under {@code /machines}, so
      * it sits behind the admin auth chain automatically. Reading a machine's disks is never anonymous.
      *
      * <p>A disk that cannot be read is a {@code DiskUnreadableException} → {@code 502}, carrying the reason
      * verbatim. It is never a {@code 0%} and never an empty list.
      */
-    @GetMapping("/{machine}/disk")
-    public List<FilesystemResponse> disk(@PathVariable String machine) {
-        return getMachineDiskUsageUseCase.getDiskUsage(machine).stream()
+    @GetMapping("/{machineId}/disk")
+    public List<FilesystemResponse> disk(@PathVariable String machineId) {
+        return getMachineDiskUsageUseCase.getDiskUsage(MachineId.of(machineId)).stream()
             .map(fs -> new FilesystemResponse(fs.machineName(), fs.device(), fs.mountPoint(),
                 fs.sizeKb(), fs.usedKb(), fs.availableKb(), fs.size(), fs.available(),
                 fs.usedPercent(), fs.thresholdPercent(), fs.watched(), fs.aboveThreshold()))
@@ -180,12 +180,12 @@ public class MachineRestController {
      * ({@code /volume1}, and worse), and a path variable carrying them is a routing problem and an encoding
      * bug waiting to happen. In a body a slash is just a character.
      */
-    @PutMapping("/{machine}/disk/watch")
-    public DiskWatchResponse setDiskWatch(@PathVariable String machine,
+    @PutMapping("/{machineId}/disk/watch")
+    public DiskWatchResponse setDiskWatch(@PathVariable String machineId,
                                           @RequestBody DiskWatchRequest request) {
-        setDiskWatchUseCase.setDiskWatch(machine, request.mountPoint(), request.watched(),
+        setDiskWatchUseCase.setDiskWatch(MachineId.of(machineId), request.mountPoint(), request.watched(),
             request.thresholdPercent());
-        return new DiskWatchResponse(machine, request.mountPoint(), request.watched(),
+        return new DiskWatchResponse(machineId, request.mountPoint(), request.watched(),
             request.thresholdPercent());
     }
 
@@ -207,16 +207,16 @@ public class MachineRestController {
     record DiskWatchRequest(String mountPoint, boolean watched, Integer thresholdPercent) {}
 
     /** The watch as it now stands, echoed back so the Explorer can render it without a re-read. */
-    record DiskWatchResponse(String machine, String mountPoint, boolean watched,
+    record DiskWatchResponse(String machineId, String mountPoint, boolean watched,
                              Integer thresholdPercent) {}
 
     /**
      * Forget the pinned SSH host key for a machine (#308), so the next terminal connect re-pins on
      * first use. Use after a host is legitimately rebuilt and a host-key mismatch is refusing connects.
      */
-    @DeleteMapping("/{machine}/host-key")
-    public ResponseEntity<Void> clearHostKey(@PathVariable String machine) {
-        clearHostKeyUseCase.clearHostKey(machine);
+    @DeleteMapping("/{machineId}/host-key")
+    public ResponseEntity<Void> clearHostKey(@PathVariable String machineId) {
+        clearHostKeyUseCase.clearHostKey(MachineId.of(machineId));
         return ResponseEntity.noContent().build();
     }
 

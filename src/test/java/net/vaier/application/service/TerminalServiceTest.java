@@ -92,7 +92,7 @@ class TerminalServiceTest {
 
     @Test
     void saveHostCredential_persistsViaPort() {
-        service.saveHostCredential("nas", new SshCredentialDraft(
+        service.saveHostCredential(mid("nas"), new SshCredentialDraft(
             "admin", AuthMethod.PASSWORD, "s3cret", null));
 
         verify(forPersistingHostCredentials).save(new HostCredential(
@@ -104,14 +104,14 @@ class TerminalServiceTest {
         when(forPersistingHostCredentials.getByMachine(mid("nas"))).thenReturn(Optional.of(
             new HostCredential(mid("nas"), "admin", AuthMethod.PRIVATE_KEY, "-----BEGIN KEY-----", "keypass", false)));
 
-        Optional<HostCredentialView> view = service.getHostCredential("nas");
+        Optional<HostCredentialView> view = service.getHostCredential(mid("nas"));
 
         assertThat(view).contains(new HostCredentialView(mid("nas"), "admin", AuthMethod.PRIVATE_KEY, true));
     }
 
     @Test
     void deleteHostCredential_deletesViaPort() {
-        service.deleteHostCredential("nas");
+        service.deleteHostCredential(mid("nas"));
         verify(forPersistingHostCredentials).deleteByMachine(mid("nas"));
     }
 
@@ -186,7 +186,7 @@ class TerminalServiceTest {
         when(forRunningSshCommands.run(any(), any())).thenReturn(probe("SHA256:fresh", "VAIER_TMUX_NEW"));
         when(forOpeningSshSessions.open(any(), any(), any())).thenReturn(sshSession);
 
-        OpenedTerminal result = service.openTerminal("nuc", "pane1", onOutput);
+        OpenedTerminal result = service.openTerminal(mid("nuc"), "pane1", onOutput);
 
         assertThat(result.session()).isSameAs(sshSession);
         assertThat(result.continuity()).isEqualTo(PersistentShell.Continuity.NEW);
@@ -205,7 +205,7 @@ class TerminalServiceTest {
         when(forRunningSshCommands.run(any(), any())).thenReturn(probe("SHA256:pinned", "VAIER_TMUX_ATTACH"));
         when(forOpeningSshSessions.open(any(), any(), any())).thenReturn(sshSession);
 
-        OpenedTerminal result = service.openTerminal("nuc", "pane1", onOutput);
+        OpenedTerminal result = service.openTerminal(mid("nuc"), "pane1", onOutput);
 
         assertThat(result.continuity()).isEqualTo(PersistentShell.Continuity.REATTACHED);
     }
@@ -216,7 +216,7 @@ class TerminalServiceTest {
         when(forRunningSshCommands.run(any(), any())).thenReturn(probe("SHA256:pinned", "VAIER_TMUX_ABSENT"));
         when(forOpeningSshSessions.open(any(), any(), any())).thenReturn(sshSession);
 
-        OpenedTerminal result = service.openTerminal("nuc", "pane1", onOutput);
+        OpenedTerminal result = service.openTerminal(mid("nuc"), "pane1", onOutput);
 
         assertThat(result.continuity()).isEqualTo(PersistentShell.Continuity.PLAIN);
     }
@@ -227,7 +227,7 @@ class TerminalServiceTest {
         when(forRunningSshCommands.run(any(), any())).thenReturn(probe("SHA256:pinned", "VAIER_TMUX_NEW"));
         when(forOpeningSshSessions.open(any(), any(), any())).thenReturn(sshSession);
 
-        service.openTerminal("nas", "pane1", onOutput);
+        service.openTerminal(mid("nas"), "pane1", onOutput);
 
         ArgumentCaptor<SshTarget> target = ArgumentCaptor.forClass(SshTarget.class);
         verify(forOpeningSshSessions).open(target.capture(), any(), any());
@@ -242,7 +242,7 @@ class TerminalServiceTest {
         when(forRunningSshCommands.run(any(), any())).thenReturn(probe("SHA256:host", "VAIER_TMUX_NEW"));
         when(forOpeningSshSessions.open(any(), any(), any())).thenReturn(sshSession);
 
-        service.openTerminal(LanAnchor.VAIER_SERVER_NAME, "pane1", onOutput);
+        service.openTerminal(mid(LanAnchor.VAIER_SERVER_NAME), "pane1", onOutput);
 
         ArgumentCaptor<SshTarget> target = ArgumentCaptor.forClass(SshTarget.class);
         verify(forOpeningSshSessions).open(target.capture(), any(), any());
@@ -253,7 +253,7 @@ class TerminalServiceTest {
     void openTerminal_noCredential_throwsNoHostCredential_andDoesNotOpen() {
         when(forResolvingSshTargets.resolve(mid("nuc"))).thenThrow(new NoHostCredentialException("nuc"));
 
-        assertThatThrownBy(() -> service.openTerminal("nuc", "pane1", onOutput))
+        assertThatThrownBy(() -> service.openTerminal(mid("nuc"), "pane1", onOutput))
             .isInstanceOf(NoHostCredentialException.class);
         verify(forOpeningSshSessions, never()).open(any(), any(), any());
     }
@@ -263,13 +263,13 @@ class TerminalServiceTest {
         when(forResolvingSshTargets.resolve(mid("ghost")))
             .thenThrow(new NotFoundException("Machine not found: ghost"));
 
-        assertThatThrownBy(() -> service.openTerminal("ghost", "pane1", onOutput))
+        assertThatThrownBy(() -> service.openTerminal(mid("ghost"), "pane1", onOutput))
             .isInstanceOf(NotFoundException.class);
     }
 
     @Test
     void clearHostKey_clearsViaPort() {
-        service.clearHostKey("nas");
+        service.clearHostKey(mid("nas"));
         verify(forTrackingHostKeys).clear(mid("nas"));
     }
 
@@ -322,7 +322,7 @@ class TerminalServiceTest {
             new HostCredential(mid("nas"), "root", AuthMethod.PASSWORD, "s3cret", null, false)));
 
         SendHostPasswordUseCase.SendPasswordResult result =
-            service.sendPassword("nas", sshSession, "geir@nas's password: ");
+            service.sendPassword(mid("nas"), sshSession, "geir@nas's password: ");
 
         assertThat(result).isEqualTo(SendHostPasswordUseCase.SendPasswordResult.SENT);
         verify(sshSession).write("s3cret\n".getBytes(StandardCharsets.UTF_8));
@@ -335,7 +335,7 @@ class TerminalServiceTest {
             new HostCredential(mid("nas"), "root", AuthMethod.PASSWORD, "s3cret", null, false)));
 
         SendHostPasswordUseCase.SendPasswordResult result =
-            service.sendPassword("nas", sshSession, "Password: ");
+            service.sendPassword(mid("nas"), sshSession, "Password: ");
 
         assertThat(result.name()).doesNotContain("s3cret");
     }
@@ -346,7 +346,7 @@ class TerminalServiceTest {
             new HostCredential(mid("nas"), "root", AuthMethod.PASSWORD, "s3cret", null, false)));
 
         SendHostPasswordUseCase.SendPasswordResult result =
-            service.sendPassword("nas", sshSession, "geir@nas:~$ ");
+            service.sendPassword(mid("nas"), sshSession, "geir@nas:~$ ");
 
         assertThat(result).isEqualTo(SendHostPasswordUseCase.SendPasswordResult.NOT_AT_PROMPT);
         verify(sshSession, never()).write(any());
@@ -358,7 +358,7 @@ class TerminalServiceTest {
             new HostCredential(mid("nas"), "root", AuthMethod.PRIVATE_KEY, "-----BEGIN KEY-----", null, true)));
 
         SendHostPasswordUseCase.SendPasswordResult result =
-            service.sendPassword("nas", sshSession, "Password: ");
+            service.sendPassword(mid("nas"), sshSession, "Password: ");
 
         assertThat(result).isEqualTo(SendHostPasswordUseCase.SendPasswordResult.NO_PASSWORD_CREDENTIAL);
         verify(sshSession, never()).write(any());
@@ -369,7 +369,7 @@ class TerminalServiceTest {
         when(forPersistingHostCredentials.getByMachine(mid("nas"))).thenReturn(Optional.empty());
 
         SendHostPasswordUseCase.SendPasswordResult result =
-            service.sendPassword("nas", sshSession, "Password: ");
+            service.sendPassword(mid("nas"), sshSession, "Password: ");
 
         assertThat(result).isEqualTo(SendHostPasswordUseCase.SendPasswordResult.NO_PASSWORD_CREDENTIAL);
         verify(sshSession, never()).write(any());
@@ -382,7 +382,7 @@ class TerminalServiceTest {
         org.mockito.Mockito.doThrow(new RuntimeException("pipe broken")).when(sshSession).write(any());
 
         SendHostPasswordUseCase.SendPasswordResult result =
-            service.sendPassword("nas", sshSession, "Password: ");
+            service.sendPassword(mid("nas"), sshSession, "Password: ");
 
         assertThat(result).isEqualTo(SendHostPasswordUseCase.SendPasswordResult.FAILED);
     }
@@ -394,7 +394,7 @@ class TerminalServiceTest {
         machineResolvesTo("nuc", "10.13.13.9", "SHA256:pinned");
         when(forRunningSshCommands.run(any(), any())).thenReturn(probe("SHA256:pinned", ""));
 
-        service.endTerminal("nuc", "pane1");
+        service.endTerminal(mid("nuc"), "pane1");
 
         // Without this the session lingers detached on the host forever, still running whatever was in it.
         ArgumentCaptor<SshTarget> target = ArgumentCaptor.forClass(SshTarget.class);
@@ -410,7 +410,7 @@ class TerminalServiceTest {
         // must not surface an error to the operator, who has already closed the pane and moved on.
         when(forResolvingSshTargets.resolve(mid("nuc"))).thenThrow(new NoHostCredentialException("nuc"));
 
-        assertThatCode(() -> service.endTerminal("nuc", "pane1")).doesNotThrowAnyException();
+        assertThatCode(() -> service.endTerminal(mid("nuc"), "pane1")).doesNotThrowAnyException();
         verify(forRunningSshCommands, never()).run(any(), any());
     }
 }

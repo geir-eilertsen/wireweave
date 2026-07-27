@@ -13,6 +13,7 @@ import net.vaier.domain.HostKeyMismatchException;
 import net.vaier.domain.NoHostCredentialException;
 import net.vaier.domain.NotFoundException;
 import net.vaier.domain.PasswordPrompt;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.PersistentShell;
 import net.vaier.domain.SshAuthException;
 import net.vaier.domain.SshConnectException;
@@ -67,8 +68,17 @@ public class TerminalWebSocketHandler extends AbstractWebSocketHandler {
 
     @Override
     public void afterConnectionEstablished(WebSocketSession wsSession) {
-        String machine = machineFromPath(wsSession.getUri());
-        if (machine == null || machine.isBlank()) {
+        String machineSegment = machineFromPath(wsSession.getUri());
+        if (machineSegment == null || machineSegment.isBlank()) {
+            closeWith(wsSession, CLOSE_NOT_FOUND, "Unknown machine");
+            return;
+        }
+        MachineId machineId;
+        try {
+            // The path segment is an identity. Anything else closes as unknown rather than being looked up,
+            // so a stale name in a bookmarked URL can never open a shell on whatever machine now bears it.
+            machineId = MachineId.of(machineSegment);
+        } catch (IllegalArgumentException e) {
             closeWith(wsSession, CLOSE_NOT_FOUND, "Unknown machine");
             return;
         }
@@ -76,16 +86,16 @@ public class TerminalWebSocketHandler extends AbstractWebSocketHandler {
             OutputTail tail = new OutputTail();
             String paneId = paneFromQuery(wsSession.getUri());
             OpenedTerminal opened = openTerminalSessionUseCase.openTerminal(
-                machine, paneId, new WsOutputListener(wsSession, tail));
+                machineId, paneId, new WsOutputListener(wsSession, tail));
             wsSession.getAttributes().put(SSH_SESSION_ATTR, opened.session());
-            wsSession.getAttributes().put(MACHINE_ATTR, machine);
+            wsSession.getAttributes().put(MACHINE_ATTR, machineId);
             wsSession.getAttributes().put(PANE_ATTR, paneId);
             wsSession.getAttributes().put(TAIL_ATTR, tail);
             // Tell the browser truthfully how this open resolved, so its reconnect banner can say
             // "reattached" only when the session was genuinely resumed.
             sendShellMode(wsSession, opened.continuity());
         } catch (NotFoundException e) {
-            closeWith(wsSession, CLOSE_NOT_FOUND, "No machine named \"" + machine + "\"");
+            closeWith(wsSession, CLOSE_NOT_FOUND, "No machine with id \"" + machineSegment + "\"");
         } catch (NoHostCredentialException e) {
             closeWith(wsSession, CLOSE_NO_CREDENTIAL, "No SSH credential stored for this machine");
         } catch (HostKeyMismatchException e) {
@@ -96,7 +106,7 @@ public class TerminalWebSocketHandler extends AbstractWebSocketHandler {
         } catch (SshConnectException e) {
             closeWith(wsSession, CLOSE_CONNECT_FAILED, "Could not reach the host");
         } catch (RuntimeException e) {
-            log.warn("Terminal open failed for {}", machine, e);
+            log.warn("Terminal open failed for {}", machineId, e);
             closeWith(wsSession, CLOSE_INTERNAL, "Terminal failed to open");
         }
     }
@@ -139,10 +149,10 @@ public class TerminalWebSocketHandler extends AbstractWebSocketHandler {
      * type) and the tail; the secret never enters this handler. The reply frame carries the status only.
      */
     private void sendStoredPassword(WebSocketSession wsSession, SshSession ssh) {
-        String machine = (String) wsSession.getAttributes().get(MACHINE_ATTR);
+        MachineId machineId = (MachineId) wsSession.getAttributes().get(MACHINE_ATTR);
         OutputTail tail = (OutputTail) wsSession.getAttributes().get(TAIL_ATTR);
         String recentOutput = tail == null ? "" : tail.snapshot();
-        SendPasswordResult result = sendHostPasswordUseCase.sendPassword(machine, ssh, recentOutput);
+        SendPasswordResult result = sendHostPasswordUseCase.sendPassword(machineId, ssh, recentOutput);
         try {
             wsSession.sendMessage(new TextMessage(
                 "{\"type\":\"password-result\",\"status\":\"" + result.name() + "\"}"));
@@ -158,10 +168,10 @@ public class TerminalWebSocketHandler extends AbstractWebSocketHandler {
      * was inside it.
      */
     private void endShell(WebSocketSession wsSession) {
-        String machine = (String) wsSession.getAttributes().get(MACHINE_ATTR);
+        MachineId machineId = (MachineId) wsSession.getAttributes().get(MACHINE_ATTR);
         String paneId = (String) wsSession.getAttributes().get(PANE_ATTR);
-        if (machine != null) {
-            endTerminalSessionUseCase.endTerminal(machine, paneId);
+        if (machineId != null) {
+            endTerminalSessionUseCase.endTerminal(machineId, paneId);
         }
     }
 

@@ -5,9 +5,11 @@ import net.vaier.application.OpenTerminalSessionUseCase;
 import net.vaier.application.OpenTerminalSessionUseCase.OpenedTerminal;
 import net.vaier.application.SendHostPasswordUseCase;
 import net.vaier.application.SendHostPasswordUseCase.SendPasswordResult;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.NoHostCredentialException;
 import net.vaier.domain.PersistentShell;
 import net.vaier.domain.SshAuthException;
+import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.port.ForOpeningSshSessions.SshOutputListener;
 import net.vaier.domain.port.ForOpeningSshSessions.SshSession;
 import org.junit.jupiter.api.Test;
@@ -36,6 +38,10 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class TerminalWebSocketHandlerTest {
 
+    private static MachineId mid(String name) {
+        return TestMachineIds.of(name);
+    }
+
     @Mock OpenTerminalSessionUseCase openTerminalSessionUseCase;
     @Mock EndTerminalSessionUseCase endTerminalSessionUseCase;
     @Mock SendHostPasswordUseCase sendHostPasswordUseCase;
@@ -58,19 +64,22 @@ class TerminalWebSocketHandlerTest {
     }
 
     @Test
-    void machineFromPath_decodesNameWithSpaces() {
+    void machineFromPath_readsTheIdentitySegment() {
+        // The segment is a MachineId now, so there is no display name to percent-decode — and nothing in it
+        // that could need escaping. A URL bookmarked before a rename still opens the same machine.
         assertThat(TerminalWebSocketHandler.machineFromPath(
-            URI.create("wss://host/machines/Vaier%20server/terminal"))).isEqualTo("Vaier server");
+            URI.create("wss://host/machines/" + mid("Vaier server") + "/terminal")))
+            .isEqualTo(mid("Vaier server").value());
         assertThat(TerminalWebSocketHandler.machineFromPath(
-            URI.create("wss://host/machines/nas/terminal"))).isEqualTo("nas");
+            URI.create("wss://host/machines/" + mid("nas") + "/terminal"))).isEqualTo(mid("nas").value());
         assertThat(TerminalWebSocketHandler.machineFromPath(URI.create("wss://host/other"))).isNull();
     }
 
     @Test
     void onConnect_opensSession_andStoresIt() throws Exception {
         attrs();
-        when(wsSession.getUri()).thenReturn(URI.create("wss://host/machines/nas/terminal"));
-        when(openTerminalSessionUseCase.openTerminal(eq("nas"), any(), any())).thenReturn(opened(sshSession));
+        when(wsSession.getUri()).thenReturn(URI.create("wss://host/machines/" + mid("nas") + "/terminal"));
+        when(openTerminalSessionUseCase.openTerminal(eq(mid("nas")), any(), any())).thenReturn(opened(sshSession));
 
         handler().afterConnectionEstablished(wsSession);
 
@@ -81,8 +90,8 @@ class TerminalWebSocketHandlerTest {
     @Test
     void onConnect_noCredential_closesWith4401() throws Exception {
         attrs();
-        when(wsSession.getUri()).thenReturn(URI.create("wss://host/machines/nas/terminal"));
-        when(openTerminalSessionUseCase.openTerminal(eq("nas"), any(), any()))
+        when(wsSession.getUri()).thenReturn(URI.create("wss://host/machines/" + mid("nas") + "/terminal"));
+        when(openTerminalSessionUseCase.openTerminal(eq(mid("nas")), any(), any()))
             .thenThrow(new NoHostCredentialException("nas"));
 
         handler().afterConnectionEstablished(wsSession);
@@ -95,8 +104,8 @@ class TerminalWebSocketHandlerTest {
     @Test
     void onConnect_authFailure_closesWith4402() throws Exception {
         attrs();
-        when(wsSession.getUri()).thenReturn(URI.create("wss://host/machines/nas/terminal"));
-        when(openTerminalSessionUseCase.openTerminal(eq("nas"), any(), any()))
+        when(wsSession.getUri()).thenReturn(URI.create("wss://host/machines/" + mid("nas") + "/terminal"));
+        when(openTerminalSessionUseCase.openTerminal(eq(mid("nas")), any(), any()))
             .thenThrow(new SshAuthException("nope"));
 
         handler().afterConnectionEstablished(wsSession);
@@ -140,11 +149,11 @@ class TerminalWebSocketHandlerTest {
     @Test
     void sendPasswordFrame_callsUseCaseWithBufferedTail_andRepliesWithStatus() throws Exception {
         attrs();
-        when(wsSession.getUri()).thenReturn(URI.create("wss://host/machines/nas/terminal"));
+        when(wsSession.getUri()).thenReturn(URI.create("wss://host/machines/" + mid("nas") + "/terminal"));
         ArgumentCaptor<SshOutputListener> listener = ArgumentCaptor.forClass(SshOutputListener.class);
-        when(openTerminalSessionUseCase.openTerminal(eq("nas"), any(), listener.capture())).thenReturn(opened(sshSession));
+        when(openTerminalSessionUseCase.openTerminal(eq(mid("nas")), any(), listener.capture())).thenReturn(opened(sshSession));
         lenient().when(wsSession.isOpen()).thenReturn(true);
-        when(sendHostPasswordUseCase.sendPassword(eq("nas"), eq(sshSession), any()))
+        when(sendHostPasswordUseCase.sendPassword(eq(mid("nas")), eq(sshSession), any()))
             .thenReturn(SendPasswordResult.SENT);
 
         TerminalWebSocketHandler handler = handler();
@@ -154,7 +163,7 @@ class TerminalWebSocketHandlerTest {
         handler.handleMessage(wsSession, new TextMessage("{\"type\":\"send-password\"}"));
 
         ArgumentCaptor<String> tail = ArgumentCaptor.forClass(String.class);
-        verify(sendHostPasswordUseCase).sendPassword(eq("nas"), eq(sshSession), tail.capture());
+        verify(sendHostPasswordUseCase).sendPassword(eq(mid("nas")), eq(sshSession), tail.capture());
         assertThat(tail.getValue()).endsWith("password: ");
 
         // The prompt output also pushes a password-prompt state frame, so filter for the result reply.
@@ -167,10 +176,10 @@ class TerminalWebSocketHandlerTest {
     @Test
     void sendPasswordReply_neverContainsTheSecret() throws Exception {
         attrs();
-        when(wsSession.getUri()).thenReturn(URI.create("wss://host/machines/nas/terminal"));
-        when(openTerminalSessionUseCase.openTerminal(eq("nas"), any(), any())).thenReturn(opened(sshSession));
+        when(wsSession.getUri()).thenReturn(URI.create("wss://host/machines/" + mid("nas") + "/terminal"));
+        when(openTerminalSessionUseCase.openTerminal(eq(mid("nas")), any(), any())).thenReturn(opened(sshSession));
         lenient().when(wsSession.isOpen()).thenReturn(true);
-        when(sendHostPasswordUseCase.sendPassword(eq("nas"), eq(sshSession), any()))
+        when(sendHostPasswordUseCase.sendPassword(eq(mid("nas")), eq(sshSession), any()))
             .thenReturn(SendPasswordResult.SENT);
 
         TerminalWebSocketHandler handler = handler();
@@ -187,8 +196,8 @@ class TerminalWebSocketHandlerTest {
     @Test
     void onConnect_sendsShellModeFrame_reflectingContinuity() throws Exception {
         attrs();
-        when(wsSession.getUri()).thenReturn(URI.create("wss://host/machines/nas/terminal?pane=abc"));
-        when(openTerminalSessionUseCase.openTerminal(eq("nas"), eq("abc"), any()))
+        when(wsSession.getUri()).thenReturn(URI.create("wss://host/machines/" + mid("nas") + "/terminal?pane=abc"));
+        when(openTerminalSessionUseCase.openTerminal(eq(mid("nas")), eq("abc"), any()))
             .thenReturn(new OpenedTerminal(sshSession, PersistentShell.Continuity.REATTACHED));
 
         handler().afterConnectionEstablished(wsSession);
@@ -215,19 +224,19 @@ class TerminalWebSocketHandlerTest {
     @Test
     void paneFromQuery_readsThePaneParameter() {
         assertThat(TerminalWebSocketHandler.paneFromQuery(
-            URI.create("wss://host/machines/nas/terminal?pane=p-42"))).isEqualTo("p-42");
+            URI.create("wss://host/machines/" + mid("nas") + "/terminal?pane=p-42"))).isEqualTo("p-42");
         assertThat(TerminalWebSocketHandler.paneFromQuery(
-            URI.create("wss://host/machines/nas/terminal"))).isNull();
+            URI.create("wss://host/machines/" + mid("nas") + "/terminal"))).isNull();
     }
 
     @Test
     void tailBuffer_isBoundedToLast512Bytes() throws Exception {
         attrs();
-        when(wsSession.getUri()).thenReturn(URI.create("wss://host/machines/nas/terminal"));
+        when(wsSession.getUri()).thenReturn(URI.create("wss://host/machines/" + mid("nas") + "/terminal"));
         ArgumentCaptor<SshOutputListener> listener = ArgumentCaptor.forClass(SshOutputListener.class);
-        when(openTerminalSessionUseCase.openTerminal(eq("nas"), any(), listener.capture())).thenReturn(opened(sshSession));
+        when(openTerminalSessionUseCase.openTerminal(eq(mid("nas")), any(), listener.capture())).thenReturn(opened(sshSession));
         lenient().when(wsSession.isOpen()).thenReturn(true);
-        when(sendHostPasswordUseCase.sendPassword(eq("nas"), eq(sshSession), any()))
+        when(sendHostPasswordUseCase.sendPassword(eq(mid("nas")), eq(sshSession), any()))
             .thenReturn(SendPasswordResult.NOT_AT_PROMPT);
 
         TerminalWebSocketHandler handler = handler();
@@ -238,7 +247,7 @@ class TerminalWebSocketHandlerTest {
         handler.handleMessage(wsSession, new TextMessage("{\"type\":\"send-password\"}"));
 
         ArgumentCaptor<String> tail = ArgumentCaptor.forClass(String.class);
-        verify(sendHostPasswordUseCase).sendPassword(eq("nas"), eq(sshSession), tail.capture());
+        verify(sendHostPasswordUseCase).sendPassword(eq(mid("nas")), eq(sshSession), tail.capture());
         assertThat(tail.getValue().getBytes(StandardCharsets.UTF_8).length).isLessThanOrEqualTo(512);
         assertThat(tail.getValue()).endsWith("Password: ");
     }
@@ -246,9 +255,9 @@ class TerminalWebSocketHandlerTest {
     @Test
     void pushesPasswordPromptState_onlyWhenItChanges() throws Exception {
         attrs();
-        when(wsSession.getUri()).thenReturn(URI.create("wss://host/machines/nas/terminal"));
+        when(wsSession.getUri()).thenReturn(URI.create("wss://host/machines/" + mid("nas") + "/terminal"));
         ArgumentCaptor<SshOutputListener> listener = ArgumentCaptor.forClass(SshOutputListener.class);
-        when(openTerminalSessionUseCase.openTerminal(eq("nas"), any(), listener.capture())).thenReturn(opened(sshSession));
+        when(openTerminalSessionUseCase.openTerminal(eq(mid("nas")), any(), listener.capture())).thenReturn(opened(sshSession));
         when(wsSession.isOpen()).thenReturn(true);
 
         TerminalWebSocketHandler handler = handler();
@@ -289,9 +298,9 @@ class TerminalWebSocketHandlerTest {
     @Test
     void outputListener_relaysRemoteOutputAsBinaryFrame() throws Exception {
         attrs();
-        when(wsSession.getUri()).thenReturn(URI.create("wss://host/machines/nas/terminal"));
+        when(wsSession.getUri()).thenReturn(URI.create("wss://host/machines/" + mid("nas") + "/terminal"));
         ArgumentCaptor<SshOutputListener> listener = ArgumentCaptor.forClass(SshOutputListener.class);
-        when(openTerminalSessionUseCase.openTerminal(eq("nas"), any(), listener.capture())).thenReturn(opened(sshSession));
+        when(openTerminalSessionUseCase.openTerminal(eq(mid("nas")), any(), listener.capture())).thenReturn(opened(sshSession));
         when(wsSession.isOpen()).thenReturn(true);
 
         handler().afterConnectionEstablished(wsSession);
@@ -315,8 +324,8 @@ class TerminalWebSocketHandlerTest {
     void endShellFrame_endsThePanesPersistentShell_andClosesTheSocket() throws Exception {
         attrs();
         when(wsSession.getUri()).thenReturn(
-            URI.create("wss://host/machines/nas/terminal?pane=pane1"));
-        when(openTerminalSessionUseCase.openTerminal(eq("nas"), eq("pane1"), any()))
+            URI.create("wss://host/machines/" + mid("nas") + "/terminal?pane=pane1"));
+        when(openTerminalSessionUseCase.openTerminal(eq(mid("nas")), eq("pane1"), any()))
             .thenReturn(opened(sshSession));
         TerminalWebSocketHandler handler = handler();
         handler.afterConnectionEstablished(wsSession);
@@ -324,15 +333,15 @@ class TerminalWebSocketHandlerTest {
         handler.handleTextMessage(wsSession, new TextMessage("{\"type\":\"end-shell\"}"));
 
         // The operator closed the pane: the shell is done, so the session must not outlive it.
-        verify(endTerminalSessionUseCase).endTerminal("nas", "pane1");
+        verify(endTerminalSessionUseCase).endTerminal(mid("nas"), "pane1");
     }
 
     @Test
     void droppedSocket_doesNotEndTheShell() {
         attrs();
         when(wsSession.getUri()).thenReturn(
-            URI.create("wss://host/machines/nas/terminal?pane=pane1"));
-        when(openTerminalSessionUseCase.openTerminal(eq("nas"), eq("pane1"), any()))
+            URI.create("wss://host/machines/" + mid("nas") + "/terminal?pane=pane1"));
+        when(openTerminalSessionUseCase.openTerminal(eq(mid("nas")), eq("pane1"), any()))
             .thenReturn(opened(sshSession));
         TerminalWebSocketHandler handler = handler();
         handler.afterConnectionEstablished(wsSession);

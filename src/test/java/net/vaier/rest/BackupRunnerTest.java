@@ -100,7 +100,7 @@ class BackupRunnerTest {
     }
 
     private void hasCredential(String name) {
-        when(credentials.getHostCredential(name)).thenReturn(
+        when(credentials.getHostCredential(mid(name))).thenReturn(
             Optional.of(new HostCredentialView(mid(name), "root", AuthMethod.PASSWORD, true)));
     }
 
@@ -444,7 +444,7 @@ class BackupRunnerTest {
     void skipsMachineWithoutSshAccessOrCredential() {
         // No stored credential: never runs, records a FAILED run.
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
-        when(credentials.getHostCredential("Colina 27")).thenReturn(Optional.empty());
+        when(credentials.getHostCredential(mid("Colina 27"))).thenReturn(Optional.empty());
 
         BackupRun noCred = backupRunner.runJob(job(), repo(), "run-1");
 

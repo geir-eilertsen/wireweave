@@ -1,6 +1,7 @@
 package net.vaier.application;
 
 import java.util.List;
+import net.vaier.domain.MachineId;
 
 /**
  * Read a machine's filesystems, on demand (#323 slice C, fixed by #325).
@@ -21,8 +22,8 @@ import java.util.List;
  */
 public interface GetMachineDiskUsageUseCase {
 
-    /** Every real filesystem on {@code machineName}, read now. */
-    List<MachineFilesystemUco> getDiskUsage(String machineName);
+    /** Every real filesystem on {@code machineId}, read now. */
+    List<MachineFilesystemUco> getDiskUsage(MachineId machineId);
 
     /**
      * One filesystem, as the Explorer and the API see it.

@@ -1,5 +1,6 @@
 package net.vaier.application;
 
+import net.vaier.domain.MachineId;
 import net.vaier.domain.PersistentShell;
 import net.vaier.domain.port.ForOpeningSshSessions.SshOutputListener;
 import net.vaier.domain.port.ForOpeningSshSessions.SshSession;
@@ -7,7 +8,7 @@ import net.vaier.domain.port.ForOpeningSshSessions.SshSession;
 public interface OpenTerminalSessionUseCase {
 
     /**
-     * Open a live SSH shell to the machine named {@code machineName} for the browser pane {@code paneId},
+     * Open a live SSH shell to the machine named {@code machineId} for the browser pane {@code paneId},
      * streaming remote output to {@code onOutput}. Resolves the machine's SSH address (peer tunnel IP /
      * LAN address / Vaier host), authenticates from the credential vault, and pins the host key on first
      * use.
@@ -25,7 +26,7 @@ public interface OpenTerminalSessionUseCase {
      * @throws net.vaier.domain.SshAuthException         the stored credential was rejected
      * @throws net.vaier.domain.SshConnectException      the host could not be reached
      */
-    OpenedTerminal openTerminal(String machineName, String paneId, SshOutputListener onOutput);
+    OpenedTerminal openTerminal(MachineId machineId, String paneId, SshOutputListener onOutput);
 
     /**
      * The live {@link SshSession} and how the open resolved (reattached / new / plain).

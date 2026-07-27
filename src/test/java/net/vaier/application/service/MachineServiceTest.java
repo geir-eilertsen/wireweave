@@ -54,8 +54,12 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class MachineServiceTest {
 
+    private static final java.util.Map<MachineId, Optional<String>> NAMES_BY_ID = new java.util.HashMap<>();
+
     private static MachineId mid(String name) {
-        return TestMachineIds.of(name);
+        MachineId id = TestMachineIds.of(name);
+        NAMES_BY_ID.put(id, Optional.of(name));
+        return id;
     }
 
     @Mock ForGettingPeerConfigurations forGettingPeerConfigurations;
@@ -89,6 +93,9 @@ class MachineServiceTest {
             forResolvingVaierServerIdentity, configResolver);
         lenient().when(forResolvingMachineIds.idForName(anyString()))
             .thenAnswer(i -> Optional.of(mid(i.getArgument(0))));
+        // The reverse direction too: disk rows and the unreadable-disk message name the machine for a person.
+        lenient().when(forResolvingMachineIds.nameForId(any(MachineId.class)))
+            .thenAnswer(i -> NAMES_BY_ID.get(i.getArgument(0)));
         lenient().when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of());
         lenient().when(forGettingVpnClients.getClients()).thenReturn(List.of());
         lenient().when(forGettingLanServers.getAll()).thenReturn(List.of());
@@ -280,10 +287,12 @@ class MachineServiceTest {
 
     @Test
     void setMachineSshAccess_lanServer_savesOverride_andReturnsEnabled() {
-        LanServer nas = new LanServer("nas", "192.168.3.50", true, 2375);
+        lenient().when(forResolvingVaierServerIdentity.identity())
+            .thenReturn(mid(LanAnchor.VAIER_SERVER_NAME));
+        LanServer nas = new LanServer("nas", "192.168.3.50", true, 2375, null, null, null, mid("nas"));
         lenient().when(forPersistingLanServers.getAll()).thenReturn(List.of(nas));
 
-        boolean effective = service.setMachineSshAccess("nas", false);
+        boolean effective = service.setMachineSshAccess(mid("nas"), false);
 
         assertThat(effective).isFalse();
         org.mockito.Mockito.verify(forPersistingLanServers).save(nas.withSshAccessOverride(false));
@@ -292,13 +301,15 @@ class MachineServiceTest {
 
     @Test
     void setMachineSshAccess_peer_updatesByPeerId_andReturnsEnabled() {
+        lenient().when(forResolvingVaierServerIdentity.identity())
+            .thenReturn(mid(LanAnchor.VAIER_SERVER_NAME));
         lenient().when(forPersistingLanServers.getAll()).thenReturn(List.of());
         lenient().when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
             new PeerConfiguration("alice-id", "alice", "10.13.13.2", "", MachineType.UBUNTU_SERVER,
-                null, null, null)
+                null, null, null, null, null, mid("alice"))
         ));
 
-        boolean effective = service.setMachineSshAccess("alice", true);
+        boolean effective = service.setMachineSshAccess(mid("alice"), true);
 
         assertThat(effective).isTrue();
         org.mockito.Mockito.verify(forUpdatingPeerConfigurations).updateSshAccess("alice-id", true);
@@ -306,21 +317,27 @@ class MachineServiceTest {
 
     @Test
     void setMachineSshAccess_unknownMachine_throwsNotFound() {
+        lenient().when(forResolvingVaierServerIdentity.identity())
+            .thenReturn(mid(LanAnchor.VAIER_SERVER_NAME));
         lenient().when(forPersistingLanServers.getAll()).thenReturn(List.of());
         lenient().when(forResolvingMachineIds.idForName(anyString()))
             .thenAnswer(i -> Optional.of(mid(i.getArgument(0))));
+        // The reverse direction too: disk rows and the unreadable-disk message name the machine for a person.
+        lenient().when(forResolvingMachineIds.nameForId(any(MachineId.class)))
+            .thenAnswer(i -> NAMES_BY_ID.get(i.getArgument(0)));
         lenient().when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of());
 
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.setMachineSshAccess("ghost", true))
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.setMachineSshAccess(mid("ghost"), true))
             .isInstanceOf(NotFoundException.class);
     }
 
     @Test
     void setMachineSshAccess_vaierServer_writesToConfig_notPeerOrLanAdapter() {
+        when(forResolvingVaierServerIdentity.identity()).thenReturn(mid(LanAnchor.VAIER_SERVER_NAME));
         lenient().when(forPersistingAppConfiguration.load())
             .thenReturn(Optional.of(VaierConfig.builder().domain("example.com").build()));
 
-        boolean effective = service.setMachineSshAccess(LanAnchor.VAIER_SERVER_NAME, false);
+        boolean effective = service.setMachineSshAccess(mid(LanAnchor.VAIER_SERVER_NAME), false);
 
         assertThat(effective).isFalse();
         ArgumentCaptor<VaierConfig> captor = ArgumentCaptor.forClass(VaierConfig.class);
@@ -370,7 +387,7 @@ class MachineServiceTest {
         when(configResolver.getDiskMonitorThresholdPercent()).thenReturn(85);
         when(forPersistingDiskWatches.getAll()).thenReturn(List.of());
 
-        var filesystems = service.getDiskUsage("NAS");
+        var filesystems = service.getDiskUsage(mid("NAS"));
 
         assertThat(filesystems).extracting(MachineFilesystemUco::mountPoint)
             .containsExactly("/", "/volume2", "/volume1");
@@ -384,7 +401,7 @@ class MachineServiceTest {
         when(configResolver.getDiskMonitorThresholdPercent()).thenReturn(85);
         when(forPersistingDiskWatches.getAll()).thenReturn(List.of());
 
-        var volume1 = service.getDiskUsage("NAS").stream()
+        var volume1 = service.getDiskUsage(mid("NAS")).stream()
             .filter(fs -> fs.mountPoint().equals("/volume1")).findFirst().orElseThrow();
 
         assertThat(volume1.usedPercent()).isEqualTo(39);
@@ -401,7 +418,7 @@ class MachineServiceTest {
         when(configResolver.getDiskMonitorThresholdPercent()).thenReturn(80);
         when(forPersistingDiskWatches.getAll()).thenReturn(List.of());
 
-        var filesystems = service.getDiskUsage("Apalveien 5");
+        var filesystems = service.getDiskUsage(mid("Apalveien 5"));
 
         assertThat(filesystems).singleElement().satisfies(root -> {
             assertThat(root.machineName()).isEqualTo("Apalveien 5");
@@ -425,7 +442,7 @@ class MachineServiceTest {
         when(configResolver.getDiskMonitorThresholdPercent()).thenReturn(80);
         when(forPersistingDiskWatches.getAll()).thenReturn(List.of());
 
-        var root = service.getDiskUsage("Colina 27").get(0);
+        var root = service.getDiskUsage(mid("Colina 27")).get(0);
 
         assertThat(root.usedPercent()).isEqualTo(91);
         assertThat(root.aboveThreshold()).isTrue();
@@ -443,7 +460,7 @@ class MachineServiceTest {
             new DiskWatch(mid("NAS"), "/", true, 95),
             new DiskWatch(mid("NAS"), "/volume2", false, null)));
 
-        var byMount = service.getDiskUsage("NAS").stream()
+        var byMount = service.getDiskUsage(mid("NAS")).stream()
             .collect(java.util.stream.Collectors.toMap(MachineFilesystemUco::mountPoint, fs -> fs));
 
         assertThat(byMount.get("/").usedPercent()).isEqualTo(88);
@@ -467,7 +484,7 @@ class MachineServiceTest {
         when(configResolver.getDiskMonitorThresholdPercent()).thenReturn(80);
         when(forPersistingDiskWatches.getAll()).thenReturn(List.of());
 
-        service.getDiskUsage("Apalveien 5");
+        service.getDiskUsage(mid("Apalveien 5"));
 
         verify(forTrackingHostKeys).pin(mid("Apalveien 5"), "SHA256:abc");
     }
@@ -480,7 +497,7 @@ class MachineServiceTest {
         when(forRunningSshCommands.run(any(), anyString()))
             .thenReturn(new CommandResult(1, "", "df: command not found", false, null));
 
-        assertThatThrownBy(() -> service.getDiskUsage("nas"))
+        assertThatThrownBy(() -> service.getDiskUsage(mid("nas")))
             .isInstanceOf(DiskUnreadableException.class)
             .hasMessageContaining("nas");
 
@@ -496,7 +513,7 @@ class MachineServiceTest {
             .thenReturn(new CommandResult(0, "Filesystem 1024-blocks Used Available Capacity Mounted on",
                 "", false, null));
 
-        assertThatThrownBy(() -> service.getDiskUsage("nas"))
+        assertThatThrownBy(() -> service.getDiskUsage(mid("nas")))
             .isInstanceOf(DiskUnreadableException.class);
     }
 
@@ -504,7 +521,7 @@ class MachineServiceTest {
 
     @Test
     void setDiskWatch_persistsTheWatchForThatOneFilesystem() {
-        service.setDiskWatch("NAS", "/", true, 95);
+        service.setDiskWatch(mid("NAS"), "/", true, 95);
 
         var saved = ArgumentCaptor.forClass(DiskWatch.class);
         verify(forPersistingDiskWatches).save(saved.capture());
@@ -513,7 +530,7 @@ class MachineServiceTest {
 
     @Test
     void setDiskWatch_withNoThresholdOfItsOwn_fallsBackToTheGlobalOne() {
-        service.setDiskWatch("NAS", "/volume1", true, null);
+        service.setDiskWatch(mid("NAS"), "/volume1", true, null);
 
         var saved = ArgumentCaptor.forClass(DiskWatch.class);
         verify(forPersistingDiskWatches).save(saved.capture());
@@ -522,7 +539,7 @@ class MachineServiceTest {
 
     @Test
     void setDiskWatch_canMuteAFilesystem() {
-        service.setDiskWatch("NAS", "/volume2", false, null);
+        service.setDiskWatch(mid("NAS"), "/volume2", false, null);
 
         var saved = ArgumentCaptor.forClass(DiskWatch.class);
         verify(forPersistingDiskWatches).save(saved.capture());

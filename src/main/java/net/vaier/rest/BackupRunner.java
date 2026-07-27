@@ -169,7 +169,7 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
             return recorded(BackupRun.failed(job, runId, clock.instant(),
                 "SSH access is disabled for " + machineName));
         }
-        if (credentials.getHostCredential(machineName).isEmpty()) {
+        if (credentials.getHostCredential(machine.get().id()).isEmpty()) {
             return recorded(BackupRun.failed(job, runId, clock.instant(),
                 "No stored credential for " + machineName));
         }
@@ -300,7 +300,7 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
         }
         Optional<Machine> machine = findMachine(job.get().machineId());
         if (machine.isEmpty() || !machine.get().effectiveSshAccess()
-            || credentials.getHostCredential(machine.get().name()).isEmpty()) {
+            || credentials.getHostCredential(machine.get().id()).isEmpty()) {
             log.debug("Cannot list archives for repository {}: machine or credential unavailable",
                 LogSafe.forLog(repositoryName));
             return List.of();
@@ -378,7 +378,7 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
         try {
             Optional<Machine> machine = findMachine(run.machineId());
             if (machine.isEmpty() || !machine.get().effectiveSshAccess()
-                || credentials.getHostCredential(machine.get().name()).isEmpty()) {
+                || credentials.getHostCredential(machine.get().id()).isEmpty()) {
                 log.debug("Cannot poll backup {} for job {}: machine or credential unavailable; leaving RUNNING",
                     LogSafe.forLog(run.runId()), LogSafe.forLog(run.jobName()));
                 return;

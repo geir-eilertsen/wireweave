@@ -6,6 +6,8 @@ import net.vaier.application.SaveHostCredentialUseCase;
 import net.vaier.domain.AuthMethod;
 import net.vaier.domain.HostCredential;
 import net.vaier.domain.HostCredentialView;
+import net.vaier.domain.MachineId;
+import net.vaier.domain.TestMachineIds;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -34,8 +36,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @ExtendWith(MockitoExtension.class)
 class HostCredentialRestControllerTest {
 
-    private static net.vaier.domain.MachineId mid(String name) {
-        return net.vaier.domain.TestMachineIds.of(name);
+    private static MachineId mid(String name) {
+        return TestMachineIds.of(name);
     }
 
     @Mock SaveHostCredentialUseCase saveHostCredentialUseCase;
@@ -50,7 +52,7 @@ class HostCredentialRestControllerTest {
             "admin", "PASSWORD", "s3cret", null);
 
         ResponseEntity<HostCredentialRestController.CredentialResponse> response =
-            controller.save("nas", request);
+            controller.save(mid("nas").value(), request);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody().hasSecret()).isTrue();
@@ -58,7 +60,7 @@ class HostCredentialRestControllerTest {
         // credential keyed by identity is the application's decision, not the controller's.
         ArgumentCaptor<net.vaier.domain.SshCredentialDraft> captor =
             ArgumentCaptor.forClass(net.vaier.domain.SshCredentialDraft.class);
-        verify(saveHostCredentialUseCase).saveHostCredential(eq("nas"), captor.capture());
+        verify(saveHostCredentialUseCase).saveHostCredential(eq(mid("nas")), captor.capture());
         net.vaier.domain.SshCredentialDraft saved = captor.getValue();
         assertThat(saved.username()).isEqualTo("admin");
         assertThat(saved.authMethod()).isEqualTo(AuthMethod.PASSWORD);
@@ -70,7 +72,7 @@ class HostCredentialRestControllerTest {
         var request = new HostCredentialRestController.SaveCredentialRequest(
             "admin", "BANANA", "s3cret", null);
 
-        assertThatThrownBy(() -> controller.save("nas", request))
+        assertThatThrownBy(() -> controller.save(mid("nas").value(), request))
             .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -84,18 +86,18 @@ class HostCredentialRestControllerTest {
         var request = new HostCredentialRestController.SaveCredentialRequest(
             "admin", "PASSWORD", "  ", null);
         org.mockito.Mockito.doThrow(new IllegalArgumentException("secret must not be blank"))
-            .when(saveHostCredentialUseCase).saveHostCredential(eq("nas"), any());
+            .when(saveHostCredentialUseCase).saveHostCredential(eq(mid("nas")), any());
 
-        assertThatThrownBy(() -> controller.save("nas", request))
+        assertThatThrownBy(() -> controller.save(mid("nas").value(), request))
             .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void get_present_returnsRedactedView() {
-        when(getHostCredentialUseCase.getHostCredential("nas"))
+        when(getHostCredentialUseCase.getHostCredential(mid("nas")))
             .thenReturn(Optional.of(new HostCredentialView(mid("nas"), "admin", AuthMethod.PASSWORD, true)));
 
-        ResponseEntity<HostCredentialRestController.CredentialResponse> response = controller.get("nas");
+        ResponseEntity<HostCredentialRestController.CredentialResponse> response = controller.get(mid("nas").value());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody().username()).isEqualTo("admin");
@@ -104,24 +106,24 @@ class HostCredentialRestControllerTest {
 
     @Test
     void get_absent_returns404() {
-        when(getHostCredentialUseCase.getHostCredential("ghost")).thenReturn(Optional.empty());
+        when(getHostCredentialUseCase.getHostCredential(mid("ghost"))).thenReturn(Optional.empty());
 
-        assertThat(controller.get("ghost").getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(controller.get(mid("ghost").value()).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }
 
     @Test
     void delete_returns204() {
-        ResponseEntity<Void> response = controller.delete("nas");
+        ResponseEntity<Void> response = controller.delete(mid("nas").value());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
-        verify(deleteHostCredentialUseCase).deleteHostCredential("nas");
+        verify(deleteHostCredentialUseCase).deleteHostCredential(mid("nas"));
     }
 
     @Test
     void put_thenGet_responseBodyNeverCarriesSecretBytes() throws Exception {
         MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
 
-        mockMvc.perform(put("/machines/nas/ssh-credential")
+        mockMvc.perform(put("/machines/" + mid("nas") + "/ssh-credential")
                 .contentType("application/json")
                 .content("""
                     {"username":"admin","authMethod":"PRIVATE_KEY",
@@ -134,10 +136,10 @@ class HostCredentialRestControllerTest {
                 org.hamcrest.Matchers.containsString("topsecretphrase"))))
             .andExpect(jsonPath("$.hasSecret").value(true));
 
-        when(getHostCredentialUseCase.getHostCredential("nas"))
+        when(getHostCredentialUseCase.getHostCredential(mid("nas")))
             .thenReturn(Optional.of(new HostCredentialView(mid("nas"), "admin", AuthMethod.PRIVATE_KEY, true)));
 
-        mockMvc.perform(get("/machines/nas/ssh-credential"))
+        mockMvc.perform(get("/machines/" + mid("nas") + "/ssh-credential"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.hasSecret").value(true))
             .andExpect(jsonPath("$.username").value("admin"))

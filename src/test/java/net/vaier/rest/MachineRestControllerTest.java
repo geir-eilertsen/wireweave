@@ -38,6 +38,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
@@ -69,7 +70,7 @@ class MachineRestControllerTest {
         // list() reads a credential per machine; default every lookup to "none stored" so the tests
         // that don't care about credentials keep asserting only what they set. Tests that do care
         // override the specific name.
-        lenient().when(getHostCredentialUseCase.getHostCredential(anyString())).thenReturn(Optional.empty());
+        lenient().when(getHostCredentialUseCase.getHostCredential(any(MachineId.class))).thenReturn(Optional.empty());
     }
 
     @Test
@@ -86,7 +87,7 @@ class MachineRestControllerTest {
                 "pubkey", "10.13.13.2/32", "1.2.3.4", "51820",
                 "1700000000", "100", "200",
                 null, null, true, null, net.vaier.domain.DeviceCategory.SERVER, null),
-            new Machine(MachineId.generate(), "nas", MachineType.LAN_SERVER,
+            new Machine(mid("nas"), "nas", MachineType.LAN_SERVER,
                 null, null, null, null, null, null, null,
                 "192.168.3.0/24", "192.168.3.50", true, 2375, net.vaier.domain.DeviceCategory.NAS, null)
         ));
@@ -111,14 +112,14 @@ class MachineRestControllerTest {
         // credential for it, not merely the ssh-access toggle — so GET /machines carries hasCredential
         // per machine: true iff a stored host credential with a secret exists for that name.
         when(getMachinesUseCase.getAllMachines()).thenReturn(List.of(
-            new Machine(MachineId.generate(), "nas", MachineType.LAN_SERVER,
+            new Machine(mid("nas"), "nas", MachineType.LAN_SERVER,
                 null, null, null, null, null, null, null,
                 "192.168.3.0/24", "192.168.3.50", true, 2375, DeviceCategory.NAS, null),
-            new Machine(MachineId.generate(), "printer", MachineType.LAN_SERVER,
+            new Machine(mid("printer"), "printer", MachineType.LAN_SERVER,
                 null, null, null, null, null, null, null,
                 "192.168.3.0/24", "192.168.3.20", false, null, DeviceCategory.PRINTER, null)
         ));
-        when(getHostCredentialUseCase.getHostCredential("nas")).thenReturn(
+        when(getHostCredentialUseCase.getHostCredential(mid("nas"))).thenReturn(
             Optional.of(new HostCredentialView(mid("nas"), "root", AuthMethod.PASSWORD, true)));
 
         var response = controller.list();
@@ -149,19 +150,19 @@ class MachineRestControllerTest {
 
     @Test
     void setSshAccess_delegatesAndReturnsEffectiveState() {
-        when(setMachineSshAccessUseCase.setMachineSshAccess("nas", false)).thenReturn(false);
+        when(setMachineSshAccessUseCase.setMachineSshAccess(mid("nas"), false)).thenReturn(false);
 
-        var response = controller.setSshAccess("nas", new MachineRestController.SshAccessRequest(false));
+        var response = controller.setSshAccess(mid("nas").value(), new MachineRestController.SshAccessRequest(false));
 
         assertThat(response.sshAccess()).isFalse();
-        verify(setMachineSshAccessUseCase).setMachineSshAccess("nas", false);
+        verify(setMachineSshAccessUseCase).setMachineSshAccess(mid("nas"), false);
     }
 
     @Test
     void setSshAccess_enabledTrue_delegates() {
-        when(setMachineSshAccessUseCase.setMachineSshAccess("nas", true)).thenReturn(true);
+        when(setMachineSshAccessUseCase.setMachineSshAccess(mid("nas"), true)).thenReturn(true);
 
-        var response = controller.setSshAccess("nas", new MachineRestController.SshAccessRequest(true));
+        var response = controller.setSshAccess(mid("nas").value(), new MachineRestController.SshAccessRequest(true));
 
         assertThat(response.sshAccess()).isTrue();
     }
@@ -171,7 +172,7 @@ class MachineRestControllerTest {
     @Test
     void vaierServer_reportsEffectiveSshAccessAndCredentialPresence() {
         when(getVaierServerUseCase.getVaierServerMachine()).thenReturn(Machine.vaierServer(MachineId.generate(), null));
-        when(getHostCredentialUseCase.getHostCredential(LanAnchor.VAIER_SERVER_NAME))
+        when(getHostCredentialUseCase.getHostCredential(any(MachineId.class)))
             .thenReturn(Optional.of(new HostCredentialView(mid(LanAnchor.VAIER_SERVER_NAME), "root",
                 AuthMethod.PASSWORD, true)));
 
@@ -185,7 +186,7 @@ class MachineRestControllerTest {
     @Test
     void vaierServer_noCredentialStored_reportsHasCredentialFalse() {
         when(getVaierServerUseCase.getVaierServerMachine()).thenReturn(Machine.vaierServer(MachineId.generate(), false));
-        when(getHostCredentialUseCase.getHostCredential(LanAnchor.VAIER_SERVER_NAME))
+        when(getHostCredentialUseCase.getHostCredential(any(MachineId.class)))
             .thenReturn(Optional.empty());
 
         var response = controller.vaierServer();
@@ -198,10 +199,10 @@ class MachineRestControllerTest {
 
     @Test
     void clearHostKey_returns204AndDelegates() {
-        var response = controller.clearHostKey("nas");
+        var response = controller.clearHostKey(mid("nas").value());
 
         assertThat(response.getStatusCode().value()).isEqualTo(204);
-        verify(clearHostKeyUseCase).clearHostKey("nas");
+        verify(clearHostKeyUseCase).clearHostKey(mid("nas"));
     }
 
     // --- progressive-adoption nudges (edge-composed) ---
@@ -215,18 +216,18 @@ class MachineRestControllerTest {
         // A reachable, storage-class peer, with an exposed service, an SSH credential, nothing backed up,
         // and no backup server anywhere ⇒ all three nudges fire.
         String freshHandshake = String.valueOf(System.currentTimeMillis() / 1000);
-        Machine alice = new Machine(MachineId.generate(), "alice", MachineType.UBUNTU_SERVER, "pk", "10.13.13.2/32",
+        Machine alice = new Machine(mid("alice"), "alice", MachineType.UBUNTU_SERVER, "pk", "10.13.13.2/32",
             "1.2.3.4", "51820", freshHandshake, "1", "1", null, null, true, null, DeviceCategory.SERVER, null);
         when(getMachinesUseCase.getAllMachines()).thenReturn(List.of(alice));
         when(getVaierServerUseCase.getVaierServerMachine()).thenReturn(Machine.vaierServer(MachineId.generate(), null));
         when(getPublishableServicesUseCase.getPublishableServices()).thenReturn(List.of(
             new PublishableService(PublishableSource.PEER, "alice", "10.13.13.2", "grafana", 3000, null, false)));
-        when(getHostCredentialUseCase.getHostCredential("alice")).thenReturn(
+        when(getHostCredentialUseCase.getHostCredential(mid("alice"))).thenReturn(
             Optional.of(new HostCredentialView(mid("alice"), "root", AuthMethod.PASSWORD, true)));
         when(getBackupJobsUseCase.getBackupJobs()).thenReturn(List.of());
         when(getBackupServersUseCase.getBackupServers()).thenReturn(List.of());
 
-        var response = controller.nudges("alice");
+        var response = controller.nudges(mid("alice").value());
 
         assertThat(response).extracting(MachineRestController.NudgeResponse::kind)
             .containsExactly(MachineNudge.Kind.PUBLISH.name(), MachineNudge.Kind.BACK_UP.name(),
@@ -238,7 +239,7 @@ class MachineRestControllerTest {
     void nudges_unknownMachine_404() {
         when(getMachinesUseCase.getAllMachines()).thenReturn(List.of());
 
-        assertThatThrownBy(() -> controller.nudges("ghost"))
+        assertThatThrownBy(() -> controller.nudges(mid("ghost").value()))
             .isInstanceOf(NotFoundException.class);
     }
 
@@ -260,11 +261,11 @@ class MachineRestControllerTest {
         // The #325 fix at the REST seam: /volume1 (39%, the volume that holds every borg backup) has to come
         // back alongside / (88%, the DSM system partition), or the operator still cannot see the disk that
         // matters.
-        when(getMachineDiskUsageUseCase.getDiskUsage("NAS")).thenReturn(List.of(
+        when(getMachineDiskUsageUseCase.getDiskUsage(mid("NAS"))).thenReturn(List.of(
             filesystem("NAS", "/", 88, 95, true, false),
             filesystem("NAS", "/volume1", 39, 85, true, false)));
 
-        var response = controller.disk("NAS");
+        var response = controller.disk(mid("NAS").value());
 
         assertThat(response).extracting(MachineRestController.FilesystemResponse::mountPoint)
             .containsExactly("/", "/volume1");
@@ -272,11 +273,11 @@ class MachineRestControllerTest {
 
     @Test
     void disk_reportsTheUsageTheSizeAndTheThresholdEachFilesystemIsJudgedAgainst() {
-        when(getMachineDiskUsageUseCase.getDiskUsage("Apalveien 5")).thenReturn(List.of(
+        when(getMachineDiskUsageUseCase.getDiskUsage(mid("Apalveien 5"))).thenReturn(List.of(
             new MachineFilesystemUco("Apalveien 5", "/dev/root", "/", 30298176L, 18178905L, 10566487L,
                 "28.9 GiB", "10.1 GiB", 63, 80, true, false)));
 
-        var root = controller.disk("Apalveien 5").get(0);
+        var root = controller.disk(mid("Apalveien 5").value()).get(0);
 
         assertThat(root.machine()).isEqualTo("Apalveien 5");
         assertThat(root.mountPoint()).isEqualTo("/");
@@ -290,10 +291,10 @@ class MachineRestControllerTest {
 
     @Test
     void disk_carriesTheDomainsOwnPressureVerdict_theBrowserNeverRecomputesIt() {
-        when(getMachineDiskUsageUseCase.getDiskUsage("Colina 27")).thenReturn(List.of(
+        when(getMachineDiskUsageUseCase.getDiskUsage(mid("Colina 27"))).thenReturn(List.of(
             filesystem("Colina 27", "/", 91, 80, true, true)));
 
-        assertThat(controller.disk("Colina 27").get(0).aboveThreshold()).isTrue();
+        assertThat(controller.disk(mid("Colina 27").value()).get(0).aboveThreshold()).isTrue();
     }
 
     // --- setting one filesystem's watch (#325) ---
@@ -302,10 +303,10 @@ class MachineRestControllerTest {
     void setDiskWatch_takesTheMountPointInTheBody_becauseAMountPointContainsSlashes() {
         // /volume1/@docker/... in a path variable would be a routing nightmare and an encoding bug waiting to
         // happen. The mount point travels in the body, where a slash is just a character.
-        var response = controller.setDiskWatch("NAS",
+        var response = controller.setDiskWatch(mid("NAS").value(),
             new MachineRestController.DiskWatchRequest("/volume1", true, 90));
 
-        verify(setDiskWatchUseCase).setDiskWatch("NAS", "/volume1", true, 90);
+        verify(setDiskWatchUseCase).setDiskWatch(mid("NAS"), "/volume1", true, 90);
         assertThat(response.mountPoint()).isEqualTo("/volume1");
         assertThat(response.watched()).isTrue();
         assertThat(response.thresholdPercent()).isEqualTo(90);
@@ -313,29 +314,24 @@ class MachineRestControllerTest {
 
     @Test
     void setDiskWatch_canMuteAFilesystem_andCanClearItsOwnThreshold() {
-        controller.setDiskWatch("NAS", new MachineRestController.DiskWatchRequest("/", false, null));
+        controller.setDiskWatch(mid("NAS").value(), new MachineRestController.DiskWatchRequest("/", false, null));
 
-        verify(setDiskWatchUseCase).setDiskWatch("NAS", "/", false, null);
+        verify(setDiskWatchUseCase).setDiskWatch(mid("NAS"), "/", false, null);
     }
 
     /**
-     * The nudges endpoint resolves its {@code {machine}} path variable by name, so it must use the rule the
-     * uniqueness guard uses — the same drift that was fixed in the backup controller. A name
-     * {@code Machine.nameIsTaken} would refuse as a duplicate must not 404 here.
+     * There is no name-matching rule here any more. The endpoint is given an identity, so "a name the
+     * uniqueness guard would call the same machine" has stopped being a question — and an id no machine
+     * has is a plain 404 rather than something that might fuzzily match.
      */
     @Test
-    void nudgesResolveTheMachineByTheDomainsNameRule_notByExactEquality() {
-        Machine colina = new Machine(mid("Colina 27"), "Colina 27", MachineType.UBUNTU_SERVER, "pk",
-            "10.13.13.3/32", null, null, null, null, null, null, null, true, null,
-            DeviceCategory.SERVER, null);
-        when(getMachinesUseCase.getAllMachines()).thenReturn(List.of(colina));
-        when(getVaierServerUseCase.getVaierServerMachine())
-            .thenReturn(Machine.vaierServer(MachineId.generate(), null));
-        when(getPublishableServicesUseCase.getPublishableServices()).thenReturn(List.of());
-        when(getBackupJobsUseCase.getBackupJobs()).thenReturn(List.of());
-        when(getBackupServersUseCase.getBackupServers()).thenReturn(List.of());
+    void nudges_anIdNoMachineHas_is404() {
+        when(getMachinesUseCase.getAllMachines()).thenReturn(List.of(
+            new Machine(mid("Colina 27"), "Colina 27", MachineType.UBUNTU_SERVER, "pk",
+                "10.13.13.3/32", null, null, null, null, null, null, null, true, null,
+                DeviceCategory.SERVER, null)));
 
-        // A name the uniqueness guard would call the same machine must not 404 here.
-        assertThat(controller.nudges("  colina 27 ")).isNotNull();
+        assertThatThrownBy(() -> controller.nudges(mid("ghost").value()))
+            .isInstanceOf(NotFoundException.class);
     }
 }

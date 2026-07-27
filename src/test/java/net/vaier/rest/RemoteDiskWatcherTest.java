@@ -95,7 +95,7 @@ class RemoteDiskWatcherTest {
     }
 
     private void hasCredential(String name) {
-        when(credentials.getHostCredential(name)).thenReturn(
+        when(credentials.getHostCredential(mid(name))).thenReturn(
             Optional.of(new HostCredentialView(mid(name), "root", AuthMethod.PASSWORD, true)));
     }
 
@@ -150,7 +150,7 @@ class RemoteDiskWatcherTest {
     @Test
     void machineWithoutCredential_isSkipped_neverRuns() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("nas")));
-        when(credentials.getHostCredential("nas")).thenReturn(Optional.empty());
+        when(credentials.getHostCredential(mid("nas"))).thenReturn(Optional.empty());
 
         watcher.checkRemoteDiskUsage();
 

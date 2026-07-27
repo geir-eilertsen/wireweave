@@ -1,5 +1,6 @@
 package net.vaier.application;
 
+import net.vaier.domain.MachineId;
 import net.vaier.domain.port.ForOpeningSshSessions.SshSession;
 
 /**
@@ -11,14 +12,14 @@ import net.vaier.domain.port.ForOpeningSshSessions.SshSession;
 public interface SendHostPasswordUseCase {
 
     /**
-     * Write the stored password for {@code machineName} into {@code session}, but only when
+     * Write the stored password for {@code machineId} into {@code session}, but only when
      * {@code recentOutput} shows the remote is at a password prompt. The secret is never returned,
      * logged, or exposed in any way.
      *
      * @param session      the live SSH session — a domain port type, so the secret stays in-process
      * @param recentOutput the tail of recent PTY output, used to confirm a live password prompt
      */
-    SendPasswordResult sendPassword(String machineName, SshSession session, String recentOutput);
+    SendPasswordResult sendPassword(MachineId machineId, SshSession session, String recentOutput);
 
     /**
      * The outcome of a send attempt. {@code SENT} wrote the password; {@code NOT_AT_PROMPT} declined

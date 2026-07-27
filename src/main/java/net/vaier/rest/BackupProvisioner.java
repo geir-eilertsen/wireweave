@@ -803,11 +803,15 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
      * (the operator-runs-the-script case, where Vaier isn't SSHing in anyway).
      */
     private String ownerUserFor(BackupServer server) {
-        // The vault is still reached by name, so the server's machine id is resolved back to one first — and
-        // when there is no name (the machine has left the fleet) there is nothing to look up, so the server's
-        // own borgUser stands rather than a vault probe that could only miss.
-        return machineNameFor(server.machineId())
-            .flatMap(credentials::getHostCredential)
+        // A server whose machine has left the fleet is not asked about at all: its own borgUser stands, and
+        // the vault is never probed. Identity-keying makes the probe possible where a name lookup used to
+        // short-circuit it, but an orphaned credential must not name the owner of a machine that is gone.
+        boolean stillInFleet = machines.getAllMachines().stream()
+            .anyMatch(m -> server.machineId().isSameAs(m.id()));
+        if (!stillInFleet) {
+            return server.borgUser();
+        }
+        return credentials.getHostCredential(server.machineId())
             .map(HostCredentialView::username)
             .orElse(server.borgUser());
     }
@@ -853,7 +857,7 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
         Optional<Machine> machine = machines.getAllMachines().stream()
             .filter(m -> m.id().equals(machineId)).findFirst();
         if (machine.isEmpty() || !machine.get().effectiveSshAccess()
-            || credentials.getHostCredential(machine.get().name()).isEmpty()) {
+            || credentials.getHostCredential(machine.get().id()).isEmpty()) {
             log.debug("Cannot provision via {}: machine unknown, SSH disabled, or no credential", machineId);
             return Optional.empty();
         }
