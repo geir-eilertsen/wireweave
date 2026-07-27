@@ -4577,6 +4577,9 @@
     // window per machine: re-opening focuses the one already there rather than spawning a second. `popup` drops
     // the browser's tab strip and address bar — chrome a terminal has no use for.
     function openShellWindow(machine, fresh) {
+        // The socket is opened against the machine's identity, never its name — a name in that path is closed
+        // as "Machine not found". It travels in the URL so the window needs no lookup of its own.
+        const machineId = midOf(machine);
         const features = 'popup,width=1024,height=680';
         // Duplicate: another, separate shell on the same machine. A brand-new session id, and a window named by
         // that id (never the machine), so it opens beside the machine's window instead of focusing it — that is
@@ -4584,6 +4587,7 @@
         if (fresh) {
             const pane = (window.VaierPanes && VaierPanes.newId) ? VaierPanes.newId() : ('p-' + Date.now());
             const w = window.open('terminal.html?machine=' + encodeURIComponent(machine)
+                + '&id=' + encodeURIComponent(machineId)
                 + '&pane=' + encodeURIComponent(pane), 'vaier-shell-' + encodeURIComponent(pane), features);
             if (!w) { toast('Your browser blocked the shell window. Allow pop-ups for Vaier and try again.'); return; }
             w.focus();
@@ -4600,6 +4604,7 @@
         if (!href || href === 'about:blank') {
             const pane = (window.VaierPanes && VaierPanes.primary) ? VaierPanes.primary(machine) : '';
             w.location.href = 'terminal.html?machine=' + encodeURIComponent(machine)
+                + '&id=' + encodeURIComponent(machineId)
                 + (pane ? '&pane=' + encodeURIComponent(pane) : '');
         }
         w.focus();

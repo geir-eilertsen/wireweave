@@ -451,6 +451,7 @@
         const s = _terminals.get(id);
         if (!s) return;
         const url = 'terminal.html?machine=' + encodeURIComponent(s.machine)
+            + '&id=' + encodeURIComponent(window.vaierMachineIdOf(s.machine))
             + '&pane=' + encodeURIComponent(s.paneId);
         // `popup` drops the browser's tab strip and address bar; the pane's own id names the window so a
         // second pop-out of the same shell focuses its window rather than opening another.

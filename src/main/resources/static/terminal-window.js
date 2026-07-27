@@ -11,6 +11,11 @@
 
     const params = new URLSearchParams(window.location.search);
     const machine = params.get('machine');
+    // The identity the socket is opened against. A name is what a person reads; it is not what addresses a
+    // machine, and putting one in the path closes the socket as "Machine not found" — the machine store is
+    // keyed by id. Carried in the URL by whoever opened this window, and re-resolved from /machines when it
+    // is missing, so a window bookmarked before ids existed still opens.
+    let machineId = params.get('id');
     const $ = (id) => document.getElementById(id);
 
     if (!machine) {
@@ -100,7 +105,8 @@
     // unique window name, so several shells on one machine can be open side by side.
     const btnDup = actionButton('Duplicate', () => {
         const pane = VaierPanes.newId();
-        window.open('terminal.html?machine=' + encodeURIComponent(machine) + '&pane=' + encodeURIComponent(pane),
+        window.open('terminal.html?machine=' + encodeURIComponent(machine)
+            + '&id=' + encodeURIComponent(machineId) + '&pane=' + encodeURIComponent(pane),
             'vaier-shell-' + encodeURIComponent(pane), 'popup,width=1024,height=680');
     });
     btnDup.title = 'Open a second, separate shell on ' + machine;
@@ -133,7 +139,7 @@
     // --- connect / reconnect --------------------------------------------------------------------------
     function connect() {
         const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const url = `${proto}//${window.location.host}/machines/${encodeURIComponent(machine)}`
+        const url = `${proto}//${window.location.host}/machines/${encodeURIComponent(machineId)}`
             + `/terminal?pane=${encodeURIComponent(paneId)}`;
         const ws = new WebSocket(url);
         ws.binaryType = 'arraybuffer';
@@ -383,5 +389,28 @@
         if (document.visibilityState === 'visible' && !state.ended) acquireWakeLock();
     });
 
-    connect();
+    // A window opened without an id (a bookmark from before this carried one) resolves the machine by name
+    // once, here, rather than handing the name to a socket that can only reject it.
+    if (machineId) {
+        connect();
+    } else {
+        setStatus('Finding ' + machine + '…');
+        fetch('/machines')
+            .then((res) => (res.ok ? res.json() : []))
+            .then((fleet) => {
+                const found = (fleet || []).find((m) => m.name === machine);
+                if (!found) {
+                    setStatus('There is no machine called "' + machine + '" in this fleet any more.', true);
+                    return;
+                }
+                machineId = found.id;
+                // Written back into this window's own URL, so a reload does not resolve it a second time.
+                const url = new URL(window.location.href);
+                url.searchParams.set('id', machineId);
+                window.history.replaceState(null, '', url);
+                setStatus(null);
+                connect();
+            })
+            .catch(() => setStatus('Could not reach Vaier to find ' + machine + '.', true));
+    }
 })();

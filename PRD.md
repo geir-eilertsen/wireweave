@@ -1831,6 +1831,19 @@ missing or malformed does not load, rather than coming back as a stranger to its
   the vault for a backup server whose machine had left the fleet, where the name lookup used to
   short-circuit — an orphaned credential must not name the owner of a machine that is gone.
 
+- **A fourth defect, found by using it (fixed 2026-07-27).** `126038b` moved the browser to identities and
+  updated the tree, the listing reader and the terminal **dock** — but not `terminal-window.js`, the
+  pop-out shell window, which is where *every* "Open shell" goes since shells moved out of the dock
+  (§6.21). It put the `?machine=` name straight into the socket path, and the handler — correctly —
+  refuses to look a name up there, so every pop-out shell closed `4404` and the window rendered its
+  literal "Machine not found." The id now travels in the URL from each of the three openers (the
+  Explorer's Open shell, the dock's pop-out, the window's own Duplicate), and the name stays for what a
+  name is for: the title, the header and the tooltips. A window opened without an id (a bookmark from
+  before) resolves it from `/machines` once, writes it into its own URL, and says plainly when the name is
+  no longer in the fleet. **Pane ids are still keyed by machine name** — deliberately, since re-keying
+  them by identity re-mints every primary and strands the tmux sessions currently running; a rename still
+  orphans a live shell, which is the same bug class and the next step here.
+
 #### Remaining
 
 Both steps below are **done and committed** (unpushed, on `main`): the SSH path went id-native in
