@@ -61,7 +61,6 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
     private final ForRunningSshCommands forRunningSshCommands;
     private final ForTrackingHostKeys forTrackingHostKeys;
     private final ForPersistingDiskWatches forPersistingDiskWatches;
-    private final net.vaier.domain.port.ForResolvingMachineIds forResolvingMachineIds;
     private final ConfigResolver configResolver;
 
     public MachineService(ForGettingPeerConfigurations forGettingPeerConfigurations,
@@ -75,7 +74,6 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
                           ForRunningSshCommands forRunningSshCommands,
                           ForTrackingHostKeys forTrackingHostKeys,
                           ForPersistingDiskWatches forPersistingDiskWatches,
-                          net.vaier.domain.port.ForResolvingMachineIds forResolvingMachineIds,
                           ForResolvingVaierServerIdentity forResolvingVaierServerIdentity,
                           ConfigResolver configResolver) {
         this.forGettingPeerConfigurations = forGettingPeerConfigurations;
@@ -89,7 +87,6 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
         this.forRunningSshCommands = forRunningSshCommands;
         this.forTrackingHostKeys = forTrackingHostKeys;
         this.forPersistingDiskWatches = forPersistingDiskWatches;
-        this.forResolvingMachineIds = forResolvingMachineIds;
         this.forResolvingVaierServerIdentity = forResolvingVaierServerIdentity;
         this.configResolver = configResolver;
     }
@@ -221,9 +218,17 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
     /**
      * What to call a machine where a person will read it. Presentation only — nothing is found by it, and a
      * machine whose name will not resolve is labelled by its identity rather than failing the read.
+     *
+     * <p>Asked of this service's own fleet rather than of a registry port: naming a machine is not a
+     * cross-domain question, and the port that used to answer it existed only because callers held a name
+     * where they should have held an identity.
      */
     private String labelFor(MachineId machineId) {
-        return forResolvingMachineIds.nameForId(machineId).orElse(machineId.value());
+        return getAllMachines().stream()
+            .filter(m -> machineId.equals(m.id()))
+            .findFirst()
+            .map(Machine::name)
+            .orElse(machineId.value());
     }
 
     private Machine vaierServerMachine() {

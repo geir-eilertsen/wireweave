@@ -1868,13 +1868,38 @@ What is left is one step — the payoff step:
    arities, so the compiler enumerated every construction site instead of letting a misplaced argument
    compile.
 
-2. **Delete the scaffolding.** `ForResolvingMachineIds`, `MachineIdRegistryAdapter`,
-   `Machine.nameIsTaken` and `Machine.hasSameName` go in one commit, and **machine names stop needing to
-   be unique** — the payoff. Three name->id crossings survive today and all three go with it: the two
-   `labelFor(MachineId)` helpers in `TerminalService`/`MachineService` become lookups the caller already
-   did, `BorgArchiveMountAdapter.mount` stops resolving a name for its log line, and — in the browser —
-   `midOf(name)` in `explorer-shell.js` (exposed as `window.vaierMachineIdOf` for the listing reader and
-   the terminal dock) is itself a lookup by name and must go once the tree carries ids of its own.
+2. ~~**Delete the scaffolding**, in one commit with the uniqueness rule.~~ **Wrong shape, found by doing
+   it (2026-07-27).** The registry and the uniqueness guard cannot go together: `Machine.nameIsTaken` is
+   what makes the *remaining* name→machine lookups unambiguous, so deleting it while any of them stands
+   trades a rule that annoys the operator for silent mis-routing — this refactor's own bug class,
+   reintroduced a layer down. It is really four steps, and the payoff is the last of them, not the first.
+
+   2a. **The registry is gone ✅ (2026-07-27).** `ForResolvingMachineIds` and `MachineIdRegistryAdapter`
+   deleted with their test, and all three crossings the plan listed went with them.
+   `MachineService.labelFor` asks its own fleet — naming a machine was never a cross-domain question, and
+   the port existed only because callers held a name where they should have held an identity.
+   `TerminalService.labelFor` is gone outright: it fed log lines that already carry the host address,
+   which identifies a machine better than a name does in a log, and the service has no fleet of its own
+   (nor may it ask a use case), so resolving a name there was the last thing keeping the port alive.
+   `BorgArchiveMountAdapter` resolves nothing now — two of its messages named the machine, but they
+   surface on that machine's own pane in the Explorer, where the operator can already see which machine
+   they asked about, and needing a name was the whole reason an adapter that reaches machines by identity
+   had to look one up.
+
+   2b. **The backup API takes identities.** `BackupRestController.findMachineNamed` is the biggest
+   remaining name→machine lookup: `/backup-servers/{name}/authorize/{machineName}`, the protect-paths
+   endpoints and the job request bodies all name a machine, and with duplicates allowed the lookup
+   silently answers with the first match. The browser call sites move with it.
+
+   2c. **The tree carries identities.** `explorer-shell.js` routes entries by name in the URL hash, which
+   is why `midOf(name)` exists (exposed as `window.vaierMachineIdOf` for the listing reader and the
+   terminal dock). It is a lookup by name and goes when the tree stops needing it. Also here:
+   `MachineRestController`'s publishable-service owner count, which matches an owner name from a feed that
+   is name-keyed upstream in the publishing domain — so that feed has to carry identities first.
+
+   2d. **Then the guard, and the payoff.** `Machine.nameIsTaken`, `Machine.hasSameName` and the four
+   uniqueness checks in `VpnService`/`LanServerService` go, and **machine names stop needing to be
+   unique**.
 
 Then: run the hex checker over the whole range, sync `README.md` and `UBIQUITOUS_LANGUAGE.md`, and
 migrate. **The migration is by hand, no migration code** — back up `vaier/config/` first, and migrate the

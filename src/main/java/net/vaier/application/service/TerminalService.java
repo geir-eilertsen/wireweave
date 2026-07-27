@@ -61,7 +61,6 @@ public class TerminalService implements
     private final ForRunningSshCommands forRunningSshCommands;
     private final ForTrackingHostKeys forTrackingHostKeys;
     private final ForVerifyingSshCredentials forVerifyingSshCredentials;
-    private final net.vaier.domain.port.ForResolvingMachineIds forResolvingMachineIds;
 
     @Override
     public void saveHostCredential(MachineId machineId, SshCredentialDraft draft) {
@@ -69,14 +68,6 @@ public class TerminalService implements
         // the caller already holds it — so a credential can no longer be filed against the wrong machine
         // by a name that was edited between the operator typing it and the save landing.
         forPersistingHostCredentials.save(draft.forMachine(machineId));
-    }
-
-    /**
-     * What to call a machine in a log line. Presentation only — nothing is found by it, and a machine whose
-     * name cannot be resolved is logged by its identity rather than going unlogged or failing the operation.
-     */
-    private String labelFor(MachineId machineId) {
-        return forResolvingMachineIds.nameForId(machineId).orElse(machineId.value());
     }
 
     @Override
@@ -113,8 +104,11 @@ public class TerminalService implements
         SshSession session = forOpeningSshSessions.open(
             target, PersistentShell.attachOrCreateCommand(paneId), onOutput);
 
+        // Logged by identity and address, never by name. A name here bought nothing a log reader needs —
+        // the address says which machine — and buying it meant this service resolving one, which is the
+        // last thing keeping a name->id registry alive.
         log.info("Opened {} terminal session to {} ({}) for pane {}",
-            continuity, labelFor(machineId), target.host(), PersistentShell.sessionName(paneId));
+            continuity, machineId, target.host(), PersistentShell.sessionName(paneId));
         return new OpenedTerminal(session, continuity);
     }
 
@@ -126,10 +120,10 @@ public class TerminalService implements
         try {
             forRunningSshCommands.run(forResolvingSshTargets.resolve(machineId),
                 PersistentShell.endCommand(paneId));
-            log.info("Ended terminal session {} on {}", PersistentShell.sessionName(paneId), labelFor(machineId));
+            log.info("Ended terminal session {} on {}", PersistentShell.sessionName(paneId), machineId);
         } catch (RuntimeException e) {
             log.warn("Could not end terminal session {} on {}: {}",
-                PersistentShell.sessionName(paneId), labelFor(machineId), e.toString());
+                PersistentShell.sessionName(paneId), machineId, e.toString());
         }
     }
 
@@ -158,7 +152,7 @@ public class TerminalService implements
             return SendPasswordResult.SENT;
         } catch (RuntimeException e) {
             // Never surface the secret — log only the machine and the failure class.
-            log.warn("Failed to send stored password to {}: {}", labelFor(machineId), e.getClass().getSimpleName());
+            log.warn("Failed to send stored password to {}: {}", machineId, e.getClass().getSimpleName());
             return SendPasswordResult.FAILED;
         }
     }
@@ -166,7 +160,7 @@ public class TerminalService implements
     @Override
     public void clearHostKey(MachineId machineId) {
         forTrackingHostKeys.clear(machineId);
-        log.info("Cleared pinned host key for {}", labelFor(machineId));
+        log.info("Cleared pinned host key for {}", machineId);
     }
 
     /**

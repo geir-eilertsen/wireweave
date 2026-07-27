@@ -21,7 +21,6 @@ import net.vaier.domain.port.ForOpeningSshSessions;
 import net.vaier.domain.port.ForOpeningSshSessions.SshOutputListener;
 import net.vaier.domain.port.ForOpeningSshSessions.SshSession;
 import net.vaier.domain.port.ForPersistingHostCredentials;
-import net.vaier.domain.port.ForResolvingMachineIds;
 import net.vaier.domain.port.ForResolvingSshTargets;
 import net.vaier.domain.port.ForRunningSshCommands;
 import net.vaier.domain.port.ForTrackingHostKeys;
@@ -61,18 +60,9 @@ class TerminalServiceTest {
     @Mock ForRunningSshCommands forRunningSshCommands;
     @Mock ForTrackingHostKeys forTrackingHostKeys;
     @Mock ForVerifyingSshCredentials forVerifyingSshCredentials;
-    @Mock ForResolvingMachineIds forResolvingMachineIds;
 
-    /**
-     * Every machine named in these tests resolves to its own stable id. The service crosses from the
-     * name a REST path carries to the identity its stores are keyed by, so without this the crossing
-     * fails and nothing downstream is exercised — the seam is background here, not the subject.
-     */
-    @BeforeEach
-    void namesResolveToIds() {
-        lenient().when(forResolvingMachineIds.idForName(anyString()))
-            .thenAnswer(i -> Optional.of(mid(i.getArgument(0))));
-    }
+    // There is no name->id crossing left to arrange: every path into this service is handed an identity,
+    // and nothing it does resolves a name to find anything.
     @Mock SshOutputListener onOutput;
     @Mock SshSession sshSession;
 

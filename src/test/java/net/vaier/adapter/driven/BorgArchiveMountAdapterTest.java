@@ -15,7 +15,6 @@ import net.vaier.domain.SshTarget;
 import net.vaier.domain.port.ForPersistingBackupJobs;
 import net.vaier.domain.port.ForPersistingBackupRepositories;
 import net.vaier.domain.port.ForPersistingBackupServers;
-import net.vaier.domain.port.ForResolvingMachineIds;
 import net.vaier.domain.port.ForResolvingSshTargets;
 import net.vaier.domain.port.ForRunningSshCommands;
 import org.junit.jupiter.api.BeforeEach;
@@ -56,7 +55,6 @@ class BorgArchiveMountAdapterTest {
     private ForPersistingBackupJobs jobs;
     private ForPersistingBackupRepositories repositories;
     private ForPersistingBackupServers servers;
-    private ForResolvingMachineIds machineIds;
     private final AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-07-15T10:00:00Z"));
 
     private BorgArchiveMountAdapter adapter;
@@ -90,15 +88,12 @@ class BorgArchiveMountAdapterTest {
             public Clock withZone(java.time.ZoneId z) { return this; }
             public Instant instant() { return now.get(); }
         };
-        machineIds = mock(ForResolvingMachineIds.class);
         adapter = new BorgArchiveMountAdapter(sshTargets, ssh, workDirResolver, jobs, repositories, servers,
-            machineIds, movingClock);
+            movingClock);
 
         when(workDirResolver.workDirFor(MACHINE_ID)).thenReturn(WORK_DIR);
         when(sshTargets.resolve(MACHINE_ID)).thenReturn(target());
         // Both directions: the Explorer still names the machine, and the mount is keyed by its identity.
-        when(machineIds.idForName(MACHINE)).thenReturn(Optional.of(MACHINE_ID));
-        when(machineIds.nameForId(MACHINE_ID)).thenReturn(Optional.of(MACHINE));
         when(jobs.getByMachine(MACHINE_ID)).thenReturn(List.of(job()));
         when(repositories.getAll()).thenReturn(List.of(repo()));
         when(servers.getAll()).thenReturn(List.of(server()));
@@ -276,9 +271,8 @@ class BorgArchiveMountAdapterTest {
      * run on that machine fails with a lock timeout — a failure whose cause is nowhere near its symptom.
      */
     @Test
-    void reconcileMounts_adoptsOrphans_evenWhenTheMachinesNameCannotBeResolved() {
+    void reconcileMounts_adoptsOrphans_withoutResolvingAnyNameAtAll() {
         when(jobs.getAll()).thenReturn(List.of(job()));
-        when(machineIds.nameForId(MACHINE_ID)).thenReturn(Optional.empty());
         when(ssh.run(any(), any())).thenAnswer(inv -> {
             String cmd = inv.getArgument(1);
             if (cmd.contains("MOUNTS_LISTED")) {

@@ -21,7 +21,6 @@ import net.vaier.domain.port.ForGettingVpnClients;
 import net.vaier.domain.port.ForPersistingAppConfiguration;
 import net.vaier.domain.port.ForPersistingDiskWatches;
 import net.vaier.domain.port.ForPersistingLanServers;
-import net.vaier.domain.port.ForResolvingMachineIds;
 import net.vaier.domain.port.ForResolvingVaierServerIdentity;
 import net.vaier.domain.port.ForResolvingServerLanCidr;
 import net.vaier.domain.port.ForResolvingSshTargets;
@@ -74,7 +73,6 @@ class MachineServiceTest {
     @Mock ForTrackingHostKeys forTrackingHostKeys;
     @Mock ForPersistingDiskWatches forPersistingDiskWatches;
     @Mock ConfigResolver configResolver;
-    @Mock ForResolvingMachineIds forResolvingMachineIds;
     @Mock ForResolvingVaierServerIdentity forResolvingVaierServerIdentity;
 
     MachineService service;
@@ -89,13 +87,8 @@ class MachineServiceTest {
         service = new MachineService(forGettingPeerConfigurations, forGettingVpnClients, forGettingLanServers,
             forResolvingServerLanCidr, forUpdatingPeerConfigurations, forPersistingLanServers,
             forPersistingAppConfiguration, forResolvingSshTargets, forRunningSshCommands,
-            forTrackingHostKeys, forPersistingDiskWatches, forResolvingMachineIds,
+            forTrackingHostKeys, forPersistingDiskWatches,
             forResolvingVaierServerIdentity, configResolver);
-        lenient().when(forResolvingMachineIds.idForName(anyString()))
-            .thenAnswer(i -> Optional.of(mid(i.getArgument(0))));
-        // The reverse direction too: disk rows and the unreadable-disk message name the machine for a person.
-        lenient().when(forResolvingMachineIds.nameForId(any(MachineId.class)))
-            .thenAnswer(i -> NAMES_BY_ID.get(i.getArgument(0)));
         lenient().when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of());
         lenient().when(forGettingVpnClients.getClients()).thenReturn(List.of());
         lenient().when(forGettingLanServers.getAll()).thenReturn(List.of());
@@ -320,11 +313,6 @@ class MachineServiceTest {
         lenient().when(forResolvingVaierServerIdentity.identity())
             .thenReturn(mid(LanAnchor.VAIER_SERVER_NAME));
         lenient().when(forPersistingLanServers.getAll()).thenReturn(List.of());
-        lenient().when(forResolvingMachineIds.idForName(anyString()))
-            .thenAnswer(i -> Optional.of(mid(i.getArgument(0))));
-        // The reverse direction too: disk rows and the unreadable-disk message name the machine for a person.
-        lenient().when(forResolvingMachineIds.nameForId(any(MachineId.class)))
-            .thenAnswer(i -> NAMES_BY_ID.get(i.getArgument(0)));
         lenient().when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of());
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.setMachineSshAccess(mid("ghost"), true))
@@ -410,8 +398,20 @@ class MachineServiceTest {
         assertThat(volume1.size()).isEqualTo("10.8 TiB");
     }
 
+    /**
+     * Put a machine in the fleet under its own identity. Disk rows and the unreadable-disk message name the
+     * machine for a person, and the service now answers that from its own fleet rather than from a registry
+     * port — so a test that wants a name back has to have the machine actually exist.
+     */
+    private void fleetHas(String name, String ip) {
+        lenient().when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            new PeerConfiguration(name.toLowerCase().replace(' ', '-'), name, ip, "",
+                MachineType.UBUNTU_SERVER, null, null, null, null, null, mid(name))));
+    }
+
     @Test
     void diskUsage_readsDfOverTheSameSshExecPortEveryOtherCommandUses() {
+        fleetHas("Apalveien 5", "10.13.13.6");
         when(forResolvingSshTargets.resolve(mid("Apalveien 5"))).thenReturn(UNPINNED);
         when(forRunningSshCommands.run(UNPINNED, "df -P"))
             .thenReturn(new CommandResult(0, LINUX_DF, "", false, null));
@@ -493,6 +493,7 @@ class MachineServiceTest {
     void diskUsage_thatCannotBeRead_saysSo_ratherThanReportingAnEmptyDisk() {
         // df failed (a sleeping machine, a df that exited non-zero). "Cannot tell" must never render as
         // 0% — a disk Vaier could not read is not a disk with room on it.
+        fleetHas("nas", "10.13.13.9");
         when(forResolvingSshTargets.resolve(mid("nas"))).thenReturn(UNPINNED);
         when(forRunningSshCommands.run(any(), anyString()))
             .thenReturn(new CommandResult(1, "", "df: command not found", false, null));
