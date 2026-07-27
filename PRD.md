@@ -1886,10 +1886,21 @@ What is left is one step — the payoff step:
    they asked about, and needing a name was the whole reason an adapter that reaches machines by identity
    had to look one up.
 
-   2b. **The backup API takes identities.** `BackupRestController.findMachineNamed` is the biggest
-   remaining name→machine lookup: `/backup-servers/{name}/authorize/{machineName}`, the protect-paths
-   endpoints and the job request bodies all name a machine, and with duplicates allowed the lookup
-   silently answers with the first match. The browser call sites move with it.
+   2b. **The backup API takes identities ✅ (2026-07-27) — and this one was a live bug, not a tidy-up.**
+   `126038b` moved the browser onto identities including `/machines/{machine}/backup/paths`, while this
+   controller went on resolving that segment as a **name** — so every protect and unprotect had been
+   answering **404 since that commit**, and ticking a folder to back it up silently did nothing. Because
+   the protect flow is also what readies a host (installs borg, trusts its key on the backup server), a
+   machine's *first* back-up could not complete either, which is why the manual **Authorize a host** button
+   was the only way through. Confirmed against the running instance before the fix (id → 404, name → 200)
+   and after (id → 200, name → 404). `findMachineNamed`/`machineNamed` are replaced by a lookup on
+   `MachineId`; a segment that does not parse as one is simply not a machine, never a name to try instead.
+   `/backup-servers/{name}/authorize/{machineId}`, `ServerRequest.machineId` and `JobRequest.machineId`
+   moved with it, along with the browser call sites — the authorize picker's option values are identities
+   now and its text is still the name. Responses keep `machineName` beside `machineId`, because the tree
+   still renders by name until 2c. One test lost its subject: the lookup used to need `Machine.hasSameName`'s
+   leniency so a name rejected at creation for colliding could still be found — an identity has no case or
+   whitespace to be lenient about.
 
    2c. **The tree carries identities.** `explorer-shell.js` routes entries by name in the URL hash, which
    is why `midOf(name)` exists (exposed as `window.vaierMachineIdOf` for the listing reader and the

@@ -190,7 +190,7 @@ public class BackupRestController {
         // The browser names a machine; the store keys one. Resolving here means a server can never be saved
         // against a machine that does not exist — which is how two backup jobs came to run nightly against
         // machines in no registry at all.
-        Machine machine = machineNamed(request.machineName());
+        Machine machine = machine(request.machineId());
         BackupServer server = new BackupServer(name, machine.id(), request.host(), sshPort,
             request.borgUser(), request.baseRepoPath(), request.serverDataPath(), request.managed());
         saveBackupServer.saveBackupServer(server);
@@ -257,36 +257,41 @@ public class BackupRestController {
      * machine is unknown; otherwise {@code 200} with the outcome. The use case never throws: a guarded-out
      * host, a missing data path, or an SSH failure come back as a negative result, not an error.
      */
-    @PostMapping("/backup-servers/{name}/authorize/{machineName}")
+    @PostMapping("/backup-servers/{name}/authorize/{machineId}")
     public ResponseEntity<AuthorizeResponse> authorizeClient(@PathVariable String name,
-                                                             @PathVariable String machineName) {
-        Optional<Machine> machine = findMachineNamed(machineName);
+                                                             @PathVariable String machineId) {
+        Optional<Machine> machine = findMachine(machineId);
         if (findServer(name).isEmpty() || machine.isEmpty()) {
             return ResponseEntity.notFound().build();
         }
         log.info("Authorizing backup client {} on server {}",
-            LogSafe.forLog(machineName), LogSafe.forLog(name));
+            LogSafe.forLog(machineId), LogSafe.forLog(name));
         AuthorizeResult result = authorizeBackupClient.authorizeClient(name, machine.get().id());
         return ResponseEntity.ok(AuthorizeResponse.from(result));
     }
 
     /**
-     * The machine the browser named, or empty — the controller's own 404, never a use case's problem.
+     * The machine the caller identified, or empty — the controller's own 404, never a use case's problem.
      *
-     * <p>Matching is {@link Machine#hasSameName}'s rule, not {@code equals}. This lookup is what mints the
-     * {@code machineId} a job or server is <em>stored</em> under, and the uniqueness guard that refuses a
-     * duplicate name uses the same rule: a name rejected at creation for colliding with one that could not
-     * then find it would be the worst of both.
+     * <p>By {@link MachineId}, and a segment that does not parse as one is simply not a machine: it is not
+     * looked up as a name and never was a machine's address. A name in this position would be a lookup that
+     * two machines sharing a name make ambiguous, and answering it with whichever came first is how a
+     * request lands on a machine nobody meant.
      */
-    private Optional<Machine> findMachineNamed(String machineName) {
-        return getMachines.getAllMachines().stream()
-            .filter(m -> Machine.hasSameName(m.name(), machineName)).findFirst();
+    private Optional<Machine> findMachine(String machineId) {
+        MachineId id;
+        try {
+            id = MachineId.of(machineId);
+        } catch (IllegalArgumentException e) {
+            return Optional.empty();
+        }
+        return getMachines.getAllMachines().stream().filter(m -> id.equals(m.id())).findFirst();
     }
 
-    /** As {@link #findMachineNamed}, but for the write paths where an unknown machine is a 404, not a null. */
-    private Machine machineNamed(String machineName) {
-        return findMachineNamed(machineName)
-            .orElseThrow(() -> new NotFoundException("Machine not found: " + machineName));
+    /** As {@link #findMachine}, but for the write paths where an unknown machine is a 404, not a null. */
+    private Machine machine(String machineId) {
+        return findMachine(machineId)
+            .orElseThrow(() -> new NotFoundException("Machine not found: " + machineId));
     }
 
     /**
@@ -389,7 +394,7 @@ public class BackupRestController {
     public ResponseEntity<JobResponse> saveJob(@PathVariable String name,
                                                @RequestBody JobRequest request) {
         log.info("Saving backup job {}", LogSafe.forLog(name));
-        Machine machine = machineNamed(request.machineName());
+        Machine machine = machine(request.machineId());
         BackupJob job = new BackupJob(name, machine.id(), request.repositoryName(),
             request.sourcePaths(), request.excludes(),
             request.keepDaily(), request.keepWeekly(), request.keepMonthly(),
@@ -423,7 +428,7 @@ public class BackupRestController {
     @PostMapping("/machines/{machine}/backup/paths")
     public ResponseEntity<ProtectPathsResponse> protectPaths(@PathVariable String machine,
                                                     @RequestBody ProtectPathsRequest request) {
-        Optional<Machine> target = findMachineNamed(machine);
+        Optional<Machine> target = findMachine(machine);
         if (target.isEmpty()) {
             return ResponseEntity.notFound().build();
         }
@@ -450,7 +455,7 @@ public class BackupRestController {
     @DeleteMapping("/machines/{machine}/backup/paths")
     public ResponseEntity<UnprotectPathsResponse> unprotectPaths(@PathVariable String machine,
                                                                  @RequestBody ProtectPathsRequest request) {
-        Optional<Machine> target = findMachineNamed(machine);
+        Optional<Machine> target = findMachine(machine);
         if (target.isEmpty()) {
             return ResponseEntity.<UnprotectPathsResponse>notFound().build();
         }
@@ -635,8 +640,8 @@ public class BackupRestController {
      * Create/update a backup server (the name is the path variable). A null {@code sshPort} defaults to the
      * borg-server convention. The server carries no secret, so every field round-trips.
      */
-    /** {@code machineName} names an existing machine; an unknown one is a 404, never a stored dangling name. */
-    record ServerRequest(String machineName, String host, Integer sshPort, String borgUser,
+    /** {@code machineId} identifies an existing machine; an unknown one is a 404, never a dangling record. */
+    record ServerRequest(String machineId, String host, Integer sshPort, String borgUser,
                          String baseRepoPath, String serverDataPath, boolean managed) {}
 
     /**
@@ -771,7 +776,7 @@ public class BackupRestController {
     }
 
     /** Create/update a backup job. */
-    record JobRequest(String machineName, String repositoryName, List<String> sourcePaths,
+    record JobRequest(String machineId, String repositoryName, List<String> sourcePaths,
                       List<String> excludes, int keepDaily, int keepWeekly, int keepMonthly,
                       String compression, boolean enabled, boolean backupAsRoot) {}
 

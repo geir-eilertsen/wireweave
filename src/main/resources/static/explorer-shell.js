@@ -3747,12 +3747,16 @@
         const h = el('div', 'ex-dialog-title'); h.textContent = 'Authorize a host · ' + s.name;
         const bodyEl = el('div', 'ex-dialog-body');
         bodyEl.appendChild(note('Trust a machine’s SSH key on this backup server so its backups can reach it.', false));
-        const names = sortedMachines().map((m) => m.name);
+        // The option's value is the machine's identity and its text is the name: one addresses the machine,
+        // the other is for the person choosing it.
+        const choices = sortedMachines();
         const sel = el('select', 'ex-input');
         const ph = el('option'); ph.value = ''; ph.disabled = true; ph.selected = true;
-        ph.textContent = names.length ? 'Select a machine' : 'No machines yet';
+        ph.textContent = choices.length ? 'Select a machine' : 'No machines yet';
         sel.appendChild(ph);
-        names.forEach((n) => { const o = el('option'); o.value = n; o.textContent = n; sel.appendChild(o); });
+        choices.forEach((m) => {
+            const o = el('option'); o.value = m.id; o.textContent = m.name; sel.appendChild(o);
+        });
         const result = el('div', 'ex-authresult');
         bodyEl.append(sel, result);
         const actions = el('div', 'ex-dialog-actions');
@@ -3768,13 +3772,14 @@
         document.addEventListener('keydown', onKey);
 
         ok.onclick = async () => {
-            const machineName = sel.value;
-            if (!machineName) { toast('Choose a machine to authorize.'); return; }
+            const machineId = sel.value;
+            const machineName = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].textContent : '';
+            if (!machineId) { toast('Choose a machine to authorize.'); return; }
             ok.disabled = true;
             result.textContent = 'Trusting the host key…';
             try {
                 const r = await fetch('/backup-servers/' + encodeURIComponent(s.name)
-                    + '/authorize/' + encodeURIComponent(machineName), { method: 'POST' });
+                    + '/authorize/' + encodeURIComponent(machineId), { method: 'POST' });
                 const v = await r.json().catch(() => ({}));
                 if (!r.ok) { result.textContent = ''; toast(v.message || ('Could not authorize ' + machineName + '.')); return; }
                 renderAuthorizeResult(result, v, machineName);
@@ -3839,7 +3844,7 @@
             const res = await fetch('/backup-servers/' + encodeURIComponent(name), {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ machineName: machineName, host: body.host, sshPort: body.sshPort,
+                body: JSON.stringify({ machineId: midOf(machineName), host: body.host, sshPort: body.sshPort,
                     borgUser: body.borgUser, baseRepoPath: body.baseRepoPath,
                     serverDataPath: body.serverDataPath, managed: body.managed }),
             });
@@ -4498,7 +4503,7 @@
             const res = await fetch('/backup-jobs/' + encodeURIComponent(job.name), {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ machineName: job.machineName, repositoryName: job.repositoryName,
+                body: JSON.stringify({ machineId: job.machineId, repositoryName: job.repositoryName,
                     sourcePaths: job.sourcePaths, excludes: job.excludes, keepDaily: job.keepDaily,
                     keepWeekly: job.keepWeekly, keepMonthly: job.keepMonthly, compression: job.compression,
                     enabled: job.enabled, backupAsRoot: on }),

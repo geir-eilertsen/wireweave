@@ -521,7 +521,7 @@ class BackupRestControllerTest {
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
 
         ResponseEntity<BackupRestController.JobResponse> response = controller.saveJob("colina-home",
-            new BackupRestController.JobRequest("Colina 27", "nas-borg", List.of("/home/geir"),
+            new BackupRestController.JobRequest(TestMachineIds.of("Colina 27").value(), "nas-borg", List.of("/home/geir"),
                 List.of(), 7, 4, 6, "zstd,6", true, true));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -542,10 +542,12 @@ class BackupRestControllerTest {
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
 
         assertThatThrownBy(() -> controller.saveJob("nuc02",
-            new BackupRestController.JobRequest("NUC02", "nas-borg", List.of("/home/geir"),
+            new BackupRestController.JobRequest(TestMachineIds.of("NUC02").value(), "nas-borg", List.of("/home/geir"),
                 List.of(), 7, 4, 6, "zstd,6", true, false)))
             .isInstanceOf(NotFoundException.class)
-            .hasMessageContaining("NUC02");
+            // The identity that was asked for, since that is what the request carried — there is no name in
+            // it to echo back, which is the point: a job can no longer be stored against a string.
+            .hasMessageContaining(TestMachineIds.of("NUC02").value());
         assertThat(jobs.getByName("nuc02")).isEmpty();
     }
 
@@ -557,7 +559,7 @@ class BackupRestControllerTest {
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
 
         ResponseEntity<BackupRestController.JobResponse> response = controller.saveJob("colina-home",
-            new BackupRestController.JobRequest("Colina 27", "nas-borg", List.of("/home/geir"),
+            new BackupRestController.JobRequest(TestMachineIds.of("Colina 27").value(), "nas-borg", List.of("/home/geir"),
                 List.of(), 7, 4, 6, "zstd,6", true, false));
 
         assertThat(response.getBody().backupAsRoot()).isFalse();
@@ -809,7 +811,7 @@ class BackupRestControllerTest {
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("NAS")));
 
         controller.saveServer("nas-borg", new BackupRestController.ServerRequest(
-            "NAS", "192.168.3.3", 8022, "borg", "home/borg/backups", "/volume1/docker/borg", true));
+            TestMachineIds.of("NAS").value(), "192.168.3.3", 8022, "borg", "home/borg/backups", "/volume1/docker/borg", true));
 
         BackupRestController.ServerResponse body = controller.getServer("nas-borg").getBody();
         assertThat(body).isNotNull();
@@ -826,7 +828,7 @@ class BackupRestControllerTest {
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("NAS")));
 
         controller.saveServer("nas-borg", new BackupRestController.ServerRequest(
-            "NAS", "192.168.3.3", null, null, null, "/volume1/docker/borg", true));
+            TestMachineIds.of("NAS").value(), "192.168.3.3", null, null, null, "/volume1/docker/borg", true));
 
         BackupServer stored = backupServers.getByName("nas-borg").orElseThrow();
         assertThat(stored.sshPort()).isEqualTo(BackupServer.DEFAULT_SSH_PORT);
@@ -957,7 +959,7 @@ class BackupRestControllerTest {
             .thenReturn(new AuthorizeResult(true, false, true, "Client key authorized on nas-borg"));
 
         ResponseEntity<BackupRestController.AuthorizeResponse> response =
-            controller.authorizeClient("nas-borg", "Colina 27");
+            controller.authorizeClient("nas-borg", TestMachineIds.of("Colina 27").value());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).isNotNull();
@@ -973,7 +975,7 @@ class BackupRestControllerTest {
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
 
         ResponseEntity<BackupRestController.AuthorizeResponse> response =
-            controller.authorizeClient("nope", "Colina 27");
+            controller.authorizeClient("nope", TestMachineIds.of("Colina 27").value());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         verify(authorizeBackupClient, never()).authorizeClient(any(), any());
@@ -985,13 +987,41 @@ class BackupRestControllerTest {
         when(getMachines.getAllMachines()).thenReturn(List.of());
 
         ResponseEntity<BackupRestController.AuthorizeResponse> response =
-            controller.authorizeClient("nas-borg", "ghost");
+            controller.authorizeClient("nas-borg", TestMachineIds.of("ghost").value());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         verify(authorizeBackupClient, never()).authorizeClient(any(), any());
     }
 
     // --- Just select and back up: protected paths ---
+
+    /**
+     * The regression that broke ticking a folder. The browser was moved onto machine identities in
+     * `126038b`, so it sends `/machines/<uuid>/backup/paths` — and this controller went on resolving that
+     * segment as a NAME, so every protect and unprotect answered 404. The Explorer showed nothing: the
+     * checkbox simply did not stick.
+     *
+     * <p>A name here is now what 404s, which is the point: an identity is the only thing that addresses a
+     * machine, and a name in this position would be a lookup that duplicates make ambiguous.
+     */
+    @Test
+    void protectPaths_addressesTheMachineByIdentity_notByName() {
+        backupServers.save(server());
+        when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
+        when(readier.readyForBackup(TestMachineIds.of("Colina 27")))
+            .thenReturn(new ReadyingOutcome(true, false, null, ""));
+
+        ResponseEntity<BackupRestController.ProtectPathsResponse> byId = controller.protectPaths(
+            TestMachineIds.of("Colina 27").value(),
+            new BackupRestController.ProtectPathsRequest(List.of("/home/geir")));
+
+        assertThat(byId.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(jobs.getByName("Colina-27")).isPresent();
+
+        assertThat(controller.protectPaths("Colina 27",
+            new BackupRestController.ProtectPathsRequest(List.of("/etc"))).getStatusCode())
+            .isEqualTo(HttpStatus.NOT_FOUND);
+    }
 
     @Test
     void protectPathsCreatesTheRepositoryAndJobThenReturnsTheJob() {
@@ -1000,7 +1030,7 @@ class BackupRestControllerTest {
         when(readier.readyForBackup(TestMachineIds.of("Colina 27")))
             .thenReturn(new ReadyingOutcome(true, false, null, "Preparing client on Colina 27"));
 
-        ResponseEntity<BackupRestController.ProtectPathsResponse> response = controller.protectPaths("Colina 27",
+        ResponseEntity<BackupRestController.ProtectPathsResponse> response = controller.protectPaths(TestMachineIds.of("Colina 27").value(),
             new BackupRestController.ProtectPathsRequest(List.of("/home/geir", "/etc/nginx")));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -1025,7 +1055,7 @@ class BackupRestControllerTest {
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
 
         // A descendant of an already-protected path is a no-op; a genuinely new path is added.
-        ResponseEntity<BackupRestController.ProtectPathsResponse> response = controller.protectPaths("Colina 27",
+        ResponseEntity<BackupRestController.ProtectPathsResponse> response = controller.protectPaths(TestMachineIds.of("Colina 27").value(),
             new BackupRestController.ProtectPathsRequest(List.of("/home/geir/docs", "/var/lib/docker")));
 
         assertThat(response.getBody()).isNotNull();
@@ -1048,7 +1078,7 @@ class BackupRestControllerTest {
             .thenReturn(new ReadyingOutcome(true, false, null,
                 "Preparing client on Colina 27 — you'll be notified when it finishes."));
 
-        ResponseEntity<BackupRestController.ProtectPathsResponse> response = controller.protectPaths("Colina 27",
+        ResponseEntity<BackupRestController.ProtectPathsResponse> response = controller.protectPaths(TestMachineIds.of("Colina 27").value(),
             new BackupRestController.ProtectPathsRequest(List.of("/home/geir")));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -1070,7 +1100,7 @@ class BackupRestControllerTest {
         jobs.save(job()); // machineName "Colina 27" already has a job
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
 
-        ResponseEntity<BackupRestController.ProtectPathsResponse> response = controller.protectPaths("Colina 27",
+        ResponseEntity<BackupRestController.ProtectPathsResponse> response = controller.protectPaths(TestMachineIds.of("Colina 27").value(),
             new BackupRestController.ProtectPathsRequest(List.of("/var/lib/docker")));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -1089,7 +1119,7 @@ class BackupRestControllerTest {
             .thenReturn(new ReadyingOutcome(false, false, null,
                 "Automatic provisioning could not run: ssh: connection reset"));
 
-        ResponseEntity<BackupRestController.ProtectPathsResponse> response = controller.protectPaths("Colina 27",
+        ResponseEntity<BackupRestController.ProtectPathsResponse> response = controller.protectPaths(TestMachineIds.of("Colina 27").value(),
             new BackupRestController.ProtectPathsRequest(List.of("/home/geir")));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -1106,7 +1136,7 @@ class BackupRestControllerTest {
         backupServers.save(server());
         when(getMachines.getAllMachines()).thenReturn(List.of());
 
-        ResponseEntity<BackupRestController.ProtectPathsResponse> response = controller.protectPaths("ghost",
+        ResponseEntity<BackupRestController.ProtectPathsResponse> response = controller.protectPaths(TestMachineIds.of("ghost").value(),
             new BackupRestController.ProtectPathsRequest(List.of("/home/geir")));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
@@ -1119,7 +1149,7 @@ class BackupRestControllerTest {
         // ConflictException.
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
 
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.protectPaths("Colina 27",
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.protectPaths(TestMachineIds.of("Colina 27").value(),
                 new BackupRestController.ProtectPathsRequest(List.of("/home/geir"))))
             .isInstanceOf(ConflictException.class)
             .hasMessageContaining("Designate a backup server");
@@ -1135,7 +1165,7 @@ class BackupRestControllerTest {
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
 
         ResponseEntity<BackupRestController.UnprotectPathsResponse> response = controller.unprotectPaths(
-            "Colina 27", new BackupRestController.ProtectPathsRequest(List.of("/etc/nginx")));
+            TestMachineIds.of("Colina 27").value(), new BackupRestController.ProtectPathsRequest(List.of("/etc/nginx")));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).isNotNull();
@@ -1155,7 +1185,7 @@ class BackupRestControllerTest {
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
 
         ResponseEntity<BackupRestController.UnprotectPathsResponse> response = controller.unprotectPaths(
-            "Colina 27",
+            TestMachineIds.of("Colina 27").value(),
             new BackupRestController.ProtectPathsRequest(List.of("/home/openhab/userdata/logs")));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -1175,7 +1205,7 @@ class BackupRestControllerTest {
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
 
         ResponseEntity<BackupRestController.UnprotectPathsResponse> response = controller.unprotectPaths(
-            "Colina 27", new BackupRestController.ProtectPathsRequest(List.of("/var/log")));
+            TestMachineIds.of("Colina 27").value(), new BackupRestController.ProtectPathsRequest(List.of("/var/log")));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody().changed()).isFalse();
@@ -1191,7 +1221,7 @@ class BackupRestControllerTest {
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
 
         ResponseEntity<BackupRestController.UnprotectPathsResponse> response = controller.unprotectPaths(
-            "Colina 27", new BackupRestController.ProtectPathsRequest(List.of("/home/geir")));
+            TestMachineIds.of("Colina 27").value(), new BackupRestController.ProtectPathsRequest(List.of("/home/geir")));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
         assertThat(jobs.getByName("colina-home")).isEmpty();
@@ -1206,7 +1236,7 @@ class BackupRestControllerTest {
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
 
         ResponseEntity<BackupRestController.UnprotectPathsResponse> response = controller.unprotectPaths(
-            "Colina 27", new BackupRestController.ProtectPathsRequest(List.of("/home/geir")));
+            TestMachineIds.of("Colina 27").value(), new BackupRestController.ProtectPathsRequest(List.of("/home/geir")));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody().changed()).isFalse();
@@ -1218,26 +1248,27 @@ class BackupRestControllerTest {
         when(getMachines.getAllMachines()).thenReturn(List.of());
 
         ResponseEntity<BackupRestController.UnprotectPathsResponse> response = controller.unprotectPaths(
-            "ghost", new BackupRestController.ProtectPathsRequest(List.of("/home/geir")));
+            TestMachineIds.of("ghost").value(), new BackupRestController.ProtectPathsRequest(List.of("/home/geir")));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }
 
     /**
-     * The lookup that resolves a posted machine name to the identity a job is STORED under must use the same
-     * rule the uniqueness guard uses. {@code Machine.nameIsTaken} treats "colina 27" as already taken by
-     * "Colina 27" — so a lookup that answered "no such machine" for it would refuse a name on creation for
-     * colliding with one it then could not find, which is the worst of both.
+     * A job is stored under the identity the request carried, with no interpretation on the way in. This
+     * used to be a lookup by NAME that had to match the uniqueness guard's rule character for character —
+     * "colina 27" finding "Colina 27" — because a name rejected at creation for colliding with one the
+     * lookup then could not find is the worst of both. An identity has no case and no whitespace to be
+     * lenient about, so the rule it had to agree with is simply gone.
      */
     @Test
-    void saveJobResolvesTheMachineByTheDomainsNameRule_notByExactEquality() {
+    void saveJobStoresTheJobUnderTheIdentityTheRequestCarried() {
         repositories.save(repo());
         backupServers.save(server());
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
 
         ResponseEntity<BackupRestController.JobResponse> response = controller.saveJob("colina-home",
-            new BackupRestController.JobRequest("  colina 27 ", "nas-borg", List.of("/home/geir"),
-                List.of(), 7, 4, 6, "zstd,6", true, false));
+            new BackupRestController.JobRequest(TestMachineIds.of("Colina 27").value(), "nas-borg",
+                List.of("/home/geir"), List.of(), 7, 4, 6, "zstd,6", true, false));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(jobs.getByName("colina-home").orElseThrow().machineId())
