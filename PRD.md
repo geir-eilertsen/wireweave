@@ -1812,24 +1812,52 @@ missing or malformed does not load, rather than coming back as a stranger to its
     driving-edge slice, for which the `machineId` field is already in place. An unknown machine name on a
     write is now a `404`, which is the door the two dead `NUC 02`/`NUC02` jobs walked through.
 
+- **The SSH path, and then everything else.** `ForResolvingSshTargets.resolve` and
+  `RunRemoteCommandUseCase.run` take a `MachineId`; `SshAddress.of` matches stored peers and LAN servers
+  on their id, and the Vaier server recognises **itself** by the id in its own config rather than by
+  comparing against `LanAnchor.VAIER_SERVER_NAME`. `BackupWorkDirResolver`'s `machineName` parameter died
+  as planned. Then credentials, the web terminal, disk usage and watches, host-key clearing and the
+  SSH-access toggle followed, along with `/machines/{machineId}/...` and the terminal WebSocket — both
+  parse the segment through `MachineId.of`, so a name there closes as unknown rather than being looked up.
+  `setMachineSshAccess` searched three stores by name and identified the Vaier server by string
+  comparison; it matches on identity in all three now.
+- **`ForResolvingVaierServerIdentity`.** The Vaier server's id was read in one layer and minted in
+  another, so whether Vaier could reach *itself* over SSH depended on whether something had already loaded
+  the Machines page. One port owns read-and-assign-once now, and assigning is confined to it.
+- **Three defects found by doing this**, each a lookup that changed meaning when it stopped being by name:
+  `reconcileMounts` skipped any machine whose name would not resolve, stranding a `borg mount` on the
+  repository lock so the next backup failed with a lock timeout; the nudges endpoint took an id but still
+  matched with `hasSameName`, so it would have 404'd on every machine; and `ownerUserFor` began probing
+  the vault for a backup server whose machine had left the fleet, where the name lookup used to
+  short-circuit — an orphaned credential must not name the owner of a machine that is gone.
+
 #### Remaining
 
-This was written as one step. Scoping it showed it is two, and the seam between them is worth keeping:
-one is backend-only, the other changes what the browser depends on.
+Both steps below are **done and committed** (unpushed, on `main`): the SSH path went id-native in
+`7969746`, the Explorer's coordinates in `5c843a5`, the rest of the machine-keyed backend in `7bf0d6f`,
+and the browser in `126038b`. `5581ca1` fixes two findings the hex checker raised against the first two.
+What is left is smaller than what was planned, but it is the part that pays:
 
-1. **The SSH path goes id-native** (backend only, no contract moves). `ForResolvingSshTargets.resolve` and
-   `RunRemoteCommandUseCase.run` take a `MachineId`; `SshAddress.of` matches by id rather than name, which
-   needs the Vaier server's own id to recognise itself (it compares against `LanAnchor.VAIER_SERVER_NAME`
-   today). Eleven `resolve` call sites (`ExplorerService` ×3, `TerminalService` ×3, `BorgArchiveMountAdapter`
-   ×3, `MachineService`, `SurvivalKitKeeperAdapter`) and five `run` callers (`BackupWorkDirResolver`,
-   `BackupProvisioner`, `RemoteDiskWatcher`, `SelfUpgradeRunner`, `BackupRunner`). Controllers keep taking
-   names and resolve at the edge, so the REST contract does not move. This is where the `machineName`
-   parameter on `BackupWorkDirResolver` dies.
-2. **The driving edge** — `/machines/{id}/…`, the Explorer's coordinates carrying ids, and the frontend.
-   Only this one is a breaking change. It deletes `ForResolvingMachineIds`, `MachineIdRegistryAdapter`,
-   `Machine.nameIsTaken` and `Machine.hasSameName` in one commit — and machine names stop needing to be
-   unique at all. The `machineLabel` arguments on the alert renderers **stay**: a name is presentation and is
-   still passed in, only now resolved from an id the caller already holds.
+1. **`/vpn/peers` must expose `machineId`.** It does not, so `explorer-shell.js`'s `loadFleet` has nothing
+   to join the fleet on and still keys `S.peers` by display name. That is the live bug: when `/machines`
+   and `/vpn/peers` disagree about a machine's name by one character, `isPeer` goes false and a delete is
+   routed to `/lan-servers/<name>` — the peer directory survives with **no backend log line and no UI
+   error**, the confirm dialog just closes. `PeerConfiguration` already holds the id; it has to travel
+   through `GetVpnPeersUseCase.VpnPeerView` -> the service that builds it -> `VpnPeerResponse` ->
+   `toResponse`. Both records are ~25 positional fields, so a misplaced argument compiles — change them
+   with named locals or check the diff field by field.
+
+2. **Delete the scaffolding.** `ForResolvingMachineIds`, `MachineIdRegistryAdapter`,
+   `Machine.nameIsTaken` and `Machine.hasSameName` go in one commit, and **machine names stop needing to
+   be unique** — the payoff. Three name->id crossings survive today and all three go with it: the two
+   `labelFor(MachineId)` helpers in `TerminalService`/`MachineService` become lookups the caller already
+   did, `BorgArchiveMountAdapter.mount` stops resolving a name for its log line, and — in the browser —
+   `midOf(name)` in `explorer-shell.js` (exposed as `window.vaierMachineIdOf` for the listing reader and
+   the terminal dock) is itself a lookup by name and must go once the tree carries ids of its own.
+
+Then: run the hex checker over the whole range, sync `README.md` and `UBIQUITOUS_LANGUAGE.md`, and
+migrate. **The migration is by hand, no migration code** — back up `vaier/config/` first, and migrate the
+YAML and deploy in the same step, because the running container and the config must agree on the key.
 
 **A hazard this refactor creates, found twice in production.** Identity-keying turns field accesses into
 *lookups*, and a lookup can fail — the machine registry reads WireGuard by shelling into a container that
