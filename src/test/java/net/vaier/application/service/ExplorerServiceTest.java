@@ -85,13 +85,13 @@ class ExplorerServiceTest {
     private void machineResolves(String machine, String pinnedFingerprint) {
         when(forResolvingSshTargets.resolve(mid(machine))).thenReturn(target(pinnedFingerprint));
         // Most of the fleet is not jailed, and on those machines nothing about a path changes.
-        lenient().when(forResolvingSftpRoots.rootFor(eq(mid(machine)), any())).thenReturn(SftpRoot.NONE);
+        lenient().when(forResolvingSftpRoots.rootFor(any())).thenReturn(SftpRoot.NONE);
     }
 
     /** The NAS's shape: DSM chroots the SFTP subsystem into /volume1 and leaves the exec channel alone. */
     private void machineIsJailedIn(String machine, String rootPath) {
         when(forResolvingSshTargets.resolve(mid(machine))).thenReturn(target("SHA256:pinned"));
-        when(forResolvingSftpRoots.rootFor(eq(mid(machine)), any())).thenReturn(new SftpRoot(rootPath));
+        when(forResolvingSftpRoots.rootFor(any())).thenReturn(new SftpRoot(rootPath));
     }
 
     private void remoteAnswers(DirectoryListing listing) {
@@ -302,7 +302,7 @@ class ExplorerServiceTest {
     @Test
     void listDirectory_onAnUnprobeableMachine_leavesItsPathsAlone() {
         when(forResolvingSshTargets.resolve(mid("asleep"))).thenReturn(target("SHA256:pinned"));
-        when(forResolvingSftpRoots.rootFor(eq(mid("asleep")), any())).thenReturn(SftpRoot.NONE);
+        when(forResolvingSftpRoots.rootFor(any())).thenReturn(SftpRoot.NONE);
         remoteAnswers(new DirectoryListing(List.of(), "SHA256:pinned"));
 
         // A machine Vaier could not probe resolves to NONE, and NONE changes nothing. Unknown is safe.
@@ -317,7 +317,7 @@ class ExplorerServiceTest {
 
         // The trust boundary still stands in front of everything: no SSH connection of any kind, not even the
         // two probes that learn the root.
-        verify(forResolvingSftpRoots, never()).rootFor(any(), any());
+        verify(forResolvingSftpRoots, never()).rootFor(any());
         verify(forResolvingSshTargets, never()).resolve(any());
     }
 

@@ -56,7 +56,8 @@ public class CachingSftpRootAdapter implements ForResolvingSftpRoots {
     private final Map<MachineId, SftpRoot> roots = new ConcurrentHashMap<>();
 
     @Override
-    public SftpRoot rootFor(MachineId machineId, SshTarget target) {
+    public SftpRoot rootFor(SshTarget target) {
+        MachineId machineId = target.machineId();
         SftpRoot cached = machineId == null ? null : roots.get(machineId);
         if (cached != null) {
             return cached;

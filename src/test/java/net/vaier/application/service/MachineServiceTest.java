@@ -22,6 +22,7 @@ import net.vaier.domain.port.ForPersistingAppConfiguration;
 import net.vaier.domain.port.ForPersistingDiskWatches;
 import net.vaier.domain.port.ForPersistingLanServers;
 import net.vaier.domain.port.ForResolvingMachineIds;
+import net.vaier.domain.port.ForResolvingVaierServerIdentity;
 import net.vaier.domain.port.ForResolvingServerLanCidr;
 import net.vaier.domain.port.ForResolvingSshTargets;
 import net.vaier.domain.port.ForRunningSshCommands;
@@ -70,6 +71,7 @@ class MachineServiceTest {
     @Mock ForPersistingDiskWatches forPersistingDiskWatches;
     @Mock ConfigResolver configResolver;
     @Mock ForResolvingMachineIds forResolvingMachineIds;
+    @Mock ForResolvingVaierServerIdentity forResolvingVaierServerIdentity;
 
     MachineService service;
 
@@ -83,7 +85,8 @@ class MachineServiceTest {
         service = new MachineService(forGettingPeerConfigurations, forGettingVpnClients, forGettingLanServers,
             forResolvingServerLanCidr, forUpdatingPeerConfigurations, forPersistingLanServers,
             forPersistingAppConfiguration, forResolvingSshTargets, forRunningSshCommands,
-            forTrackingHostKeys, forPersistingDiskWatches, forResolvingMachineIds, configResolver);
+            forTrackingHostKeys, forPersistingDiskWatches, forResolvingMachineIds,
+            forResolvingVaierServerIdentity, configResolver);
         lenient().when(forResolvingMachineIds.idForName(anyString()))
             .thenAnswer(i -> Optional.of(mid(i.getArgument(0))));
         lenient().when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of());

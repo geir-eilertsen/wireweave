@@ -6,12 +6,11 @@ import net.vaier.domain.MachineId;
 import net.vaier.domain.NoHostCredentialException;
 import net.vaier.domain.SshAddress;
 import net.vaier.domain.SshTarget;
-import net.vaier.domain.VaierConfig;
 import net.vaier.domain.port.ForGettingPeerConfigurations;
 import net.vaier.domain.port.ForPersistingHostCredentials;
-import net.vaier.domain.port.ForPersistingAppConfiguration;
 import net.vaier.domain.port.ForPersistingLanServers;
 import net.vaier.domain.port.ForResolvingSshTargets;
+import net.vaier.domain.port.ForResolvingVaierServerIdentity;
 import net.vaier.domain.port.ForResolvingVaierServerSshAddress;
 import net.vaier.domain.port.ForTrackingHostKeys;
 import org.springframework.stereotype.Component;
@@ -37,7 +36,7 @@ public class MachineSshTargetAdapter implements ForResolvingSshTargets {
     private final ForResolvingVaierServerSshAddress forResolvingVaierServerSshAddress;
     private final ForPersistingHostCredentials forPersistingHostCredentials;
     private final ForTrackingHostKeys forTrackingHostKeys;
-    private final ForPersistingAppConfiguration forPersistingAppConfiguration;
+    private final ForResolvingVaierServerIdentity forResolvingVaierServerIdentity;
 
     @Override
     public SshTarget resolve(MachineId machineId) {
@@ -52,10 +51,13 @@ public class MachineSshTargetAdapter implements ForResolvingSshTargets {
         return SshTarget.on(host, credential, pinned);
     }
 
-    /** The Vaier server's stored identity, or null when it has not been assigned one — read, never minted. */
+    /**
+     * The Vaier server's identity. Asked for through the port rather than read out of the config here,
+     * because a Vaier that had never been assigned one used to resolve to nothing — and "no identity" then
+     * matched no machine, so Vaier could not reach itself over SSH until some other caller happened to
+     * assign it first.
+     */
     private MachineId vaierServerId() {
-        return forPersistingAppConfiguration.load()
-            .flatMap(VaierConfig::vaierServerIdentity)
-            .orElse(null);
+        return forResolvingVaierServerIdentity.identity();
     }
 }

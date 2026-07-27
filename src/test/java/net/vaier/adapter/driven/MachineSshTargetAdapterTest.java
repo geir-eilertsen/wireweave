@@ -10,10 +10,9 @@ import net.vaier.domain.NoHostCredentialException;
 import net.vaier.domain.NotFoundException;
 import net.vaier.domain.SshTarget;
 import net.vaier.domain.TestMachineIds;
-import net.vaier.domain.VaierConfig;
 import net.vaier.domain.port.ForGettingPeerConfigurations;
 import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
-import net.vaier.domain.port.ForPersistingAppConfiguration;
+import net.vaier.domain.port.ForResolvingVaierServerIdentity;
 import net.vaier.domain.port.ForPersistingHostCredentials;
 import net.vaier.domain.port.ForPersistingLanServers;
 import net.vaier.domain.port.ForResolvingVaierServerSshAddress;
@@ -53,7 +52,7 @@ class MachineSshTargetAdapterTest {
     @Mock ForResolvingVaierServerSshAddress forResolvingVaierServerSshAddress;
     @Mock ForPersistingHostCredentials forPersistingHostCredentials;
     @Mock ForTrackingHostKeys forTrackingHostKeys;
-    @Mock ForPersistingAppConfiguration forPersistingAppConfiguration;
+    @Mock ForResolvingVaierServerIdentity forResolvingVaierServerIdentity;
 
     @InjectMocks MachineSshTargetAdapter adapter;
 
@@ -74,18 +73,21 @@ class MachineSshTargetAdapterTest {
 
     /** Vaier knows its own identity — the one id that lives in the config, not in a machine store. */
     private void vaierServerIdentifiesItselfAs(MachineId machineId) {
-        when(forPersistingAppConfiguration.load()).thenReturn(Optional.of(
-            VaierConfig.builder().vaierServerMachineId(machineId.value()).build()));
+        when(forResolvingVaierServerIdentity.identity()).thenReturn(machineId);
     }
 
-    /** Vaier has not been assigned an identity yet, so it can never be mistaken for the machine asked for. */
-    private void vaierServerHasNoIdentityYet() {
-        lenient().when(forPersistingAppConfiguration.load()).thenReturn(Optional.empty());
+    /**
+     * Vaier is some machine other than the one being resolved, so it can never answer for it. There is no
+     * "Vaier has no identity" case any more: the port assigns one the first time it is asked, precisely so
+     * that resolving the Vaier server cannot depend on some other caller having run first.
+     */
+    private void vaierServerIsADifferentMachine() {
+        lenient().when(forResolvingVaierServerIdentity.identity()).thenReturn(mid("the Vaier server"));
     }
 
     @Test
     void peer_resolvesToTheTunnelIp_withVaultCredentialAndPinnedKey() {
-        vaierServerHasNoIdentityYet();
+        vaierServerIsADifferentMachine();
         when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(peer("nuc", "10.13.13.9")));
         when(forPersistingHostCredentials.getByMachine(mid("nuc"))).thenReturn(Optional.of(passwordCred("nuc")));
         when(forTrackingHostKeys.getFingerprint(mid("nuc"))).thenReturn(Optional.of("SHA256:pinned"));
@@ -101,7 +103,7 @@ class MachineSshTargetAdapterTest {
 
     @Test
     void lanServer_resolvesToTheLanAddress() {
-        vaierServerHasNoIdentityYet();
+        vaierServerIsADifferentMachine();
         lenient().when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of());
         when(forPersistingLanServers.getAll()).thenReturn(List.of(lanServer("nas", "192.168.3.50")));
         when(forPersistingHostCredentials.getByMachine(mid("nas"))).thenReturn(Optional.of(passwordCred("nas")));
@@ -128,14 +130,14 @@ class MachineSshTargetAdapterTest {
     }
 
     /**
-     * Recognising itself is by id, not by the name {@code LanAnchor.VAIER_SERVER_NAME}. A Vaier that has
-     * not been assigned an identity must not answer for a machine that merely could not be found — the
-     * failure to find is the answer, and reporting Vaier's own address instead would send a command
-     * intended for a fleet machine to the machine issuing it.
+     * Recognising itself is by id, not by the name {@code LanAnchor.VAIER_SERVER_NAME}. Vaier must not
+     * answer for a machine that merely could not be found — the failure to find is the answer, and
+     * reporting Vaier's own address instead would send a command intended for a fleet machine to the
+     * machine issuing it.
      */
     @Test
-    void vaierServerWithoutAnIdentity_doesNotAnswerForAMachineThatCannotBeFound() {
-        vaierServerHasNoIdentityYet();
+    void vaierServer_doesNotAnswerForADifferentMachineThatCannotBeFound() {
+        vaierServerIsADifferentMachine();
         when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of());
         when(forPersistingLanServers.getAll()).thenReturn(List.of());
 
@@ -145,7 +147,7 @@ class MachineSshTargetAdapterTest {
 
     @Test
     void unknownMachine_throwsNotFound() {
-        vaierServerHasNoIdentityYet();
+        vaierServerIsADifferentMachine();
         when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of());
         when(forPersistingLanServers.getAll()).thenReturn(List.of());
 
@@ -156,7 +158,7 @@ class MachineSshTargetAdapterTest {
 
     @Test
     void machineWithoutAVaultCredential_throwsNoHostCredential() {
-        vaierServerHasNoIdentityYet();
+        vaierServerIsADifferentMachine();
         when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(peer("nuc", "10.13.13.9")));
         when(forPersistingHostCredentials.getByMachine(mid("nuc"))).thenReturn(Optional.empty());
 

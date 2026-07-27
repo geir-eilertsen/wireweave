@@ -22,10 +22,11 @@ public interface ForResolvingSftpRoots {
     /**
      * Where the file tree of the machine reachable at {@code target} begins.
      *
-     * <p>The answer is remembered under {@code machineId} — the machine's identity, which is what it
-     * <em>is</em>. This used to be a name, and the implementation had to take the identity off the target
-     * instead, because a name is a label an operator edits and two machines can wear the same one at
-     * different times — a jail served to the wrong machine silently rewrites every path Vaier shows for it.
+     * <p>The answer is remembered under the target's own {@link MachineId} — the machine's identity, which
+     * is what it <em>is</em>. The identity is taken off the target rather than passed alongside it, so there
+     * is one source and no way for a caller to key the cache on one machine while connecting to another: a
+     * jail served to the wrong machine silently rewrites every path Vaier shows for it, in both directions.
+     * A name would be worse still — a label an operator edits, and two machines can wear the same one.
      */
-    SftpRoot rootFor(MachineId machineId, SshTarget target);
+    SftpRoot rootFor(SshTarget target);
 }

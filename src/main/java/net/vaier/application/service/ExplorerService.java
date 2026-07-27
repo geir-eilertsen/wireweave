@@ -63,7 +63,7 @@ public class ExplorerService
         String requested = path == null || path.isBlank() ? null : FileEntry.normalisePath(path);
 
         SshTarget target = forResolvingSshTargets.resolve(machineId);
-        SftpRoot root = forResolvingSftpRoots.rootFor(machineId, target);
+        SftpRoot root = forResolvingSftpRoots.rootFor(target);
 
         // Present or past, the service maps a requested coordinate down to the real machine path SFTP must be
         // asked for, and the answered entries back up to the requested coordinate. In the present that is the
@@ -126,7 +126,7 @@ public class ExplorerService
     public ResolvedFileCoordinate resolve(MachineId machineId, String path, String at) {
         String requested = FileEntry.normalisePath(path);
         SshTarget target = forResolvingSshTargets.resolve(machineId);
-        SftpRoot root = forResolvingSftpRoots.rootFor(machineId, target);
+        SftpRoot root = forResolvingSftpRoots.rootFor(target);
         return new ResolvedFileCoordinate(target, sftpPathFor(machineId, root, requested, at));
     }
 
@@ -155,7 +155,7 @@ public class ExplorerService
     public void delete(MachineId machineId, String path) {
         String requested = FileEntry.normalisePath(path);
         SshTarget target = forResolvingSshTargets.resolve(machineId);
-        SftpRoot root = forResolvingSftpRoots.rootFor(machineId, target);
+        SftpRoot root = forResolvingSftpRoots.rootFor(target);
 
         forBrowsingRemoteFiles.delete(target, root.toDeletableJailPath(requested));
         log.info("Deleted {} on {}", requested, machineId);

@@ -5,13 +5,13 @@ import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.application.DiscoverVaierServerContainersUseCase;
 import net.vaier.application.GetSelfUpgradeStatusUseCase;
-import net.vaier.application.GetVaierServerUseCase;
 import net.vaier.application.RunRemoteCommandUseCase;
 import net.vaier.application.UpgradeVaierUseCase;
 import net.vaier.domain.CommandResult;
 import net.vaier.domain.DockerService;
 import net.vaier.domain.MachineId;
 import net.vaier.domain.SelfUpgrade;
+import net.vaier.domain.port.ForResolvingVaierServerIdentity;
 import net.vaier.domain.SelfUpgradeScript;
 import net.vaier.domain.SelfUpgradeStatus;
 import org.springframework.stereotype.Component;
@@ -35,24 +35,24 @@ public class SelfUpgradeRunner implements UpgradeVaierUseCase, GetSelfUpgradeSta
 
     private final DiscoverVaierServerContainersUseCase containers;
     private final RunRemoteCommandUseCase remoteCommand;
-    private final GetVaierServerUseCase vaierServer;
+    private final ForResolvingVaierServerIdentity vaierServerIdentity;
 
     public SelfUpgradeRunner(DiscoverVaierServerContainersUseCase containers,
                              RunRemoteCommandUseCase remoteCommand,
-                             GetVaierServerUseCase vaierServer) {
+                             ForResolvingVaierServerIdentity vaierServerIdentity) {
         this.containers = containers;
         this.remoteCommand = remoteCommand;
-        this.vaierServer = vaierServer;
+        this.vaierServerIdentity = vaierServerIdentity;
     }
 
     /**
      * The Vaier server's own identity. It is the one machine that cannot be found by searching the machine
-     * stores — it is neither a peer nor a LAN server — so it is asked for rather than looked up. Resolved
-     * per call rather than held: this component outlives a config reload, and an id cached here would go on
-     * addressing a machine the config no longer describes.
+     * stores — it is neither a peer nor a LAN server — so it is asked for through a driven port rather than
+     * borrowed from another domain's use case. Resolved per call rather than held: this component outlives a
+     * config reload, and an id cached here would go on addressing a machine the config no longer describes.
      */
     private MachineId vaierServerId() {
-        return vaierServer.getVaierServerMachine().id();
+        return vaierServerIdentity.identity();
     }
 
     @Override

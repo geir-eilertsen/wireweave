@@ -26,6 +26,7 @@ import net.vaier.domain.port.ForGettingPeerConfigurations;
 import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
 import net.vaier.domain.port.ForGettingVpnClients;
 import net.vaier.domain.port.ForPersistingAppConfiguration;
+import net.vaier.domain.port.ForResolvingVaierServerIdentity;
 import net.vaier.domain.port.ForPersistingDiskWatches;
 import net.vaier.domain.port.ForPersistingLanServers;
 import net.vaier.domain.port.ForResolvingServerLanCidr;
@@ -54,6 +55,7 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
     private final ForUpdatingPeerConfigurations forUpdatingPeerConfigurations;
     private final ForPersistingLanServers forPersistingLanServers;
     private final ForPersistingAppConfiguration forPersistingAppConfiguration;
+    private final ForResolvingVaierServerIdentity forResolvingVaierServerIdentity;
     private final ForResolvingSshTargets forResolvingSshTargets;
     private final ForRunningSshCommands forRunningSshCommands;
     private final ForTrackingHostKeys forTrackingHostKeys;
@@ -73,6 +75,7 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
                           ForTrackingHostKeys forTrackingHostKeys,
                           ForPersistingDiskWatches forPersistingDiskWatches,
                           net.vaier.domain.port.ForResolvingMachineIds forResolvingMachineIds,
+                          ForResolvingVaierServerIdentity forResolvingVaierServerIdentity,
                           ConfigResolver configResolver) {
         this.forGettingPeerConfigurations = forGettingPeerConfigurations;
         this.forGettingVpnClients = forGettingVpnClients;
@@ -86,6 +89,7 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
         this.forTrackingHostKeys = forTrackingHostKeys;
         this.forPersistingDiskWatches = forPersistingDiskWatches;
         this.forResolvingMachineIds = forResolvingMachineIds;
+        this.forResolvingVaierServerIdentity = forResolvingVaierServerIdentity;
         this.configResolver = configResolver;
     }
 
@@ -223,26 +227,9 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
     private Machine vaierServerMachine() {
         VaierConfig config = forPersistingAppConfiguration.load().orElse(null);
         Boolean override = config == null ? null : config.getVaierServerSshAccess();
-        return Machine.vaierServer(vaierServerMachineId(config), override);
+        return Machine.vaierServer(forResolvingVaierServerIdentity.identity(), override);
     }
 
-    /** The stored Vaier-server machine id, or a freshly minted one persisted back to the config. */
-    private net.vaier.domain.MachineId vaierServerMachineId(VaierConfig config) {
-        if (config != null && config.getVaierServerMachineId() != null) {
-            try {
-                return net.vaier.domain.MachineId.of(config.getVaierServerMachineId());
-            } catch (IllegalArgumentException e) {
-                log.error("vaierServerMachineId in the Vaier config is malformed ({}); assigning a new one."
-                    + " Anything keyed to the old id will need re-pointing.", e.getMessage());
-            }
-        }
-        net.vaier.domain.MachineId assigned = net.vaier.domain.MachineId.generate();
-        VaierConfig toSave = (config == null ? VaierConfig.builder().build() : config)
-            .toBuilder().vaierServerMachineId(assigned.value()).build();
-        forPersistingAppConfiguration.save(toSave);
-        log.info("Assigned the Vaier server its machine id {}", assigned);
-        return assigned;
-    }
 
     @Override
     public boolean setMachineSshAccess(String machineName, boolean enabled) {
