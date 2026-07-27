@@ -4680,14 +4680,86 @@
             if (res.ok) {
                 noteEl.className = 'ex-set-note is-ok';
                 noteEl.textContent = okText || 'Saved.';
-            } else {
-                const err = await res.json().catch(() => ({}));
-                noteEl.className = 'ex-set-note is-err';
-                noteEl.textContent = err.message || 'Could not save.';
+                return true;
             }
+            const err = await res.json().catch(() => ({}));
+            noteEl.className = 'ex-set-note is-err';
+            noteEl.textContent = err.message || 'Could not save.';
+            return false;
         } catch (e) {
             noteEl.className = 'ex-set-note is-err';
             noteEl.textContent = 'Could not save.';
+            return false;
+        }
+    }
+
+    // The last kit written this session, kept out of S.settings (which loadSettings replaces wholesale) so
+    // navigating away from Settings and back does not lose the one record of where the copies went. Stamped,
+    // because "written" with no time reads as "written now" the second time you see it.
+    let _kitWrite = null;
+
+    // What one write achieved, and why it went where it did.
+    //
+    // The headline is the only question worth asking of a kit — is there now something out there that opens
+    // without this server — so it is answered in those words rather than as a count of successful requests.
+    // Vaier chose these machines, so it says why for each one, the same way a nudge does: an operator can
+    // disagree with a stated reason, but should never have to derive one. Machines that were passed over are
+    // folded away; they are reasoning, not trouble, and the fleet has more of them than kit hosts.
+    function renderKitWrite(host, r, at) {
+        host.textContent = '';
+        const kept = (r.chosen || []).length;
+        const when = at ? at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+
+        if (r.survivesLossOfVaier) {
+            const line = el('div', 'ex-runline');
+            line.textContent = (kept === 1 ? '1 machine holds a copy' : kept + ' machines hold a copy')
+                + ' you can read without this server. Written ' + when + '.';
+            host.appendChild(line);
+        } else {
+            // Vaier's own copy was still written, and saying so matters: the operator can open the kit right
+            // here, today. It just does not survive the one event the kit exists for.
+            host.appendChild(note('No machine took a copy, so nothing written just now outlives this server. '
+                + 'Vaier’s own copy is in place — it dies with the machine it is on. The failures below say '
+                + 'what each host refused with.', true));
+        }
+
+        if (r.fewerCopiesThanIntended && r.survivesLossOfVaier) {
+            const short = el('div', 'ex-hint');
+            short.textContent = 'Vaier keeps three copies where it can, never two behind the same relay. This '
+                + 'fleet had room for ' + kept + '.';
+            host.appendChild(short);
+        }
+
+        const rows = (items, cls, name, why) => {
+            if (!items || !items.length) return;
+            const list = el('div', 'ex-kit-list');
+            items.forEach((it) => {
+                const row = el('div', 'ex-kit-row' + (cls ? ' ' + cls : ''));
+                const n = el('div', 'ex-kit-name'); n.textContent = name(it);
+                const w = el('div', 'ex-kit-why'); w.textContent = why(it);
+                row.append(n, w);
+                list.appendChild(row);
+            });
+            host.appendChild(list);
+        };
+
+        rows(r.chosen, null, (p) => p.machineName, (p) => p.reason);
+        // A host that refused is the one thing here that needs acting on, so it is never folded away.
+        rows(r.failures, 'is-err', (f) => f.machineName,
+            (f) => 'No copy was written: ' + f.reason);
+
+        if (r.skipped && r.skipped.length) {
+            const d = disclosure('Why not the other machines?');
+            const list = el('div', 'ex-kit-list');
+            r.skipped.forEach((sk) => {
+                const row = el('div', 'ex-kit-row is-quiet');
+                const n = el('div', 'ex-kit-name'); n.textContent = sk.machineName;
+                const w = el('div', 'ex-kit-why'); w.textContent = sk.reason;
+                row.append(n, w);
+                list.appendChild(row);
+            });
+            d.appendChild(list);
+            host.appendChild(d);
         }
     }
 
@@ -4746,6 +4818,103 @@
             'In ' + (c.backupScheduleZone || 'the server’s zone') + '. A failed run emails the admins.', hour));
         saveRow(sched, 'Save schedule', (n) => saveSetting('/settings/backup-schedule', 'PUT',
             { backupScheduleHour: parseInt(hour.value, 10) }, n, 'Schedule saved.'));
+
+        // --- The survival kit: the way out of the circle the backups are otherwise in ---
+        //
+        // Two controls, one decision. The passphrase is the operator's to choose and to keep — never
+        // generated, because a strong random string is exactly what nobody carries in their head, and the
+        // kit's whole point is that it opens on a day Vaier cannot be asked anything. Typed twice, because a
+        // typo here is invisible until the one day it matters.
+        const kitForm = sectionForm('Reading your backups without Vaier');
+        const kitWhy = el('div', 'ex-hint');
+        kitWhy.textContent = 'Every repository passphrase lives in Vaier, and Vaier’s own backup is encrypted '
+            + 'with one of them — so losing this server would leave you holding archives nothing can open. A '
+            + 'survival kit is that list, encrypted with a passphrase only you know and copied onto machines '
+            + 'Vaier does not run on. Each copy carries the one openssl command that opens it, printed in the '
+            + 'clear on the file itself.';
+        kitForm.appendChild(kitWhy);
+
+        const kitPass = input('', c.hasSurvivalKitPassphrase
+            ? 'A passphrase is set — type a new one to replace it' : 'Choose a passphrase', 'password');
+        const kitAgain = input('', 'Type it again', 'password');
+        kitForm.append(
+            field('Kit passphrase', 'The one thing you keep yourself. Write it down somewhere that is not a '
+                + 'computer — Vaier cannot recover it, and a kit nobody can open is not a kit.', kitPass),
+            field('Confirm', c.hasSurvivalKitPassphrase
+                ? 'Kits already on the fleet still open with the old passphrase until you write them again.'
+                : 'Typed twice because a mistyped passphrase looks like a saved one until the day you need it.',
+                kitAgain));
+
+        // The write action and everything it reports live below the passphrase, in their own block: saving a
+        // passphrase and writing a kit are separate acts, and rolling them into one Save would write kits
+        // across the fleet as a side effect of typing a password.
+        const kitOut = el('div', 'ex-kit-out');
+        const writeRow = el('div', 'ex-set-actions');
+        const writeBtn = el('button', 'ex-btn is-accent');
+        writeBtn.textContent = 'Write the kit now';
+        const writeNote = el('span', 'ex-set-note');
+        writeRow.append(writeBtn, writeNote);
+
+        const kitNote = saveRow(kitForm, 'Save passphrase', (n) => {
+            const p = kitPass.value;
+            if (!p.trim()) {
+                n.className = 'ex-set-note is-err'; n.textContent = 'Enter a passphrase.'; return;
+            }
+            if (p !== kitAgain.value) {
+                n.className = 'ex-set-note is-err'; n.textContent = 'The two entries do not match.'; return;
+            }
+            saveSetting('/settings/survival-kit-passphrase', 'PUT', { passphrase: p }, n,
+                'Passphrase saved.').then((ok) => {
+                    kitPass.value = ''; kitAgain.value = '';
+                    if (!ok) return;
+                    c.hasSurvivalKitPassphrase = true;
+                    kitPass.placeholder = 'A passphrase is set — type a new one to replace it';
+                    armWrite();
+                    // Said only when there are kits out there to have gone stale by this.
+                    if (_kitWrite) {
+                        n.textContent = 'Passphrase saved. Write the kit again so the copies match it.';
+                        n.className = 'ex-set-note is-warn';
+                    }
+                });
+        });
+        kitForm.append(writeRow, kitOut);
+
+        // The button is only offered when it can do something. Without a passphrase it would write nothing
+        // and say 409, which is a fact about an endpoint, not an answer to a person.
+        function armWrite() {
+            writeBtn.disabled = !c.hasSurvivalKitPassphrase;
+            writeBtn.title = c.hasSurvivalKitPassphrase
+                ? 'Write the kit and copy it onto the machines Vaier picks'
+                : 'Choose a passphrase first — Vaier will not write a kit that anyone could open';
+        }
+        armWrite();
+        if (_kitWrite) renderKitWrite(kitOut, _kitWrite.report, _kitWrite.at);
+
+        writeBtn.onclick = async () => {
+            writeBtn.disabled = true;
+            writeNote.className = 'ex-set-note';
+            writeNote.textContent = 'Writing the kit and copying it out…';
+            try {
+                const res = await fetch('/survival-kit', { method: 'POST' });
+                if (res.ok) {
+                    const report = await res.json();
+                    _kitWrite = { report, at: new Date() };
+                    renderKitWrite(kitOut, report, _kitWrite.at);
+                    writeNote.textContent = '';
+                } else if (res.status === 409) {
+                    writeNote.className = 'ex-set-note is-err';
+                    writeNote.textContent = 'Choose a passphrase first, then write the kit.';
+                } else {
+                    const err = await res.json().catch(() => ({}));
+                    writeNote.className = 'ex-set-note is-err';
+                    writeNote.textContent = err.message || 'Vaier could not write the kit.';
+                }
+            } catch (e) {
+                writeNote.className = 'ex-set-note is-err';
+                writeNote.textContent = 'Vaier could not write the kit.';
+            }
+            armWrite();
+        };
 
         // --- AWS credentials: only meaningful in Route53 DNS mode ---
         if (c.dnsProvider === 'ROUTE53') {

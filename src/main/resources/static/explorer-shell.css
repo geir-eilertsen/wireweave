@@ -1236,6 +1236,24 @@ select.ex-input { cursor: pointer; }
 .ex-set-note.is-err { color: var(--red); }
 .ex-set-note.is-warn { color: var(--yellow); }
 
+/* Where the survival kit's copies went, and why. The same two-line shape as a nudge — a name, and the
+   reasoning under it — because it is the same act: Vaier stating a decision it made on the operator's
+   behalf. No icon and no button, since there is nothing here to do; a host that refused takes the red edge,
+   because that one is not reasoning, it is a copy the fleet does not have. */
+.ex-kit-out:not(:empty) { margin-top: 14px; }
+.ex-kit-list { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; max-width: 640px; }
+.ex-kit-row {
+    padding: 9px 12px;
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--accent);
+    border-radius: var(--radius-1);
+    background: var(--bg-card);
+}
+.ex-kit-row.is-err { border-left-color: var(--red); }
+.ex-kit-row.is-quiet { border-left-color: var(--border); }
+.ex-kit-name { color: var(--text); font-weight: 600; }
+.ex-kit-why { color: var(--text-muted); font-size: 13px; margin-top: 3px; line-height: 1.45; }
+
 /* The Advanced fold — the shell's one place to keep rare or mechanism-heavy controls out of sight. A quiet
    native <details>, restyled to the shell's hand: a muted summary that brightens on hover, its own hairline
    above, and a marker that turns as it opens. Deliberately understated — the boldness is spent elsewhere. */
