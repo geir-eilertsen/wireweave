@@ -1846,9 +1846,10 @@ missing or malformed does not load, rather than coming back as a stranger to its
 
 #### Remaining
 
-Both steps below are **done and committed** (unpushed, on `main`): the SSH path went id-native in
+The work that got this far is **committed and pushed** on `main`: the SSH path went id-native in
 `7969746`, the Explorer's coordinates in `5c843a5`, the rest of the machine-keyed backend in `7bf0d6f`,
-and the browser in `126038b`. `5581ca1` fixes two findings the hex checker raised against the first two.
+and the browser in `126038b`. `5581ca1` fixes two findings the hex checker raised against the first two,
+and `4cdf3c8` fixes the pop-out shell window that `126038b` missed (the fourth defect above).
 What is left is smaller than what was planned, but it is the part that pays:
 
 1. **`/vpn/peers` must expose `machineId`.** It does not, so `explorer-shell.js`'s `loadFleet` has nothing
