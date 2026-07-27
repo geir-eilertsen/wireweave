@@ -4,6 +4,7 @@ import net.vaier.application.GetAppSettingsUseCase;
 import net.vaier.application.GetSelfUpgradeStatusUseCase;
 import net.vaier.application.GetAppSettingsUseCase.AppSettingsResult;
 import net.vaier.application.GetAppVersionUseCase;
+import net.vaier.application.SetSurvivalKitPassphraseUseCase;
 import net.vaier.application.TestSmtpCredentialsUseCase;
 import net.vaier.application.UpdateAwsCredentialsUseCase;
 import net.vaier.application.UpdateBackupSettingsUseCase;
@@ -30,6 +31,7 @@ public class SettingsRestController {
     private final TestSmtpCredentialsUseCase testSmtpCredentialsUseCase;
     private final UpdateDiskMonitorSettingsUseCase updateDiskMonitorSettingsUseCase;
     private final UpdateBackupSettingsUseCase updateBackupSettingsUseCase;
+    private final SetSurvivalKitPassphraseUseCase setSurvivalKitPassphraseUseCase;
     private final GetSelfUpgradeStatusUseCase getSelfUpgradeStatusUseCase;
     private final UpgradeVaierUseCase upgradeVaierUseCase;
 
@@ -40,6 +42,7 @@ public class SettingsRestController {
                                   TestSmtpCredentialsUseCase testSmtpCredentialsUseCase,
                                   UpdateDiskMonitorSettingsUseCase updateDiskMonitorSettingsUseCase,
                                   UpdateBackupSettingsUseCase updateBackupSettingsUseCase,
+                                  SetSurvivalKitPassphraseUseCase setSurvivalKitPassphraseUseCase,
                                   GetSelfUpgradeStatusUseCase getSelfUpgradeStatusUseCase,
                                   UpgradeVaierUseCase upgradeVaierUseCase) {
         this.getAppSettingsUseCase = getAppSettingsUseCase;
@@ -49,6 +52,7 @@ public class SettingsRestController {
         this.testSmtpCredentialsUseCase = testSmtpCredentialsUseCase;
         this.updateDiskMonitorSettingsUseCase = updateDiskMonitorSettingsUseCase;
         this.updateBackupSettingsUseCase = updateBackupSettingsUseCase;
+        this.setSurvivalKitPassphraseUseCase = setSurvivalKitPassphraseUseCase;
         this.getSelfUpgradeStatusUseCase = getSelfUpgradeStatusUseCase;
         this.upgradeVaierUseCase = upgradeVaierUseCase;
     }
@@ -150,6 +154,20 @@ public class SettingsRestController {
         }
     }
 
+    /**
+     * Choose the survival kit passphrase. A {@code PUT} of the value alone — it is never read back, so
+     * {@code GET /settings/config} answers only {@code hasSurvivalKitPassphrase}.
+     */
+    @PutMapping("/survival-kit-passphrase")
+    public ResponseEntity<?> setSurvivalKitPassphrase(@RequestBody SurvivalKitPassphraseRequest request) {
+        try {
+            setSurvivalKitPassphraseUseCase.setSurvivalKitPassphrase(request.passphrase());
+            return ResponseEntity.ok().build();
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(ApiError.of("BAD_REQUEST", e.getMessage()));
+        }
+    }
+
     @PostMapping("/smtp/test")
     public ResponseEntity<?> testSmtp(@RequestBody TestSmtpRequest request) {
         try {
@@ -170,4 +188,5 @@ public class SettingsRestController {
                                   String smtpPassword, String smtpSender, String recipient) {}
     public record UpdateDiskMonitorRequest(int diskMonitorThresholdPercent) {}
     public record UpdateBackupScheduleRequest(int backupScheduleHour) {}
+    public record SurvivalKitPassphraseRequest(String passphrase) {}
 }

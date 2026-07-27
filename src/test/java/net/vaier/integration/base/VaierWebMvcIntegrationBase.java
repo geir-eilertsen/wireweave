@@ -189,7 +189,15 @@ public abstract class VaierWebMvcIntegrationBase {
     protected UpdateDiskMonitorSettingsUseCase updateDiskMonitorSettingsUseCase;
 
     @MockBean
-    protected net.vaier.application.UpdateBackupSettingsUseCase updateBackupSettingsUseCase;
+    protected UpdateBackupSettingsUseCase updateBackupSettingsUseCase;
+
+    @MockBean
+    protected SetSurvivalKitPassphraseUseCase setSurvivalKitPassphraseUseCase;
+
+    // Implemented by rest/SurvivalKitWriter, which composes machines, the backup stores and SSH — mocked
+    // here like the other rest-layer orchestrators (@WebMvcTest loads controllers only).
+    @MockBean
+    protected WriteSurvivalKitUseCase writeSurvivalKitUseCase;
 
     // Self-upgrade: the runner that implements these lives in rest/ (it drives a detached process over SSH,
     // like BackupRunner), so a controller-slice context has no instance of it to wire.

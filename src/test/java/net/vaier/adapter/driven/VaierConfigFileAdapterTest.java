@@ -229,6 +229,34 @@ class VaierConfigFileAdapterTest {
         assertThat(adapter().readStoredPassword()).isEmpty();
     }
 
+    /**
+     * The kit passphrase is the third reversible secret in this file, and it is encrypted like the other two.
+     * On this host that is nearly theatre — {@code vault.key} sits in the same directory — but the config
+     * file travels (into a backup archive, into a support paste) where the key does not.
+     */
+    @Test
+    void save_thenLoad_roundTripsTheSurvivalKitPassphraseEncrypted() throws IOException {
+        VaierConfig config = VaierConfig.builder()
+            .domain("example.com")
+            .survivalKitPassphrase("the-kit-passphrase")
+            .build();
+
+        adapter().save(config);
+
+        assertThat(Files.readString(tempDir.resolve("vaier-config.yml")))
+            .doesNotContain("the-kit-passphrase")
+            .contains("enc:v1:");
+        assertThat(adapter().load().orElseThrow().getSurvivalKitPassphrase())
+            .isEqualTo("the-kit-passphrase");
+    }
+
+    @Test
+    void load_survivalKitPassphraseIsNullWhenNoneHasBeenChosen() {
+        adapter().save(VaierConfig.builder().domain("example.com").build());
+
+        assertThat(adapter().load().orElseThrow().hasSurvivalKitPassphrase()).isFalse();
+    }
+
     // --- at-rest secret encryption (#307) ---
 
     @Test

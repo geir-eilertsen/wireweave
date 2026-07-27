@@ -60,6 +60,7 @@ public class VaierConfigFileAdapter implements ForPersistingAppConfiguration, Fo
                 .smtpUsername((String) data.get("smtpUsername"))
                 .smtpSender((String) data.get("smtpSender"))
                 .smtpPassword(cipher.decrypt((String) data.get("smtpPassword")))
+                .survivalKitPassphrase(cipher.decrypt((String) data.get("survivalKitPassphrase")))
                 .diskMonitorThresholdPercent((Integer) data.get("diskMonitorThresholdPercent"))
                 .backupScheduleHour((Integer) data.get("backupScheduleHour"))
                 .vaierServerSshAccess((Boolean) data.get("vaierServerSshAccess"))
@@ -94,6 +95,8 @@ public class VaierConfigFileAdapter implements ForPersistingAppConfiguration, Fo
         data.put("smtpUsername", config.getSmtpUsername());
         data.put("smtpSender", config.getSmtpSender());
         data.put("smtpPassword", cipher.encrypt(config.getSmtpPassword()));
+        // The survival kit passphrase — the third reversible secret here, encrypted like the other two.
+        data.put("survivalKitPassphrase", cipher.encrypt(config.getSurvivalKitPassphrase()));
         data.put("diskMonitorThresholdPercent", config.getDiskMonitorThresholdPercent());
         data.put("backupScheduleHour", config.getBackupScheduleHour());
         // Vaier-server SSH-access override (#311); only written when the operator has pinned one.

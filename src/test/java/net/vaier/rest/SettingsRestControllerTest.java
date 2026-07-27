@@ -3,6 +3,7 @@ package net.vaier.rest;
 import net.vaier.application.GetAppSettingsUseCase;
 import net.vaier.application.GetAppSettingsUseCase.AppSettingsResult;
 import net.vaier.application.GetAppVersionUseCase;
+import net.vaier.application.SetSurvivalKitPassphraseUseCase;
 import net.vaier.application.TestSmtpCredentialsUseCase;
 import net.vaier.application.UpdateAwsCredentialsUseCase;
 import net.vaier.application.UpdateBackupSettingsUseCase;
@@ -30,6 +31,7 @@ class SettingsRestControllerTest {
     @Mock TestSmtpCredentialsUseCase testSmtpCredentialsUseCase;
     @Mock UpdateDiskMonitorSettingsUseCase updateDiskMonitorSettingsUseCase;
     @Mock UpdateBackupSettingsUseCase updateBackupSettingsUseCase;
+    @Mock SetSurvivalKitPassphraseUseCase setSurvivalKitPassphraseUseCase;
 
     @InjectMocks
     SettingsRestController controller;
@@ -47,7 +49,8 @@ class SettingsRestControllerTest {
     @Test
     void getConfig_returnsCurrentSettings() {
         AppSettingsResult settings = new AppSettingsResult("example.com", "****MPLE", "admin@example.com",
-                "smtp.example.com", 587, "user@example.com", "noreply@example.com", "ROUTE53", 85, false, 2, "Europe/Oslo");
+                "smtp.example.com", 587, "user@example.com", "noreply@example.com", "ROUTE53", 85, false, 2,
+                "Europe/Oslo", true);
         when(getAppSettingsUseCase.getSettings()).thenReturn(settings);
 
         ResponseEntity<AppSettingsResult> response = controller.getConfig();
@@ -55,6 +58,31 @@ class SettingsRestControllerTest {
         assertThat(response.getStatusCode().value()).isEqualTo(200);
         assertThat(response.getBody()).isEqualTo(settings);
         assertThat(response.getBody().backupScheduleHour()).isEqualTo(2);
+    }
+
+    /**
+     * The passphrase goes in and is never handed back: {@code GET /settings/config} says only whether one
+     * exists. A settings page that could show it would put every backup passphrase in the fleet behind one
+     * shoulder-surf, and the browser has no use for the value it does not already have.
+     */
+    @Test
+    void setSurvivalKitPassphrase_storesItAndReturns200() {
+        ResponseEntity<?> response = controller.setSurvivalKitPassphrase(
+                new SettingsRestController.SurvivalKitPassphraseRequest("correct horse battery staple"));
+
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
+        verify(setSurvivalKitPassphraseUseCase).setSurvivalKitPassphrase("correct horse battery staple");
+    }
+
+    @Test
+    void setSurvivalKitPassphrase_returns400WhenTheUseCaseRefusesIt() {
+        doThrow(new IllegalArgumentException("The survival kit passphrase must not be blank"))
+                .when(setSurvivalKitPassphraseUseCase).setSurvivalKitPassphrase("  ");
+
+        ResponseEntity<?> response = controller.setSurvivalKitPassphrase(
+                new SettingsRestController.SurvivalKitPassphraseRequest("  "));
+
+        assertThat(response.getStatusCode().value()).isEqualTo(400);
     }
 
     @Test

@@ -39,8 +39,15 @@ public final class SurvivalKitHosts {
 
     private SurvivalKitHosts() {}
 
-    /** A machine that will keep a copy: which machine, the site it stands for, and why it was chosen. */
-    public record Placement(String machineName, String site, String reason) {}
+    /**
+     * A machine that will keep a copy: which machine, the site it stands for, and why it was chosen.
+     *
+     * <p>Both an identity and a name, and they do different jobs. The kit is <em>written</em> by
+     * {@link MachineId}, so a machine renamed between choosing and writing still gets its copy. The name is
+     * carried alongside purely to be read — by the operator judging Vaier's reasoning, and in the failure
+     * line for a host that refused, which is a line someone has to act on.
+     */
+    public record Placement(MachineId machineId, String machineName, String site, String reason) {}
 
     /** A machine that will not keep a copy, and the fact the operator would need to disagree with. */
     public record Skipped(String machineName, String reason) {}
@@ -82,7 +89,8 @@ public final class SurvivalKitHosts {
         List<Placement> chosen = new ArrayList<>();
         for (Site site : sites) {
             if (kept.contains(site)) {
-                chosen.add(new Placement(site.keeper().name(), site.name(), chosenReason(site, kept)));
+                chosen.add(new Placement(site.keeper().id(), site.keeper().name(), site.name(),
+                    chosenReason(site, kept)));
             } else {
                 skipped.add(new Skipped(site.keeper().name(), notKeptReason(site, kept)));
             }

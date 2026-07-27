@@ -3,6 +3,7 @@ package net.vaier.application.service;
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.application.GetAppSettingsUseCase;
 import net.vaier.application.GetAppVersionUseCase;
+import net.vaier.application.SetSurvivalKitPassphraseUseCase;
 import net.vaier.application.TestSmtpCredentialsUseCase;
 import net.vaier.application.UpdateAwsCredentialsUseCase;
 import net.vaier.application.UpdateBackupSettingsUseCase;
@@ -29,6 +30,7 @@ public class SettingsService implements
     UpdateSmtpSettingsUseCase,
     UpdateDiskMonitorSettingsUseCase,
     UpdateBackupSettingsUseCase,
+    SetSurvivalKitPassphraseUseCase,
     TestSmtpCredentialsUseCase {
 
     private final ForPersistingAppConfiguration configPersistence;
@@ -69,7 +71,7 @@ public class SettingsService implements
             .map(this::toResult)
             .orElse(new AppSettingsResult(null, null, null, null, null, null, null, dnsProviderName(),
                 VaierConfig.DEFAULT_DISK_MONITOR_THRESHOLD_PERCENT, configResolver.isSocialAuthAvailable(),
-                VaierConfig.DEFAULT_BACKUP_SCHEDULE_HOUR, backupScheduleZone()));
+                VaierConfig.DEFAULT_BACKUP_SCHEDULE_HOUR, backupScheduleZone(), false));
     }
 
     @Override
@@ -86,6 +88,14 @@ public class SettingsService implements
         configPersistence.save(current.withBackupScheduleHour(hour));
         configResolver.reload();
         log.info("Fleet-backup nightly schedule hour updated to {}", hour);
+    }
+
+    @Override
+    public void setSurvivalKitPassphrase(String passphrase) {
+        VaierConfig current = configPersistence.load().orElse(VaierConfig.builder().build());
+        configPersistence.save(current.withSurvivalKitPassphrase(passphrase));
+        // Never logged, not even masked, and never its length: this one opens every backup in the fleet.
+        log.info("Survival kit passphrase set");
     }
 
     private String dnsProviderName() {
@@ -134,7 +144,8 @@ public class SettingsService implements
             config.effectiveDiskMonitorThresholdPercent(),
             configResolver.isSocialAuthAvailable(),
             config.effectiveBackupScheduleHour(),
-            backupScheduleZone()
+            backupScheduleZone(),
+            config.hasSurvivalKitPassphrase()
         );
     }
 

@@ -31,6 +31,8 @@ import net.vaier.application.RunBackupJobUseCase;
 import net.vaier.application.SaveBackupJobUseCase;
 import net.vaier.application.SaveBackupRepositoryUseCase;
 import net.vaier.application.SaveBackupServerUseCase;
+import net.vaier.application.WriteSurvivalKitUseCase;
+import net.vaier.application.WriteSurvivalKitUseCase.SurvivalKitReport;
 import net.vaier.domain.Archive;
 import net.vaier.domain.BackupJob;
 import net.vaier.domain.BackupRepository;
@@ -105,6 +107,7 @@ public class BackupRestController {
     private final PrepareBackupClientUseCase prepareBackupClient;
     private final ProtectMachinePathsUseCase protectMachinePaths;
     private final ForSubscribingToEvents forSubscribingToEvents;
+    private final WriteSurvivalKitUseCase writeSurvivalKit;
 
     public BackupRestController(SaveBackupRepositoryUseCase saveBackupRepository,
                                GetBackupRepositoriesUseCase getBackupRepositories,
@@ -126,7 +129,8 @@ public class BackupRestController {
                                AuthorizeBackupClientUseCase authorizeBackupClient,
                                PrepareBackupClientUseCase prepareBackupClient,
                                ProtectMachinePathsUseCase protectMachinePaths,
-                               ForSubscribingToEvents forSubscribingToEvents) {
+                               ForSubscribingToEvents forSubscribingToEvents,
+                               WriteSurvivalKitUseCase writeSurvivalKit) {
         this.saveBackupRepository = saveBackupRepository;
         this.getBackupRepositories = getBackupRepositories;
         this.deleteBackupRepository = deleteBackupRepository;
@@ -148,6 +152,7 @@ public class BackupRestController {
         this.prepareBackupClient = prepareBackupClient;
         this.protectMachinePaths = protectMachinePaths;
         this.forSubscribingToEvents = forSubscribingToEvents;
+        this.writeSurvivalKit = writeSurvivalKit;
     }
 
     /**
@@ -853,6 +858,58 @@ public class BackupRestController {
                 r.repositoryName(),
                 r.status(), r.startedAt(), r.finishedAt(), r.exitCode(), r.archiveName(), r.summary(),
                 r.diagnostics(), r.needsClientReadying());
+        }
+    }
+
+    /**
+     * Write the fleet's survival kit and put copies where Vaier decided they should go.
+     *
+     * <p>One endpoint for one operator decision — <em>make sure I can still read my backups if this server is
+     * gone</em>. The response carries Vaier's reasoning as well as the outcome: which hosts hold a copy and
+     * why, which were passed over and why, and which refused. {@code 409} when no kit passphrase has been
+     * chosen yet, which is a precondition the operator can fix, not a server error.
+     */
+    @PostMapping("/survival-kit")
+    public ResponseEntity<SurvivalKitResponse> writeSurvivalKit() {
+        try {
+            return ResponseEntity.ok(SurvivalKitResponse.from(writeSurvivalKit.writeSurvivalKit()));
+        } catch (IllegalStateException e) {
+            log.warn("Survival kit not written: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.CONFLICT).build();
+        }
+    }
+
+    /** A machine that now holds a copy of the kit, and the reason Vaier chose it. */
+    record KitCopyResponse(String machineId, String machineName, String site, String reason) {}
+
+    /** A machine that holds no copy, and the fact the operator would have to disagree with. */
+    record KitSkippedResponse(String machineName, String reason) {}
+
+    /** A destination that would not take the kit, in the words the machine used. */
+    record KitFailureResponse(String machineName, String reason) {}
+
+    /**
+     * What one write achieved. {@code survivesLossOfVaier} is the answer to the only question that matters —
+     * false when no fleet machine took a copy, which puts the fleet back inside the circle the kit exists to
+     * break, however well the Vaier server's own copy went.
+     */
+    record SurvivalKitResponse(int copiesKept, boolean survivesLossOfVaier, boolean fewerCopiesThanIntended,
+                               List<KitCopyResponse> chosen, List<KitSkippedResponse> skipped,
+                               List<KitFailureResponse> failures) {
+        static SurvivalKitResponse from(SurvivalKitReport report) {
+            return new SurvivalKitResponse(
+                report.rollout().copiesKept(),
+                report.rollout().survivesLossOfVaier(),
+                report.selection().fewerCopiesThanIntended(),
+                report.selection().chosen().stream()
+                    .map(p -> new KitCopyResponse(p.machineId().value(), p.machineName(), p.site(), p.reason()))
+                    .toList(),
+                report.selection().skipped().stream()
+                    .map(sk -> new KitSkippedResponse(sk.machineName(), sk.reason()))
+                    .toList(),
+                report.rollout().failures().stream()
+                    .map(f -> new KitFailureResponse(f.machineName(), f.reason()))
+                    .toList());
         }
     }
 }

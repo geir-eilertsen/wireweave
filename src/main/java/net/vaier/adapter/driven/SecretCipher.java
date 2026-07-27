@@ -8,10 +8,12 @@ import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.Optional;
 import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import lombok.extern.slf4j.Slf4j;
+import net.vaier.domain.port.ForReadingTheConfigKey;
 import org.springframework.stereotype.Component;
 
 /**
@@ -32,7 +34,7 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @Slf4j
-public class SecretCipher {
+public class SecretCipher implements ForReadingTheConfigKey {
 
     /** Envelope prefix marking a value produced by this cipher (version 1). */
     static final String PREFIX = "enc:v1:";
@@ -75,6 +77,34 @@ public class SecretCipher {
             }
         }
         return resolved;
+    }
+
+    /**
+     * The stored master key, exactly as it sits — Base64 of the 32 bytes — or empty when there is none yet.
+     *
+     * <p>Read, never minted: unlike {@link #key()}, this does not generate one when it finds nothing. A key
+     * created by the act of writing a survival kit would decrypt nothing, printed on the one page that says
+     * it decrypts everything.
+     */
+    @Override
+    public Optional<String> configKey() {
+        String envKey = System.getenv(ENV_KEY);
+        if (envKey != null && decodeKey(envKey.trim()) != null) {
+            return Optional.of(envKey.trim());
+        }
+        Path keyFile = Path.of(configDir, KEY_FILE_NAME);
+        if (!Files.exists(keyFile)) {
+            return Optional.empty();
+        }
+        try {
+            String stored = Files.readString(keyFile).trim();
+            // A file that is not a usable key is reported as no key at all, rather than as a string that
+            // would be copied off the kit and silently decrypt nothing.
+            return decodeKey(stored) == null ? Optional.empty() : Optional.of(stored);
+        } catch (IOException e) {
+            log.warn("Could not read the vault key file {} for the survival kit", keyFile, e);
+            return Optional.empty();
+        }
     }
 
     /**

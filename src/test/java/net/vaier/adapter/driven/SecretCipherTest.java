@@ -21,6 +21,33 @@ class SecretCipherTest {
         return new SecretCipher(tempDir.toString());
     }
 
+    /**
+     * The survival kit has to carry this key: restoring Vaier from one of its own archives yields a config
+     * whose every secret is {@code enc:v1:} ciphertext, and without the key that restore is a dead end. The
+     * kit is encrypted with the operator's passphrase, so the key is not in the clear anywhere it lands.
+     */
+    @Test
+    void configKey_isTheVaultKeyThatDecryptsEverythingElse() throws Exception {
+        SecretCipher cipher = cipher();
+        String ciphertext = cipher.encrypt("a stored secret");
+
+        String configKey = cipher.configKey().orElseThrow();
+
+        // Exactly what is in the key file — an operator who has this can decrypt the config store by hand.
+        assertThat(configKey).isEqualTo(Files.readString(tempDir.resolve("vault.key")).trim());
+        // And it really is the key: a cipher told to use it reads the other one's ciphertext.
+        assertThat(new SecretCipher(tempDir.toString()).decrypt(ciphertext)).isEqualTo("a stored secret");
+    }
+
+    /**
+     * Never generated on the way out. A key minted by the act of writing a kit would be a key that decrypts
+     * nothing, printed on the one page that claims it decrypts everything.
+     */
+    @Test
+    void configKey_isEmptyWhenNoKeyHasBeenGeneratedYet() {
+        assertThat(cipher().configKey()).isEmpty();
+    }
+
     @Test
     void roundTrips_multiLinePrivateKeyLikeString() {
         String pem = """

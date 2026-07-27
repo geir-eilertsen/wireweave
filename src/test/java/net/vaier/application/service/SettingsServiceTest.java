@@ -260,6 +260,30 @@ class SettingsServiceTest {
         verify(configPersistence, never()).save(any());
     }
 
+    // --- setSurvivalKitPassphrase ---
+
+    @Test
+    void setSurvivalKitPassphrasePersistsItAndCarriesTheRestOfTheConfigOver() {
+        when(configPersistence.load()).thenReturn(Optional.of(existingConfig()));
+
+        service.setSurvivalKitPassphrase("correct horse battery staple");
+
+        ArgumentCaptor<VaierConfig> captor = ArgumentCaptor.forClass(VaierConfig.class);
+        verify(configPersistence).save(captor.capture());
+        assertThat(captor.getValue().getSurvivalKitPassphrase()).isEqualTo("correct horse battery staple");
+        assertThat(captor.getValue().getDomain()).isEqualTo("example.com");
+        assertThat(captor.getValue().getAwsSecret()).isEqualTo("secret");
+    }
+
+    /** Refused by the entity, and nothing is written — a blank passphrase must not reach the store. */
+    @Test
+    void setSurvivalKitPassphrase_rejectsABlankOne() {
+        assertThatThrownBy(() -> service.setSurvivalKitPassphrase("  "))
+            .isInstanceOf(IllegalArgumentException.class);
+
+        verify(configPersistence, never()).save(any());
+    }
+
     // --- updateAwsCredentials ---
 
     @Test

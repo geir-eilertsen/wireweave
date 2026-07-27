@@ -24,6 +24,8 @@ import net.vaier.application.ProvisionBackupServerUseCase.ProvisionState;
 import net.vaier.application.ProvisionBackupServerUseCase.ProvisionStatus;
 import net.vaier.application.GetMachinesUseCase;
 import net.vaier.application.RunBackupJobUseCase;
+import net.vaier.application.WriteSurvivalKitUseCase;
+import net.vaier.application.WriteSurvivalKitUseCase.SurvivalKitReport;
 import net.vaier.application.service.BackupService;
 import net.vaier.domain.Archive;
 import net.vaier.domain.DeviceCategory;
@@ -35,6 +37,8 @@ import net.vaier.domain.BackupRun;
 import net.vaier.domain.BackupRunStatus;
 import net.vaier.domain.ConflictException;
 import net.vaier.domain.Edition;
+import net.vaier.domain.SurvivalKitHosts;
+import net.vaier.domain.SurvivalKitRollout;
 import net.vaier.domain.BackupServer;
 import net.vaier.domain.port.ForPersistingBackupJobs;
 import net.vaier.domain.port.ForPersistingBackupRepositories;
@@ -90,6 +94,7 @@ class BackupRestControllerTest {
     PrepareBackupClientUseCase prepareBackupClient;
     ForReadyingBackupClients readier;
     net.vaier.domain.port.ForSubscribingToEvents forSubscribingToEvents;
+    WriteSurvivalKitUseCase writeSurvivalKit;
     BackupService service;
     BackupRestController controller;
     ObjectMapper objectMapper = new ObjectMapper();
@@ -147,6 +152,7 @@ class BackupRestControllerTest {
         checkPrerequisites = mock(CheckBackupPrerequisitesUseCase.class);
         initBackupRepository = mock(InitBackupRepositoryUseCase.class);
         provisionBackupServer = mock(ProvisionBackupServerUseCase.class);
+        writeSurvivalKit = mock(WriteSurvivalKitUseCase.class);
         generateSetupScript = mock(GenerateBackupServerSetupScriptUseCase.class);
         getMachines = mock(GetMachinesUseCase.class);
         authorizeBackupClient = mock(AuthorizeBackupClientUseCase.class);
@@ -157,7 +163,7 @@ class BackupRestControllerTest {
         controller = new BackupRestController(service, service, service, service, service, service,
             generateSetupScript, provisionBackupServer, service, service, service, service, runBackupJob,
             listArchives, checkPrerequisites, initBackupRepository, getMachines, authorizeBackupClient,
-            prepareBackupClient, service, forSubscribingToEvents);
+            prepareBackupClient, service, forSubscribingToEvents, writeSurvivalKit);
     }
 
     private Machine machine(String name) {
@@ -1236,5 +1242,55 @@ class BackupRestControllerTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(jobs.getByName("colina-home").orElseThrow().machineId())
             .isEqualTo(TestMachineIds.of("Colina 27"));
+    }
+
+    // --- survival kit ------------------------------------------------------------------------------------
+
+    /**
+     * One call, one decision: make sure the fleet's backups can still be read if this server is gone. The
+     * response carries Vaier's reasoning — which hosts hold a copy and why — because the operator is meant to
+     * be able to disagree with a stated reason, not to derive one.
+     */
+    @Test
+    void writeSurvivalKit_reportsWhereTheCopiesWentAndWhy() {
+        MachineId apalveien = TestMachineIds.of("Apalveien 5");
+        when(writeSurvivalKit.writeSurvivalKit()).thenReturn(new SurvivalKitReport(
+            new SurvivalKitHosts.Selection(
+                List.of(new SurvivalKitHosts.Placement(apalveien, "Apalveien 5", "site-a", "furthest from the rest")),
+                List.of(new SurvivalKitHosts.Skipped("geir-pc", "a laptop is not always on"))),
+            new SurvivalKitRollout.Result(1,
+                List.of(new SurvivalKitRollout.Failure("Colina 27", "ssh: connection reset")))));
+
+        ResponseEntity<BackupRestController.SurvivalKitResponse> response = controller.writeSurvivalKit();
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody().copiesKept()).isEqualTo(1);
+        assertThat(response.getBody().survivesLossOfVaier()).isTrue();
+        // Three copies were intended and one landed, which the operator has to be told outright.
+        assertThat(response.getBody().fewerCopiesThanIntended()).isTrue();
+        assertThat(response.getBody().chosen()).singleElement()
+            .satisfies(p -> {
+                assertThat(p.machineId()).isEqualTo(apalveien.value());
+                assertThat(p.machineName()).isEqualTo("Apalveien 5");
+                assertThat(p.reason()).isNotBlank();
+            });
+        assertThat(response.getBody().skipped()).singleElement()
+            .satisfies(sk -> assertThat(sk.reason()).contains("always on"));
+        assertThat(response.getBody().failures()).singleElement()
+            .satisfies(f -> assertThat(f.machineName()).isEqualTo("Colina 27"));
+    }
+
+    /**
+     * No passphrase is a state conflict, not a server error: {@code 409} carrying the message, so the page
+     * can say what to do instead of showing a masked 500.
+     */
+    @Test
+    void writeSurvivalKit_returns409WhenNoPassphraseHasBeenChosen() {
+        when(writeSurvivalKit.writeSurvivalKit())
+            .thenThrow(new IllegalStateException("Choose a survival kit passphrase before writing a kit"));
+
+        ResponseEntity<BackupRestController.SurvivalKitResponse> response = controller.writeSurvivalKit();
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
     }
 }

@@ -21,6 +21,11 @@ public interface GetAppSettingsUseCase {
          * The zone that hour is read in — the scheduler's own clock zone (e.g. {@code Europe/Oslo}), so the
          * UI can name it instead of saying "server local time" and leaving the operator to guess.
          */
-        String backupScheduleZone
+        String backupScheduleZone,
+        /**
+         * Whether a survival kit passphrase has been chosen. Whether, never what — the value opens every
+         * backup in the fleet and the browser has no use for it.
+         */
+        boolean hasSurvivalKitPassphrase
     ) {}
 }

@@ -40,6 +40,18 @@ public class VaierConfig {
     private String vaierServerMachineId;
 
     /**
+     * The passphrase that opens this fleet's {@link SurvivalKit}, or null until the operator has chosen one.
+     *
+     * <p>Vaier holding it looks wrong for a second — it is the one secret the design says the operator keeps
+     * in their head. It costs nothing: anyone who can read this field already has {@code vault.key}, and with
+     * it every repository passphrase directly, so the kit tells them nothing new. What holding it buys is the
+     * thing the whole feature exists for — Vaier can <em>rewrite</em> the kit when a passphrase changes,
+     * where a Vaier that could not would be left nagging about a kit going stale in the operator's absence.
+     * The operator still keeps it in their head, for the day there is no vault left to read it from.
+     */
+    private String survivalKitPassphrase;
+
+    /**
      * The Vaier server's own identity, or empty when it has not been assigned one yet or the stored value
      * is unusable.
      *
@@ -57,6 +69,27 @@ public class VaierConfig {
         } catch (IllegalArgumentException e) {
             return Optional.empty();
         }
+    }
+
+    /**
+     * A copy with the survival kit passphrase replaced; every other field carries over unchanged.
+     *
+     * <p>Blank is refused rather than stored. A kit encrypted with nothing is indistinguishable on its face
+     * from a protected one — same header, same marker, same instructions — so the operator would go on
+     * believing the copies on their fleet were safe to leave lying there.
+     */
+    public VaierConfig withSurvivalKitPassphrase(String passphrase) {
+        if (passphrase == null || passphrase.isBlank()) {
+            throw new IllegalArgumentException("The survival kit passphrase must not be blank");
+        }
+        return toBuilder()
+            .survivalKitPassphrase(passphrase)
+            .build();
+    }
+
+    /** Whether a kit passphrase has been chosen — asked before a rollout, and answered for the browser. */
+    public boolean hasSurvivalKitPassphrase() {
+        return survivalKitPassphrase != null && !survivalKitPassphrase.isBlank();
     }
 
     /** The default host-disk alert threshold when none is configured: notify above 85% used. */

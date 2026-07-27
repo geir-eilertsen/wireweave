@@ -158,6 +158,45 @@ class VaierConfigTest {
         assertThat(VaierConfig.builder().build().isSmtpConfigured()).isFalse();
     }
 
+    // --- the survival kit passphrase -------------------------------------------------------------------
+
+    @Test
+    void withSurvivalKitPassphrase_replacesItAndCarriesEveryOtherFieldOver() {
+        VaierConfig updated = fullConfig().withSurvivalKitPassphrase("correct horse battery staple");
+
+        assertThat(updated.getSurvivalKitPassphrase()).isEqualTo("correct horse battery staple");
+        assertThat(updated.getDomain()).isEqualTo("vaier.net");
+        assertThat(updated.getAwsSecret()).isEqualTo("topsecret");
+        assertThat(updated.getSmtpHost()).isEqualTo("smtp.example.com");
+    }
+
+    /**
+     * A kit written with a blank passphrase looks exactly like a protected one and hands the fleet to anyone
+     * who opens it, so the emptiness is refused at the point it would be stored — not later, when the only
+     * thing left to do about it is write a kit that gives everything away.
+     */
+    @Test
+    void withSurvivalKitPassphrase_refusesABlankOne() {
+        assertThatThrownBy(() -> fullConfig().withSurvivalKitPassphrase("   "))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("passphrase");
+        assertThatThrownBy(() -> fullConfig().withSurvivalKitPassphrase(null))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("passphrase");
+    }
+
+    /**
+     * Asked before every rollout, and answered for the browser — which is told <em>whether</em> there is a
+     * passphrase and never what it is.
+     */
+    @Test
+    void hasSurvivalKitPassphrase_isFalseUntilOneIsChosen() {
+        assertThat(VaierConfig.builder().build().hasSurvivalKitPassphrase()).isFalse();
+        assertThat(VaierConfig.builder().survivalKitPassphrase("  ").build().hasSurvivalKitPassphrase())
+            .isFalse();
+        assertThat(fullConfig().withSurvivalKitPassphrase("chosen").hasSurvivalKitPassphrase()).isTrue();
+    }
+
     // --- the Vaier server's own identity ---------------------------------------------------------------
 
     /**
