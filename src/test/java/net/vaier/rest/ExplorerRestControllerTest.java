@@ -15,6 +15,9 @@ import net.vaier.domain.NotFoundException;
 import net.vaier.domain.PathOutsideSftpRootException;
 import net.vaier.domain.ProtectedPaths;
 import net.vaier.domain.PermissionDeniedException;
+import net.vaier.domain.MachineId;
+import net.vaier.domain.TestMachineIds;
+import net.vaier.domain.Selection;
 import net.vaier.domain.SftpRoot;
 import net.vaier.domain.SourcePaths;
 import net.vaier.rest.ExplorerRestController.DirectoryResponse;
@@ -48,6 +51,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @ExtendWith(MockitoExtension.class)
 class ExplorerRestControllerTest {
 
+    private static MachineId mid(String name) {
+        return TestMachineIds.of(name);
+    }
+
     @Mock BrowseFilesUseCase browseFilesUseCase;
     @Mock ListMachineArchivesUseCase listMachineArchivesUseCase;
     @Mock DownloadFileUseCase downloadFileUseCase;
@@ -71,11 +78,11 @@ class ExplorerRestControllerTest {
 
     @Test
     void get_listsTheRequestedDirectory_onTheRequestedMachine() {
-        when(browseFilesUseCase.listDirectory("apalveien5", "/home/geir", null)).thenReturn(at("/home/geir",
+        when(browseFilesUseCase.listDirectory(mid("apalveien5"), "/home/geir", null)).thenReturn(at("/home/geir",
             FileEntry.in("/home/geir", "docs", true, 4096, WHEN),
             FileEntry.in("/home/geir", "notes.txt", false, 120, WHEN)));
 
-        ResponseEntity<DirectoryResponse> response = controller.list("apalveien5", "/home/geir", null);
+        ResponseEntity<DirectoryResponse> response = controller.list(mid("apalveien5").value(), "/home/geir", null);
 
         assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
         List<FileEntryResponse> body = response.getBody().entries();
@@ -89,19 +96,19 @@ class ExplorerRestControllerTest {
     @Test
     void get_withNoPath_letsTheMachineSayWhereItsTreeBegins() throws Exception {
         MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
-        when(browseFilesUseCase.listDirectory("NAS", null, null))
+        when(browseFilesUseCase.listDirectory(mid("NAS"), null, null))
             .thenReturn(new MachineDirectory(new SftpRoot("/volume1"), "/volume1",
                 List.of(FileEntry.in("/volume1", "homes", true, 4096, WHEN))));
 
         // No path means "wherever this machine's tree begins" — NOT "/". The browser cannot know that the NAS
         // begins at /volume1 until it has asked, so it must not be made to guess.
-        mockMvc.perform(get("/machines/NAS/files"))
+        mockMvc.perform(get("/machines/" + mid("NAS") + "/files"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.root").value("/volume1"))
             .andExpect(jsonPath("$.path").value("/volume1"))
             .andExpect(jsonPath("$.entries[0].path").value("/volume1/homes"));
 
-        verify(browseFilesUseCase).listDirectory("NAS", null, null);
+        verify(browseFilesUseCase).listDirectory(mid("NAS"), null, null);
     }
 
     @Test
@@ -112,7 +119,7 @@ class ExplorerRestControllerTest {
 
         // The listing is no longer a bare array: an array cannot carry the root, and a machine's file tree
         // begins at its root.
-        mockMvc.perform(get("/machines/apalveien5/files").param("path", "/"))
+        mockMvc.perform(get("/machines/" + mid("apalveien5") + "/files").param("path", "/"))
             .andExpect(status().isOk())
             .andExpect(content().contentTypeCompatibleWith("application/json"))
             .andExpect(jsonPath("$.root").value("/"))
@@ -129,11 +136,11 @@ class ExplorerRestControllerTest {
         MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
         when(browseFilesUseCase.listDirectory(any(), any(), any())).thenReturn(at("/var/lib"));
 
-        mockMvc.perform(get("/machines/apalveien5/files").param("path", "/var/lib"))
+        mockMvc.perform(get("/machines/" + mid("apalveien5") + "/files").param("path", "/var/lib"))
             .andExpect(status().isOk());
 
         // The path is handed to the domain verbatim — the controller does not sanitise it, the domain does.
-        verify(browseFilesUseCase).listDirectory("apalveien5", "/var/lib", null);
+        verify(browseFilesUseCase).listDirectory(mid("apalveien5"), "/var/lib", null);
     }
 
     @Test
@@ -143,7 +150,7 @@ class ExplorerRestControllerTest {
         when(browseFilesUseCase.listDirectory(any(), any(), any()))
             .thenThrow(new IllegalArgumentException("A path must not climb above the root: /../etc"));
 
-        mockMvc.perform(get("/machines/apalveien5/files").param("path", "/../etc"))
+        mockMvc.perform(get("/machines/" + mid("apalveien5") + "/files").param("path", "/../etc"))
             .andExpect(status().isBadRequest());
     }
 
@@ -157,7 +164,7 @@ class ExplorerRestControllerTest {
         // /volume2 exists on the NAS — df and the web terminal both see it — but SFTP is chrooted into
         // /volume1 and can never reach it. The operator must be told exactly that, and never be shown an
         // empty folder or, worse, the jail's own contents under another path's name.
-        mockMvc.perform(get("/machines/NAS/files").param("path", "/volume2"))
+        mockMvc.perform(get("/machines/" + mid("NAS") + "/files").param("path", "/volume2"))
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.code").value("PATH_OUTSIDE_SFTP_ROOT"))
             .andExpect(jsonPath("$.message").value(
@@ -174,7 +181,7 @@ class ExplorerRestControllerTest {
         when(browseFilesUseCase.listDirectory(any(), any(), any()))
             .thenThrow(new NoHostCredentialException("Vaier server"));
 
-        mockMvc.perform(get("/machines/Vaier server/files"))
+        mockMvc.perform(get("/machines/" + mid("Vaier server") + "/files"))
             .andExpect(status().isFailedDependency())
             .andExpect(jsonPath("$.code").value("NO_CREDENTIAL"))
             .andExpect(jsonPath("$.detail").value("Vaier server"))
@@ -187,17 +194,17 @@ class ExplorerRestControllerTest {
         // The machine protects exactly /home/geir. An entry AT that path is backedUp; an ancestor /home merely
         // CONTAINS it (half shield); an unrelated /var is neither. All three verdicts are the domain's
         // (SourcePaths.covers / enclosesUnder), rendered per entry — never re-derived in the browser.
-        when(browseFilesUseCase.listDirectory("apalveien5", "/", null))
+        when(browseFilesUseCase.listDirectory(mid("apalveien5"), "/", null))
             .thenReturn(new MachineDirectory(SftpRoot.NONE, "/", List.of(
                 FileEntry.in("/", "home", true, 4096, WHEN),
                 FileEntry.in("/", "var", true, 4096, WHEN)),
                 protecting("/home/geir")));
-        when(browseFilesUseCase.listDirectory("apalveien5", "/home", null))
+        when(browseFilesUseCase.listDirectory(mid("apalveien5"), "/home", null))
             .thenReturn(new MachineDirectory(SftpRoot.NONE, "/home", List.of(
                 FileEntry.in("/home", "geir", true, 4096, WHEN)),
                 protecting("/home/geir")));
 
-        List<FileEntryResponse> root = controller.list("apalveien5", "/", null).getBody().entries();
+        List<FileEntryResponse> root = controller.list(mid("apalveien5").value(), "/", null).getBody().entries();
         FileEntryResponse home = root.stream().filter(e -> e.name().equals("home")).findFirst().orElseThrow();
         FileEntryResponse var = root.stream().filter(e -> e.name().equals("var")).findFirst().orElseThrow();
         // /home contains a source path deeper down but is not itself backed up -> half shield.
@@ -208,7 +215,7 @@ class ExplorerRestControllerTest {
         assertThat(var.containsBackedUp()).isFalse();
 
         // The entry that IS the source path -> fully backed up, and never also "contains" (mutually exclusive).
-        FileEntryResponse geir = controller.list("apalveien5", "/home", null).getBody().entries().getFirst();
+        FileEntryResponse geir = controller.list(mid("apalveien5").value(), "/home", null).getBody().entries().getFirst();
         assertThat(geir.backedUp()).isTrue();
         assertThat(geir.containsBackedUp()).isFalse();
     }
@@ -220,14 +227,14 @@ class ExplorerRestControllerTest {
         // read the fix as broken, and — worse — believe data is in the archives that borg walks straight past.
         ProtectedPaths protection = ProtectedPaths.of(
             SourcePaths.of(List.of("/home")), Excludes.of(List.of("/home/openhab/userdata/logs")));
-        when(browseFilesUseCase.listDirectory("apalveien5", "/home/openhab/userdata", null))
+        when(browseFilesUseCase.listDirectory(mid("apalveien5"), "/home/openhab/userdata", null))
             .thenReturn(new MachineDirectory(SftpRoot.NONE, "/home/openhab/userdata", List.of(
                 FileEntry.in("/home/openhab/userdata", "logs", true, 4096, WHEN),
                 FileEntry.in("/home/openhab/userdata", "jsondb", true, 4096, WHEN)),
                 protection));
 
         List<FileEntryResponse> entries =
-            controller.list("apalveien5", "/home/openhab/userdata", null).getBody().entries();
+            controller.list(mid("apalveien5").value(), "/home/openhab/userdata", null).getBody().entries();
         FileEntryResponse logs = entries.stream().filter(e -> e.name().equals("logs")).findFirst().orElseThrow();
         FileEntryResponse jsondb = entries.stream().filter(e -> e.name().equals("jsondb")).findFirst().orElseThrow();
 
@@ -244,19 +251,19 @@ class ExplorerRestControllerTest {
         // folder that merely contains something protected; its unholed siblings keep their full shield.
         ProtectedPaths protection = ProtectedPaths.of(
             SourcePaths.of(List.of("/home")), Excludes.of(List.of("/home/openhab/userdata/logs")));
-        when(browseFilesUseCase.listDirectory("colina27", "/", null))
+        when(browseFilesUseCase.listDirectory(mid("colina27"), "/", null))
             .thenReturn(new MachineDirectory(SftpRoot.NONE, "/", List.of(
                 FileEntry.in("/", "home", true, 4096, WHEN)), protection));
-        when(browseFilesUseCase.listDirectory("colina27", "/home", null))
+        when(browseFilesUseCase.listDirectory(mid("colina27"), "/home", null))
             .thenReturn(new MachineDirectory(SftpRoot.NONE, "/home", List.of(
                 FileEntry.in("/home", "openhab", true, 4096, WHEN),
                 FileEntry.in("/home", "geir", true, 4096, WHEN)), protection));
 
-        FileEntryResponse home = controller.list("colina27", "/", null).getBody().entries().getFirst();
+        FileEntryResponse home = controller.list(mid("colina27").value(), "/", null).getBody().entries().getFirst();
         assertThat(home.backedUp()).as("/home holds a hole, so it is not whole").isFalse();
         assertThat(home.containsBackedUp()).isTrue();
 
-        List<FileEntryResponse> inHome = controller.list("colina27", "/home", null).getBody().entries();
+        List<FileEntryResponse> inHome = controller.list(mid("colina27").value(), "/home", null).getBody().entries();
         FileEntryResponse openhab = inHome.stream().filter(e -> e.name().equals("openhab"))
             .findFirst().orElseThrow();
         FileEntryResponse geir = inHome.stream().filter(e -> e.name().equals("geir"))
@@ -271,11 +278,11 @@ class ExplorerRestControllerTest {
     void get_inThePast_marksNothingBackedUp() {
         // An archived listing carries an empty protected set — the past's backup shape is not today's, so no
         // entry is marked, whatever its path.
-        when(browseFilesUseCase.listDirectory("apalveien5", "/home/geir", "ab12"))
+        when(browseFilesUseCase.listDirectory(mid("apalveien5"), "/home/geir", "ab12"))
             .thenReturn(new MachineDirectory(SftpRoot.NONE, "/home/geir",
                 List.of(FileEntry.in("/home/geir", "docs", true, 4096, WHEN)), "ab12"));
 
-        FileEntryResponse entry = controller.list("apalveien5", "/home/geir", "ab12").getBody().entries().getFirst();
+        FileEntryResponse entry = controller.list(mid("apalveien5").value(), "/home/geir", "ab12").getBody().entries().getFirst();
 
         assertThat(entry.backedUp()).isFalse();
         assertThat(entry.containsBackedUp()).isFalse();
@@ -286,18 +293,18 @@ class ExplorerRestControllerTest {
     @Test
     void get_withAnArchiveCoordinate_browsesThePast_andCarriesItBack() throws Exception {
         MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
-        when(browseFilesUseCase.listDirectory("apalveien5", "/home/geir", "ab12"))
+        when(browseFilesUseCase.listDirectory(mid("apalveien5"), "/home/geir", "ab12"))
             .thenReturn(new MachineDirectory(SftpRoot.NONE, "/home/geir",
                 List.of(FileEntry.in("/home/geir", "notes.txt", false, 120, WHEN)), "ab12"));
 
-        mockMvc.perform(get("/machines/apalveien5/files").param("path", "/home/geir").param("at", "ab12"))
+        mockMvc.perform(get("/machines/" + mid("apalveien5") + "/files").param("path", "/home/geir").param("at", "ab12"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.path").value("/home/geir"))
             // The listing carries the archive coordinate, so the browser knows it is looking at the past.
             .andExpect(jsonPath("$.at").value("ab12"))
             .andExpect(jsonPath("$.entries[0].path").value("/home/geir/notes.txt"));
 
-        verify(browseFilesUseCase).listDirectory("apalveien5", "/home/geir", "ab12");
+        verify(browseFilesUseCase).listDirectory(mid("apalveien5"), "/home/geir", "ab12");
     }
 
     // --- slice 2: download ------------------------------------------------------------------------------
@@ -305,7 +312,7 @@ class ExplorerRestControllerTest {
     @Test
     void download_streamsTheFile_asAnAttachment_withItsNameSizeAndBytes() throws Exception {
         byte[] payload = "hello download".getBytes();
-        when(downloadFileUseCase.openForDownload("apalveien5", "/home/geir/notes.txt", null))
+        when(downloadFileUseCase.openForDownload(mid("apalveien5"), "apalveien5", "/home/geir/notes.txt", null))
             .thenReturn(new Download("notes.txt", payload.length, "application/octet-stream", out -> {
                 try {
                     out.write(payload);
@@ -317,7 +324,7 @@ class ExplorerRestControllerTest {
         // Invoked directly (not via MockMvc) so the streamed body is asserted deterministically, without the
         // async dispatch a StreamingResponseBody otherwise needs.
         ResponseEntity<StreamingResponseBody> response =
-            controller.download("apalveien5", "/home/geir/notes.txt", null);
+            controller.download(mid("apalveien5").value(), "/home/geir/notes.txt", null, "apalveien5");
 
         assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
         assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_OCTET_STREAM);
@@ -331,7 +338,7 @@ class ExplorerRestControllerTest {
 
     @Test
     void download_fromAnArchive_isAllowed_becauseADownloadIsARead() throws Exception {
-        when(downloadFileUseCase.openForDownload("apalveien5", "/home/geir/notes.txt", "ab12"))
+        when(downloadFileUseCase.openForDownload(mid("apalveien5"), "apalveien5", "/home/geir/notes.txt", "ab12"))
             .thenReturn(new Download("notes.txt", 3, "application/octet-stream", out -> {
                 try {
                     out.write("old".getBytes());
@@ -341,12 +348,12 @@ class ExplorerRestControllerTest {
             }));
 
         ResponseEntity<StreamingResponseBody> response =
-            controller.download("apalveien5", "/home/geir/notes.txt", "ab12");
+            controller.download(mid("apalveien5").value(), "/home/geir/notes.txt", "ab12", "apalveien5");
 
         java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
         response.getBody().writeTo(out);
         assertThat(out.toByteArray()).isEqualTo("old".getBytes());
-        verify(downloadFileUseCase).openForDownload("apalveien5", "/home/geir/notes.txt", "ab12");
+        verify(downloadFileUseCase).openForDownload(mid("apalveien5"), "apalveien5", "/home/geir/notes.txt", "ab12");
     }
 
     @Test
@@ -354,7 +361,7 @@ class ExplorerRestControllerTest {
         // The zip is built by the use case; the controller only wires the handle to the response. -1 stands
         // for "not known ahead of time" — a zip's byte count isn't the sum of the files it holds.
         byte[] zipBytes = {1, 2, 3};
-        when(downloadFileUseCase.openForDownload("apalveien5", "/home/geir", null))
+        when(downloadFileUseCase.openForDownload(mid("apalveien5"), "apalveien5", "/home/geir", null))
             .thenReturn(new Download("geir.zip", -1, "application/zip", out -> {
                 try {
                     out.write(zipBytes);
@@ -363,7 +370,7 @@ class ExplorerRestControllerTest {
                 }
             }));
 
-        ResponseEntity<StreamingResponseBody> response = controller.download("apalveien5", "/home/geir", null);
+        ResponseEntity<StreamingResponseBody> response = controller.download(mid("apalveien5").value(), "/home/geir", null, "apalveien5");
 
         assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
         assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.valueOf("application/zip"));
@@ -383,8 +390,8 @@ class ExplorerRestControllerTest {
             .thenReturn(new Download("apalveien5.zip", -1, "application/zip", out -> {
             }));
 
-        String selection = "[{\"machine\":\"apalveien5\",\"path\":\"/home/x\",\"at\":null},"
-            + "{\"machine\":\"apalveien5\",\"path\":\"/etc/hosts\",\"at\":\"ab12\"}]";
+        String selection = "[{\"machineId\":\"" + mid("apalveien5") + "\",\"machine\":\"apalveien5\",\"path\":\"/home/x\",\"at\":null},"
+            + "{\"machineId\":\"" + mid("apalveien5") + "\",\"machine\":\"apalveien5\",\"path\":\"/etc/hosts\",\"at\":\"ab12\"}]";
         controller.downloadZip(selection);
 
         // The JSON array becomes the selection's coordinates, in order, with `at` carried (null and an id).
@@ -393,8 +400,8 @@ class ExplorerRestControllerTest {
             org.mockito.ArgumentCaptor.forClass(List.class);
         verify(downloadFileUseCase).openForDownload(captor.capture());
         assertThat(captor.getValue()).containsExactly(
-            new net.vaier.domain.Selection.Coordinate("apalveien5", "/home/x", null),
-            new net.vaier.domain.Selection.Coordinate("apalveien5", "/etc/hosts", "ab12"));
+            new Selection.Coordinate(mid("apalveien5"), "apalveien5", "/home/x", null),
+            new Selection.Coordinate(mid("apalveien5"), "apalveien5", "/etc/hosts", "ab12"));
     }
 
     @Test
@@ -410,7 +417,7 @@ class ExplorerRestControllerTest {
             }));
 
         ResponseEntity<StreamingResponseBody> response =
-            controller.downloadZip("[{\"machine\":\"apalveien5\",\"path\":\"/home/x\"}]");
+            controller.downloadZip("[{\"machineId\":\"" + mid("apalveien5") + "\",\"machine\":\"apalveien5\",\"path\":\"/home/x\"}]");
 
         assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
         assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.valueOf("application/zip"));
@@ -430,7 +437,7 @@ class ExplorerRestControllerTest {
             }));
 
         ResponseEntity<StreamingResponseBody> response = controller.downloadZip(
-            "[{\"machine\":\"apalveien5\",\"path\":\"/etc\"},{\"machine\":\"colina27\",\"path\":\"/etc\"}]");
+            "[{\"machineId\":\"" + mid("apalveien5") + "\",\"machine\":\"apalveien5\",\"path\":\"/etc\"},{\"machineId\":\"" + mid("colina27") + "\",\"machine\":\"colina27\",\"path\":\"/etc\"}]");
 
         assertThat(response.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION))
             .isEqualTo("attachment; filename=\"vaier-selection.zip\"");
@@ -445,7 +452,7 @@ class ExplorerRestControllerTest {
 
         mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
                 .post("/machines/files/download-zip")
-                .param("selection", "[{\"machine\":\"apalveien5\",\"path\":\"/home/x\"}]"))
+                .param("selection", "[{\"machineId\":\"" + mid("apalveien5") + "\",\"machine\":\"apalveien5\",\"path\":\"/home/x\"}]"))
             .andExpect(status().isOk());
 
         verify(downloadFileUseCase).openForDownload(any());
@@ -466,30 +473,30 @@ class ExplorerRestControllerTest {
 
     @Test
     void delete_removesThePath_andAnswers204NoContent() {
-        ResponseEntity<Void> response = controller.delete("apalveien5", "/home/geir/old");
+        ResponseEntity<Void> response = controller.delete(mid("apalveien5").value(), "/home/geir/old");
 
         assertThat(response.getStatusCode().value()).isEqualTo(204);
-        verify(deleteFileUseCase).delete("apalveien5", "/home/geir/old");
+        verify(deleteFileUseCase).delete(mid("apalveien5"), "/home/geir/old");
     }
 
     @Test
     void delete_passesThePathThroughVerbatim_asTheQueryParameter() throws Exception {
         MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
 
-        mockMvc.perform(delete("/machines/apalveien5/files").param("path", "/var/tmp/junk"))
+        mockMvc.perform(delete("/machines/" + mid("apalveien5") + "/files").param("path", "/var/tmp/junk"))
             .andExpect(status().isNoContent());
 
         // The path is handed to the domain verbatim — the controller does not sanitise it, the domain does.
-        verify(deleteFileUseCase).delete("apalveien5", "/var/tmp/junk");
+        verify(deleteFileUseCase).delete(mid("apalveien5"), "/var/tmp/junk");
     }
 
     @Test
     void delete_ofTheSftpRoot_isABadRequest_carryingTheGuardSentence() throws Exception {
         MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller)
             .setControllerAdvice(new GlobalExceptionHandler()).build();
-        doThrow(new CannotDeleteSftpRootException("/volume1")).when(deleteFileUseCase).delete("NAS", "/volume1");
+        doThrow(new CannotDeleteSftpRootException("/volume1")).when(deleteFileUseCase).delete(mid("NAS"), "/volume1");
 
-        mockMvc.perform(delete("/machines/NAS/files").param("path", "/volume1"))
+        mockMvc.perform(delete("/machines/" + mid("NAS") + "/files").param("path", "/volume1"))
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.code").value("BAD_REQUEST"))
             .andExpect(jsonPath("$.message").value(
@@ -501,9 +508,9 @@ class ExplorerRestControllerTest {
         MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller)
             .setControllerAdvice(new GlobalExceptionHandler()).build();
         doThrow(new NotFoundException("No such directory: /home/geir/ghost on apalveien5"))
-            .when(deleteFileUseCase).delete("apalveien5", "/home/geir/ghost");
+            .when(deleteFileUseCase).delete(mid("apalveien5"), "/home/geir/ghost");
 
-        mockMvc.perform(delete("/machines/apalveien5/files").param("path", "/home/geir/ghost"))
+        mockMvc.perform(delete("/machines/" + mid("apalveien5") + "/files").param("path", "/home/geir/ghost"))
             .andExpect(status().isNotFound());
     }
 
@@ -512,20 +519,20 @@ class ExplorerRestControllerTest {
         MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller)
             .setControllerAdvice(new GlobalExceptionHandler()).build();
         doThrow(new PermissionDeniedException("Not allowed to read /root as geir."))
-            .when(deleteFileUseCase).delete("apalveien5", "/root");
+            .when(deleteFileUseCase).delete(mid("apalveien5"), "/root");
 
-        mockMvc.perform(delete("/machines/apalveien5/files").param("path", "/root"))
+        mockMvc.perform(delete("/machines/" + mid("apalveien5") + "/files").param("path", "/root"))
             .andExpect(status().isForbidden());
     }
 
     @Test
     void archives_listsTheMachinesArchives_newestFirst_withIdNameAndTime() throws Exception {
         MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
-        when(listMachineArchivesUseCase.listMachineArchives("apalveien5")).thenReturn(List.of(
+        when(listMachineArchivesUseCase.listMachineArchives(mid("apalveien5"))).thenReturn(List.of(
             new Archive("apalveien5-2026-07-14T02:00:00", "b", Instant.parse("2026-07-14T02:00:00Z")),
             new Archive("apalveien5-2026-07-13T02:00:00", "a", Instant.parse("2026-07-13T02:00:00Z"))));
 
-        mockMvc.perform(get("/machines/apalveien5/archives"))
+        mockMvc.perform(get("/machines/" + mid("apalveien5") + "/archives"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$[0].id").value("b"))
             .andExpect(jsonPath("$[0].name").value("apalveien5-2026-07-14T02:00:00"))

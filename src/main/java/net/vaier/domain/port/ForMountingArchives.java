@@ -1,5 +1,6 @@
 package net.vaier.domain.port;
 
+import net.vaier.domain.MachineId;
 import net.vaier.domain.MountedArchive;
 
 /**
@@ -18,14 +19,14 @@ import net.vaier.domain.MountedArchive;
 public interface ForMountingArchives {
 
     /**
-     * Mount the archive with id {@code archiveId} on the machine named {@code machineName} and return where
+     * Mount the archive with id {@code archiveId} on the machine named {@code machineId} and return where
      * it landed. Mount-on-demand and idempotent: a second call for the same archive returns the same
      * {@link MountedArchive} without remounting.
      *
      * @throws IllegalArgumentException when {@code archiveId} is not a well-formed archive id
      * @throws net.vaier.domain.NotFoundException when no machine bears the name
      */
-    MountedArchive mount(String machineName, String archiveId);
+    MountedArchive mount(MachineId machineId, String archiveId);
 
     /**
      * Unmount every archive mount left untouched for longer than {@code idleWindow}, freeing the FUSE mount

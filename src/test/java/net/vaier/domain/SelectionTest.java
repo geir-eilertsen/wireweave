@@ -18,7 +18,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class SelectionTest {
 
     private static Coordinate on(String machine, String path) {
-        return new Coordinate(machine, path, null);
+        return new Coordinate(TestMachineIds.of(machine), machine, path, null);
     }
 
     @Test
@@ -93,7 +93,8 @@ class SelectionTest {
 
     @Test
     void anArchiveCoordinate_carriesItsPointInTime_andIsNamedTheSameWay() {
-        Coordinate past = new Coordinate("apalveien5", "/home/geir/notes.txt", "ab12");
+        Coordinate past = new Coordinate(TestMachineIds.of("apalveien5"), "apalveien5",
+            "/home/geir/notes.txt", "ab12");
         Selection selection = new Selection(List.of(past));
 
         assertThat(selection.placements().getFirst().coordinate().at()).isEqualTo("ab12");

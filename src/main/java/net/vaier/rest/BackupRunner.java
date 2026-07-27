@@ -328,25 +328,19 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
     }
 
     /**
-     * List the archives the machine named {@code machineName} can be browsed at — the Explorer time rail's
-     * data. Maps the machine to its first backup job, then lists that job's repository's archives newest
-     * first (via the same {@link #listArchives} path). Empty — never throwing — when the machine has no
-     * backup job (nothing to browse), or when the underlying repository list is empty for any reason.
+     * List the archives the machine {@code machineId} can be browsed at — the Explorer time rail's data.
+     * Maps the machine to its first backup job, then lists that job's repository's archives newest first
+     * (via the same {@link #listArchives} path). Empty — never throwing — when the machine has no backup
+     * job (nothing to browse), or when the underlying repository list is empty for any reason.
      */
     @Override
-    public List<Archive> listMachineArchives(String machineName) {
-        // The Explorer still browses by name while jobs are keyed by identity, so the crossing happens here,
-        // at the driving edge, against the same machine registry every other guard in this class uses.
-        Optional<MachineId> machineId = machines.getAllMachines().stream()
-            .filter(m -> Machine.hasSameName(m.name(), machineName)).map(Machine::id).findFirst();
-        if (machineId.isEmpty()) {
-            log.debug("No archives for machine {}: no such machine", LogSafe.forLog(machineName));
-            return List.of();
-        }
+    public List<Archive> listMachineArchives(MachineId machineId) {
+        // No crossing left: the Explorer browses by identity and jobs are keyed by it, so a machine whose
+        // name changed between opening the tree and opening the time rail still finds its own archives.
         Optional<BackupJob> job = jobs.getBackupJobs().stream()
-            .filter(j -> j.machineId().equals(machineId.get())).findFirst();
+            .filter(j -> j.machineId().equals(machineId)).findFirst();
         if (job.isEmpty()) {
-            log.debug("No archives for machine {}: it has no backup job", LogSafe.forLog(machineName));
+            log.debug("No archives for machine {}: it has no backup job", machineId);
             return List.of();
         }
         return Archive.newestFirst(listArchives(job.get().repositoryName()));

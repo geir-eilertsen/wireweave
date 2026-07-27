@@ -2,6 +2,8 @@ package net.vaier.rest;
 
 import net.vaier.application.GetTransfersUseCase;
 import net.vaier.application.StartTransferUseCase;
+import net.vaier.domain.MachineId;
+import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.Transfer;
 import net.vaier.domain.port.ForSubscribingToEvents;
 import org.junit.jupiter.api.Test;
@@ -26,6 +28,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @ExtendWith(MockitoExtension.class)
 class TransferRestControllerTest {
 
+    private static MachineId mid(String name) {
+        return TestMachineIds.of(name);
+    }
+
     @Mock StartTransferUseCase startTransfer;
     @Mock GetTransfersUseCase getTransfers;
     @Mock ForSubscribingToEvents forSubscribingToEvents;
@@ -33,18 +39,20 @@ class TransferRestControllerTest {
     @InjectMocks TransferRestController controller;
 
     private static Transfer running(String id) {
-        return Transfer.starting(id, "apalveien5", "/home/geir/notes.txt", true, "colina27", "/backup");
+        return Transfer.starting(id, mid("apalveien5"), "apalveien5", "/home/geir/notes.txt", true,
+            mid("colina27"), "colina27", "/backup");
     }
 
     @Test
     void post_startsATransfer_andReturnsItsJson() throws Exception {
         MockMvc mvc = MockMvcBuilders.standaloneSetup(controller).build();
-        when(startTransfer.startTransfer("apalveien5", "/home/geir/notes.txt", null, "colina27", "/backup"))
+        when(startTransfer.startTransfer(mid("apalveien5"), "apalveien5", "/home/geir/notes.txt", null, mid("colina27"), "colina27", "/backup"))
             .thenReturn(running("t1"));
 
         mvc.perform(post("/transfers").contentType("application/json").content("""
-                {"sourceMachine":"apalveien5","sourcePath":"/home/geir/notes.txt","at":null,
-                 "destMachine":"colina27","destPath":"/backup"}"""))
+                {"sourceMachineId":"%s","sourceMachine":"apalveien5","sourcePath":"/home/geir/notes.txt","at":null,
+                 "destMachineId":"%s","destMachine":"colina27","destPath":"/backup"}"""
+                .formatted(mid("apalveien5"), mid("colina27"))))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.id").value("t1"))
             .andExpect(jsonPath("$.sourceMachine").value("apalveien5"))
@@ -56,32 +64,34 @@ class TransferRestControllerTest {
             .andExpect(jsonPath("$.totalBytes").doesNotExist())
             .andExpect(jsonPath("$.error").doesNotExist());
 
-        verify(startTransfer).startTransfer("apalveien5", "/home/geir/notes.txt", null, "colina27", "/backup");
+        verify(startTransfer).startTransfer(mid("apalveien5"), "apalveien5", "/home/geir/notes.txt", null, mid("colina27"), "colina27", "/backup");
     }
 
     @Test
     void post_passesTheArchiveCoordinateThroughForARestore() throws Exception {
         MockMvc mvc = MockMvcBuilders.standaloneSetup(controller).build();
-        when(startTransfer.startTransfer(any(), any(), eq("ab12"), any(), any())).thenReturn(running("t2"));
+        when(startTransfer.startTransfer(any(), any(), any(), eq("ab12"), any(), any(), any())).thenReturn(running("t2"));
 
         mvc.perform(post("/transfers").contentType("application/json").content("""
-                {"sourceMachine":"nas","sourcePath":"/a/x.txt","at":"ab12",
-                 "destMachine":"nas","destPath":"/restore"}"""))
+                {"sourceMachineId":"%s","sourceMachine":"nas","sourcePath":"/a/x.txt","at":"ab12",
+                 "destMachineId":"%s","destMachine":"nas","destPath":"/restore"}"""
+                .formatted(mid("nas"), mid("nas"))))
             .andExpect(status().isOk());
 
-        verify(startTransfer).startTransfer("nas", "/a/x.txt", "ab12", "nas", "/restore");
+        verify(startTransfer).startTransfer(mid("nas"), "nas", "/a/x.txt", "ab12", mid("nas"), "nas", "/restore");
     }
 
     @Test
     void post_aNoOpOrBadPath_isABadRequest() throws Exception {
         MockMvc mvc = MockMvcBuilders.standaloneSetup(controller)
             .setControllerAdvice(new GlobalExceptionHandler()).build();
-        when(startTransfer.startTransfer(any(), any(), any(), any(), any()))
+        when(startTransfer.startTransfer(any(), any(), any(), any(), any(), any(), any()))
             .thenThrow(new IllegalArgumentException("A transfer's source and destination are the same file"));
 
         mvc.perform(post("/transfers").contentType("application/json").content("""
-                {"sourceMachine":"nas","sourcePath":"/a/b/c.txt","at":null,
-                 "destMachine":"nas","destPath":"/a/b"}"""))
+                {"sourceMachineId":"%s","sourceMachine":"nas","sourcePath":"/a/b/c.txt","at":null,
+                 "destMachineId":"%s","destMachine":"nas","destPath":"/a/b"}"""
+                .formatted(mid("nas"), mid("nas"))))
             .andExpect(status().isBadRequest());
     }
 

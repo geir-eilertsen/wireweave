@@ -11,6 +11,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import net.vaier.application.ListMachineArchivesUseCase;
 import net.vaier.domain.Archive;
 import net.vaier.domain.FileEntry;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.Selection;
 import net.vaier.domain.ProtectedPaths;
 import org.springframework.http.HttpHeaders;
@@ -57,13 +58,13 @@ public class ExplorerRestController {
      * <em>inside that archive</em> — the machine's past. Absent {@code at}, the live filesystem, unchanged
      * (#326: omitting {@code path} is still a question, not a default).
      */
-    @GetMapping("/machines/{machine}/files")
-    public ResponseEntity<DirectoryResponse> list(@PathVariable String machine,
+    @GetMapping("/machines/{machineId}/files")
+    public ResponseEntity<DirectoryResponse> list(@PathVariable String machineId,
                                                   @RequestParam(required = false) String path,
                                                   @RequestParam(required = false) String at) {
         log.debug("Browsing {} on machine {} at archive {}",
-            LogSafe.forLog(path), LogSafe.forLog(machine), LogSafe.forLog(at));
-        MachineDirectory directory = browseFilesUseCase.listDirectory(machine, path, at);
+            LogSafe.forLog(path), LogSafe.forLog(machineId), LogSafe.forLog(at));
+        MachineDirectory directory = browseFilesUseCase.listDirectory(MachineId.of(machineId), path, at);
         return ResponseEntity.ok(DirectoryResponse.from(directory));
     }
 
@@ -76,13 +77,17 @@ public class ExplorerRestController {
      * {@code Content-Length} is only set when the use case reports one (a file always does; a directory
      * never does — {@link Download#sizeBytes()} is {@code -1}).
      */
-    @GetMapping("/machines/{machine}/files/download")
-    public ResponseEntity<StreamingResponseBody> download(@PathVariable String machine,
+    @GetMapping("/machines/{machineId}/files/download")
+    public ResponseEntity<StreamingResponseBody> download(@PathVariable String machineId,
                                                           @RequestParam String path,
-                                                          @RequestParam(required = false) String at) {
+                                                          @RequestParam(required = false) String at,
+                                                          @RequestParam(required = false) String name) {
         log.info("Downloading {} from machine {} at archive {}",
-            LogSafe.forLog(path), LogSafe.forLog(machine), LogSafe.forLog(at));
-        Download download = downloadFileUseCase.openForDownload(machine, path, at);
+            LogSafe.forLog(path), LogSafe.forLog(machineId), LogSafe.forLog(at));
+        // `name` is what to call the machine in the filename when the download is a whole root, which
+        // has no basename of its own. Optional: a missing one costs a nicer filename, never the file.
+        Download download = downloadFileUseCase.openForDownload(
+            MachineId.of(machineId), name == null || name.isBlank() ? "files" : name, path, at);
         StreamingResponseBody body = download.writer()::accept;
         ResponseEntity.BodyBuilder response = ResponseEntity.ok()
             .header(HttpHeaders.CONTENT_DISPOSITION,
@@ -133,7 +138,8 @@ public class ExplorerRestController {
             throw new IllegalArgumentException("Malformed selection: expected a JSON array of coordinates");
         }
         return java.util.Arrays.stream(items)
-            .map(item -> new Selection.Coordinate(item.machine(), item.path(), item.at()))
+            .map(item -> new Selection.Coordinate(
+                MachineId.of(item.machineId()), item.machine(), item.path(), item.at()))
             .toList();
     }
 
@@ -155,10 +161,10 @@ public class ExplorerRestController {
      * permission-denied is a {@code 403}, and the SFTP-root guard — you cannot delete a machine's whole
      * browsable tree — is a {@code 400} carrying its own sentence (all via {@link GlobalExceptionHandler}).
      */
-    @DeleteMapping("/machines/{machine}/files")
-    public ResponseEntity<Void> delete(@PathVariable String machine, @RequestParam String path) {
-        log.info("Deleting {} on machine {}", LogSafe.forLog(path), LogSafe.forLog(machine));
-        deleteFileUseCase.delete(machine, path);
+    @DeleteMapping("/machines/{machineId}/files")
+    public ResponseEntity<Void> delete(@PathVariable String machineId, @RequestParam String path) {
+        log.info("Deleting {} on machine {}", LogSafe.forLog(path), LogSafe.forLog(machineId));
+        deleteFileUseCase.delete(MachineId.of(machineId), path);
         return ResponseEntity.noContent().build();
     }
 
@@ -166,10 +172,11 @@ public class ExplorerRestController {
      * The archives this machine can be browsed at, newest first — the time rail's data. Each carries the
      * {@code id} the browser hands back as the {@code at} coordinate, plus a display name and creation time.
      */
-    @GetMapping("/machines/{machine}/archives")
-    public ResponseEntity<List<ArchiveResponse>> archives(@PathVariable String machine) {
-        log.debug("Listing archives for machine {}", LogSafe.forLog(machine));
-        return ResponseEntity.ok(listMachineArchivesUseCase.listMachineArchives(machine).stream()
+    @GetMapping("/machines/{machineId}/archives")
+    public ResponseEntity<List<ArchiveResponse>> archives(@PathVariable String machineId) {
+        log.debug("Listing archives for machine {}", LogSafe.forLog(machineId));
+        return ResponseEntity.ok(
+            listMachineArchivesUseCase.listMachineArchives(MachineId.of(machineId)).stream()
             .map(ArchiveResponse::from).toList());
     }
 
@@ -179,7 +186,7 @@ public class ExplorerRestController {
      * or absent for the live filesystem, or an archive id for the past. Jackson binds each element of the
      * {@code selection} JSON array to one of these.
      */
-    record SelectionItem(String machine, String path, String at) {
+    record SelectionItem(String machineId, String machine, String path, String at) {
     }
 
     /**

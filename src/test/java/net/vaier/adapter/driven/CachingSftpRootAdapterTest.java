@@ -3,10 +3,12 @@ package net.vaier.adapter.driven;
 import net.vaier.domain.AuthMethod;
 import net.vaier.domain.CommandResult;
 import net.vaier.domain.HostCredential;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.SftpRoot;
 import net.vaier.domain.SshConnectException;
 import net.vaier.domain.SshHome;
 import net.vaier.domain.SshTarget;
+import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.port.ForBrowsingRemoteFiles;
 import net.vaier.domain.port.ForRunningSshCommands;
 import org.junit.jupiter.api.Test;
@@ -40,8 +42,8 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class CachingSftpRootAdapterTest {
 
-    private static net.vaier.domain.MachineId mid(String name) {
-        return net.vaier.domain.TestMachineIds.of(name);
+    private static MachineId mid(String name) {
+        return TestMachineIds.of(name);
     }
 
     @Mock ForRunningSshCommands forRunningSshCommands;
@@ -69,7 +71,7 @@ class CachingSftpRootAdapterTest {
         execHomeIs("/volume1/homes/geir");   // what df, borg and the operator's own terminal call it
         sftpHomeIs("/homes/geir");           // what the Explorer, inside the jail, calls it
 
-        SftpRoot root = adapter.rootFor("NAS", NAS);
+        SftpRoot root = adapter.rootFor(mid("NAS"), NAS);
 
         assertThat(root.jailed()).isTrue();
         assertThat(root.path()).isEqualTo("/volume1");
@@ -80,7 +82,7 @@ class CachingSftpRootAdapterTest {
         execHomeIs("/volume1/homes/geir");
         sftpHomeIs("/homes/geir");
 
-        adapter.rootFor("NAS", NAS);
+        adapter.rootFor(mid("NAS"), NAS);
 
         // The home, named physically: a jail is a physical subtree, so an aliased home can never line up with
         // one. Same channel and same port the backups' $HOME probe already runs on — no third way to reach a
@@ -96,7 +98,7 @@ class CachingSftpRootAdapterTest {
         execHomeIs("/home/geir");
         sftpHomeIs("/home/geir");
 
-        SftpRoot root = adapter.rootFor("Apalveien 5", NAS);
+        SftpRoot root = adapter.rootFor(mid("Apalveien 5"), NAS);
 
         assertThat(root.jailed()).isFalse();
         assertThat(root).isEqualTo(SftpRoot.NONE);
@@ -110,9 +112,9 @@ class CachingSftpRootAdapterTest {
         execHomeIs("/volume1/homes/geir");
         sftpHomeIs("/homes/geir");
 
-        assertThat(adapter.rootFor("NAS", NAS).path()).isEqualTo("/volume1");
-        assertThat(adapter.rootFor("NAS", NAS).path()).isEqualTo("/volume1");
-        assertThat(adapter.rootFor("NAS", NAS).path()).isEqualTo("/volume1");
+        assertThat(adapter.rootFor(mid("NAS"), NAS).path()).isEqualTo("/volume1");
+        assertThat(adapter.rootFor(mid("NAS"), NAS).path()).isEqualTo("/volume1");
+        assertThat(adapter.rootFor(mid("NAS"), NAS).path()).isEqualTo("/volume1");
 
         // A root does not move. Every directory the operator clicks would otherwise cost two extra SSH
         // connections to a machine on the far side of a VPN.
@@ -130,14 +132,14 @@ class CachingSftpRootAdapterTest {
         doReturn(new CommandResult(0, "/home/geir", "", false, "SHA256:pinned"))
             .when(forRunningSshCommands).run(eq(apalveien), any());
         when(forBrowsingRemoteFiles.home(eq(apalveien))).thenReturn("/home/geir");
-        assertThat(adapter.rootFor("Apalveien 5", apalveien).jailed()).isFalse();
+        assertThat(adapter.rootFor(mid("Apalveien 5"), apalveien).jailed()).isFalse();
 
         doReturn(new CommandResult(0, "/volume1/homes/geir", "", false, "SHA256:pinned"))
             .when(forRunningSshCommands).run(eq(NAS), any());
         when(forBrowsingRemoteFiles.home(eq(NAS))).thenReturn("/homes/geir");
 
         // One machine's jail must never be pinned onto another's paths.
-        assertThat(adapter.rootFor("NAS", NAS).path()).isEqualTo("/volume1");
+        assertThat(adapter.rootFor(mid("NAS"), NAS).path()).isEqualTo("/volume1");
     }
 
     // --- what is not known is not guessed ---------------------------------------------------------------
@@ -150,13 +152,13 @@ class CachingSftpRootAdapterTest {
             .when(forRunningSshCommands).run(any(), any());
 
         // Unknown is safe; guessing is not. The machine's paths are left exactly as they are.
-        assertThat(adapter.rootFor("NAS", NAS)).isEqualTo(SftpRoot.NONE);
+        assertThat(adapter.rootFor(mid("NAS"), NAS)).isEqualTo(SftpRoot.NONE);
 
         // And a blip must never poison the cache: a machine that was merely asleep gets asked again.
         doReturn(new CommandResult(0, "/volume1/homes/geir", "", false, "SHA256:pinned"))
             .when(forRunningSshCommands).run(any(), any());
         sftpHomeIs("/homes/geir");
-        assertThat(adapter.rootFor("NAS", NAS).path()).isEqualTo("/volume1");
+        assertThat(adapter.rootFor(mid("NAS"), NAS).path()).isEqualTo("/volume1");
     }
 
     @Test
@@ -165,7 +167,7 @@ class CachingSftpRootAdapterTest {
         when(forBrowsingRemoteFiles.home(any()))
             .thenThrow(new SshConnectException("Connection refused", new RuntimeException()));
 
-        assertThat(adapter.rootFor("NAS", NAS)).isEqualTo(SftpRoot.NONE);
+        assertThat(adapter.rootFor(mid("NAS"), NAS)).isEqualTo(SftpRoot.NONE);
     }
 
     @Test
@@ -173,7 +175,7 @@ class CachingSftpRootAdapterTest {
         when(forRunningSshCommands.run(any(), any()))
             .thenReturn(new CommandResult(127, "", "sh: printf: not found", false, "SHA256:pinned"));
 
-        assertThat(adapter.rootFor("NAS", NAS)).isEqualTo(SftpRoot.NONE);
+        assertThat(adapter.rootFor(mid("NAS"), NAS)).isEqualTo(SftpRoot.NONE);
         // The SFTP half is pointless once the exec half has no answer — and it costs a connection.
         verify(forBrowsingRemoteFiles, never()).home(any());
     }
@@ -183,14 +185,14 @@ class CachingSftpRootAdapterTest {
         execHomeIs("/volume1/homes/geir");
         sftpHomeIs("/srv/elsewhere");   // not a suffix — Vaier does not understand this machine
 
-        SftpRoot root = adapter.rootFor("NAS", NAS);
+        SftpRoot root = adapter.rootFor(mid("NAS"), NAS);
 
         assertThat(root).isEqualTo(SftpRoot.NONE);
 
         // This answer is stable, not transient — the machine answered, it just answered something Vaier cannot
         // read a jail out of. Asking again on every directory click would be two SSH connections per click,
         // forever, for an answer that will not change.
-        adapter.rootFor("NAS", NAS);
+        adapter.rootFor(mid("NAS"), NAS);
         verify(forRunningSshCommands, times(1)).run(any(), any());
     }
 
@@ -210,7 +212,7 @@ class CachingSftpRootAdapterTest {
         when(forBrowsingRemoteFiles.firstDirectory(any(), eq(SftpRoot.jailCandidates("/volume1/homes/geir"))))
             .thenReturn(Optional.of("/homes/geir"));
 
-        SftpRoot root = adapter.rootFor("NAS", NAS);
+        SftpRoot root = adapter.rootFor(mid("NAS"), NAS);
 
         assertThat(root.jailed()).isTrue();
         assertThat(root.path()).isEqualTo("/volume1");
@@ -221,7 +223,7 @@ class CachingSftpRootAdapterTest {
         execHomeIs("/home/geir");
         sftpHomeIs("/home/geir");
 
-        assertThat(adapter.rootFor("Apalveien 5", NAS)).isEqualTo(SftpRoot.NONE);
+        assertThat(adapter.rootFor(mid("Apalveien 5"), NAS)).isEqualTo(SftpRoot.NONE);
 
         // An ordinary machine answers the direct question, and the search is never run at all — one exec
         // probe, one SFTP probe, exactly as before.
@@ -234,62 +236,67 @@ class CachingSftpRootAdapterTest {
         sftpHomeIs("/");
         when(forBrowsingRemoteFiles.firstDirectory(any(), any())).thenReturn(Optional.empty());
 
-        assertThat(adapter.rootFor("NAS", NAS)).isEqualTo(SftpRoot.NONE);
+        assertThat(adapter.rootFor(mid("NAS"), NAS)).isEqualTo(SftpRoot.NONE);
     }
 
     // --- what the answer is remembered under ------------------------------------------------------------
 
     /**
-     * The root is remembered under the machine's <b>identity</b>, not its name. A rename is an edit to a
-     * label — it must not throw away a root the machine already answered, because doing so costs two SSH
-     * connections to a host on the far side of a VPN on the operator's very next directory click.
+     * The root is remembered under the machine's identity, so a machine already asked is not asked again —
+     * which would cost two SSH connections to a host on the far side of a VPN on the operator's very next
+     * directory click.
+     *
+     * <p>There is no longer a rename to test here, and that is the point: the caller names the machine by
+     * its identity, so a renamed machine passes the same argument it did before and the question of what
+     * happens to its cached root cannot arise.
      */
     @Test
-    void rootFor_remembersUnderTheMachinesIdentity_soARenameDoesNotReprobe() {
+    void rootFor_remembersTheAnswer_soAMachineAlreadyAskedIsNotAskedAgain() {
         execHomeIs("/volume1/homes/geir");
         sftpHomeIs("/homes/geir");
 
-        SftpRoot before = adapter.rootFor("NAS", NAS);
-        SftpRoot afterRename = adapter.rootFor("Synology", NAS);   // same machine, new label
+        SftpRoot first = adapter.rootFor(mid("NAS"), NAS);
+        SftpRoot second = adapter.rootFor(mid("NAS"), NAS);
 
-        assertThat(afterRename).isEqualTo(before);
+        assertThat(second).isEqualTo(first);
         verify(forRunningSshCommands, times(1)).run(any(), any());
     }
 
     /**
-     * And the dangerous direction: a name is reusable, so two machines can wear the same one at different
-     * times. A cache keyed on the name would serve the first machine's jail for the second — silently
-     * rewriting every path Vaier shows for it, in both directions. Keyed on identity, they cannot collide.
+     * And the dangerous direction: two machines must never share a cache entry. This is why the key is an
+     * identity and not a name — a name is reusable, so two machines can wear the same one at different
+     * times, and serving the first machine's jail for the second would silently rewrite every path Vaier
+     * shows for it, in both directions. Distinct machines are distinct identities and cannot collide.
      */
     @Test
-    void rootFor_neverServesOneMachinesRootToAnother_thatLaterTookItsName() {
+    void rootFor_neverServesOneMachinesRootToAnother() {
         SshTarget other = SshTarget.on("10.13.13.4",
             new HostCredential(mid("Roon server"), "geir", AuthMethod.PASSWORD, "pw", null, false),
             "SHA256:pinned");
         execHomeIs("/volume1/homes/geir");
         sftpHomeIs("/homes/geir");
-        assertThat(adapter.rootFor("NAS", NAS).jailed()).isTrue();
+        assertThat(adapter.rootFor(mid("NAS"), NAS).jailed()).isTrue();
 
-        // A different machine, now bearing the same name. It has its own root, and must be asked for it.
+        // A different machine entirely. It has its own root, and must be asked for it.
         doReturn(new CommandResult(0, "/home/geir", "", false, "SHA256:pinned"))
             .when(forRunningSshCommands).run(eq(other), any());
         when(forBrowsingRemoteFiles.home(eq(other))).thenReturn("/home/geir");
 
-        assertThat(adapter.rootFor("NAS", other).jailed()).isFalse();
+        assertThat(adapter.rootFor(mid("Roon server"), other).jailed()).isFalse();
     }
 
     /**
-     * A target with no identity is a pre-registration credential test against a bare address. There is
+     * A machine with no identity is a pre-registration credential test against a bare address. There is
      * nothing to remember it under, so it is probed each time rather than cached against a null.
      */
     @Test
-    void rootFor_aTargetWithNoIdentity_isNeverCached() {
+    void rootFor_aMachineWithNoIdentity_isNeverCached() {
         SshTarget unregistered = new SshTarget("10.13.13.99", 22, "geir", AuthMethod.PASSWORD, "pw", null, null);
         execHomeIs("/home/geir");
         sftpHomeIs("/home/geir");
 
-        adapter.rootFor("a host being added", unregistered);
-        adapter.rootFor("a host being added", unregistered);
+        adapter.rootFor(null, unregistered);
+        adapter.rootFor(null, unregistered);
 
         verify(forRunningSshCommands, times(2)).run(any(), any());
     }

@@ -22,7 +22,6 @@ import net.vaier.domain.ProtectedPaths;
 import net.vaier.domain.SourcePaths;
 import net.vaier.domain.port.ForMountingArchives;
 import net.vaier.domain.port.ForReadingProtectedPaths;
-import net.vaier.domain.port.ForResolvingMachineIds;
 import net.vaier.domain.port.ForResolvingSftpRoots;
 import net.vaier.domain.port.ForResolvingSshTargets;
 import net.vaier.domain.port.ForTrackingHostKeys;
@@ -68,7 +67,6 @@ class ExplorerServiceTest {
     }
 
     @Mock ForResolvingSshTargets forResolvingSshTargets;
-    @Mock ForResolvingMachineIds forResolvingMachineIds;
     @Mock ForBrowsingRemoteFiles forBrowsingRemoteFiles;
     @Mock ForTrackingHostKeys forTrackingHostKeys;
     @Mock ForResolvingSftpRoots forResolvingSftpRoots;
@@ -84,26 +82,16 @@ class ExplorerServiceTest {
             new HostCredential(mid("apalveien5"), "root", AuthMethod.PASSWORD, "pw", null, false), pinnedFingerprint);
     }
 
-    /**
-     * The machine is in the registry under the name the browser used. The Explorer's coordinates still
-     * arrive as names, so every browse crosses name→id once before it can resolve an SSH target.
-     */
-    private void knownMachine(String machine) {
-        lenient().when(forResolvingMachineIds.idForName(machine)).thenReturn(Optional.of(mid(machine)));
-    }
-
     private void machineResolves(String machine, String pinnedFingerprint) {
-        knownMachine(machine);
         when(forResolvingSshTargets.resolve(mid(machine))).thenReturn(target(pinnedFingerprint));
         // Most of the fleet is not jailed, and on those machines nothing about a path changes.
-        lenient().when(forResolvingSftpRoots.rootFor(eq(machine), any())).thenReturn(SftpRoot.NONE);
+        lenient().when(forResolvingSftpRoots.rootFor(eq(mid(machine)), any())).thenReturn(SftpRoot.NONE);
     }
 
     /** The NAS's shape: DSM chroots the SFTP subsystem into /volume1 and leaves the exec channel alone. */
     private void machineIsJailedIn(String machine, String rootPath) {
-        knownMachine(machine);
         when(forResolvingSshTargets.resolve(mid(machine))).thenReturn(target("SHA256:pinned"));
-        when(forResolvingSftpRoots.rootFor(eq(machine), any())).thenReturn(new SftpRoot(rootPath));
+        when(forResolvingSftpRoots.rootFor(eq(mid(machine)), any())).thenReturn(new SftpRoot(rootPath));
     }
 
     private void remoteAnswers(DirectoryListing listing) {
@@ -117,7 +105,7 @@ class ExplorerServiceTest {
             FileEntry.in("/home/geir", "notes.txt", false, 120, WHEN),
             FileEntry.in("/home/geir", "docs", true, 4096, WHEN)), "SHA256:pinned"));
 
-        List<FileEntry> entries = service.listDirectory("apalveien5", "/home/geir").entries();
+        List<FileEntry> entries = service.listDirectory(mid("apalveien5"), "/home/geir").entries();
 
         // Listing order is the domain's rule — directories before files — not the order the remote replied in.
         assertThat(entries).extracting(FileEntry::name).containsExactly("docs", "notes.txt");
@@ -129,17 +117,17 @@ class ExplorerServiceTest {
     @Test
     void listDirectory_carriesTheMachinesProtectedPaths_soEntriesCanBeMarkedBackedUp() {
         machineResolves("apalveien5", "SHA256:pinned");
-        when(forReadingProtectedPaths.protectedPathsFor("apalveien5"))
+        when(forReadingProtectedPaths.protectedPathsFor(mid("apalveien5")))
             .thenReturn(ProtectedPaths.of(SourcePaths.of(List.of("/home/geir")), Excludes.none()));
         remoteAnswers(new DirectoryListing(List.of(
             FileEntry.in("/home/geir", "docs", true, 4096, WHEN)), "SHA256:pinned"));
 
-        MachineDirectory directory = service.listDirectory("apalveien5", "/home/geir");
+        MachineDirectory directory = service.listDirectory(mid("apalveien5"), "/home/geir");
 
         // The service asks the driven port (never a backup use case) and threads the domain value object back;
         // the coverage decision itself stays in the domain.
         assertThat(directory.protectedPaths().covers("/home/geir/docs")).isTrue();
-        verify(forReadingProtectedPaths).protectedPathsFor("apalveien5");
+        verify(forReadingProtectedPaths).protectedPathsFor(mid("apalveien5"));
     }
 
     @Test
@@ -149,7 +137,7 @@ class ExplorerServiceTest {
         remoteAnswers(new DirectoryListing(List.of(
             FileEntry.in(MOUNTPOINT + "/home/geir", "docs", true, 4096, WHEN)), "SHA256:pinned"));
 
-        MachineDirectory directory = service.listDirectory("apalveien5", "/home/geir", "ab12");
+        MachineDirectory directory = service.listDirectory(mid("apalveien5"), "/home/geir", "ab12");
 
         // The past's backup shape is not today's — the protected set is empty and the port is never asked.
         assertThat(directory.protectedPaths().isEmpty()).isTrue();
@@ -161,14 +149,14 @@ class ExplorerServiceTest {
         machineResolves("apalveien5", "SHA256:pinned");
         remoteAnswers(new DirectoryListing(List.of(), "SHA256:pinned"));
 
-        service.listDirectory("apalveien5", "/home//geir/./docs/");
+        service.listDirectory(mid("apalveien5"), "/home//geir/./docs/");
 
         verify(forBrowsingRemoteFiles).list(any(), eq("/home/geir/docs"));
     }
 
     @Test
     void listDirectory_aPathClimbingAboveTheRoot_isRefusedBeforeAnyConnection() {
-        assertThatThrownBy(() -> service.listDirectory("apalveien5", "/../../etc/passwd"))
+        assertThatThrownBy(() -> service.listDirectory(mid("apalveien5"), "/../../etc/passwd"))
             .isInstanceOf(IllegalArgumentException.class);
 
         // The hostile path never reaches the machine — Vaier does not even open the connection.
@@ -178,7 +166,7 @@ class ExplorerServiceTest {
 
     @Test
     void listDirectory_aRelativePath_isRefusedBeforeAnyConnection() {
-        assertThatThrownBy(() -> service.listDirectory("apalveien5", "etc/passwd"))
+        assertThatThrownBy(() -> service.listDirectory(mid("apalveien5"), "etc/passwd"))
             .isInstanceOf(IllegalArgumentException.class);
 
         verify(forBrowsingRemoteFiles, never()).list(any(), any());
@@ -191,7 +179,7 @@ class ExplorerServiceTest {
         machineResolves("apalveien5", null);
         remoteAnswers(new DirectoryListing(List.of(), "SHA256:fresh"));
 
-        service.listDirectory("apalveien5", "/");
+        service.listDirectory(mid("apalveien5"), "/");
 
         verify(forTrackingHostKeys).pin(mid("apalveien5"), "SHA256:fresh");
     }
@@ -201,29 +189,27 @@ class ExplorerServiceTest {
         machineResolves("apalveien5", "SHA256:pinned");
         remoteAnswers(new DirectoryListing(List.of(), "SHA256:pinned"));
 
-        service.listDirectory("apalveien5", "/");
+        service.listDirectory(mid("apalveien5"), "/");
 
         verify(forTrackingHostKeys, never()).pin(any(), any());
     }
 
     @Test
     void listDirectory_unknownMachine_propagatesNotFound() {
-        // A name nobody in the fleet answers to. Now that the SSH path is keyed by identity, this fails at
-        // the name→id crossing, before Vaier has anything it could try to connect to.
-        when(forResolvingMachineIds.idForName("ghost")).thenReturn(Optional.empty());
+        // An id no machine in the fleet has. The resolver is the one that knows, so it is asked and refuses.
+        when(forResolvingSshTargets.resolve(mid("ghost")))
+            .thenThrow(new NotFoundException("Machine not found: " + mid("ghost")));
 
-        assertThatThrownBy(() -> service.listDirectory("ghost", "/"))
+        assertThatThrownBy(() -> service.listDirectory(mid("ghost"), "/"))
             .isInstanceOf(NotFoundException.class);
-        verify(forResolvingSshTargets, never()).resolve(any());
     }
 
     @Test
     void listDirectory_machineWithoutACredential_propagatesNoHostCredential() {
-        knownMachine("apalveien5");
         when(forResolvingSshTargets.resolve(mid("apalveien5")))
             .thenThrow(new NoHostCredentialException("apalveien5"));
 
-        assertThatThrownBy(() -> service.listDirectory("apalveien5", "/"))
+        assertThatThrownBy(() -> service.listDirectory(mid("apalveien5"), "/"))
             .isInstanceOf(NoHostCredentialException.class);
         verify(forBrowsingRemoteFiles, never()).list(any(), any());
     }
@@ -239,7 +225,7 @@ class ExplorerServiceTest {
         machineIsJailedIn("NAS", "/volume1");
         remoteAnswers(new DirectoryListing(List.of(), "SHA256:pinned"));
 
-        service.listDirectory("NAS", "/volume1/homes");
+        service.listDirectory(mid("NAS"), "/volume1/homes");
 
         // The browser's path is a TRUE coordinate. SFTP, inside the jail, has never heard of /volume1.
         verify(forBrowsingRemoteFiles).list(any(), eq("/homes"));
@@ -251,7 +237,7 @@ class ExplorerServiceTest {
         remoteAnswers(new DirectoryListing(List.of(
             FileEntry.in("/homes", "geir", true, 4096, WHEN)), "SHA256:pinned"));
 
-        MachineDirectory directory = service.listDirectory("NAS", "/volume1/homes");
+        MachineDirectory directory = service.listDirectory(mid("NAS"), "/volume1/homes");
 
         // One directory, one coordinate — the same one borg's source path and `df` use. Without this, #323's
         // coverage would compare /volume1/homes/geir with /homes/geir and report a backed-up directory as
@@ -265,7 +251,7 @@ class ExplorerServiceTest {
         machineIsJailedIn("NAS", "/volume1");
         remoteAnswers(new DirectoryListing(List.of(), "SHA256:pinned"));
 
-        assertThat(service.listDirectory("NAS", "/volume1").root().path()).isEqualTo("/volume1");
+        assertThat(service.listDirectory(mid("NAS"), "/volume1").root().path()).isEqualTo("/volume1");
     }
 
     @Test
@@ -273,7 +259,7 @@ class ExplorerServiceTest {
         machineIsJailedIn("NAS", "/volume1");
         remoteAnswers(new DirectoryListing(List.of(), "SHA256:pinned"));
 
-        MachineDirectory directory = service.listDirectory("NAS", null);
+        MachineDirectory directory = service.listDirectory(mid("NAS"), null);
 
         // Anything above the root is unreachable over SFTP, so the tree begins there — and asking for "/" on
         // this machine would be asking for a path it cannot answer at all.
@@ -285,7 +271,7 @@ class ExplorerServiceTest {
     void listDirectory_aPathOutsideTheJail_isRefusedWithTheReason_notAnsweredWithAnEmptyDirectory() {
         machineIsJailedIn("NAS", "/volume1");
 
-        assertThatThrownBy(() -> service.listDirectory("NAS", "/volume2"))
+        assertThatThrownBy(() -> service.listDirectory(mid("NAS"), "/volume2"))
             .isInstanceOf(PathOutsideSftpRootException.class)
             .hasMessageContaining("/volume2")
             .hasMessageContaining("/volume1");
@@ -303,7 +289,7 @@ class ExplorerServiceTest {
         remoteAnswers(new DirectoryListing(List.of(
             FileEntry.in("/home", "geir", true, 4096, WHEN)), "SHA256:pinned"));
 
-        MachineDirectory directory = service.listDirectory("apalveien5", "/home");
+        MachineDirectory directory = service.listDirectory(mid("apalveien5"), "/home");
 
         // The regression that matters most: on a machine with no jail, every path is the path it always was.
         assertThat(directory.root()).isEqualTo(SftpRoot.NONE);
@@ -315,19 +301,18 @@ class ExplorerServiceTest {
 
     @Test
     void listDirectory_onAnUnprobeableMachine_leavesItsPathsAlone() {
-        knownMachine("asleep");
         when(forResolvingSshTargets.resolve(mid("asleep"))).thenReturn(target("SHA256:pinned"));
-        when(forResolvingSftpRoots.rootFor(eq("asleep"), any())).thenReturn(SftpRoot.NONE);
+        when(forResolvingSftpRoots.rootFor(eq(mid("asleep")), any())).thenReturn(SftpRoot.NONE);
         remoteAnswers(new DirectoryListing(List.of(), "SHA256:pinned"));
 
         // A machine Vaier could not probe resolves to NONE, and NONE changes nothing. Unknown is safe.
-        assertThat(service.listDirectory("asleep", "/etc").path()).isEqualTo("/etc");
+        assertThat(service.listDirectory(mid("asleep"), "/etc").path()).isEqualTo("/etc");
         verify(forBrowsingRemoteFiles).list(any(), eq("/etc"));
     }
 
     @Test
     void listDirectory_aHostilePath_isRefusedBeforeTheMachineIsEvenProbed() {
-        assertThatThrownBy(() -> service.listDirectory("NAS", "/../../etc/passwd"))
+        assertThatThrownBy(() -> service.listDirectory(mid("NAS"), "/../../etc/passwd"))
             .isInstanceOf(IllegalArgumentException.class);
 
         // The trust boundary still stands in front of everything: no SSH connection of any kind, not even the
@@ -345,7 +330,7 @@ class ExplorerServiceTest {
     private static final String MOUNTPOINT = "/home/ubuntu/.vaier-backup/mounts/ab12";
 
     private void archiveMountsAt(String machine, String archiveId, String mountpoint) {
-        when(forMountingArchives.mount(machine, archiveId)).thenReturn(new MountedArchive(mountpoint));
+        when(forMountingArchives.mount(mid(machine), archiveId)).thenReturn(new MountedArchive(mountpoint));
     }
 
     @Test
@@ -355,7 +340,7 @@ class ExplorerServiceTest {
         remoteAnswers(new DirectoryListing(List.of(
             FileEntry.in(MOUNTPOINT + "/home/geir", "notes.txt", false, 120, WHEN)), "SHA256:pinned"));
 
-        MachineDirectory directory = service.listDirectory("apalveien5", "/home/geir", "ab12");
+        MachineDirectory directory = service.listDirectory(mid("apalveien5"), "/home/geir", "ab12");
 
         // The path the browser sent is an ARCHIVE coordinate; the SFTP read happens under the mountpoint.
         verify(forBrowsingRemoteFiles).list(any(), eq(MOUNTPOINT + "/home/geir"));
@@ -373,7 +358,7 @@ class ExplorerServiceTest {
         remoteAnswers(new DirectoryListing(List.of(
             FileEntry.in(MOUNTPOINT, "home", true, 4096, WHEN)), "SHA256:pinned"));
 
-        MachineDirectory directory = service.listDirectory("apalveien5", null, "ab12");
+        MachineDirectory directory = service.listDirectory(mid("apalveien5"), null, "ab12");
 
         // The archive captured absolute machine paths, so its tree begins at "/", read at the mountpoint.
         verify(forBrowsingRemoteFiles).list(any(), eq(MOUNTPOINT));
@@ -385,7 +370,7 @@ class ExplorerServiceTest {
     void listDirectory_withAnArchive_stillRefusesAPathThatClimbsAboveTheRoot_beforeMounting() {
         // The trust boundary is unchanged in the past: a climb is refused before a machine is resolved or an
         // archive is mounted.
-        assertThatThrownBy(() -> service.listDirectory("apalveien5", "/../../etc/passwd", "ab12"))
+        assertThatThrownBy(() -> service.listDirectory(mid("apalveien5"), "/../../etc/passwd", "ab12"))
             .isInstanceOf(IllegalArgumentException.class);
 
         verify(forMountingArchives, never()).mount(any(), any());
@@ -398,7 +383,7 @@ class ExplorerServiceTest {
         machineResolves("apalveien5", "SHA256:pinned");
         remoteAnswers(new DirectoryListing(List.of(), "SHA256:pinned"));
 
-        MachineDirectory directory = service.listDirectory("apalveien5", "/home", null);
+        MachineDirectory directory = service.listDirectory(mid("apalveien5"), "/home", null);
 
         // Omitting `at` is the present, unchanged (#326 is not regressed): no mount, no archive coordinate.
         verify(forMountingArchives, never()).mount(any(), any());
@@ -412,7 +397,7 @@ class ExplorerServiceTest {
     void resolve_inThePresent_givesTheTarget_andTheJailMappedPath() {
         machineIsJailedIn("NAS", "/volume1");
 
-        var resolved = service.resolve("NAS", "/volume1/homes/geir", null);
+        var resolved = service.resolve(mid("NAS"), "/volume1/homes/geir", null);
 
         // The browser's path is a TRUE coordinate; SFTP, inside the jail, must be asked for the jail path —
         // exactly what listDirectory maps a browse down to.
@@ -424,7 +409,7 @@ class ExplorerServiceTest {
     void resolve_onAnUnjailedMachine_isTheTruePathItself() {
         machineResolves("apalveien5", "SHA256:pinned");
 
-        assertThat(service.resolve("apalveien5", "/home/geir/notes.txt", null).path())
+        assertThat(service.resolve(mid("apalveien5"), "/home/geir/notes.txt", null).path())
             .isEqualTo("/home/geir/notes.txt");
     }
 
@@ -433,7 +418,7 @@ class ExplorerServiceTest {
         machineResolves("apalveien5", "SHA256:pinned");
         archiveMountsAt("apalveien5", "ab12", MOUNTPOINT);
 
-        var resolved = service.resolve("apalveien5", "/home/geir/notes.txt", "ab12");
+        var resolved = service.resolve(mid("apalveien5"), "/home/geir/notes.txt", "ab12");
 
         // A restore's source is the past: the read happens under the mountpoint, same as a past browse.
         assertThat(resolved.path()).isEqualTo(MOUNTPOINT + "/home/geir/notes.txt");
@@ -441,7 +426,7 @@ class ExplorerServiceTest {
 
     @Test
     void resolve_normalisesThePath_andRefusesAClimb_beforeAnyConnection() {
-        assertThatThrownBy(() -> service.resolve("apalveien5", "/../../etc/passwd", null))
+        assertThatThrownBy(() -> service.resolve(mid("apalveien5"), "/../../etc/passwd", null))
             .isInstanceOf(IllegalArgumentException.class);
         verify(forResolvingSshTargets, never()).resolve(any());
     }
@@ -459,7 +444,7 @@ class ExplorerServiceTest {
             return null;
         }).when(forBrowsingRemoteFiles).download(any(), eq("/home/geir/notes.txt"), any());
 
-        var download = service.openForDownload("apalveien5", "/home/geir/notes.txt", null);
+        var download = service.openForDownload(mid("apalveien5"), "apalveien5", "/home/geir/notes.txt", null);
 
         assertThat(download.filename()).isEqualTo("notes.txt");
         assertThat(download.sizeBytes()).isEqualTo(120);
@@ -474,7 +459,7 @@ class ExplorerServiceTest {
         when(forBrowsingRemoteFiles.stat(any(), eq("/home/geir/notes.txt")))
             .thenReturn(new ForBrowsingRemoteFiles.RemoteStat(false, 120));
 
-        var download = service.openForDownload("apalveien5", "/home/geir/notes.txt", null);
+        var download = service.openForDownload(mid("apalveien5"), "apalveien5", "/home/geir/notes.txt", null);
 
         assertThat(download.contentType()).isEqualTo("application/octet-stream");
     }
@@ -493,7 +478,7 @@ class ExplorerServiceTest {
             v.file("docs/readme.md", stream("nested"));
         });
 
-        Download download = service.openForDownload("apalveien5", "/home/geir", null);
+        Download download = service.openForDownload(mid("apalveien5"), "apalveien5", "/home/geir", null);
 
         assertThat(download.filename()).isEqualTo("geir.zip");
         assertThat(download.contentType()).isEqualTo("application/zip");
@@ -513,7 +498,7 @@ class ExplorerServiceTest {
         // in it — and the service maps that to a zip directory entry.
         walksTree("/home/geir", v -> v.directory("empty"));
 
-        Download download = service.openForDownload("apalveien5", "/home/geir", null);
+        Download download = service.openForDownload(mid("apalveien5"), "apalveien5", "/home/geir", null);
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         download.writer().accept(out);
@@ -531,7 +516,7 @@ class ExplorerServiceTest {
         when(forBrowsingRemoteFiles.stat(any(), eq("/")))
             .thenReturn(new ForBrowsingRemoteFiles.RemoteStat(true, 4096));
 
-        Download download = service.openForDownload("apalveien5", "/", null);
+        Download download = service.openForDownload(mid("apalveien5"), "apalveien5", "/", null);
 
         // "/" has no basename of its own to zip under, so the machine's own name stands in for it. The walk
         // itself is lazy (only the writer opens it), so nothing about listing is stubbed or verified here.
@@ -549,7 +534,7 @@ class ExplorerServiceTest {
         walksTree(MOUNTPOINT + "/home/geir", v -> v.file("notes.txt", stream("old")));
 
         // A download is a read, so zipping the past is fine too — same rule as a single-file download.
-        Download download = service.openForDownload("apalveien5", "/home/geir", "ab12");
+        Download download = service.openForDownload(mid("apalveien5"), "apalveien5", "/home/geir", "ab12");
 
         assertThat(unzip(download)).containsOnly(entry("notes.txt", "old"));
     }
@@ -557,7 +542,7 @@ class ExplorerServiceTest {
     // --- selection zip: download a fleet-wide selection of coordinates as one zip ----------------------
 
     private static Selection.Coordinate coordinate(String machine, String path, String at) {
-        return new Selection.Coordinate(machine, path, at);
+        return new Selection.Coordinate(mid(machine), machine, path, at);
     }
 
     /** Stub a file coordinate: it stats as a file, and its download writes {@code content} into the stream. */
@@ -714,7 +699,7 @@ class ExplorerServiceTest {
     void delete_resolvesTheMachine_andDeletesTheRequestedPath() {
         machineResolves("apalveien5", "SHA256:pinned");
 
-        service.delete("apalveien5", "/home/geir/old");
+        service.delete(mid("apalveien5"), "/home/geir/old");
 
         verify(forBrowsingRemoteFiles).delete(any(), eq("/home/geir/old"));
     }
@@ -723,7 +708,7 @@ class ExplorerServiceTest {
     void delete_onAJailedMachine_deletesTheJailPath_ofTheTruePathTheBrowserSent() {
         machineIsJailedIn("NAS", "/volume1");
 
-        service.delete("NAS", "/volume1/homes/geir/old");
+        service.delete(mid("NAS"), "/volume1/homes/geir/old");
 
         // The browser's path is a TRUE coordinate; SFTP, inside the jail, must be asked for the jail path —
         // the same down-mapping every other Explorer operation shares.
@@ -734,7 +719,7 @@ class ExplorerServiceTest {
     void delete_refusesToDeleteTheMachinesSftpRootItself_beforeAnyConnection() {
         machineIsJailedIn("NAS", "/volume1");
 
-        assertThatThrownBy(() -> service.delete("NAS", "/volume1"))
+        assertThatThrownBy(() -> service.delete(mid("NAS"), "/volume1"))
             .isInstanceOf(CannotDeleteSftpRootException.class)
             .hasMessageContaining("/volume1");
 
@@ -746,7 +731,7 @@ class ExplorerServiceTest {
     void delete_refusesToDeleteTheFilesystemRoot_onAnUnjailedMachine() {
         machineResolves("apalveien5", "SHA256:pinned");
 
-        assertThatThrownBy(() -> service.delete("apalveien5", "/"))
+        assertThatThrownBy(() -> service.delete(mid("apalveien5"), "/"))
             .isInstanceOf(CannotDeleteSftpRootException.class);
 
         verify(forBrowsingRemoteFiles, never()).delete(any(), any());
@@ -754,7 +739,7 @@ class ExplorerServiceTest {
 
     @Test
     void delete_aPathClimbingAboveTheRoot_isRefusedBeforeAnyConnection() {
-        assertThatThrownBy(() -> service.delete("apalveien5", "/../../etc/passwd"))
+        assertThatThrownBy(() -> service.delete(mid("apalveien5"), "/../../etc/passwd"))
             .isInstanceOf(IllegalArgumentException.class);
 
         // The trust boundary stands in front of a delete exactly as it does a browse: no machine is resolved.
@@ -764,7 +749,7 @@ class ExplorerServiceTest {
 
     @Test
     void delete_aRelativePath_isRefusedBeforeAnyConnection() {
-        assertThatThrownBy(() -> service.delete("apalveien5", "etc/passwd"))
+        assertThatThrownBy(() -> service.delete(mid("apalveien5"), "etc/passwd"))
             .isInstanceOf(IllegalArgumentException.class);
 
         verify(forBrowsingRemoteFiles, never()).delete(any(), any());
@@ -777,7 +762,7 @@ class ExplorerServiceTest {
         when(forBrowsingRemoteFiles.stat(any(), eq(MOUNTPOINT + "/home/geir/notes.txt")))
             .thenReturn(new ForBrowsingRemoteFiles.RemoteStat(false, 120));
 
-        var download = service.openForDownload("apalveien5", "/home/geir/notes.txt", "ab12");
+        var download = service.openForDownload(mid("apalveien5"), "apalveien5", "/home/geir/notes.txt", "ab12");
 
         // A download is a read, so the past is fine — the file is read under the mountpoint.
         assertThat(download.filename()).isEqualTo("notes.txt");

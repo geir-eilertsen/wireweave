@@ -1,5 +1,6 @@
 package net.vaier.application;
 
+import net.vaier.domain.MachineId;
 import net.vaier.domain.Transfer;
 
 /**
@@ -18,6 +19,6 @@ public interface StartTransferUseCase {
      * @throws IllegalArgumentException when a path is not absolute, or the transfer is a no-op onto its own
      *                                  live file (surfaces as a 400)
      */
-    Transfer startTransfer(String sourceMachine, String sourcePath, String at,
-                           String destMachine, String destPath);
+    Transfer startTransfer(MachineId sourceMachineId, String sourceMachine, String sourcePath, String at,
+                           MachineId destMachineId, String destMachine, String destPath);
 }

@@ -1,5 +1,6 @@
 package net.vaier.domain.port;
 
+import net.vaier.domain.MachineId;
 import net.vaier.domain.ProtectedPaths;
 
 /**
@@ -13,6 +14,6 @@ import net.vaier.domain.ProtectedPaths;
  */
 public interface ForReadingProtectedPaths {
 
-    /** What {@code machineName} currently backs up, or an empty protection when it has no job. */
-    ProtectedPaths protectedPathsFor(String machineName);
+    /** What {@code machineId} currently backs up, or an empty protection when it has no job. */
+    ProtectedPaths protectedPathsFor(MachineId machineId);
 }

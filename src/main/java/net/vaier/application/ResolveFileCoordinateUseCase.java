@@ -1,5 +1,6 @@
 package net.vaier.application;
 
+import net.vaier.domain.MachineId;
 import net.vaier.domain.SshTarget;
 
 /**
@@ -15,7 +16,7 @@ import net.vaier.domain.SshTarget;
 public interface ResolveFileCoordinateUseCase {
 
     /**
-     * Resolve {@code path} on {@code machineName} at time {@code at} to the SFTP target and the real path to
+     * Resolve {@code path} on {@code machineId} at time {@code at} to the SFTP target and the real path to
      * ask it for. With {@code at} null the present is resolved (jail-mapped); with {@code at} naming an
      * archive the past is resolved (mounted, then jail-mapped) — a read of the past, which a transfer may use
      * as its source (a restore).
@@ -24,9 +25,9 @@ public interface ResolveFileCoordinateUseCase {
      *             move or download is always concrete, never "wherever the tree begins")
      * @throws IllegalArgumentException when {@code path} is not a browsable absolute path
      * @throws net.vaier.domain.PathOutsideSftpRootException when {@code path} is above the machine's SFTP root
-     * @throws net.vaier.domain.NotFoundException when no machine bears the name
+     * @throws net.vaier.domain.NotFoundException when no machine has that id
      */
-    ResolvedFileCoordinate resolve(String machineName, String path, String at);
+    ResolvedFileCoordinate resolve(MachineId machineId, String path, String at);
 
     /** A coordinate resolved for SFTP: where to connect ({@code target}) and the real path to ask for. */
     record ResolvedFileCoordinate(SshTarget target, String path) {

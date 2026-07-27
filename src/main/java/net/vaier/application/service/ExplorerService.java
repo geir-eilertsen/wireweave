@@ -7,6 +7,7 @@ import net.vaier.application.DeleteFileUseCase;
 import net.vaier.application.DownloadFileUseCase;
 import net.vaier.application.ResolveFileCoordinateUseCase;
 import net.vaier.domain.FileEntry;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.MountedArchive;
 import net.vaier.domain.NotFoundException;
 import net.vaier.domain.PermissionDeniedException;
@@ -18,10 +19,7 @@ import net.vaier.domain.port.ForBrowsingRemoteFiles;
 import net.vaier.domain.port.ForBrowsingRemoteFiles.DirectoryListing;
 import net.vaier.domain.port.ForBrowsingRemoteFiles.RemoteStat;
 import net.vaier.domain.port.ForMountingArchives;
-import net.vaier.domain.MachineId;
-import net.vaier.domain.NotFoundException;
 import net.vaier.domain.port.ForReadingProtectedPaths;
-import net.vaier.domain.port.ForResolvingMachineIds;
 import net.vaier.domain.port.ForResolvingSftpRoots;
 import net.vaier.domain.port.ForResolvingSshTargets;
 import net.vaier.domain.port.ForTrackingHostKeys;
@@ -51,7 +49,6 @@ public class ExplorerService
     implements BrowseFilesUseCase, ResolveFileCoordinateUseCase, DownloadFileUseCase, DeleteFileUseCase {
 
     private final ForResolvingSshTargets forResolvingSshTargets;
-    private final ForResolvingMachineIds forResolvingMachineIds;
     private final ForBrowsingRemoteFiles forBrowsingRemoteFiles;
     private final ForTrackingHostKeys forTrackingHostKeys;
     private final ForResolvingSftpRoots forResolvingSftpRoots;
@@ -59,26 +56,26 @@ public class ExplorerService
     private final ForReadingProtectedPaths forReadingProtectedPaths;
 
     @Override
-    public MachineDirectory listDirectory(String machineName, String path, String at) {
+    public MachineDirectory listDirectory(MachineId machineId, String path, String at) {
         // The trust boundary: the browser's path becomes a real path here, or it is refused — before a
         // machine is resolved, an archive is mounted, or any connection is opened. This holds identically in
         // the past: a climb above the root is refused before slice D does anything.
         String requested = path == null || path.isBlank() ? null : FileEntry.normalisePath(path);
 
-        SshTarget target = forResolvingSshTargets.resolve(machineIdOf(machineName));
-        SftpRoot root = forResolvingSftpRoots.rootFor(machineName, target);
+        SshTarget target = forResolvingSshTargets.resolve(machineId);
+        SftpRoot root = forResolvingSftpRoots.rootFor(machineId, target);
 
         // Present or past, the service maps a requested coordinate down to the real machine path SFTP must be
         // asked for, and the answered entries back up to the requested coordinate. In the present that is the
         // jail (down and back). In the past it is the archive mount, composed on top of the jail — the service
         // asks the mount port for a mountpoint and never learns what borg is.
         return at == null || at.isBlank()
-            ? listPresent(machineName, target, root, requested)
-            : listPast(machineName, target, root, requested, at);
+            ? listPresent(machineId, target, root, requested)
+            : listPast(machineId, target, root, requested, at);
     }
 
     /** The live filesystem: down into the jail to read, back onto the machine's own coordinates. */
-    private MachineDirectory listPresent(String machineName, SshTarget target, SftpRoot root, String requested) {
+    private MachineDirectory listPresent(MachineId machineId, SshTarget target, SftpRoot root, String requested) {
         // A machine's file tree begins at its SFTP root, not at "/": on a chrooted machine "/" is not a path
         // SFTP can be asked about at all. So a browser that names no path is asking where the tree begins.
         String directory = requested != null ? requested : root.path();
@@ -89,8 +86,8 @@ public class ExplorerService
         // What the machine backs up travels back with the listing so the browser can mark backed-up entries.
         // Whether a given entry is covered is the domain's decision (ProtectedPaths.covers — source paths minus
         // excludes), asked per entry when the response is rendered, never re-derived in the browser.
-        ProtectedPaths protectedPaths = forReadingProtectedPaths.protectedPathsFor(machineName);
-        log.debug("Listed {} on {}", directory, machineName);
+        ProtectedPaths protectedPaths = forReadingProtectedPaths.protectedPathsFor(machineId);
+        log.debug("Listed {} on {}", directory, machineId);
         return new MachineDirectory(root, directory, FileEntry.listing(root.anchor(listing.entries())),
             protectedPaths);
     }
@@ -101,9 +98,9 @@ public class ExplorerService
      * archive path maps under the mountpoint to the real machine path, which then maps down through the jail
      * exactly as the present does; the answered entries map back the other way, mount then jail.
      */
-    private MachineDirectory listPast(String machineName, SshTarget target, SftpRoot root, String requested,
+    private MachineDirectory listPast(MachineId machineId, SshTarget target, SftpRoot root, String requested,
                                       String at) {
-        MountedArchive mounted = forMountingArchives.mount(machineName, at);
+        MountedArchive mounted = forMountingArchives.mount(machineId, at);
 
         String directory = requested != null ? requested : "/";
         String machinePath = mounted.machinePath(directory);
@@ -114,7 +111,7 @@ public class ExplorerService
         // Two maps home: the jail anchors entries onto real machine paths, then the mount strips itself off
         // to leave the file's own path in the archive — the same coordinate the live tree uses.
         List<FileEntry> archiveEntries = mounted.anchor(root.anchor(listing.entries()));
-        log.debug("Listed {} in archive {} on {}", directory, at, machineName);
+        log.debug("Listed {} in archive {} on {}", directory, at, machineId);
         return new MachineDirectory(SftpRoot.NONE, directory, FileEntry.listing(archiveEntries), at);
     }
 
@@ -126,11 +123,11 @@ public class ExplorerService
      * here, before a machine is resolved or an archive mounted.
      */
     @Override
-    public ResolvedFileCoordinate resolve(String machineName, String path, String at) {
+    public ResolvedFileCoordinate resolve(MachineId machineId, String path, String at) {
         String requested = FileEntry.normalisePath(path);
-        SshTarget target = forResolvingSshTargets.resolve(machineIdOf(machineName));
-        SftpRoot root = forResolvingSftpRoots.rootFor(machineName, target);
-        return new ResolvedFileCoordinate(target, sftpPathFor(machineName, root, requested, at));
+        SshTarget target = forResolvingSshTargets.resolve(machineId);
+        SftpRoot root = forResolvingSftpRoots.rootFor(machineId, target);
+        return new ResolvedFileCoordinate(target, sftpPathFor(machineId, root, requested, at));
     }
 
     /**
@@ -138,11 +135,11 @@ public class ExplorerService
      * archive-mount path composed over the jail in the past. This is the one down-mapping the whole Explorer
      * shares — {@link #listPresent}/{@link #listPast} map a browse the same way.
      */
-    private String sftpPathFor(String machineName, SftpRoot root, String requested, String at) {
+    private String sftpPathFor(MachineId machineId, SftpRoot root, String requested, String at) {
         if (at == null || at.isBlank()) {
             return root.toJailPath(requested);
         }
-        MountedArchive mounted = forMountingArchives.mount(machineName, at);
+        MountedArchive mounted = forMountingArchives.mount(machineId, at);
         return root.toJailPath(mounted.machinePath(requested));
     }
 
@@ -155,13 +152,13 @@ public class ExplorerService
      * There is no {@code at}: only the live filesystem is ever deleted, because the past is read-only.
      */
     @Override
-    public void delete(String machineName, String path) {
+    public void delete(MachineId machineId, String path) {
         String requested = FileEntry.normalisePath(path);
-        SshTarget target = forResolvingSshTargets.resolve(machineIdOf(machineName));
-        SftpRoot root = forResolvingSftpRoots.rootFor(machineName, target);
+        SshTarget target = forResolvingSshTargets.resolve(machineId);
+        SftpRoot root = forResolvingSftpRoots.rootFor(machineId, target);
 
         forBrowsingRemoteFiles.delete(target, root.toDeletableJailPath(requested));
-        log.info("Deleted {} on {}", requested, machineName);
+        log.info("Deleted {} on {}", requested, machineId);
     }
 
     private static final String OCTET_STREAM = "application/octet-stream";
@@ -175,14 +172,14 @@ public class ExplorerService
      * is zipping it.
      */
     @Override
-    public Download openForDownload(String machineName, String path, String at) {
-        ResolvedFileCoordinate coordinate = resolve(machineName, path, at);
+    public Download openForDownload(MachineId machineId, String machineLabel, String path, String at) {
+        ResolvedFileCoordinate coordinate = resolve(machineId, path, at);
         RemoteStat stat = forBrowsingRemoteFiles.stat(coordinate.target(), coordinate.path());
         if (stat.directory()) {
-            return openDirectoryForDownload(machineName, path, coordinate);
+            return openDirectoryForDownload(machineId, machineLabel, path, coordinate);
         }
         String filename = basename(coordinate.path());
-        log.debug("Opening {} on {} for download ({} bytes)", filename, machineName, stat.sizeBytes());
+        log.debug("Opening {} on {} for download ({} bytes)", filename, machineId, stat.sizeBytes());
         return new Download(filename, stat.sizeBytes(), OCTET_STREAM,
             out -> forBrowsingRemoteFiles.download(coordinate.target(), coordinate.path(), out));
     }
@@ -194,11 +191,12 @@ public class ExplorerService
      * for it. The size is not known ahead of time: a zip's byte count is not the sum of the files it holds,
      * so {@code Content-Length} must not be guessed at and is reported as {@code -1}.
      */
-    private Download openDirectoryForDownload(String machineName, String requestedPath,
+    private Download openDirectoryForDownload(MachineId machineId, String machineLabel,
+                                              String requestedPath,
                                                ResolvedFileCoordinate coordinate) {
         String dirname = basename(FileEntry.normalisePath(requestedPath));
-        String zipFilename = (dirname.isEmpty() ? machineName : dirname) + ".zip";
-        log.debug("Opening directory {} on {} for a zip download", coordinate.path(), machineName);
+        String zipFilename = (dirname.isEmpty() ? machineLabel : dirname) + ".zip";
+        log.debug("Opening directory {} on {} for a zip download", coordinate.path(), machineId);
         return new Download(zipFilename, -1, ZIP,
             out -> streamZip(coordinate.target(), coordinate.path(), out));
     }
@@ -248,11 +246,11 @@ public class ExplorerService
         ResolvedFileCoordinate resolved;
         RemoteStat stat;
         try {
-            resolved = resolve(coordinate.machine(), coordinate.path(), coordinate.at());
+            resolved = resolve(coordinate.machineId(), coordinate.path(), coordinate.at());
             stat = forBrowsingRemoteFiles.stat(resolved.target(), resolved.path());
         } catch (NotFoundException | PermissionDeniedException e) {
             log.debug("Skipping {} on {} in the selection zip: {}",
-                coordinate.path(), coordinate.machine(), e.getMessage());
+                coordinate.path(), coordinate.machineLabel(), e.getMessage());
             return;
         }
         if (stat.directory()) {
@@ -326,14 +324,4 @@ public class ExplorerService
         target.pinOnFirstUse(presentedFingerprint, forTrackingHostKeys);
     }
 
-    /**
-     * The identity of the machine the browser named. The Explorer's coordinates still arrive as names, and
-     * the SSH path is keyed by identity — this is the one place that crossing happens, so a rename can never
-     * strand a browse. It goes away with the coordinates themselves when the driving edge addresses machines
-     * by id.
-     */
-    private MachineId machineIdOf(String machineName) {
-        return forResolvingMachineIds.idForName(machineName)
-            .orElseThrow(() -> new NotFoundException("Machine not found: " + machineName));
-    }
 }

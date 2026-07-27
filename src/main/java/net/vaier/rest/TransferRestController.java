@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.application.GetTransfersUseCase;
 import net.vaier.application.StartTransferUseCase;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.Transfer;
 import net.vaier.domain.port.ForSubscribingToEvents;
 import org.springframework.http.MediaType;
@@ -48,8 +49,12 @@ public class TransferRestController {
             LogSafe.forLog(request.sourceMachine()), LogSafe.forLog(request.sourcePath()),
             LogSafe.forLog(request.at()), LogSafe.forLog(request.destMachine()),
             LogSafe.forLog(request.destPath()));
-        Transfer transfer = startTransfer.startTransfer(request.sourceMachine(), request.sourcePath(),
-            request.at(), request.destMachine(), request.destPath());
+        // The browser names the machines by identity and carries a label only so the UI can say which is
+        // which. MachineId.of rejects anything that is not an id, so a malformed one is a 400, never a
+        // lookup that might accidentally match a machine.
+        Transfer transfer = startTransfer.startTransfer(
+            MachineId.of(request.sourceMachineId()), request.sourceMachine(), request.sourcePath(),
+            request.at(), MachineId.of(request.destMachineId()), request.destMachine(), request.destPath());
         return ResponseEntity.ok(TransferResponse.from(transfer));
     }
 
@@ -72,15 +77,17 @@ public class TransferRestController {
      * A request to start a transfer. {@code at} names the source archive for a restore, or is null for a
      * live-source copy; there is no destination time coordinate — you cannot paste into the past.
      */
-    record StartTransferRequest(String sourceMachine, String sourcePath, String at,
-                                String destMachine, String destPath) {}
+    record StartTransferRequest(String sourceMachineId, String sourceMachine, String sourcePath, String at,
+                                String destMachineId, String destMachine, String destPath) {}
 
     /** A transfer as the browser sees it — the same shape the POST returns and the GET lists. */
-    record TransferResponse(String id, String sourceMachine, String sourcePath, String destMachine,
-                            String destPath, String state, long bytesCopied, Long totalBytes, String error) {
+    record TransferResponse(String id, String sourceMachineId, String sourceMachine, String sourcePath,
+                            String destMachineId, String destMachine, String destPath, String state,
+                            long bytesCopied, Long totalBytes, String error) {
         static TransferResponse from(Transfer t) {
-            return new TransferResponse(t.id(), t.sourceMachine(), t.sourcePath(), t.destMachine(),
-                t.destPath(), t.state().name(), t.bytesCopied(), t.totalBytes(), t.error());
+            return new TransferResponse(t.id(), t.sourceMachineId().value(), t.sourceMachine(),
+                t.sourcePath(), t.destMachineId().value(), t.destMachine(), t.destPath(),
+                t.state().name(), t.bytesCopied(), t.totalBytes(), t.error());
         }
     }
 }

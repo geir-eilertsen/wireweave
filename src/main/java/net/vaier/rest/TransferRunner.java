@@ -7,6 +7,7 @@ import net.vaier.application.ResolveFileCoordinateUseCase.ResolvedFileCoordinate
 import net.vaier.application.StartTransferUseCase;
 import net.vaier.domain.FileEntry;
 import net.vaier.domain.SshTarget;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.Transfer;
 import net.vaier.domain.port.ForBrowsingRemoteFiles;
 import net.vaier.domain.port.ForPublishingEvents;
@@ -101,17 +102,18 @@ public class TransferRunner implements StartTransferUseCase, GetTransfersUseCase
      * the relay on the executor. The returned {@link Transfer} is {@code RUNNING}; it settles later.
      */
     @Override
-    public Transfer startTransfer(String sourceMachine, String sourcePath, String at,
-                                  String destMachine, String destPath) {
+    public Transfer startTransfer(MachineId sourceMachineId, String sourceMachine, String sourcePath,
+                                  String at, MachineId destMachineId, String destMachine, String destPath) {
         boolean sourceLive = at == null || at.isBlank();
         String id = UUID.randomUUID().toString();
         // Domain validation up front: absolute paths, and no live no-op onto its own file. Throws → 400.
-        Transfer transfer = Transfer.starting(id, sourceMachine, sourcePath, sourceLive, destMachine, destPath);
+        Transfer transfer = Transfer.starting(id, sourceMachineId, sourceMachine, sourcePath, sourceLive,
+            destMachineId, destMachine, destPath);
         register(transfer);
         log.info("Starting transfer {} : {}:{} -> {}:{}",
             id, LogSafe.forLog(sourceMachine), LogSafe.forLog(sourcePath),
             LogSafe.forLog(destMachine), LogSafe.forLog(destPath));
-        executor.submit(() -> runTransfer(id, sourceMachine, sourcePath, at, destMachine, destPath));
+        executor.submit(() -> runTransfer(id, sourceMachineId, sourcePath, at, destMachineId, destPath));
         return transfer;
     }
 
@@ -126,12 +128,12 @@ public class TransferRunner implements StartTransferUseCase, GetTransfersUseCase
      * progress has a denominator, then streams a file or walks a directory. Any failure settles the transfer
      * {@code FAILED} with the reason rather than throwing on the executor thread.
      */
-    private void runTransfer(String id, String sourceMachine, String sourcePath, String at,
-                             String destMachine, String destPath) {
+    private void runTransfer(String id, MachineId sourceMachineId, String sourcePath, String at,
+                             MachineId destMachineId, String destPath) {
         try {
-            ResolvedFileCoordinate source = resolveFileCoordinate.resolve(sourceMachine, sourcePath, at);
+            ResolvedFileCoordinate source = resolveFileCoordinate.resolve(sourceMachineId, sourcePath, at);
             // The destination is always the present — never a time coordinate.
-            ResolvedFileCoordinate dest = resolveFileCoordinate.resolve(destMachine, destPath, null);
+            ResolvedFileCoordinate dest = resolveFileCoordinate.resolve(destMachineId, destPath, null);
 
             ForBrowsingRemoteFiles.RemoteStat stat = files.stat(source.target(), source.path());
             long total = stat.directory()

@@ -1,5 +1,6 @@
 package net.vaier.domain.port;
 
+import net.vaier.domain.MachineId;
 import net.vaier.domain.SftpRoot;
 import net.vaier.domain.SshTarget;
 
@@ -21,10 +22,10 @@ public interface ForResolvingSftpRoots {
     /**
      * Where the file tree of the machine reachable at {@code target} begins.
      *
-     * <p>The answer is remembered under the target's own {@link net.vaier.domain.MachineId} — its identity,
-     * which is what the machine <em>is</em>. {@code machineName} is only what to call it in the log line
-     * that announces a jail, and carries no meaning to the implementation beyond that: a name is a label an
-     * operator edits, and two machines can wear the same one at different times.
+     * <p>The answer is remembered under {@code machineId} — the machine's identity, which is what it
+     * <em>is</em>. This used to be a name, and the implementation had to take the identity off the target
+     * instead, because a name is a label an operator edits and two machines can wear the same one at
+     * different times — a jail served to the wrong machine silently rewrites every path Vaier shows for it.
      */
-    SftpRoot rootFor(String machineName, SshTarget target);
+    SftpRoot rootFor(MachineId machineId, SshTarget target);
 }

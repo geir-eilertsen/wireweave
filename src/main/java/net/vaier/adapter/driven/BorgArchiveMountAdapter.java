@@ -86,13 +86,13 @@ public class BorgArchiveMountAdapter implements ForMountingArchives {
     }
 
     @Override
-    public MountedArchive mount(String machineName, String archiveId) {
-        // The target is resolved FIRST because it carries the machine's identity, and identity is what the
-        // job store and the work-dir cache are keyed by. Taking the id from the same resolution that opens
-        // the connection is what makes it impossible to mount one machine's archive using another's job.
-        MachineId machineId = machineIds.idForName(machineName)
-            .orElseThrow(() -> new NotFoundException("Machine not found: " + machineName));
+    public MountedArchive mount(MachineId machineId, String archiveId) {
+        // The caller already holds the identity, so nothing is looked up to reach the machine. The job store
+        // and the work-dir cache are keyed by the same id the target is opened with, which is what makes it
+        // impossible to mount one machine's archive using another's job.
         SshTarget target = sshTargets.resolve(machineId);
+        // A name only to say which machine in a message; a failure to find one never stops the mount.
+        String machineName = machineIds.nameForId(machineId).orElse(machineId.value());
         // MountedArchive.under validates the archive id (opaque hex) before any connection is opened.
         String workDir = workDirResolver.workDirFor(machineId);
         MountedArchive mounted = MountedArchive.under(workDir, archiveId);

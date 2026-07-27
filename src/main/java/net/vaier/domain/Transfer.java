@@ -27,8 +27,9 @@ package net.vaier.domain;
  * @param totalBytes the transfer's size once a pre-walk has measured it, or {@code null} while still unknown
  * @param error the failure reason when {@code state} is {@code FAILED}, otherwise {@code null}
  */
-public record Transfer(String id, String sourceMachine, String sourcePath, String destMachine,
-                       String destPath, TransferState state, long bytesCopied, Long totalBytes, String error) {
+public record Transfer(String id, MachineId sourceMachineId, String sourceMachine, String sourcePath,
+                       MachineId destMachineId, String destMachine, String destPath, TransferState state,
+                       long bytesCopied, Long totalBytes, String error) {
 
     /**
      * Begin a transfer of {@code sourcePath} on {@code sourceMachine} into the directory {@code destDir} on
@@ -41,7 +42,8 @@ public record Transfer(String id, String sourceMachine, String sourcePath, Strin
      * @throws IllegalArgumentException when a path is not absolute, the source is the root, or the transfer is
      *                                  a no-op onto its own live file
      */
-    public static Transfer starting(String id, String sourceMachine, String sourcePath, boolean sourceLive,
+    public static Transfer starting(String id, MachineId sourceMachineId, String sourceMachine,
+                                    String sourcePath, boolean sourceLive, MachineId destMachineId,
                                     String destMachine, String destDir) {
         String source = FileEntry.normalisePath(sourcePath);
         String directory = FileEntry.normalisePath(destDir);
@@ -49,35 +51,41 @@ public record Transfer(String id, String sourceMachine, String sourcePath, Strin
             throw new IllegalArgumentException("A transfer's source must be a file or directory, not the root");
         }
         String finalDest = join(directory, basename(source));
-        if (sourceLive && sourceMachine.equals(destMachine) && finalDest.equals(source)) {
+        // Same machine by identity, never by name: two machines may be called the same thing, and once
+        // that is allowed a name comparison would refuse a real transfer between them as a no-op.
+        if (sourceLive && sourceMachineId.equals(destMachineId) && finalDest.equals(source)) {
             throw new IllegalArgumentException(
                 "A transfer's source and destination are the same file: " + source);
         }
-        return new Transfer(id, sourceMachine, source, destMachine, directory,
-            TransferState.RUNNING, 0L, null, null);
+        return new Transfer(id, sourceMachineId, sourceMachine, source, destMachineId, destMachine,
+            directory, TransferState.RUNNING, 0L, null, null);
     }
 
     /** The same transfer with its measured size — the denominator progress is reported against. */
     public Transfer withTotal(Long total) {
-        return new Transfer(id, sourceMachine, sourcePath, destMachine, destPath, state, bytesCopied, total, error);
+        return new Transfer(id, sourceMachineId, sourceMachine, sourcePath, destMachineId, destMachine,
+            destPath, state, bytesCopied, total, error);
     }
 
     /** The same transfer advanced to {@code bytesCopied} bytes relayed so far. */
     public Transfer progressed(long copied) {
-        return new Transfer(id, sourceMachine, sourcePath, destMachine, destPath, state, copied, totalBytes, error);
+        return new Transfer(id, sourceMachineId, sourceMachine, sourcePath, destMachineId, destMachine,
+            destPath, state, copied, totalBytes, error);
     }
 
     /** Settle the transfer as finished cleanly. Only a RUNNING transfer may settle. */
     public Transfer completed() {
         requireRunning();
-        return new Transfer(id, sourceMachine, sourcePath, destMachine, destPath, TransferState.DONE,
+        return new Transfer(id, sourceMachineId, sourceMachine, sourcePath, destMachineId, destMachine,
+            destPath, TransferState.DONE,
             bytesCopied, totalBytes, null);
     }
 
     /** Settle the transfer as failed, carrying {@code reason}. Only a RUNNING transfer may settle. */
     public Transfer failed(String reason) {
         requireRunning();
-        return new Transfer(id, sourceMachine, sourcePath, destMachine, destPath, TransferState.FAILED,
+        return new Transfer(id, sourceMachineId, sourceMachine, sourcePath, destMachineId, destMachine,
+            destPath, TransferState.FAILED,
             bytesCopied, totalBytes, reason);
     }
 

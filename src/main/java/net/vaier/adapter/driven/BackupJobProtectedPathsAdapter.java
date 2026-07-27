@@ -7,11 +7,9 @@ import net.vaier.domain.ProtectedPaths;
 import net.vaier.domain.SourcePaths;
 import net.vaier.domain.port.ForPersistingBackupJobs;
 import net.vaier.domain.port.ForReadingProtectedPaths;
-import net.vaier.domain.port.ForResolvingMachineIds;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
-import java.util.Optional;
 
 /**
  * Reads what a machine backs up straight from the fleet-backup job store. Translation only: it gathers the
@@ -19,8 +17,10 @@ import java.util.Optional;
  * ({@link SourcePaths#of}, {@link Excludes#of}, {@link ProtectedPaths#of}) — it makes no coverage decision of
  * its own. A machine with no job yields an empty {@link ProtectedPaths}, so the Explorer marks nothing on it.
  *
- * <p>A machine with no identity Vaier can resolve — a name that matches nothing — likewise yields an empty
- * {@link ProtectedPaths}: nothing is claimed to be backed up for a machine Vaier does not know.
+ * <p>An id no job names likewise yields an empty {@link ProtectedPaths}: nothing is claimed to be backed up
+ * for a machine that has no job. This used to be two cases rather than one — the Explorer asked by name and
+ * this adapter crossed to an identity first, so a name matching nothing was its own kind of empty. Both
+ * sides speak identity now, and the crossing is gone.
  *
  * <p>The excludes are not optional detail. Reading only the source paths reported an excluded folder as
  * backed up, which is the one thing a backup tool must never say about data that is in no archive.
@@ -29,22 +29,16 @@ import java.util.Optional;
 public class BackupJobProtectedPathsAdapter implements ForReadingProtectedPaths {
 
     private final ForPersistingBackupJobs jobs;
-    private final ForResolvingMachineIds machineIds;
 
-    public BackupJobProtectedPathsAdapter(ForPersistingBackupJobs jobs, ForResolvingMachineIds machineIds) {
+    public BackupJobProtectedPathsAdapter(ForPersistingBackupJobs jobs) {
         this.jobs = jobs;
-        this.machineIds = machineIds;
     }
 
     @Override
-    public ProtectedPaths protectedPathsFor(String machineName) {
-        // The Explorer still asks by name; the job store is keyed by identity. Crossing here — through the one
-        // seam that does it — is why a machine that has been renamed still shows what it protects.
-        Optional<MachineId> machineId = machineIds.idForName(machineName);
-        if (machineId.isEmpty()) {
-            return ProtectedPaths.of(SourcePaths.of(List.of()), Excludes.of(List.of()));
-        }
-        List<BackupJob> machineJobs = jobs.getByMachine(machineId.get());
+    public ProtectedPaths protectedPathsFor(MachineId machineId) {
+        // Both sides speak identity now, so there is no crossing left to get wrong. This adapter existed
+        // partly to perform one; what remains is only the question the Explorer actually asked.
+        List<BackupJob> machineJobs = jobs.getByMachine(machineId);
         List<String> allPaths = machineJobs.stream()
             .map(BackupJob::sourcePaths)
             .flatMap(List::stream)

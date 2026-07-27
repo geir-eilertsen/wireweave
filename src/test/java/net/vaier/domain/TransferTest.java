@@ -15,8 +15,9 @@ class TransferTest {
 
     @Test
     void starting_isRunning_withNoBytesYet_andNormalisedPaths() {
-        Transfer t = Transfer.starting("t1", "apalveien5", "/home//geir/./notes.txt", true,
-            "colina27", "/backup");
+        Transfer t = Transfer.starting("t1", TestMachineIds.of("apalveien5"), "apalveien5", "/home//geir/./notes.txt", true,
+            
+            TestMachineIds.of("colina27"), "colina27", "/backup");
 
         assertThat(t.id()).isEqualTo("t1");
         assertThat(t.sourceMachine()).isEqualTo("apalveien5");
@@ -31,27 +32,31 @@ class TransferTest {
 
     @Test
     void starting_aNonAbsoluteDestination_isRefused() {
-        assertThatThrownBy(() -> Transfer.starting("t1", "a", "/x/y", true, "b", "relative/dir"))
+        assertThatThrownBy(() -> Transfer.starting("t1", TestMachineIds.of("a"), "a", "/x/y", true,
+            TestMachineIds.of("b"), "b", "relative/dir"))
             .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void starting_aNonAbsoluteSource_isRefused() {
-        assertThatThrownBy(() -> Transfer.starting("t1", "a", "x/y", true, "b", "/dir"))
+        assertThatThrownBy(() -> Transfer.starting("t1", TestMachineIds.of("a"), "a", "x/y", true,
+            TestMachineIds.of("b"), "b", "/dir"))
             .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void starting_ontoItsOwnFile_isRefused() {
         // /a/b/c.txt copied into /a/b would land back on /a/b/c.txt — the same file, on the same machine.
-        assertThatThrownBy(() -> Transfer.starting("t1", "nas", "/a/b/c.txt", true, "nas", "/a/b"))
+        assertThatThrownBy(() -> Transfer.starting("t1", TestMachineIds.of("nas"), "nas", "/a/b/c.txt", true,
+            TestMachineIds.of("nas"), "nas", "/a/b"))
             .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void starting_ontoTheSamePathButADifferentMachine_isACopy_notANoOp() {
         // Same path, different machine: the whole point of a Transfer. Never refused.
-        Transfer t = Transfer.starting("t1", "nas", "/a/b/c.txt", true, "colina27", "/a/b");
+        Transfer t = Transfer.starting("t1", TestMachineIds.of("nas"), "nas", "/a/b/c.txt", true,
+            TestMachineIds.of("colina27"), "colina27", "/a/b");
         assertThat(t.destMachine()).isEqualTo("colina27");
     }
 
@@ -59,41 +64,47 @@ class TransferTest {
     void starting_restoringAnArchivedFileOntoItsOwnLivePath_isAllowed() {
         // Source in the past (sourceLive=false), destination the live present, same machine + same final
         // path: that is a restore, not a no-op. It is exactly what the past-as-a-coordinate design allows.
-        Transfer t = Transfer.starting("t1", "nas", "/a/b/c.txt", false, "nas", "/a/b");
+        Transfer t = Transfer.starting("t1", TestMachineIds.of("nas"), "nas", "/a/b/c.txt", false,
+            TestMachineIds.of("nas"), "nas", "/a/b");
         assertThat(t.state()).isEqualTo(TransferState.RUNNING);
     }
 
     @Test
     void withTotal_setsTheDenominatorForProgress() {
-        Transfer t = Transfer.starting("t1", "a", "/x", true, "b", "/y").withTotal(2048L);
+        Transfer t = Transfer.starting("t1", TestMachineIds.of("a"), "a", "/x", true,
+            TestMachineIds.of("b"), "b", "/y").withTotal(2048L);
         assertThat(t.totalBytes()).isEqualTo(2048L);
         assertThat(t.state()).isEqualTo(TransferState.RUNNING);
     }
 
     @Test
     void progressed_advancesBytesCopied() {
-        Transfer t = Transfer.starting("t1", "a", "/x", true, "b", "/y").withTotal(2048L).progressed(1000L);
+        Transfer t = Transfer.starting("t1", TestMachineIds.of("a"), "a", "/x", true,
+            TestMachineIds.of("b"), "b", "/y").withTotal(2048L).progressed(1000L);
         assertThat(t.bytesCopied()).isEqualTo(1000L);
         assertThat(t.state()).isEqualTo(TransferState.RUNNING);
     }
 
     @Test
     void completed_movesToDone() {
-        Transfer t = Transfer.starting("t1", "a", "/x", true, "b", "/y").withTotal(10L).progressed(10L).completed();
+        Transfer t = Transfer.starting("t1", TestMachineIds.of("a"), "a", "/x", true,
+            TestMachineIds.of("b"), "b", "/y").withTotal(10L).progressed(10L).completed();
         assertThat(t.state()).isEqualTo(TransferState.DONE);
         assertThat(t.error()).isNull();
     }
 
     @Test
     void failed_movesToFailed_carryingTheReason() {
-        Transfer t = Transfer.starting("t1", "a", "/x", true, "b", "/y").failed("connection reset");
+        Transfer t = Transfer.starting("t1", TestMachineIds.of("a"), "a", "/x", true,
+            TestMachineIds.of("b"), "b", "/y").failed("connection reset");
         assertThat(t.state()).isEqualTo(TransferState.FAILED);
         assertThat(t.error()).isEqualTo("connection reset");
     }
 
     @Test
     void aSettledTransfer_doesNotTransitionAgain() {
-        Transfer done = Transfer.starting("t1", "a", "/x", true, "b", "/y").completed();
+        Transfer done = Transfer.starting("t1", TestMachineIds.of("a"), "a", "/x", true,
+            TestMachineIds.of("b"), "b", "/y").completed();
         assertThatThrownBy(done::completed).isInstanceOf(IllegalStateException.class);
         assertThatThrownBy(() -> done.failed("late")).isInstanceOf(IllegalStateException.class);
     }

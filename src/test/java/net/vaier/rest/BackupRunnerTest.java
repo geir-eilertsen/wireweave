@@ -1,6 +1,5 @@
 package net.vaier.rest;
 
-import net.vaier.domain.MachineId;
 import net.vaier.application.BackupWorkDirResolver;
 import net.vaier.application.GetBackupJobsUseCase;
 import net.vaier.application.GetBackupRepositoriesUseCase;
@@ -21,8 +20,9 @@ import net.vaier.domain.CommandResult;
 import net.vaier.domain.DeviceCategory;
 import net.vaier.domain.HostCredentialView;
 import net.vaier.domain.Machine;
-import net.vaier.domain.TestMachineIds;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.MachineType;
+import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.port.ForPublishingEvents;
 import net.vaier.domain.port.ForRecordingBackupRuns;
 import org.junit.jupiter.api.BeforeEach;
@@ -48,7 +48,7 @@ import static org.mockito.Mockito.when;
 
 class BackupRunnerTest {
 
-    private static net.vaier.domain.MachineId mid(String name) {
+    private static MachineId mid(String name) {
         return TestMachineIds.of(name);
     }
 
@@ -408,7 +408,7 @@ class BackupRunnerTest {
         when(runner.run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("borg list --json")))
             .thenReturn(new CommandResult(0, json, "", false, "SHA256:x"));
 
-        List<Archive> archives = backupRunner.listMachineArchives("Colina 27");
+        List<Archive> archives = backupRunner.listMachineArchives(mid("Colina 27"));
 
         assertThat(archives).extracting(Archive::id).containsExactly("b", "a");
     }
@@ -417,7 +417,7 @@ class BackupRunnerTest {
     void listMachineArchives_ofAMachineWithNoBackupJob_isEmpty() {
         when(jobs.getBackupJobs()).thenReturn(List.of(job())); // backs up "Colina 27", not "Roon"
 
-        assertThat(backupRunner.listMachineArchives("Roon")).isEmpty();
+        assertThat(backupRunner.listMachineArchives(mid("Roon"))).isEmpty();
         verify(runner, never()).run(any(), any());
     }
 

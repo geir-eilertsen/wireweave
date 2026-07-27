@@ -1,6 +1,7 @@
 package net.vaier.application;
 
 import net.vaier.domain.Archive;
+import net.vaier.domain.MachineId;
 
 import java.util.List;
 
@@ -15,6 +16,6 @@ import java.util.List;
  */
 public interface ListMachineArchivesUseCase {
 
-    /** Every archive the machine named {@code machineName} can be browsed at, newest first; empty when none. */
-    List<Archive> listMachineArchives(String machineName);
+    /** Every archive the machine named {@code machineId} can be browsed at, newest first; empty when none. */
+    List<Archive> listMachineArchives(MachineId machineId);
 }

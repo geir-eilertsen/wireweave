@@ -1,6 +1,7 @@
 package net.vaier.application;
 
 import net.vaier.domain.FileEntry;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.ProtectedPaths;
 import net.vaier.domain.SftpRoot;
 import net.vaier.domain.SourcePaths;
@@ -14,16 +15,16 @@ import java.util.List;
 public interface BrowseFilesUseCase {
 
     /**
-     * What the directory at {@code path} on {@code machineName} holds <em>in the present</em>, in listing
-     * order — the two-coordinate browse. Equivalent to {@link #listDirectory(String, String, String)} with
+     * What the directory at {@code path} on {@code machineId} holds <em>in the present</em>, in listing
+     * order — the two-coordinate browse. Equivalent to {@link #listDirectory(MachineId, String, String)} with
      * no archive.
      */
-    default MachineDirectory listDirectory(String machineName, String path) {
-        return listDirectory(machineName, path, null);
+    default MachineDirectory listDirectory(MachineId machineId, String path) {
+        return listDirectory(machineId, path, null);
     }
 
     /**
-     * What the directory at {@code path} on {@code machineName} holds, in listing order (directories
+     * What the directory at {@code path} on {@code machineId} holds, in listing order (directories
      * before files, then by name) — at the machine's <b>true</b> coordinates, the ones {@code df}, borg and
      * the operator's own terminal use.
      *
@@ -39,10 +40,10 @@ public interface BrowseFilesUseCase {
      * @throws IllegalArgumentException when {@code path} is not a browsable absolute path
      * @throws net.vaier.domain.PathOutsideSftpRootException when {@code path} is above the machine's SFTP
      *         root, and so unreachable over SFTP however valid a path it is
-     * @throws net.vaier.domain.NotFoundException when no machine bears the name
+     * @throws net.vaier.domain.NotFoundException when no machine has that id
      * @throws net.vaier.domain.NoHostCredentialException when the machine has no credential in the vault
      */
-    MachineDirectory listDirectory(String machineName, String path, String at);
+    MachineDirectory listDirectory(MachineId machineId, String path, String at);
 
     /**
      * One directory on one machine: the {@code entries} it holds, the {@code path} they were read from, the

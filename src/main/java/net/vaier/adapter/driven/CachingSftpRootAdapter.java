@@ -56,13 +56,12 @@ public class CachingSftpRootAdapter implements ForResolvingSftpRoots {
     private final Map<MachineId, SftpRoot> roots = new ConcurrentHashMap<>();
 
     @Override
-    public SftpRoot rootFor(String machineName, SshTarget target) {
-        MachineId machineId = target.machineId();
+    public SftpRoot rootFor(MachineId machineId, SshTarget target) {
         SftpRoot cached = machineId == null ? null : roots.get(machineId);
         if (cached != null) {
             return cached;
         }
-        return probe(machineName, target)
+        return probe(machineId, target)
             .map(root -> {
                 // A target with no identity is a pre-registration credential test against a bare address:
                 // there is nothing to remember it under, so it is asked again next time.
@@ -80,12 +79,12 @@ public class CachingSftpRootAdapter implements ForResolvingSftpRoots {
      * answers with two homes that do not line up has still <em>answered</em>: that resolves to
      * {@link SftpRoot#NONE} and is worth remembering, so it comes back present, not empty.
      */
-    private Optional<SftpRoot> probe(String machineName, SshTarget target) {
+    private Optional<SftpRoot> probe(MachineId machineId, SshTarget target) {
         try {
             Optional<String> execHome = SshHome.in(exec(target));
             if (execHome.isEmpty()) {
                 log.debug("Could not read the physical home over the exec channel on {}; leaving its paths "
-                    + "alone", machineName);
+                    + "alone", machineId);
                 return Optional.empty();
             }
             String trueHome = execHome.get();
@@ -95,7 +94,7 @@ public class CachingSftpRootAdapter implements ForResolvingSftpRoots {
             // is the jail. Every unjailed machine in the fleet is answered here, at one probe apiece.
             Optional<SftpRoot> direct = SftpRoot.resolve(trueHome, forBrowsingRemoteFiles.home(target));
             if (direct.isPresent()) {
-                return Optional.of(announce(machineName, direct.get()));
+                return Optional.of(announce(machineId, direct.get()));
             }
 
             // The NAS does not oblige: it answers "/" — the jail root itself, which says nothing about where
@@ -106,26 +105,26 @@ public class CachingSftpRootAdapter implements ForResolvingSftpRoots {
             if (jailedHome.isEmpty()) {
                 log.warn("{} says its home is {}, but its SFTP service can see no part of that path — so "
                     + "Vaier will not guess where that service is rooted, and leaves the machine's paths as "
-                    + "they are.", machineName, trueHome);
+                    + "they are.", machineId, trueHome);
                 return Optional.of(SftpRoot.NONE);
             }
-            return Optional.of(announce(machineName,
+            return Optional.of(announce(machineId,
                 SftpRoot.resolve(trueHome, jailedHome.get()).orElse(SftpRoot.NONE)));
 
         } catch (RuntimeException e) {
             // Unreachable, unauthenticated, a changed host key — every one of them an ordinary state of a
             // fleet. None of them is a reason to fail the browse: the listing itself is about to be attempted
             // and will report the real failure in its own words. Here it only means "root unknown".
-            log.debug("Could not resolve the SFTP root of {}: {}", machineName, e.getMessage());
+            log.debug("Could not resolve the SFTP root of {}: {}", machineId, e.getMessage());
             return Optional.empty();
         }
     }
 
     /** A jail is worth saying out loud once — it changes every path Vaier shows for the machine. */
-    private static SftpRoot announce(String machineName, SftpRoot root) {
+    private static SftpRoot announce(MachineId machineId, SftpRoot root) {
         if (root.jailed()) {
             log.info("{}'s SFTP service is rooted at {} — its files are shown at their real paths",
-                machineName, root.path());
+                machineId, root.path());
         }
         return root;
     }

@@ -1,5 +1,6 @@
 package net.vaier.application;
 
+import net.vaier.domain.MachineId;
 import net.vaier.domain.Selection;
 
 import java.io.OutputStream;
@@ -19,15 +20,19 @@ import java.util.function.Consumer;
 public interface DownloadFileUseCase {
 
     /**
-     * Prepare the file or directory at {@code path} on {@code machineName} at time {@code at} for download.
+     * Prepare the file or directory at {@code path} on {@code machineId} at time {@code at} for download.
      * A download is a read, so the past is allowed ({@code at} may name an archive) — including zipping a
      * directory as it was in that archive.
      *
+     * @param machineLabel what to call the machine in the download's filename — presentation only, never
+     *                     matched on. Downloading a machine's whole root yields {@code <label>.zip}, because
+     *                     a root has no basename of its own to be named after, and an identity in a filename
+     *                     would make the one artefact the operator actually opens unreadable
      * @param path the file or directory to download, at the machine's own true coordinates — required
      * @throws IllegalArgumentException when {@code path} is not absolute
      * @throws net.vaier.domain.NotFoundException when the machine, or the path, is not there
      */
-    Download openForDownload(String machineName, String path, String at);
+    Download openForDownload(MachineId machineId, String machineLabel, String path, String at);
 
     /**
      * Prepare a whole fleet-wide {@link Selection} of coordinates for download as one {@code application/zip}

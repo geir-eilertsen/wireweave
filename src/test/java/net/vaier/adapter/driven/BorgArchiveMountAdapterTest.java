@@ -151,7 +151,7 @@ class BorgArchiveMountAdapterTest {
     void mount_coldMount_mountsTheArchiveByName_intoTheIdKeyedMountpoint() {
         sshBehaves(false);
 
-        MountedArchive mounted = adapter.mount(MACHINE, ARCHIVE_ID);
+        MountedArchive mounted = adapter.mount(MACHINE_ID, ARCHIVE_ID);
 
         assertThat(mounted.mountpoint()).isEqualTo(MOUNTPOINT);
         // The archive name came from `borg list`, and the mount addressed REPO::ARCHIVE into the mountpoint.
@@ -166,7 +166,7 @@ class BorgArchiveMountAdapterTest {
     void mount_ensuresThePassFile_beforeBorgNeedsTheSecret() {
         sshBehaves(false);
 
-        adapter.mount(MACHINE, ARCHIVE_ID);
+        adapter.mount(MACHINE_ID, ARCHIVE_ID);
 
         // Same discipline as list/create: the 0600 pass file is provisioned so borg's BORG_PASSCOMMAND reads it.
         verify(ssh).run(any(), contains("umask 077"));
@@ -176,7 +176,7 @@ class BorgArchiveMountAdapterTest {
     void mount_whenAlreadyMounted_shortCircuits_withoutListingOrMounting() {
         sshBehaves(true);
 
-        MountedArchive mounted = adapter.mount(MACHINE, ARCHIVE_ID);
+        MountedArchive mounted = adapter.mount(MACHINE_ID, ARCHIVE_ID);
 
         assertThat(mounted.mountpoint()).isEqualTo(MOUNTPOINT);
         // A warm re-browse costs one probe round trip — never another borg list or borg mount.
@@ -188,7 +188,7 @@ class BorgArchiveMountAdapterTest {
     void mount_anArchiveIdTheRepositoryDoesNotHold_isNotFound() {
         sshBehaves(false);
 
-        assertThatThrownBy(() -> adapter.mount(MACHINE, "deadbeef"))
+        assertThatThrownBy(() -> adapter.mount(MACHINE_ID, "deadbeef"))
             .isInstanceOf(NotFoundException.class);
         // A non-existent archive is never mounted.
         verify(ssh, never()).run(any(), contains("borg mount"));
@@ -200,13 +200,13 @@ class BorgArchiveMountAdapterTest {
         // The probe still runs (mountpoint is derivable), but there is no repository to mount from.
         when(ssh.run(any(), any())).thenReturn(ok("NOT_MOUNTED"));
 
-        assertThatThrownBy(() -> adapter.mount(MACHINE, ARCHIVE_ID))
+        assertThatThrownBy(() -> adapter.mount(MACHINE_ID, ARCHIVE_ID))
             .isInstanceOf(NotFoundException.class);
     }
 
     @Test
     void mount_anIllFormedArchiveId_isRejectedBeforeAnyConnection() {
-        assertThatThrownBy(() -> adapter.mount(MACHINE, "../etc"))
+        assertThatThrownBy(() -> adapter.mount(MACHINE_ID, "../etc"))
             .isInstanceOf(IllegalArgumentException.class);
         verify(ssh, never()).run(any(), any());
     }
@@ -214,7 +214,7 @@ class BorgArchiveMountAdapterTest {
     @Test
     void unmountIdle_unmountsMountsUntouchedBeyondTheWindow_andLeavesFreshOnesAlone() {
         sshBehaves(false);
-        adapter.mount(MACHINE, ARCHIVE_ID); // touched at 10:00:00
+        adapter.mount(MACHINE_ID, ARCHIVE_ID); // touched at 10:00:00
 
         // 20 minutes later, sweeping a 15-minute idle window releases it.
         now.set(Instant.parse("2026-07-15T10:20:00Z"));
@@ -227,7 +227,7 @@ class BorgArchiveMountAdapterTest {
     @Test
     void unmountIdle_whenTheUnmountFails_keepsTrackingSoALaterSweepRetries() {
         sshBehaves(false);
-        adapter.mount(MACHINE, ARCHIVE_ID); // touched at 10:00:00
+        adapter.mount(MACHINE_ID, ARCHIVE_ID); // touched at 10:00:00
 
         // The unmount does not take — a FUSE handle is still open, so the mount is still there afterwards.
         // Dropping it from tracking here is exactly how a mount orphans and holds the repo lock forever.
@@ -300,7 +300,7 @@ class BorgArchiveMountAdapterTest {
     @Test
     void releaseAll_unmountsEveryTrackedMount_forAGracefulShutdown() {
         sshBehaves(false);
-        adapter.mount(MACHINE, ARCHIVE_ID);
+        adapter.mount(MACHINE_ID, ARCHIVE_ID);
 
         adapter.releaseAll();
 
@@ -310,7 +310,7 @@ class BorgArchiveMountAdapterTest {
     @Test
     void unmountIdle_leavesAFreshlyUsedMountMounted() {
         sshBehaves(false);
-        adapter.mount(MACHINE, ARCHIVE_ID); // touched at 10:00:00
+        adapter.mount(MACHINE_ID, ARCHIVE_ID); // touched at 10:00:00
 
         // Only 5 minutes later: still within the 15-minute window, so nothing is unmounted.
         now.set(Instant.parse("2026-07-15T10:05:00Z"));
@@ -322,10 +322,10 @@ class BorgArchiveMountAdapterTest {
     @Test
     void unmountIdle_reBrowsingRefreshesTheIdleClock() {
         sshBehaves(false);
-        adapter.mount(MACHINE, ARCHIVE_ID); // touched at 10:00:00
+        adapter.mount(MACHINE_ID, ARCHIVE_ID); // touched at 10:00:00
 
         now.set(Instant.parse("2026-07-15T10:10:00Z"));
-        adapter.mount(MACHINE, ARCHIVE_ID); // re-touched at 10:10:00 (warm-ish; probe says not mounted, remounts idempotently)
+        adapter.mount(MACHINE_ID, ARCHIVE_ID); // re-touched at 10:10:00 (warm-ish; probe says not mounted, remounts idempotently)
 
         now.set(Instant.parse("2026-07-15T10:20:00Z")); // 10 min after the last touch, inside a 15-min window
         adapter.unmountIdle(Duration.ofMinutes(15).toMillis());

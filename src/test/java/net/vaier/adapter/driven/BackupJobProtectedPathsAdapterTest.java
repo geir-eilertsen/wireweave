@@ -5,7 +5,6 @@ import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.BackupJob;
 import net.vaier.domain.ProtectedPaths;
 import net.vaier.domain.port.ForPersistingBackupJobs;
-import net.vaier.domain.port.ForResolvingMachineIds;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -36,15 +35,7 @@ class BackupJobProtectedPathsAdapterTest {
     @BeforeEach
     void setUp() {
         jobs = new InMemoryJobs();
-        // The Explorer asks by name; the store is keyed by identity. The stub is the one seam that crosses.
-        adapter = new BackupJobProtectedPathsAdapter(jobs, new ForResolvingMachineIds() {
-            @Override public Optional<MachineId> idForName(String machineName) {
-                return Optional.of(TestMachineIds.of(machineName));
-            }
-            @Override public Optional<String> nameForId(MachineId machineId) {
-                return Optional.empty();
-            }
-        });
+        adapter = new BackupJobProtectedPathsAdapter(jobs);
     }
 
     private BackupJob job(String name, List<String> sources, List<String> excludes) {
@@ -54,14 +45,14 @@ class BackupJobProtectedPathsAdapterTest {
 
     @Test
     void aMachineWithNoJobProtectsNothing() {
-        assertThat(adapter.protectedPathsFor("Apalveien 5").isEmpty()).isTrue();
+        assertThat(adapter.protectedPathsFor(TestMachineIds.of("Apalveien 5")).isEmpty()).isTrue();
     }
 
     @Test
     void theJobsSourcePathsAreProtected() {
         jobs.save(job("apalveien-5", List.of("/home"), List.of()));
 
-        assertThat(adapter.protectedPathsFor("Apalveien 5").covers("/home/openhab")).isTrue();
+        assertThat(adapter.protectedPathsFor(TestMachineIds.of("Apalveien 5")).covers("/home/openhab")).isTrue();
     }
 
     @Test
@@ -70,7 +61,7 @@ class BackupJobProtectedPathsAdapterTest {
         // shield, and the fix to "stop backing up" would have looked like it did nothing at all.
         jobs.save(job("apalveien-5", List.of("/home"), List.of("/home/openhab/userdata/logs")));
 
-        ProtectedPaths paths = adapter.protectedPathsFor("Apalveien 5");
+        ProtectedPaths paths = adapter.protectedPathsFor(TestMachineIds.of("Apalveien 5"));
 
         assertThat(paths.covers("/home/openhab/userdata/logs")).isFalse();
         assertThat(paths.covers("/home/openhab/userdata/logs/openhab.log")).isFalse();
@@ -82,7 +73,7 @@ class BackupJobProtectedPathsAdapterTest {
         jobs.save(job("apalveien-5", List.of("/home"), List.of("/home/openhab")));
         jobs.save(job("apalveien-5-etc", List.of("/etc"), List.of()));
 
-        ProtectedPaths paths = adapter.protectedPathsFor("Apalveien 5");
+        ProtectedPaths paths = adapter.protectedPathsFor(TestMachineIds.of("Apalveien 5"));
 
         assertThat(paths.covers("/etc/nginx")).isTrue();
         assertThat(paths.covers("/home/geir")).isTrue();

@@ -28,20 +28,32 @@ public record Selection(List<Coordinate> coordinates) {
     }
 
     /**
-     * One picked file or directory: the {@code machine} it lives on, its {@code path} (the machine's own
-     * true coordinate), and the point in time {@code at} — {@code null} for the live filesystem, or an
-     * archive id for the past, exactly like a single download's {@code at}.
+     * One picked file or directory: the {@code machineId} it lives on, what to <em>call</em> that machine
+     * ({@code machineLabel}), its {@code path} (the machine's own true coordinate), and the point in time
+     * {@code at} — {@code null} for the live filesystem, or an archive id for the past, exactly like a
+     * single download's {@code at}.
+     *
+     * <p>Both, because a coordinate is used two ways and they want different things. Reaching the machine
+     * is keyed by identity, so a rename between picking a file and downloading it cannot redirect the read.
+     * Arranging the zip is for a person: the label names the download and the folder two machines' {@code
+     * /etc}s are separated into, and a UUID there would make the one artefact the operator actually opens
+     * unreadable. The label is presentation and is never matched on.
      */
-    public record Coordinate(String machine, String path, String at) {
+    public record Coordinate(MachineId machineId, String machineLabel, String path, String at) {
     }
 
     /** A coordinate paired with the top-level zip-entry name it is placed under (its file, or its subtree). */
     public record Placement(Coordinate coordinate, String entryPrefix) {
     }
 
-    /** Whether the selection touches more than one machine — the switch between the two filename and layout rules. */
+    /**
+     * Whether the selection touches more than one machine — the switch between the two filename and layout
+     * rules. Counted by identity, not by label: two machines are allowed to be called the same thing, and
+     * counting labels would call that one machine and flatten both their files into a single namespace,
+     * where their same-named paths would collide and one would silently overwrite the other.
+     */
     public boolean spansMultipleMachines() {
-        return coordinates.stream().map(Coordinate::machine).distinct().count() > 1;
+        return coordinates.stream().map(Coordinate::machineId).distinct().count() > 1;
     }
 
     /**
@@ -50,7 +62,7 @@ public record Selection(List<Coordinate> coordinates) {
      * selection spans machines and no one machine names it.
      */
     public String downloadFilename() {
-        String base = spansMultipleMachines() ? "vaier-selection" : coordinates.getFirst().machine();
+        String base = spansMultipleMachines() ? "vaier-selection" : coordinates.getFirst().machineLabel();
         return base + ".zip";
     }
 
@@ -66,7 +78,7 @@ public record Selection(List<Coordinate> coordinates) {
         List<Placement> placements = new ArrayList<>();
         for (Coordinate coordinate : coordinates) {
             String base = basename(coordinate);
-            String top = multiMachine ? coordinate.machine() + "/" + base : base;
+            String top = multiMachine ? coordinate.machineLabel() + "/" + base : base;
             placements.add(new Placement(coordinate, makeUnique(top, taken)));
         }
         return placements;
@@ -80,7 +92,7 @@ public record Selection(List<Coordinate> coordinates) {
     private static String basename(Coordinate coordinate) {
         String path = FileEntry.normalisePath(coordinate.path());
         String name = path.substring(path.lastIndexOf('/') + 1);
-        return name.isEmpty() ? coordinate.machine() : name;
+        return name.isEmpty() ? coordinate.machineLabel() : name;
     }
 
     /** {@code name} if free, else {@code name (2)}, {@code name (3)} … — the first form not already taken. */
