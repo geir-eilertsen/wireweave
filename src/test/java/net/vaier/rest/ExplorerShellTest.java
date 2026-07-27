@@ -657,15 +657,17 @@ class ExplorerShellTest {
         // under the id would put them under a machine that does not exist in the tree, and every peer would
         // show an empty `containers` entry while Vaier could see its containers perfectly well.
         //
-        // The shell already holds the id -> name map (S.peerNames, built in loadFleet for exactly this
-        // reason). loadContainers must go through it.
+        // The shell holds the peers indexed by WireGuard id (S.peersById, built in loadFleet), and
+        // peerDisplayName is the one crossing from that id to what a person calls the machine.
+        // loadContainers must go through it. (It used to read a separate id -> name map; that map went when
+        // the fleet join moved onto machine identities, but this crossing is still required and still here.)
         String js = read("explorer-shell.js");
         int from = js.indexOf("async function loadContainers(");
         assertThat(from).isPositive();
         String body = js.substring(from, js.indexOf("\n    }", from));
 
-        assertThat(body).as("peer containers must be keyed by machine name, via the id -> name map")
-            .contains("peerNames");
+        assertThat(body).as("peer containers must be keyed by machine name, via the peer-id crossing")
+            .contains("peerDisplayName");
     }
 
     @Test

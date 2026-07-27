@@ -1850,16 +1850,23 @@ The work that got this far is **committed and pushed** on `main`: the SSH path w
 `7969746`, the Explorer's coordinates in `5c843a5`, the rest of the machine-keyed backend in `7bf0d6f`,
 and the browser in `126038b`. `5581ca1` fixes two findings the hex checker raised against the first two,
 and `4cdf3c8` fixes the pop-out shell window that `126038b` missed (the fourth defect above).
-What is left is smaller than what was planned, but it is the part that pays:
+What is left is one step — the payoff step:
 
-1. **`/vpn/peers` must expose `machineId`.** It does not, so `explorer-shell.js`'s `loadFleet` has nothing
-   to join the fleet on and still keys `S.peers` by display name. That is the live bug: when `/machines`
-   and `/vpn/peers` disagree about a machine's name by one character, `isPeer` goes false and a delete is
-   routed to `/lan-servers/<name>` — the peer directory survives with **no backend log line and no UI
-   error**, the confirm dialog just closes. `PeerConfiguration` already holds the id; it has to travel
-   through `GetVpnPeersUseCase.VpnPeerView` -> the service that builds it -> `VpnPeerResponse` ->
-   `toResponse`. Both records are ~25 positional fields, so a misplaced argument compiles — change them
-   with named locals or check the diff field by field.
+1. ~~**`/vpn/peers` must expose `machineId`.**~~ **✅ done 2026-07-27.** `machineId` travels
+   `PeerConfiguration` -> `VpnPeerView` -> `VpnPeerResponse`, **read from the stored config and never
+   minted**: a live WireGuard peer with no config on disk is in no machine registry, so its `machineId` is
+   null rather than a fabricated value that would join to nothing while looking like it could. The browser's
+   `S.peers` is keyed by identity now, which closes the live bug — when `/machines` and `/vpn/peers`
+   disagreed about a name by one character, `isPeer` went false and a delete was routed to
+   `/lan-servers/<name>`, where it 404'd with **no backend log line and no UI error**, the confirm dialog
+   simply closing while the peer stayed. (The live fleet showed exactly that shape: peer id `Colina-27`
+   against display name `Colina 27`.) Three lookups genuinely start from a name and now resolve through the
+   machine registry rather than matching peer names against each other — the tree's liveness dot, the
+   capability strip, and a LAN server's stored `relayPeerName` (`peerNamed`). What arrives keyed by
+   WireGuard peer id — the liveness stream and the container scrape — goes through a second index
+   (`S.peersById`) and one named crossing, `peerDisplayName`. Adding the field mid-record changed both
+   arities, so the compiler enumerated every construction site instead of letting a misplaced argument
+   compile.
 
 2. **Delete the scaffolding.** `ForResolvingMachineIds`, `MachineIdRegistryAdapter`,
    `Machine.nameIsTaken` and `Machine.hasSameName` go in one commit, and **machine names stop needing to

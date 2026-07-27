@@ -9,6 +9,7 @@ import net.vaier.config.ConfigResolver;
 import net.vaier.domain.DnsRecord.DnsRecordType;
 import net.vaier.domain.GeoLocation;
 import net.vaier.domain.LanServer;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.MachineType;
 import net.vaier.domain.ReverseProxyRoute;
 import net.vaier.domain.VpnClient;
@@ -1265,6 +1266,38 @@ class VpnServiceTest {
         assertThat(view.lanCidr()).isNull();
         assertThat(view.lanAddress()).isNull();
         assertThat(view.description()).isNull();
+    }
+
+    /**
+     * The field the Explorer joins the fleet on. It comes from the stored config and is never minted here:
+     * this is a read, and identity is read, never invented.
+     */
+    @Test
+    void getVpnPeers_carriesTheMachinesIdentityFromItsStoredConfig() {
+        MachineId identity = MachineId.generate();
+        VpnClient client = new VpnClient("pub", "10.13.13.2/32", "", "", "0", "0", "0");
+        when(forGettingVpnClients.getClients()).thenReturn(List.of(client));
+        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("alice-1");
+        when(peerConfigProvider.getPeerConfigByIp("10.13.13.2")).thenReturn(Optional.of(
+            new PeerConfiguration("alice-1", "Alice", "10.13.13.2", "[Interface]",
+                MachineType.UBUNTU_SERVER, null, null, null, null, null, identity)));
+
+        assertThat(service.getVpnPeers().get(0).machineId()).isEqualTo(identity.value());
+    }
+
+    /**
+     * A live WireGuard peer with no config on disk is in no machine registry, so it has no identity to give.
+     * Null, never a stand-in: a fabricated id would join to nothing while looking like it could, and a
+     * caller would read "this peer is not a machine" as "this machine is not a peer".
+     */
+    @Test
+    void getVpnPeers_hasNoIdentityForAPeerWithNoStoredConfig() {
+        VpnClient client = new VpnClient("pub", "10.13.13.2/32", "", "", "0", "0", "0");
+        when(forGettingVpnClients.getClients()).thenReturn(List.of(client));
+        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("orphan-1");
+        when(peerConfigProvider.getPeerConfigByIp("10.13.13.2")).thenReturn(Optional.empty());
+
+        assertThat(service.getVpnPeers().get(0).machineId()).isNull();
     }
 
     @Test

@@ -33,7 +33,8 @@ class VpnPeerControllerIT extends VaierWebMvcIntegrationBase {
     @Test
     void listPeers_returnsMappedPeerList() throws Exception {
         VpnPeerView view = new VpnPeerView(
-                "peer1", "peer1", "pubkey123", "10.13.13.2/32", "10.13.13.2",
+                "peer1", "11111111-2222-3333-4444-555555555555", "peer1", "pubkey123", "10.13.13.2/32",
+                "10.13.13.2",
                 "1.2.3.4", "51820", "2024-01-01", true, "100", "200",
                 MachineType.UBUNTU_SERVER, true, false, false, Set.of(),
                 null, null, null, Optional.empty(), false,
@@ -43,6 +44,8 @@ class VpnPeerControllerIT extends VaierWebMvcIntegrationBase {
         mockMvc.perform(get("/vpn/peers"))
                .andExpect(status().isOk())
                .andExpect(jsonPath("$[0].name").value("peer1"))
+               // The identity the browser joins the fleet on travels over the wire, not just in the view.
+               .andExpect(jsonPath("$[0].machineId").value("11111111-2222-3333-4444-555555555555"))
                .andExpect(jsonPath("$[0].publicKey").value("pubkey123"))
                .andExpect(jsonPath("$[0].peerType").value("UBUNTU_SERVER"));
     }

@@ -116,8 +116,8 @@
         path: ['fleet'],                 // the selected entry, as its path
         open: new Set(['/fleet']),
         machines: [],                    // GET /machines
-        peers: new Map(),                // machine name -> its live WireGuard peer (tunnel address, liveness)
-        peerNames: new Map(),            // peer id -> machine name (the SSE keys stats by id, not by name)
+        peers: new Map(),                // machine id -> its live WireGuard peer (tunnel address, liveness)
+        peersById: new Map(),            // WireGuard peer id -> the same peer (the SSE keys stats that way)
         lan: new Map(),                  // machine name -> its LAN server (the domain's MachineStatus)
         serverLocation: null,            // GET /vpn/peers/server-location — the Vaier server's geo (Frankfurt), for the map
         lanScan: null,                   // GET /lan-scan — the discovered-machines snapshot { status, machines, lastScanCompleted }, or { gated } on Community
@@ -241,12 +241,26 @@
     // so the entry is named by both, exactly as the unpublish call is.
     const serviceName = (s) => (s.shortName || s.name) + (s.pathPrefix || '');
 
+    // The tree addresses its entries by name — it will carry identities of its own in a later slice — so a
+    // name is resolved through the machine registry first and the peer is found by that machine's IDENTITY.
+    // Deliberately not by matching the peer's own name: that join is the one this removed, because /machines
+    // and /vpn/peers disagreeing by a character silently turned a peer into a LAN server.
+    function peerNamed(name) {
+        const machine = S.machines.find((x) => x.name === name);
+        return machine ? S.peers.get(machine.id) : undefined;
+    }
+
+    // Container scrapes and publishable candidates name their machine by WireGuard peer id, which is not a
+    // machine identity and not a display name. Falls through unchanged for LAN and Vaier servers, whose
+    // peerName already is the name.
+    function peerDisplayName(peerId) {
+        const peer = S.peersById.get(peerId);
+        return peer ? peer.name : peerId;
+    }
+
     const servicesOn = (machine) => S.services.filter((s) => machineOfService(s) === machine);
     const containersOn = (machine) => S.containers.get(machine) || [];
-    // A publishable candidate names the machine it runs on by peer id (like the container scrape), so it maps
-    // back to the machine's canonical name through the same id→name map. Falls through for LAN/Vaier servers,
-    // whose peerName already is the name.
-    const candidateMachine = (c) => S.peerNames.get(c.peerName) || c.peerName;
+    const candidateMachine = (c) => peerDisplayName(c.peerName);
     const candidatesOn = (machine) => S.publishable.filter((c) => candidateMachine(c) === machine);
     // The repositories that live on a backup server, filtered by the server they name. One server, so this is
     // every repository Vaier knows — but the filter keeps it honest if a stale repo names a server that is gone.
@@ -436,7 +450,7 @@
                 fetch('/docker-services/lan-servers').then((r) => (r.ok ? r.json() : [])),
             ]);
             (peers || []).forEach((p) => {
-                next.set(S.peerNames.get(p.peerName) || p.peerName, p.containers || []);
+                next.set(peerDisplayName(p.peerName), p.containers || []);
             });
             (lan || []).forEach((l) => next.set(l.name, l.containers || []));
             if (server) next.set(VAIER_SERVER, server.containers || []);
@@ -626,7 +640,7 @@
         // We are standing inside the answer.
         if (name === VAIER_SERVER) return 'is-up';
 
-        const peer = S.peers.get(name);
+        const peer = peerNamed(name);
         if (peer) {
             if (peer.connected) return 'is-up';
             // A pure client (phone / Mac / Linux / Windows PC) being offline is routine, not an error —
@@ -663,7 +677,7 @@
     // strip, so names still line up. Icon-only; the capability rides along as the glyph's hover title.
     function machineCaps(name) {
         const m = S.machines.find((x) => x.name === name);
-        const peer = S.peers.get(name);
+        const peer = m ? S.peers.get(m.id) : undefined;
         const caps = document.createElement('span');
         caps.className = 'ex-caps';
         if (peer && peer.isRelay) caps.appendChild(capIcon('relay', 'Relay — routes a LAN behind it'));
@@ -1069,7 +1083,9 @@
             if (s.relayPeerName === VAIER_SERVER) {
                 if (!hasLoc) return; lat = loc.latitude; lon = loc.longitude;
             } else {
-                const relay = S.peers.get(s.relayPeerName);
+                // A LAN server stores its relay as a NAME, so that reference is resolved through the
+                // registry rather than by matching peer names against each other.
+                const relay = peerNamed(s.relayPeerName);
                 if (!relay || relay.latitude == null || relay.longitude == null) return;
                 lat = relay.latitude; lon = relay.longitude;
             }
@@ -1095,7 +1111,7 @@
     // A peer answers at its tunnel address, a LAN server on its LAN — the same rule the SSH connection
     // itself is resolved by, so what the Inspector shows is where Vaier would actually go.
     function tunnelAddress(m) {
-        const peer = S.peers.get(m.name);
+        const peer = S.peers.get(m.id);
         if (peer && peer.tunnelIp) return peer.tunnelIp;
         return m.lanAddress || '';
     }
@@ -1104,7 +1120,7 @@
         const m = machineOf(S.path);
         if (!m) return pane.appendChild(note('That machine is no longer in the fleet.', true));
 
-        const peer = S.peers.get(m.name);
+        const peer = S.peers.get(m.id);
         const head = paneHead(m.name, true, MACHINE_TYPE[m.type]);
         head.querySelector('.ex-pane-title').appendChild(dot(m.name));
         pane.appendChild(head);
@@ -1219,7 +1235,7 @@
             body.appendChild(edit);
 
             const adv = disclosure('Advanced');
-            if (S.peers.has(m.name)) {
+            if (S.peers.has(m.id)) {
                 const cfg = el('div', 'ex-lactions is-static');
                 cfg.appendChild(selVerb('refresh', 'Reissue config', 'ex-btn', () => reissuePeer(m)));
                 cfg.appendChild(selVerb('refresh', 'Regenerate config', 'ex-btn', () => regenerateMachine(m)));
@@ -1273,12 +1289,12 @@
     // servers by name. Then the fleet reloads and we follow the machine to its — possibly new — name.
     async function saveMachineEdits(m, v) {
         const isLan = m.type === 'LAN_SERVER';
-        const peer = S.peers.get(m.name);
+        const peer = S.peers.get(m.id);
         const pid = peer ? peer.id : null;
         if (!isLan && !pid) { toast('Vaier cannot edit that machine.'); return; }
         const enc = encodeURIComponent;
         const base = isLan ? '/lan-servers/' + enc(m.name) : '/vpn/peers/' + enc(pid);
-        const rec = S.peers.get(m.name) || S.lan.get(m.name) || {};
+        const rec = S.peers.get(m.id) || S.lan.get(m.name) || {};
         let ok = true, renamedTo = m.name;
 
         if (v.description !== (rec.description || '')) {
@@ -1320,8 +1336,8 @@
     // are Vaier's.
     function editMachineForm(m) {
         return new Promise((resolve) => {
-            const rec = S.peers.get(m.name) || S.lan.get(m.name) || {};
-            const isServerPeer = S.peers.has(m.name) && SERVER_TYPES.has(m.type);
+            const rec = S.peers.get(m.id) || S.lan.get(m.name) || {};
+            const isServerPeer = S.peers.has(m.id) && SERVER_TYPES.has(m.type);
             const scrim = el('div', 'ex-scrim is-on');
             const dialog = el('div', 'ex-dialog');
             const h = el('div', 'ex-dialog-title'); h.textContent = 'Edit ' + m.name;
@@ -1392,7 +1408,7 @@
     // asks first and shows the new config once, exactly as a new machine does. Recreated from what /machines and
     // the peer record already hold, so the machine keeps its name, type, LAN and description.
     async function regenerateMachine(m) {
-        const peer = S.peers.get(m.name);
+        const peer = S.peers.get(m.id);
         if (!peer) return;
         const ok = await confirmModal('Regenerate ' + m.name + '’s config?',
             'Vaier deletes ' + m.name + '’s WireGuard peer and recreates it with a fresh keypair — a brand-new '
@@ -1400,7 +1416,7 @@
             + ' can only reconnect once the new one is installed. Reissue keeps the same keys; regenerate '
             + 'replaces them. Only regenerate when the keypair itself must change.', 'Regenerate');
         if (!ok) return;
-        const rec = S.peers.get(m.name) || {};
+        const rec = S.peers.get(m.id) || {};
         const recreate = { name: m.name, peerType: m.type, lanCidr: m.lanCidr || null,
             lanAddress: m.lanAddress || null, description: rec.description || null };
         try {
@@ -2442,13 +2458,13 @@
     }
 
     async function removeMachine(m) {
-        const isPeer = S.peers.has(m.name);
+        const isPeer = S.peers.has(m.id);
         const ok = await confirmTyped('Remove ' + m.name + '?',
             'This deletes ' + m.name + ' from the fleet — its ' + (isPeer ? 'WireGuard peer' : 'registration')
             + ' is removed and it can no longer reach the VPN. This cannot be undone. Type the machine name to '
             + 'confirm.', m.name, 'Remove');
         if (!ok) return;
-        const url = isPeer ? '/vpn/peers/' + encodeURIComponent(S.peers.get(m.name).id)
+        const url = isPeer ? '/vpn/peers/' + encodeURIComponent(S.peers.get(m.id).id)
                            : '/lan-servers/' + encodeURIComponent(m.name);
         try {
             const res = await fetch(url, { method: 'DELETE' });
@@ -2462,7 +2478,7 @@
     // Reissue a peer's WireGuard config — fresh keys and a new config, shown once like a new machine's. The old
     // config stops working once the new one is installed, so it asks first.
     async function reissuePeer(m) {
-        const peer = S.peers.get(m.name);
+        const peer = S.peers.get(m.id);
         if (!peer) return;
         const ok = await confirmModal('Reissue ' + m.name + '’s config?',
             'Vaier generates a fresh WireGuard config for ' + m.name + '. The current one stops working the '
@@ -6195,11 +6211,17 @@
             // stats that arrive on the stream are keyed by the peer's id, so keep the id -> machine map too.
             const res = await fetch('/vpn/peers');
             const peers = res.ok ? await res.json() : [];
+            // Keyed by machine identity, which is what a row from /machines carries. It used to be keyed by
+            // display name, and that was the live bug: one character of disagreement between the two lists
+            // made a peer look like a LAN server, and a delete went to /lan-servers/<name> — 404 in silence,
+            // no log line, no error, the confirm dialog just closing while the peer stayed where it was.
+            // A peer with no stored config has no identity (it is in no registry); it is indexed by its
+            // WireGuard id alone, and simply does not join.
             S.peers = new Map();
-            S.peerNames = new Map();
+            S.peersById = new Map();
             peers.forEach((p) => {
-                S.peers.set(p.name, p);
-                S.peerNames.set(p.id, p.name);
+                if (p.machineId) S.peers.set(p.machineId, p);
+                S.peersById.set(p.id, p);
             });
         } catch (e) { /* a fleet with no peers is a fleet, not a failure */ }
 
@@ -6405,8 +6427,7 @@
         events.addEventListener('peers-stats', (e) => {
             try {
                 JSON.parse(e.data).forEach((stat) => {
-                    const name = S.peerNames.get(stat.name) || stat.name;
-                    const peer = S.peers.get(name);
+                    const peer = S.peersById.get(stat.name);
                     if (peer) {
                         peer.connected = stat.connected;
                         peer.latestHandshake = stat.latestHandshake;

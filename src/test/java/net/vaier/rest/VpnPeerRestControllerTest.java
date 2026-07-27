@@ -18,6 +18,7 @@ import net.vaier.application.ReissuePeerConfigUseCase;
 import net.vaier.application.RenamePeerUseCase;
 import net.vaier.application.UpdateLanCidrUseCase;
 import net.vaier.domain.GeoLocation;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.MachineType;
 import net.vaier.domain.SetupToken;
 import net.vaier.domain.port.ForTrackingPeerConfigRetrieval;
@@ -32,7 +33,9 @@ import org.springframework.http.MediaType;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -66,10 +69,17 @@ class VpnPeerRestControllerTest {
 
     @InjectMocks VpnPeerRestController controller;
 
+    /** The identity a peer with a stored config carries, kept per peer id so a test can assert on it. */
+    private static final Map<String, MachineId> IDENTITIES = new ConcurrentHashMap<>();
+
+    private static MachineId identityOf(String peerId) {
+        return IDENTITIES.computeIfAbsent(peerId, p -> MachineId.generate());
+    }
+
     private static VpnPeerView view(String id, String name, boolean connected,
                                     String endpointIp, MachineType type, String description,
                                     Optional<GeoLocation> geo) {
-        return new VpnPeerView(id, name, "pub", "10.13.13.2/32", "10.13.13.2",
+        return new VpnPeerView(id, identityOf(id).value(), name, "pub", "10.13.13.2/32", "10.13.13.2",
             endpointIp, "51820", "0", connected, "0", "0",
             type, type.isServerType(), type.isVpnPeer() && !type.isServerType(), false,
             net.vaier.domain.PeerArtifact.forPeerType(type),
@@ -381,7 +391,7 @@ class VpnPeerRestControllerTest {
     @Test
     void listPeers_exposesConfigOutOfDateFlag() {
         when(getVpnPeersUseCase.getVpnPeers()).thenReturn(List.of(
-            new VpnPeerView("nas", "nas", "pub", "10.13.13.6/32", "10.13.13.6",
+            new VpnPeerView("nas", identityOf("nas").value(), "nas", "pub", "10.13.13.6/32", "10.13.13.6",
                 "", "51820", "0", false, "0", "0",
                 MachineType.UBUNTU_SERVER, true, false, false,
                 net.vaier.domain.PeerArtifact.forPeerType(MachineType.UBUNTU_SERVER),
@@ -401,6 +411,10 @@ class VpnPeerRestControllerTest {
         var peer = controller.listPeers().getBody().get(0);
 
         assertThat(peer.id()).isEqualTo("nas");
+        // The identity the browser joins the fleet on. Without it here, the Explorer has nothing but the
+        // display name to match /machines against — and a one-character disagreement between the two routes
+        // a peer delete at /lan-servers/<name>, which answers 404 in silence and leaves the peer standing.
+        assertThat(peer.machineId()).isEqualTo(identityOf("nas").value());
         assertThat(peer.name()).isEqualTo("nas");
         assertThat(peer.description()).isEqualTo("Home media server");
         assertThat(peer.peerType()).isEqualTo("UBUNTU_SERVER");
@@ -451,7 +465,7 @@ class VpnPeerRestControllerTest {
     @Test
     void listPeers_exposesEffectiveDeviceCategoryAndOverrideFlag() {
         when(getVpnPeersUseCase.getVpnPeers()).thenReturn(List.of(
-            new VpnPeerView("nas", "nas", "pub", "10.13.13.6/32", "10.13.13.6",
+            new VpnPeerView("nas", identityOf("nas").value(), "nas", "pub", "10.13.13.6/32", "10.13.13.6",
                 "", "51820", "0", false, "0", "0",
                 MachineType.UBUNTU_SERVER, true, false, false,
                 net.vaier.domain.PeerArtifact.forPeerType(MachineType.UBUNTU_SERVER),

@@ -23,6 +23,7 @@ import net.vaier.config.ServiceNames;
 import net.vaier.domain.GeoLocation;
 import net.vaier.domain.LanServer;
 import net.vaier.domain.Machine;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.MachineType;
 import net.vaier.domain.PeerId;
 import net.vaier.domain.PeerNotFoundException;
@@ -236,8 +237,14 @@ public class VpnService implements
         boolean sshAccess = rawCfg
             .map(ForGettingPeerConfigurations.PeerConfiguration::effectiveSshAccess)
             .orElseGet(() -> net.vaier.domain.Machine.defaultSshAccess(deviceCategory, peerType));
+        // Read from the stored config, never minted: a live peer with no config on disk is in no machine
+        // registry, and a caller joining on a fabricated id would match nothing while looking like it could.
+        String machineId = rawCfg
+            .map(ForGettingPeerConfigurations.PeerConfiguration::machineId)
+            .map(MachineId::value)
+            .orElse(null);
         return new VpnPeerView(
-            id, name, client.publicKey(), client.allowedIps(), peerIp,
+            id, machineId, name, client.publicKey(), client.allowedIps(), peerIp,
             client.endpointIp(), client.endpointPort(), client.latestHandshake(),
             client.isConnected(), client.transferRx(), client.transferTx(),
             peerType, isServer, isClient, isRelay,

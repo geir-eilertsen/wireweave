@@ -21,6 +21,14 @@ public interface GetVpnPeersUseCase {
 
     /**
      * @param id                  the peer's immutable identifier (config directory name).
+     * @param machineId           the peer machine's {@link net.vaier.domain.MachineId} as its canonical
+     *                            string, or null for a live WireGuard peer with no stored configuration —
+     *                            such a peer is in no machine registry, and inventing an id here would be
+     *                            minting one, which identity never is. Beside {@code id}, which addresses
+     *                            the peer's own endpoints: this addresses the MACHINE, and is what a caller
+     *                            holding a row from {@code /machines} joins on. A name cannot do that job —
+     *                            it is editable, and one character of disagreement between the two lists
+     *                            silently turns a peer into a LAN server in the caller's eyes.
      * @param name                the operator-facing display label; falls back to the id-derived
      *                            label when no config exists yet.
      * @param peerType            the persisted {@link MachineType}; falls back to
@@ -47,6 +55,7 @@ public interface GetVpnPeersUseCase {
      */
     record VpnPeerView(
         String id,
+        String machineId,
         String name,
         String publicKey,
         String allowedIps,

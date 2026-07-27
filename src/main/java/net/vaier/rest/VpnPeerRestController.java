@@ -90,7 +90,7 @@ public class VpnPeerRestController {
 
     private static VpnPeerResponse toResponse(VpnPeerView v) {
         return new VpnPeerResponse(
-            v.id(), v.name(), v.publicKey(), v.allowedIps(), v.tunnelIp(),
+            v.id(), v.machineId(), v.name(), v.publicKey(), v.allowedIps(), v.tunnelIp(),
             v.endpointIp(), v.endpointPort(), v.latestHandshake(),
             v.connected(), v.transferRx(), v.transferTx(),
             v.peerType().name(), v.isServer(), v.isClient(), v.isRelay(),
@@ -510,6 +510,8 @@ public class VpnPeerRestController {
      */
     public record VpnPeerResponse(
             String id,
+            /** The machine's identity — what the browser joins this list to {@code /machines} on. */
+            String machineId,
             String name,
             String publicKey,
             String allowedIps,
