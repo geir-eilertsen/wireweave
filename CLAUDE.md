@@ -15,18 +15,6 @@ I am basically tired of maintaining a VPN server with reverse proxy pointing to 
 - **Web interface for managing everything** with Vaier
 - **Self-generated dashboard for linking to all my services** with Vaier
 
-## Build & Run Commands
-
-```bash
-mvn clean package              # Build JAR (with tests)
-mvn clean package -DskipTests  # Build JAR (skip tests)
-mvn test                       # Run all tests
-mvn spring-boot:run            # Run locally (port 8080)
-docker compose up -d           # Run full stack (WireGuard + Traefik + Vaier)
-```
-
-Swagger UI: `http://localhost:8080/swagger-ui.html` (local) or `http://localhost:8888/swagger-ui.html` (Docker)
-
 ## Architecture
 
 **Hexagonal architecture** (Ports & Adapters) with four layers:
@@ -59,14 +47,6 @@ Cross-domain orchestration (e.g., `VpnService.deletePeer` cascading into `Publis
 
 This is stricter than the write-orchestration exception above (which is about *injecting* a `*UseCase` for a genuine cascade, and does not license a service to *implement* a driven port). See `hexagonal-architecture` skill rule 3 and hex-checker rule 9.
 
-### Key Integrations
-
-- **WireGuard**: File-based config management at `WIREGUARD_CONFIG_PATH`, process execution for peer management
-- **Traefik**: YAML dynamic config generation at `TRAEFIK_CONFIG_PATH`
-- **AWS Route53**: DNS zone/record CRUD via AWS SDK v2
-- **Docker**: Container discovery via Docker socket (`/var/run/docker.sock`)
-- **oauth2-proxy**: Google authentication; Vaier authorizes via the `/authz/verify` forward-auth endpoint against its own `access.yml` store (#305)
-
 ### No Database
 
 All state is file-based (WireGuard/Traefik YAML configs, the `access.yml` social-login store), cloud-based (Route53), or ephemeral (oauth2-proxy's own signed cookie session). No SQL database or ORM.
@@ -75,12 +55,10 @@ All state is file-based (WireGuard/Traefik YAML configs, the `access.yml` social
 
 Application services must never import from an unrelated use case interface just to share a constant or utility. If two unrelated services happen to need the same string value (e.g. a container name and a subdomain that are both "vaier"), keep them as separate literals in their own contexts — forced sharing via an unrelated interface creates spaghetti dependencies that violate the hexagonal architecture. Only introduce shared constants when the concepts are genuinely the same and the coupling is intentional.
 
-## Tech Stack
+## Use Lombok, never hand-written getters/setters
 
-- Java 21, Spring Boot 3.5.5, Maven
-- Project Lombok (use `@Data`, `@Builder`, etc. — no manual getters/setters)
-- Springdoc OpenAPI 2.7.0 for API documentation
-- Argon2-JVM for password hashing
+Project Lombok is on the classpath — use `@Data`, `@Builder`, etc. Never hand-write a getter, setter,
+`equals`, `hashCode`, or `toString`.
 
 ## Import types, never write them fully qualified
 
@@ -100,33 +78,13 @@ line, and never add new ones.
 Two narrow exceptions: an unavoidable name collision between two imported types, and a fully-qualified
 name inside a Javadoc `{@link}` where the type is not otherwise imported.
 
-## CI/CD
-
-GitHub Actions:
-- `.github/workflows/build-deploy.yml`: build → test → Docker image → push to Docker Hub on main branch. On a `v*` tag push it is also the release pipeline, and includes a **hard SpotBugs gate** (tag-only step) that must pass before the release image is built or published.
-- `.github/workflows/static-analysis.yml`: on-demand SpotBugs (+ find-sec-bugs + fb-contrib) via `workflow_dispatch` — the companion to the release gate, for checking analysis before tagging. Static analysis never runs on ordinary push/PR builds. Findings are filtered by `spotbugs-exclude.xml`.
-
 ## Docker Stack
 
-The `docker-compose.yml` runs these services on a custom bridge network (`172.20.0.0/16`):
-1. **WireGuard** — VPN server (UDP 51820)
-2. **Traefik** — Reverse proxy with Let's Encrypt (ports 80, 443, 8080)
-3. **oauth2-proxy** — Authenticates users with Google; Vaier owns authorization via `/authz/verify` (#305). Always-on infrastructure.
-4. **Vaier** — This Spring Boot app (port 8888 externally, 8080 internally)
-5. **vaier-offline** — Tiny always-up nginx serving the branded offline page when the Vaier container itself is down (a low-priority Traefik fallback router for the Vaier host)
-
-Authelia and its Redis session store were decommissioned (#305) in favour of Google social login via oauth2-proxy.
+Authelia and its Redis session store were decommissioned (#305) in favour of Google social login via oauth2-proxy. Do not reintroduce them.
 
 ### Sub-image version pinning
 
-All upstream images in `docker-compose.yml` are pinned to specific versions (no floating `:latest` tags). The generated WireGuard client compose (`DockerComposeGeneratorAdapter`) must pin the same wireguard version as the server — a drift-check test enforces this.
-
-**When bumping a pinned version:**
-1. Look up the latest stable release for each image (check the upstream's GitHub releases / Docker Hub tags — skip pre-release, rc, beta tags).
-2. **Ask the dev before bumping** — never bump unilaterally. Explain which images have newer releases and what changed.
-3. Only bump if the dev confirms, and only bump one image at a time unless asked otherwise.
-4. After bumping, run `mvn test` and deploy the full stack with `docker compose up -d` to confirm nothing broke before committing.
-5. Bump the Maven `project.version` in the same change (per issue #167 policy: Vaier release cuts only when sub-image deps change).
+All upstream images in `docker-compose.yml` are pinned to specific versions — **no floating `:latest` tags**. To change one, use the `bump-subimage` skill: bumping is an ask-the-dev-first workflow with its own version-cut and drift-check rules.
 
 ## Required Environment Variables
 
@@ -136,18 +94,6 @@ All upstream images in `docker-compose.yml` are pinned to specific versions (no 
 | `VAIER_AWS_SECRET` | AWS secret key for Route53 |
 | `VAIER_DOMAIN` | Base domain name |
 | `ACME_EMAIL` | Let's Encrypt email |
-
-## Deploying changes
-
-Always build the Docker image locally with the correct tag before deploying:
-
-```bash
-docker build --build-arg VAIER_VERSION=$(mvn -q help:evaluate -Dexpression=project.version -DforceStdout) \
-  -t getvaier/vaier:latest .                             # Build image (matches docker-compose.yml image tag)
-docker compose up -d --force-recreate vaier              # Deploy
-```
-
-The `docker-compose.yml` uses `image: getvaier/vaier:latest`. Building as just `vaier:latest` will not be picked up.
 
 ## Test-driven development
 
@@ -180,21 +126,10 @@ All three documents must always reflect the actual state of the codebase. Stale 
 
 ## After changing code
 
-After any code change, build and deploy to the local Docker Compose stack:
-
-```bash
-docker build --build-arg VAIER_VERSION=$(mvn -q help:evaluate -Dexpression=project.version -DforceStdout) \
-  -t getvaier/vaier:latest .
-docker compose up -d --force-recreate vaier
-```
-
-Then ask the user to verify the fix works.
+After any code change, build and deploy to the local Docker Compose stack using the `deploy-vaier`
+skill (it carries the exact build tag and the gotchas). Then ask the user to verify the fix works.
 
 If the user confirms the fix is good:
 1. Commit the changes to git.
 2. If the change was triggered by a GitHub issue, include `Closes #<issue-number>` in the commit message — GitHub will close the issue automatically when pushed to main.
 3. **Do NOT push** — only commit locally. The user will push when ready.
-
-## Server development
-
-When developing on a server, you can use the `docker-compose.yml` file to run the full stack locally. This is useful for testing and debugging changes before deploying to production.
