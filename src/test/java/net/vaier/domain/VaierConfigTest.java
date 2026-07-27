@@ -197,6 +197,33 @@ class VaierConfigTest {
         assertThat(fullConfig().withSurvivalKitPassphrase("chosen").hasSurvivalKitPassphrase()).isTrue();
     }
 
+    @Test
+    void withSurvivalKitFingerprint_recordsWhatWasWrittenAndKeepsEveryOtherField() {
+        VaierConfig updated = fullConfig().withSurvivalKitFingerprint("abc123");
+
+        assertThat(updated.getSurvivalKitFingerprint()).isEqualTo("abc123");
+        assertThat(updated.getDomain()).isEqualTo("vaier.net");
+        assertThat(updated.getAwsSecret()).isEqualTo("topsecret");
+    }
+
+    /**
+     * The one staleness a fingerprint of the contents cannot see: the kit says exactly the same thing, it is
+     * just locked with a different passphrase now. Every copy on the fleet still opens with the old one, so
+     * changing the passphrase here forgets what was written — which reads downstream as "never written" and
+     * rewrites the fleet on the next sweep.
+     */
+    @Test
+    void changingThePassphraseForgetsWhatWasWritten_becauseTheOldKitsNoLongerOpenWithIt() {
+        VaierConfig written = fullConfig()
+            .withSurvivalKitPassphrase("the old one")
+            .withSurvivalKitFingerprint("abc123");
+
+        VaierConfig rekeyed = written.withSurvivalKitPassphrase("the new one");
+
+        assertThat(rekeyed.getSurvivalKitFingerprint()).isNull();
+        assertThat(rekeyed.getSurvivalKitPassphrase()).isEqualTo("the new one");
+    }
+
     // --- the Vaier server's own identity ---------------------------------------------------------------
 
     /**

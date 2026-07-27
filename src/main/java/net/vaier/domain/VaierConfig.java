@@ -52,6 +52,17 @@ public class VaierConfig {
     private String survivalKitPassphrase;
 
     /**
+     * A fingerprint of what the kits on the fleet say, recorded when they were last written, or null when
+     * they never have been.
+     *
+     * <p>Not a secret and not encrypted — it is a digest of a page whose every line Vaier already stores
+     * here, and it has to be readable to be compared. What it buys is the thing a dirty flag cannot: it
+     * survives a restart, it cannot be missed by a write path that forgot to set it, and it is meaningful
+     * about kits written before anything was watching.
+     */
+    private String survivalKitFingerprint;
+
+    /**
      * The Vaier server's own identity, or empty when it has not been assigned one yet or the stored value
      * is unusable.
      *
@@ -84,6 +95,18 @@ public class VaierConfig {
         }
         return toBuilder()
             .survivalKitPassphrase(passphrase)
+            // Forget what was written. Every copy on the fleet still opens with the OLD passphrase, and it
+            // says the same words as a kit written under the new one — so the contents cannot reveal the
+            // staleness and nothing else would. Cleared here, at the one place that knows, it reads
+            // downstream as "never written" and the fleet is rewritten on the next sweep.
+            .survivalKitFingerprint(null)
+            .build();
+    }
+
+    /** A copy recording the fingerprint of the kits just written; every other field carries over. */
+    public VaierConfig withSurvivalKitFingerprint(String fingerprint) {
+        return toBuilder()
+            .survivalKitFingerprint(fingerprint)
             .build();
     }
 

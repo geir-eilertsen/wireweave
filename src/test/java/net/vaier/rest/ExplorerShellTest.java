@@ -165,10 +165,12 @@ class ExplorerShellTest {
         // to show what lives on the server) — both already there for the Backups page. Everything else here was
         // already reachable, and a fetch to anything outside this list would mean an endpoint was invented to
         // make the tree look finished. (The download is an <a href>, not a fetch, so it does not appear here.)
+        // /survival-kit joins it with the Settings section that writes the fleet's kits: the endpoint is the
+        // one the API already had, and the section is a front for it rather than a reason for it to exist.
         List<String> allowed = List.of("/machines", "/vpn/peers", "/lan-servers", "/users/me",
                                        "/docker-services", "/published-services", "/access/services",
                                        "/transfers", "/backup-servers", "/backup-repositories", "/backup-jobs",
-                                       "/settings", "/license", "/lan-scan");
+                                       "/settings", "/license", "/lan-scan", "/survival-kit");
         String js = read("explorer-shell.js");
         Matcher m = Pattern.compile("fetch\\([`']([^`']+)[`']").matcher(js);
         int found = 0;

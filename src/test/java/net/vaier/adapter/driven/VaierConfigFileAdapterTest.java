@@ -250,6 +250,23 @@ class VaierConfigFileAdapterTest {
             .isEqualTo("the-kit-passphrase");
     }
 
+    /**
+     * The fingerprint is stored in the clear, unlike the passphrase beside it. It is a digest of a page whose
+     * every line already lives in this file, and it has to be readable to be compared — encrypting it would
+     * buy nothing and cost the comparison.
+     */
+    @Test
+    void save_thenLoad_roundTripsTheSurvivalKitFingerprintInTheClear() throws IOException {
+        adapter().save(VaierConfig.builder()
+            .domain("example.com")
+            .survivalKitFingerprint("d41d8cd98f00b204")
+            .build());
+
+        assertThat(Files.readString(tempDir.resolve("vaier-config.yml"))).contains("d41d8cd98f00b204");
+        assertThat(adapter().load().orElseThrow().getSurvivalKitFingerprint())
+            .isEqualTo("d41d8cd98f00b204");
+    }
+
     @Test
     void load_survivalKitPassphraseIsNullWhenNoneHasBeenChosen() {
         adapter().save(VaierConfig.builder().domain("example.com").build());

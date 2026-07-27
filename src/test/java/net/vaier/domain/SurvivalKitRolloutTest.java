@@ -118,6 +118,25 @@ class SurvivalKitRolloutTest {
         assertThat(result.copiesKept()).isZero();
     }
 
+    /**
+     * The verdict a sweep records against: only a rollout that reached everything counts as written, so a
+     * host that was asleep is tried again rather than being quietly assumed to hold a kit.
+     */
+    @Test
+    void reachedEveryDestination_isFalseWhileAnyDestinationIsMissingItsCopy() {
+        Keeper keeper = new Keeper();
+        keeper.failing.add(idOf("Apalveien 5"));
+
+        SurvivalKitRollout.Result partial = SurvivalKitRollout.distribute(
+            selection("Apalveien 5", "Colina-27"), KIT, keeper);
+        assertThat(partial.reachedEveryDestination()).isFalse();
+
+        keeper.failing.clear();
+        SurvivalKitRollout.Result complete = SurvivalKitRollout.distribute(
+            selection("Apalveien 5", "Colina-27"), KIT, keeper);
+        assertThat(complete.reachedEveryDestination()).isTrue();
+    }
+
     @Test
     void aRolloutWithNoChosenMachineNeverSurvivesVaier_howeverWellTheLocalCopyWent() {
         Keeper keeper = new Keeper();

@@ -41,6 +41,18 @@ public final class SurvivalKitRollout {
         public boolean survivesLossOfVaier() {
             return copiesKept > 0;
         }
+
+        /**
+         * Whether every destination took this kit — every chosen machine and the Vaier server's own copy.
+         *
+         * <p>Asked because a rollout is only worth <em>recording</em> as done when it is: a host that was
+         * asleep holds nothing, or holds something older, and nothing about the fleet's contents will have
+         * changed to reveal that later. Treating a partial rollout as unwritten is what makes it be tried
+         * again — and, since that is remembered on disk rather than in memory, tried again after a restart.
+         */
+        public boolean reachedEveryDestination() {
+            return failures.isEmpty();
+        }
     }
 
     /** Write {@code kit} to every chosen machine and to the Vaier server, attempting all of them. */

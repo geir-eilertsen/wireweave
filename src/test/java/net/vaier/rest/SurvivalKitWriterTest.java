@@ -66,9 +66,15 @@ class SurvivalKitWriterTest {
     private final Map<MachineId, String> kept = new ConcurrentHashMap<>();
     private String localCopy;
 
+    /** Hosts that will not take a copy this time — a machine that is off, in one line. */
+    private final List<MachineId> refusing = new ArrayList<>();
+
     private final ForKeepingSurvivalKits keeper = new ForKeepingSurvivalKits() {
         @Override
         public void keepOn(MachineId machineId, String content) {
+            if (refusing.contains(machineId)) {
+                throw new IllegalStateException("ssh: connect to host: no route to host");
+            }
             kept.put(machineId, content);
         }
 
@@ -218,5 +224,134 @@ class SurvivalKitWriterTest {
             .anySatisfy(skipped -> assertThat(skipped.machineName()).isEqualTo("geir-pc"));
         assertThat(report.selection().skipped()).allSatisfy(
             skipped -> assertThat(skipped.reason()).isNotBlank());
+    }
+
+    // --- keeping the fleet's kits current, unasked ------------------------------------------------------
+    //
+    // The button is not the feature. A kit rewritten only when someone remembers has the same flaw as the
+    // printed sheet it replaced: it goes stale the moment a passphrase changes, and you believe you are
+    // covered. These are the sweeps that make it Vaier's problem instead of the operator's.
+
+    @Test
+    void theFirstSweepWritesTheFleet_becauseNeverWrittenIsTheStalenessThatMattersMost() {
+        writer().keepTheFleetsKitsCurrent();
+
+        assertThat(kept).containsOnlyKeys(APALVEIEN, COLINA);
+        // What was written is remembered, so the next sweep has something to compare against.
+        assertThat(config.getSurvivalKitFingerprint()).isNotBlank();
+    }
+
+    @Test
+    void aSweepThatFindsNothingChangedWritesNothing() {
+        SurvivalKitWriter writer = writer();
+        writer.keepTheFleetsKitsCurrent();
+        kept.clear();
+        localCopy = null;
+
+        writer.keepTheFleetsKitsCurrent();
+
+        assertThat(kept).isEmpty();
+        assertThat(localCopy).isNull();
+    }
+
+    /**
+     * The cause the operator would most expect to be covered, and the one a fingerprint of the contents
+     * cannot see on its own: the kit says exactly the same words, it is only locked differently. Every copy
+     * on the fleet still opens with the old passphrase until this happens.
+     */
+    @Test
+    void changingTheKitPassphraseRewritesTheFleetOnTheNextSweep() {
+        SurvivalKitWriter writer = writer();
+        writer.keepTheFleetsKitsCurrent();
+        kept.clear();
+
+        config = config.withSurvivalKitPassphrase("a different passphrase");
+        writer.keepTheFleetsKitsCurrent();
+
+        assertThat(kept).containsOnlyKeys(APALVEIEN, COLINA);
+        assertThat(openTheKit(kept.get(APALVEIEN))).startsWith("a different passphrase\n");
+    }
+
+    /** A repository added, a passphrase rotated, a machine renamed — all of it reaches the kit as contents. */
+    @Test
+    void aChangeToWhatTheKitWouldSayRewritesTheFleet() {
+        SurvivalKitWriter writer = writer();
+        writer.keepTheFleetsKitsCurrent();
+        kept.clear();
+
+        when(repositories.getAll()).thenReturn(List.of(
+            new BackupRepository("apalveien5", "nas-borg", null, "a-rotated-passphrase", false)));
+        writer.keepTheFleetsKitsCurrent();
+
+        assertThat(openTheKit(kept.get(COLINA))).contains("a-rotated-passphrase");
+    }
+
+    /**
+     * A host that was asleep holds nothing, or holds something older. Nothing about the contents changed, so
+     * no other signal would ever notice — and the fleet would sit a copy short of what it believes it has.
+     */
+    @Test
+    void aHostThatMissedTheLastWriteIsTriedAgainOnTheNextSweep() {
+        SurvivalKitWriter writer = writer();
+        refusing.add(COLINA);
+        writer.keepTheFleetsKitsCurrent();
+        assertThat(kept).containsOnlyKeys(APALVEIEN);
+
+        refusing.clear();
+        kept.clear();
+        writer.keepTheFleetsKitsCurrent();
+
+        assertThat(kept).containsOnlyKeys(APALVEIEN, COLINA);
+    }
+
+    /** No passphrase, nothing written — the sweep is not a way around the operator's one decision. */
+    @Test
+    void aSweepWritesNothingBeforeAPassphraseHasBeenChosen() {
+        config = VaierConfig.builder().domain("vaier.net").build();
+
+        writer().keepTheFleetsKitsCurrent();
+
+        assertThat(kept).isEmpty();
+        assertThat(localCopy).isNull();
+    }
+
+    /**
+     * Nothing is being backed up, so there is nothing to survive. Pushing a kit onto three machines to tell
+     * them so is noise, and it would put a file on every host of a fleet that has not asked for any of this.
+     */
+    @Test
+    void aSweepWritesNothingWhenNoRepositoryExistsYet() {
+        SurvivalKitWriter writer = writer();
+        when(repositories.getAll()).thenReturn(List.of());
+
+        writer.keepTheFleetsKitsCurrent();
+
+        assertThat(kept).isEmpty();
+        assertThat(config.getSurvivalKitFingerprint()).isNull();
+    }
+
+    /** A hand-pressed write records what it wrote too, or the very next sweep would write it all again. */
+    @Test
+    void writingByHandRecordsWhatWasWritten_soTheNextSweepDoesNotRepeatIt() {
+        SurvivalKitWriter writer = writer();
+        writer.writeSurvivalKit();
+        String recorded = config.getSurvivalKitFingerprint();
+        kept.clear();
+
+        writer.keepTheFleetsKitsCurrent();
+
+        assertThat(recorded).isNotBlank();
+        assertThat(kept).isEmpty();
+    }
+
+    /** The sweep never throws: it runs on a timer, and a scheduler that dies stops watching everything. */
+    @Test
+    void aSweepThatCannotReadTheFleetDoesNotThrow() {
+        SurvivalKitWriter writer = writer();
+        when(servers.getAll()).thenThrow(new IllegalStateException("the store is unreadable"));
+
+        writer.keepTheFleetsKitsCurrent();
+
+        assertThat(kept).isEmpty();
     }
 }
