@@ -126,17 +126,17 @@ class WireguardConfigFileAdapterIT {
     }
 
     @Test
-    void resolvePeerNameByIp_returnsNameWhenFound() throws IOException {
+    void resolvePeerIdByIp_returnsNameWhenFound() throws IOException {
         writePeerConfig("myserver", "10.13.13.5", MachineType.UBUNTU_SERVER, null);
 
-        String resolved = adapter.resolvePeerNameByIp("10.13.13.5");
+        String resolved = adapter.resolvePeerIdByIp("10.13.13.5");
 
         assertThat(resolved).isEqualTo("myserver");
     }
 
     @Test
-    void resolvePeerNameByIp_returnsIpWhenNotFound() {
-        String resolved = adapter.resolvePeerNameByIp("10.99.99.99");
+    void resolvePeerIdByIp_returnsIpWhenNotFound() {
+        String resolved = adapter.resolvePeerIdByIp("10.99.99.99");
 
         assertThat(resolved).isEqualTo("10.99.99.99");
     }

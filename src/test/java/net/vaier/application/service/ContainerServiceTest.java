@@ -20,7 +20,7 @@ import net.vaier.domain.port.ForGettingPeerConfigurations;
 import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
 import net.vaier.domain.port.ForGettingServerInfo;
 import net.vaier.domain.port.ForGettingVpnClients;
-import net.vaier.domain.port.ForResolvingPeerNames;
+import net.vaier.domain.port.ForResolvingPeerIds;
 import net.vaier.domain.port.ForPublishingEvents;
 import net.vaier.domain.port.ForResolvingRegistryDigest;
 import net.vaier.domain.ImageUpdateTracker;
@@ -60,7 +60,7 @@ class ContainerServiceTest {
 
     @Mock ForGettingServerInfo forGettingServerInfo;
     @Mock ForGettingVpnClients forGettingVpnClients;
-    @Mock ForResolvingPeerNames forResolvingPeerNames;
+    @Mock ForResolvingPeerIds forResolvingPeerIds;
     @Mock ForGettingPeerConfigurations forGettingPeerConfigurations;
     @Mock ForGettingLanServers forGettingLanServers;
     @Mock ForResolvingRegistryDigest forResolvingRegistryDigest;
@@ -92,7 +92,7 @@ class ContainerServiceTest {
         var lanServerDiscovery =
             new net.vaier.adapter.driven.LanServerContainerDiscoveryAdapter(forGettingLanServers, forGettingServerInfo);
         service = new ContainerService(forGettingServerInfo, forGettingVpnClients,
-            forResolvingPeerNames, forGettingPeerConfigurations,
+            forResolvingPeerIds, forGettingPeerConfigurations,
             forResolvingRegistryDigest, forPublishingEvents, tracker, clock,
             snapshotStore, snapshotStore, snapshotStore, snapshotStore, lanServerDiscovery,
             () -> TestMachineIds.of("Vaier server"));
@@ -174,7 +174,7 @@ class ContainerServiceTest {
             argThat(s -> s != null && s.dockerHostUrl().equals("unix:///var/run/docker.sock"))))
             .thenReturn(List.of());
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client("10.13.13.6/32")));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.6")).thenReturn("Apalveien 5");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.6")).thenReturn("Apalveien 5");
         when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.6"))
             .thenReturn(Optional.of(peerConfig("Apalveien 5", "10.13.13.6", MachineType.UBUNTU_SERVER)));
         when(forGettingServerInfo.getServicesWithExposedPorts(argThat(s -> s != null && "10.13.13.6".equals(s.getAddress()))))
@@ -457,7 +457,7 @@ class ContainerServiceTest {
     @Test
     void discoverAll_reachablePeer_returnsStatusOkWithContainers() {
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client("10.13.13.2/32")));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("alice");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice");
         when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.2"))
             .thenReturn(Optional.of(peerConfig("alice", "10.13.13.2", MachineType.UBUNTU_SERVER)));
         List<DockerService> containers = List.of(dockerService("my-app", 8080));
@@ -467,7 +467,7 @@ class ContainerServiceTest {
 
         assertThat(result).hasSize(1);
         assertThat(result.get(0).status()).isEqualTo("OK");
-        assertThat(result.get(0).peerName()).isEqualTo("alice");
+        assertThat(result.get(0).peerId()).isEqualTo("alice");
         // The scrape says whose containers these are by identity. Without it the browser had to file them
         // under a display name, which meant crossing from an identity on every read and getting an empty
         // list for any machine whose two names disagreed by a character.
@@ -479,7 +479,7 @@ class ContainerServiceTest {
     @Test
     void discoverAll_unreachablePeer_returnsStatusUnreachableWithEmptyContainers() {
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client("10.13.13.3/32")));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.3")).thenReturn("bob");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.3")).thenReturn("bob");
         when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.3"))
             .thenReturn(Optional.of(peerConfig("bob", "10.13.13.3", MachineType.UBUNTU_SERVER)));
         when(forGettingServerInfo.getServicesWithExposedPorts(any(Server.class)))
@@ -489,7 +489,7 @@ class ContainerServiceTest {
 
         assertThat(result).hasSize(1);
         assertThat(result.get(0).status()).isEqualTo("UNREACHABLE");
-        assertThat(result.get(0).peerName()).isEqualTo("bob");
+        assertThat(result.get(0).peerId()).isEqualTo("bob");
         assertThat(result.get(0).containers()).isEmpty();
     }
 
@@ -499,8 +499,8 @@ class ContainerServiceTest {
             client("10.13.13.2/32"),
             client("10.13.13.3/32")
         ));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("alice");
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.3")).thenReturn("bob");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.3")).thenReturn("bob");
         when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.2"))
             .thenReturn(Optional.of(peerConfig("alice", "10.13.13.2", MachineType.UBUNTU_SERVER)));
         when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.3"))
@@ -519,7 +519,7 @@ class ContainerServiceTest {
     @Test
     void discoverAll_extractsIpFromCidrNotation() {
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client("10.13.13.5/24")));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.5")).thenReturn("charlie");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.5")).thenReturn("charlie");
         when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.5"))
             .thenReturn(Optional.of(peerConfig("charlie", "10.13.13.5", MachineType.UBUNTU_SERVER)));
         when(forGettingServerInfo.getServicesWithExposedPorts(any())).thenReturn(List.of());
@@ -532,7 +532,7 @@ class ContainerServiceTest {
     @Test
     void discoverAll_mobileClient_isSkipped() {
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client("10.13.13.10/32")));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.10")).thenReturn("phone");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.10")).thenReturn("phone");
         when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.10"))
             .thenReturn(Optional.of(peerConfig("phone", "10.13.13.10", MachineType.MOBILE_CLIENT)));
 
@@ -545,7 +545,7 @@ class ContainerServiceTest {
     @Test
     void discoverAll_windowsClient_isSkipped() {
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client("10.13.13.11/32")));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.11")).thenReturn("laptop");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.11")).thenReturn("laptop");
         when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.11"))
             .thenReturn(Optional.of(peerConfig("laptop", "10.13.13.11", MachineType.WINDOWS_CLIENT)));
 
@@ -558,7 +558,7 @@ class ContainerServiceTest {
     @Test
     void discoverAll_serverPeer_isQueried() {
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client("10.13.13.2/32")));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("server1");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("server1");
         when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.2"))
             .thenReturn(Optional.of(peerConfig("server1", "10.13.13.2", MachineType.UBUNTU_SERVER)));
         when(forGettingServerInfo.getServicesWithExposedPorts(any())).thenReturn(List.of());
@@ -573,7 +573,7 @@ class ContainerServiceTest {
     @Test
     void discoverAll_serverPeerWithStaleHandshake_skippedWithoutDockerQuery() {
         when(forGettingVpnClients.getClients()).thenReturn(List.of(disconnectedClient("10.13.13.5/32")));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.5")).thenReturn("server1");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.5")).thenReturn("server1");
         when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.5"))
             .thenReturn(Optional.of(peerConfig("server1", "10.13.13.5", MachineType.UBUNTU_SERVER)));
 
@@ -587,7 +587,7 @@ class ContainerServiceTest {
     @Test
     void discoverAll_unknownPeerConfig_defaultsToQueried() {
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client("10.13.13.20/32")));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.20")).thenReturn("unknown");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.20")).thenReturn("unknown");
         when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.20"))
             .thenReturn(Optional.empty());
         when(forGettingServerInfo.getServicesWithExposedPorts(any())).thenReturn(List.of());
@@ -606,9 +606,9 @@ class ContainerServiceTest {
             client("10.13.13.10/32"),
             client("10.13.13.3/32")
         ));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("server1");
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.10")).thenReturn("phone");
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.3")).thenReturn("server2");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("server1");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.10")).thenReturn("phone");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.3")).thenReturn("server2");
         when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.2"))
             .thenReturn(Optional.of(peerConfig("server1", "10.13.13.2", MachineType.UBUNTU_SERVER)));
         when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.10"))
@@ -620,7 +620,7 @@ class ContainerServiceTest {
         List<PeerContainers> result = service.scrapePeerContainers();
 
         assertThat(result).hasSize(2);
-        assertThat(result).extracting(PeerContainers::peerName).containsExactly("server1", "server2");
+        assertThat(result).extracting(PeerContainers::peerId).containsExactly("server1", "server2");
     }
 
     @Test
@@ -630,7 +630,7 @@ class ContainerServiceTest {
         String handshake240sAgo = String.valueOf(System.currentTimeMillis() / 1000 - 240);
         VpnClient peer = new VpnClient("pubkey", "10.13.13.5/32", "1.2.3.4", "51820", handshake240sAgo, "0", "0");
         when(forGettingVpnClients.getClients()).thenReturn(List.of(peer));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.5")).thenReturn("server1");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.5")).thenReturn("server1");
         when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.5"))
             .thenReturn(Optional.of(peerConfig("server1", "10.13.13.5", MachineType.UBUNTU_SERVER)));
 
@@ -646,7 +646,7 @@ class ContainerServiceTest {
         String handshake120sAgo = String.valueOf(System.currentTimeMillis() / 1000 - 120);
         VpnClient peer = new VpnClient("pubkey", "10.13.13.5/32", "1.2.3.4", "51820", handshake120sAgo, "0", "0");
         when(forGettingVpnClients.getClients()).thenReturn(List.of(peer));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.5")).thenReturn("server1");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.5")).thenReturn("server1");
         when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.5"))
             .thenReturn(Optional.of(peerConfig("server1", "10.13.13.5", MachineType.UBUNTU_SERVER)));
         when(forGettingServerInfo.getServicesWithExposedPorts(any())).thenReturn(List.of());
@@ -660,7 +660,7 @@ class ContainerServiceTest {
     @Test
     void discoverAll_peerWithMatchingWireguardImage_wireguardOutdatedIsFalse() {
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client("10.13.13.2/32")));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("alice");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice");
         when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.2"))
             .thenReturn(Optional.of(peerConfig("alice", "10.13.13.2", MachineType.UBUNTU_SERVER)));
         when(forGettingServerInfo.getServicesWithExposedPorts(any()))
@@ -674,7 +674,7 @@ class ContainerServiceTest {
     @Test
     void discoverAll_alwaysReportsExpectedWireguardImageOnReachablePeers() {
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client("10.13.13.2/32")));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("alice");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice");
         when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.2"))
             .thenReturn(Optional.of(peerConfig("alice", "10.13.13.2", MachineType.UBUNTU_SERVER)));
         when(forGettingServerInfo.getServicesWithExposedPorts(any()))
@@ -688,7 +688,7 @@ class ContainerServiceTest {
     @Test
     void discoverAll_peerWithOlderWireguardImage_wireguardOutdatedIsTrue() {
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client("10.13.13.2/32")));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("alice");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice");
         when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.2"))
             .thenReturn(Optional.of(peerConfig("alice", "10.13.13.2", MachineType.UBUNTU_SERVER)));
         when(forGettingServerInfo.getServicesWithExposedPorts(any()))
@@ -702,7 +702,7 @@ class ContainerServiceTest {
     @Test
     void discoverAll_peerWithLatestTagWireguard_wireguardOutdatedIsTrue() {
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client("10.13.13.2/32")));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("alice");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice");
         when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.2"))
             .thenReturn(Optional.of(peerConfig("alice", "10.13.13.2", MachineType.UBUNTU_SERVER)));
         when(forGettingServerInfo.getServicesWithExposedPorts(any()))
@@ -716,7 +716,7 @@ class ContainerServiceTest {
     @Test
     void discoverAll_peerWithNoWireguardContainer_wireguardOutdatedIsFalse() {
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client("10.13.13.2/32")));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("alice");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice");
         when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.2"))
             .thenReturn(Optional.of(peerConfig("alice", "10.13.13.2", MachineType.UBUNTU_SERVER)));
         when(forGettingServerInfo.getServicesWithExposedPorts(any()))
@@ -730,7 +730,7 @@ class ContainerServiceTest {
     @Test
     void discoverAll_unreachablePeer_wireguardOutdatedIsFalse() {
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client("10.13.13.3/32")));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.3")).thenReturn("bob");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.3")).thenReturn("bob");
         when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.3"))
             .thenReturn(Optional.of(peerConfig("bob", "10.13.13.3", MachineType.UBUNTU_SERVER)));
         when(forGettingServerInfo.getServicesWithExposedPorts(any()))
@@ -752,7 +752,7 @@ class ContainerServiceTest {
     @Test
     void refresh_thenDiscoverAll_servesTheScrapedSnapshot() {
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client("10.13.13.2/32")));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("alice");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice");
         when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.2"))
             .thenReturn(Optional.of(peerConfig("alice", "10.13.13.2", MachineType.UBUNTU_SERVER)));
         when(forGettingServerInfo.getServicesWithExposedPorts(any())).thenReturn(List.of());
@@ -761,13 +761,13 @@ class ContainerServiceTest {
 
         List<PeerContainers> result = service.discoverAll();
         assertThat(result).hasSize(1);
-        assertThat(result.get(0).peerName()).isEqualTo("alice");
+        assertThat(result.get(0).peerId()).isEqualTo("alice");
     }
 
     @Test
     void discoverAll_servesCachedSnapshotWithoutRescraping() {
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client("10.13.13.2/32")));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("alice");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice");
         when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.2"))
             .thenReturn(Optional.of(peerConfig("alice", "10.13.13.2", MachineType.UBUNTU_SERVER)));
         when(forGettingServerInfo.getServicesWithExposedPorts(any())).thenReturn(List.of());

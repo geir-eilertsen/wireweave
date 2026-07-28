@@ -6,7 +6,7 @@ import net.vaier.domain.DockerService.PortMapping;
 import net.vaier.domain.Server.State;
 import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
 import net.vaier.domain.port.ForProbingServiceVersion;
-import net.vaier.domain.port.ForResolvingPeerNames;
+import net.vaier.domain.port.ForResolvingPeerIds;
 import net.vaier.domain.port.ForResolvingServiceGroup;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -1011,7 +1011,7 @@ class ReverseProxyRouteTest {
     @Test
     void displayName_vaierServerService_returnsSubdomainAtVaierServer() {
         ReverseProxyRoute route = route("pihole.example.com", "pihole", 8080);
-        ForResolvingPeerNames resolver = ip -> ip;
+        ForResolvingPeerIds resolver = ip -> ip;
 
         String name = route.displayName("example.com", List.of(), List.of(), resolver);
 
@@ -1022,7 +1022,7 @@ class ReverseProxyRouteTest {
     void displayName_peerService_stripsPeerSuffixFromSubdomain() {
         ReverseProxyRoute route = route("pihole.myserver.example.com", "10.13.13.2", 8080);
         VpnClient peer = connectedPeer("10.13.13.2/32");
-        ForResolvingPeerNames resolver = ip -> "10.13.13.2".equals(ip) ? "myserver" : ip;
+        ForResolvingPeerIds resolver = ip -> "10.13.13.2".equals(ip) ? "myserver" : ip;
 
         String name = route.displayName("example.com", List.of(), List.of(peer), resolver);
 
@@ -1038,7 +1038,7 @@ class ReverseProxyRouteTest {
         VpnClient peerClient = connectedPeer("10.13.13.5/32");
         PeerConfiguration peer = new PeerConfiguration("apalveien5", "Apalveien 5", "10.13.13.5",
             "", MachineType.UBUNTU_SERVER, null, null, null);
-        ForResolvingPeerNames resolver = ip -> ip;
+        ForResolvingPeerIds resolver = ip -> ip;
 
         String name = route.displayName("example.com", List.of(), List.of(peerClient), resolver, List.of(peer));
 
@@ -1053,7 +1053,7 @@ class ReverseProxyRouteTest {
         VpnClient peerClient = connectedPeer("10.13.13.3/32");
         PeerConfiguration peer = new PeerConfiguration("Colina-27", "Colina 27", "10.13.13.3",
             "", MachineType.UBUNTU_SERVER, null, null, null);
-        ForResolvingPeerNames resolver = ip -> ip;
+        ForResolvingPeerIds resolver = ip -> ip;
 
         String name = route.displayName("example.com", List.of(), List.of(peerClient), resolver, List.of(peer));
 
@@ -1063,7 +1063,7 @@ class ReverseProxyRouteTest {
     @Test
     void displayName_unknownAddress_fallsBackToVaierServer() {
         ReverseProxyRoute route = route("app.example.com", "10.13.13.5", 8080);
-        ForResolvingPeerNames resolver = ip -> ip;
+        ForResolvingPeerIds resolver = ip -> ip;
 
         String name = route.displayName("example.com", List.of(), List.of(), resolver);
 
@@ -1075,7 +1075,7 @@ class ReverseProxyRouteTest {
         // Peer presence (not connection state) controls server naming.
         ReverseProxyRoute route = route("app.myserver.example.com", "10.13.13.2", 8080);
         VpnClient disconnected = new VpnClient("pk", "10.13.13.2/32", "1.2.3.4", "51820", "0", "0", "0");
-        ForResolvingPeerNames resolver = ip -> "10.13.13.2".equals(ip) ? "myserver" : ip;
+        ForResolvingPeerIds resolver = ip -> "10.13.13.2".equals(ip) ? "myserver" : ip;
 
         String name = route.displayName("example.com", List.of(), List.of(disconnected), resolver);
 
@@ -1091,7 +1091,7 @@ class ReverseProxyRouteTest {
         VpnClient peerClient = connectedPeer("10.13.13.5/32");
         PeerConfiguration peer = new PeerConfiguration("apalveien5", "Apalveien 5", "10.13.13.5",
             "", MachineType.UBUNTU_SERVER, null, null, null);
-        ForResolvingPeerNames resolver = ip -> ip;
+        ForResolvingPeerIds resolver = ip -> ip;
 
         assertThat(route.shortName("example.com", List.of(peerClient), resolver, List.of(peer)))
             .isEqualTo("openhab");
@@ -1100,7 +1100,7 @@ class ReverseProxyRouteTest {
     @Test
     void shortName_forVaierServerRouteIsJustTheSubdomain() {
         ReverseProxyRoute route = route("pihole.example.com", "pihole", 8080);
-        ForResolvingPeerNames resolver = ip -> ip;
+        ForResolvingPeerIds resolver = ip -> ip;
 
         assertThat(route.shortName("example.com", List.of(), resolver, List.of())).isEqualTo("pihole");
     }
@@ -1108,7 +1108,7 @@ class ReverseProxyRouteTest {
     @Test
     void serviceLocation_vaierServerRoute_isVaierServer() {
         ReverseProxyRoute route = route("pihole.example.com", "pihole", 8080);
-        ForResolvingPeerNames resolver = ip -> ip;
+        ForResolvingPeerIds resolver = ip -> ip;
 
         assertThat(route.serviceLocation(List.of(), resolver, List.of()))
             .isEqualTo(ReverseProxyRoute.ServiceLocation.VAIER_SERVER);
@@ -1118,7 +1118,7 @@ class ReverseProxyRouteTest {
     void serviceLocation_peerHostedRoute_isPeerServer() {
         ReverseProxyRoute route = route("app.myserver.example.com", "10.13.13.2", 8080);
         VpnClient peer = connectedPeer("10.13.13.2/32");
-        ForResolvingPeerNames resolver = ip -> "10.13.13.2".equals(ip) ? "myserver" : ip;
+        ForResolvingPeerIds resolver = ip -> "10.13.13.2".equals(ip) ? "myserver" : ip;
 
         assertThat(route.serviceLocation(List.of(peer), resolver, List.of()))
             .isEqualTo(ReverseProxyRoute.ServiceLocation.PEER_SERVER);
@@ -1291,7 +1291,7 @@ class ReverseProxyRouteTest {
             "nut-router", "nut.apalveien5.example.com", "192.168.3.3", 3001, "http", "nut-svc");
         PeerConfiguration relay = new PeerConfiguration("apalveien5", "10.13.13.5", "",
             MachineType.UBUNTU_SERVER, "192.168.3.0/24", "192.168.3.5");
-        ForResolvingPeerNames resolver = ip -> ip;
+        ForResolvingPeerIds resolver = ip -> ip;
 
         String name = route.displayName("example.com", List.of(), List.of(), resolver, List.of(relay));
 

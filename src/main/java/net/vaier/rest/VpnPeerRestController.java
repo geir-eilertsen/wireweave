@@ -213,13 +213,13 @@ public class VpnPeerRestController {
                 qrCodePngBase64, dockerCompose, setupScript, setupToken);
     }
 
-    @PatchMapping("/{peerName}")
+    @PatchMapping("/{peerId}")
     public ResponseEntity<Void> renamePeer(
-            @PathVariable String peerName,
+            @PathVariable String peerId,
             @RequestBody(required = false) RenamePeerRequest request) {
         String newName = request != null ? request.newName() : null;
-        log.info("Renaming peer {} to {}", LogSafe.forLog(peerName), LogSafe.forLog(newName));
-        renamePeerUseCase.renamePeer(peerName, newName);
+        log.info("Renaming peer {} to {}", LogSafe.forLog(peerId), LogSafe.forLog(newName));
+        renamePeerUseCase.renamePeer(peerId, newName);
         forPublishingEvents.publish("vpn-peers", "peers-updated", "");
         return ResponseEntity.noContent().build();
     }
@@ -232,38 +232,38 @@ public class VpnPeerRestController {
         return ResponseEntity.noContent().build();
     }
 
-    @PatchMapping("/{peerName}/lan-address")
+    @PatchMapping("/{peerId}/lan-address")
     public ResponseEntity<Void> updateLanAddress(
-            @PathVariable String peerName,
+            @PathVariable String peerId,
             @RequestBody(required = false) UpdateLanAddressRequest request) {
         String lanAddress = request != null ? request.lanAddress() : null;
         log.info("Updating LAN address for peer {} to {}",
-            LogSafe.forLog(peerName), LogSafe.forLog(lanAddress));
-        forUpdatingPeerConfigurations.updateLanAddress(peerName, lanAddress);
+            LogSafe.forLog(peerId), LogSafe.forLog(lanAddress));
+        forUpdatingPeerConfigurations.updateLanAddress(peerId, lanAddress);
         forPublishingEvents.publish("vpn-peers", "peers-updated", "");
         return ResponseEntity.noContent().build();
     }
 
-    @PatchMapping("/{peerName}/lan-cidr")
+    @PatchMapping("/{peerId}/lan-cidr")
     public ResponseEntity<Void> updateLanCidr(
-            @PathVariable String peerName,
+            @PathVariable String peerId,
             @RequestBody(required = false) UpdateLanCidrRequest request) {
         String lanCidr = request != null ? request.lanCidr() : null;
         log.info("Updating LAN CIDR for peer {} to {}",
-            LogSafe.forLog(peerName), LogSafe.forLog(lanCidr));
+            LogSafe.forLog(peerId), LogSafe.forLog(lanCidr));
         // updateLanCidr signals a CIDR-already-owned conflict via ConflictException -> 409.
-        updateLanCidrUseCase.updateLanCidr(peerName, lanCidr);
+        updateLanCidrUseCase.updateLanCidr(peerId, lanCidr);
         forPublishingEvents.publish("vpn-peers", "peers-updated", "");
         return ResponseEntity.noContent().build();
     }
 
-    @PatchMapping("/{peerName}/description")
+    @PatchMapping("/{peerId}/description")
     public ResponseEntity<Void> updateDescription(
-            @PathVariable String peerName,
+            @PathVariable String peerId,
             @RequestBody(required = false) UpdateDescriptionRequest request) {
         String description = request != null ? request.description() : null;
-        log.info("Updating description for peer {}", LogSafe.forLog(peerName));
-        forUpdatingPeerConfigurations.updateDescription(peerName, description);
+        log.info("Updating description for peer {}", LogSafe.forLog(peerId));
+        forUpdatingPeerConfigurations.updateDescription(peerId, description);
         forPublishingEvents.publish("vpn-peers", "peers-updated", "");
         return ResponseEntity.noContent().build();
     }
@@ -273,14 +273,14 @@ public class VpnPeerRestController {
      * hint, orthogonal to the routing {@code peerType}. An invalid category value propagates as
      * {@code IllegalArgumentException} -> 400; an unknown peer as {@code PeerNotFoundException} -> 404.
      */
-    @PatchMapping("/{peerName}/device-category")
+    @PatchMapping("/{peerId}/device-category")
     public ResponseEntity<Void> updateDeviceCategory(
-            @PathVariable String peerName,
+            @PathVariable String peerId,
             @RequestBody(required = false) UpdateDeviceCategoryRequest request) {
         String deviceCategory = request != null ? request.deviceCategory() : null;
         log.info("Updating device category for peer {} to {}",
-            LogSafe.forLog(peerName), LogSafe.forLog(deviceCategory));
-        updatePeerDeviceCategoryUseCase.updatePeerDeviceCategory(peerName, deviceCategory);
+            LogSafe.forLog(peerId), LogSafe.forLog(deviceCategory));
+        updatePeerDeviceCategoryUseCase.updatePeerDeviceCategory(peerId, deviceCategory);
         forPublishingEvents.publish("vpn-peers", "peers-updated", "");
         return ResponseEntity.noContent().build();
     }
@@ -312,18 +312,18 @@ public class VpnPeerRestController {
         return ResponseEntity.ok(response);
     }
 
-    @GetMapping("/{peerName}/config-file")
-    public ResponseEntity<?> downloadConfigFile(@PathVariable String peerName) {
-        log.info("Downloading config file for peer: {}", LogSafe.forLog(peerName));
-        ResponseEntity<?> gate = checkOneShotGate(peerName);
+    @GetMapping("/{peerId}/config-file")
+    public ResponseEntity<?> downloadConfigFile(@PathVariable String peerId) {
+        log.info("Downloading config file for peer: {}", LogSafe.forLog(peerId));
+        ResponseEntity<?> gate = checkOneShotGate(peerId);
         if (gate != null) return gate;
-        return getPeerConfigUseCase.getPeerConfig(peerName)
+        return getPeerConfigUseCase.getPeerConfig(peerId)
                 .map(result -> {
                     byte[] content = result.configContent().getBytes();
                     ByteArrayResource resource = new ByteArrayResource(content);
                     return ResponseEntity.ok()
                             .header(HttpHeaders.CONTENT_DISPOSITION,
-                                    "attachment; filename=" + peerName + ".conf")
+                                    "attachment; filename=" + peerId + ".conf")
                             .contentType(MediaType.parseMediaType("text/plain"))
                             .contentLength(content.length)
                             .<Object>body(resource);
@@ -331,12 +331,12 @@ public class VpnPeerRestController {
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
-    @GetMapping("/{peerName}/qr-code")
-    public ResponseEntity<?> getPeerQrCode(@PathVariable String peerName) {
-        log.info("Generating QR code for peer: {}", LogSafe.forLog(peerName));
-        ResponseEntity<?> gate = checkOneShotGate(peerName);
+    @GetMapping("/{peerId}/qr-code")
+    public ResponseEntity<?> getPeerQrCode(@PathVariable String peerId) {
+        log.info("Generating QR code for peer: {}", LogSafe.forLog(peerId));
+        ResponseEntity<?> gate = checkOneShotGate(peerId);
         if (gate != null) return gate;
-        var config = getPeerConfigUseCase.getPeerConfig(peerName);
+        var config = getPeerConfigUseCase.getPeerConfig(peerId);
         if (config.isEmpty()) return ResponseEntity.notFound().build();
         try {
             byte[] png = encodeQrCodePng(config.get().configContent());
@@ -344,23 +344,23 @@ public class VpnPeerRestController {
                     .contentType(MediaType.IMAGE_PNG)
                     .body(png);
         } catch (Exception e) {
-            log.error("Failed to generate QR code for peer {}: {}", LogSafe.forLog(peerName), e.getMessage(), e);
+            log.error("Failed to generate QR code for peer {}: {}", LogSafe.forLog(peerId), e.getMessage(), e);
             return ResponseEntity.internalServerError().build();
         }
     }
 
-    @GetMapping("/{peerName}/docker-compose")
+    @GetMapping("/{peerId}/docker-compose")
     public ResponseEntity<?> downloadDockerCompose(
-            @PathVariable String peerName,
+            @PathVariable String peerId,
             @RequestParam(required = false, defaultValue = "vaier.eilertsen.family") String serverUrl,
             @RequestParam(required = false, defaultValue = ServiceNames.DEFAULT_WG_PORT) String serverPort
     ) {
-        log.info("Generating docker-compose for peer: {}", LogSafe.forLog(peerName));
-        ResponseEntity<?> gate = checkOneShotGate(peerName);
+        log.info("Generating docker-compose for peer: {}", LogSafe.forLog(peerId));
+        ResponseEntity<?> gate = checkOneShotGate(peerId);
         if (gate != null) return gate;
 
         String dockerCompose = generateDockerComposeUseCase.generateWireguardClientDockerCompose(
-                peerName, serverUrl, serverPort);
+                peerId, serverUrl, serverPort);
         byte[] content = dockerCompose.getBytes();
 
         ByteArrayResource resource = new ByteArrayResource(content);
@@ -372,28 +372,28 @@ public class VpnPeerRestController {
                 .body(resource);
     }
 
-    @GetMapping("/{peerName}/setup-script")
+    @GetMapping("/{peerId}/setup-script")
     public ResponseEntity<?> downloadSetupScript(
-            @PathVariable String peerName,
+            @PathVariable String peerId,
             @RequestParam(required = false, defaultValue = "vaier.eilertsen.family") String serverUrl,
             @RequestParam(required = false, defaultValue = ServiceNames.DEFAULT_WG_PORT) String serverPort
     ) {
-        log.info("Generating setup script for peer: {}", LogSafe.forLog(peerName));
-        ResponseEntity<?> gate = checkOneShotGate(peerName);
+        log.info("Generating setup script for peer: {}", LogSafe.forLog(peerId));
+        ResponseEntity<?> gate = checkOneShotGate(peerId);
         if (gate != null) return gate;
 
-        return generatePeerSetupScriptUseCase.generateSetupScript(peerName, serverUrl, serverPort)
+        return generatePeerSetupScriptUseCase.generateSetupScript(peerId, serverUrl, serverPort)
                 .map(script -> {
                     byte[] content = script.getBytes();
                     ByteArrayResource resource = new ByteArrayResource(content);
                     return ResponseEntity.ok()
-                            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=setup-" + peerName + ".sh")
+                            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=setup-" + peerId + ".sh")
                             .contentType(MediaType.parseMediaType("application/x-sh"))
                             .contentLength(content.length)
                             .<Object>body(resource);
                 })
                 .orElseGet(() -> {
-                    log.warn("Peer not found for setup script: {}", LogSafe.forLog(peerName));
+                    log.warn("Peer not found for setup script: {}", LogSafe.forLog(peerId));
                     return ResponseEntity.notFound().build();
                 });
     }
@@ -442,14 +442,14 @@ public class VpnPeerRestController {
      * directory doesn't exist, or a 410 if the marker was already set. Returns null on first
      * successful view — the caller proceeds to serve the artefact.
      */
-    private ResponseEntity<?> checkOneShotGate(String peerName) {
+    private ResponseEntity<?> checkOneShotGate(String peerId) {
         try {
-            if (!forTrackingPeerConfigRetrieval.markViewedIfNotAlready(peerName)) {
+            if (!forTrackingPeerConfigRetrieval.markViewedIfNotAlready(peerId)) {
                 return alreadyViewedResponse();
             }
             return null;
         } catch (IllegalStateException e) {
-            log.warn("Peer not found for one-shot gate: {}", LogSafe.forLog(peerName));
+            log.warn("Peer not found for one-shot gate: {}", LogSafe.forLog(peerId));
             return ResponseEntity.notFound().build();
         }
     }
@@ -464,11 +464,11 @@ public class VpnPeerRestController {
      * Best-effort QR PNG → base64. Returns null and logs on failure so the create response is
      * still usable (config text is still inline; the operator can copy/paste).
      */
-    private String tryEncodeQrCodeBase64(String content, String peerName) {
+    private String tryEncodeQrCodeBase64(String content, String peerId) {
         try {
             return java.util.Base64.getEncoder().encodeToString(encodeQrCodePng(content));
         } catch (Exception e) {
-            log.error("Failed to generate QR code for peer {}: {}", LogSafe.forLog(peerName), e.getMessage(), e);
+            log.error("Failed to generate QR code for peer {}: {}", LogSafe.forLog(peerId), e.getMessage(), e);
             return null;
         }
     }

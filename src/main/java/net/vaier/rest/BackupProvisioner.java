@@ -569,9 +569,9 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
     }
 
     /**
-     * The machine's current name, or empty when it has left the fleet. This is a <em>lookup key</em> — the
-     * credential vault is still keyed by name — and deliberately not {@link #machineIdOnTheWire}, whose
-     * fallback is a rendered string that could only ever miss.
+     * The machine's current name, or empty when it has left the fleet. Purely a <em>display</em> label: it
+     * goes into the settled event beside the machine's identity, which is what the browser watches on. The
+     * vault has been keyed by {@link MachineId} since §6.22 — this comment used to say otherwise.
      */
     private Optional<String> machineNameFor(MachineId machineId) {
         return machines.getAllMachines().stream()

@@ -13,7 +13,7 @@ import net.vaier.application.GetVpnPeersUseCase;
 import net.vaier.application.GetVpnPeersUseCase.VpnPeerView;
 import net.vaier.application.ReissuePeerConfigUseCase;
 import net.vaier.application.RenamePeerUseCase;
-import net.vaier.application.ResolveVpnPeerNameUseCase;
+import net.vaier.application.ResolveVpnPeerIdUseCase;
 import net.vaier.application.SyncLanRoutesUseCase;
 import net.vaier.application.UpdateLanCidrUseCase;
 import net.vaier.application.UpdatePeerDeviceCategoryUseCase;
@@ -45,7 +45,7 @@ import net.vaier.domain.port.ForPersistingHostCredentials;
 import net.vaier.domain.port.ForPersistingLanServers;
 import net.vaier.domain.port.ForTrackingHostKeys;
 import net.vaier.domain.port.ForPersistingReverseProxyRoutes;
-import net.vaier.domain.port.ForResolvingPeerNames;
+import net.vaier.domain.port.ForResolvingPeerIds;
 import net.vaier.domain.port.ForResolvingPublicHost;
 import net.vaier.domain.port.ForResolvingServerLanCidr;
 import net.vaier.domain.port.ForSyncingLanRoutes;
@@ -73,7 +73,7 @@ public class VpnService implements
     DeletePeerUseCase,
     GetVpnClientsUseCase,
     GetVpnPeersUseCase,
-    ResolveVpnPeerNameUseCase,
+    ResolveVpnPeerIdUseCase,
     GetPeerConfigUseCase,
     GeneratePeerSetupScriptUseCase,
     GenerateDockerComposeUseCase,
@@ -98,7 +98,7 @@ public class VpnService implements
 
     private final ConfigResolver configResolver;
     private final ForGettingVpnClients forGettingVpnClients;
-    private final ForResolvingPeerNames forResolvingPeerNames;
+    private final ForResolvingPeerIds forResolvingPeerIds;
     private final ForGettingPeerConfigurations peerConfigProvider;
     private final ForDeletingVpnPeers vpnPeerDeleter;
     private final ForPersistingReverseProxyRoutes forPersistingReverseProxyRoutes;
@@ -118,7 +118,7 @@ public class VpnService implements
 
     public VpnService(ConfigResolver configResolver,
                       ForGettingVpnClients forGettingVpnClients,
-                      ForResolvingPeerNames forResolvingPeerNames,
+                      ForResolvingPeerIds forResolvingPeerIds,
                       ForGettingPeerConfigurations peerConfigProvider,
                       ForDeletingVpnPeers vpnPeerDeleter,
                       ForPersistingReverseProxyRoutes forPersistingReverseProxyRoutes,
@@ -137,7 +137,7 @@ public class VpnService implements
                       ForTrackingHostKeys forTrackingHostKeys) {
         this.configResolver = configResolver;
         this.forGettingVpnClients = forGettingVpnClients;
-        this.forResolvingPeerNames = forResolvingPeerNames;
+        this.forResolvingPeerIds = forResolvingPeerIds;
         this.peerConfigProvider = peerConfigProvider;
         this.vpnPeerDeleter = vpnPeerDeleter;
         this.forPersistingReverseProxyRoutes = forPersistingReverseProxyRoutes;
@@ -196,7 +196,7 @@ public class VpnService implements
 
     private VpnPeerView toVpnPeerView(VpnClient client, ServerRenderContext serverContext) {
         String peerIp = client.vpnIp();
-        String id = forResolvingPeerNames.resolvePeerNameByIp(peerIp);
+        String id = forResolvingPeerIds.resolvePeerIdByIp(peerIp);
         // The raw PeerConfiguration carries the device-category override and owns the effective-
         // category decision; the PeerConfigResult below is the existing view of the same config.
         Optional<ForGettingPeerConfigurations.PeerConfiguration> rawCfg =
@@ -291,11 +291,11 @@ public class VpnService implements
         }
     }
 
-    // --- ResolveVpnPeerNameUseCase ---
+    // --- ResolveVpnPeerIdUseCase ---
 
     @Override
-    public String resolvePeerNameByIp(String ipAddress) {
-        return forResolvingPeerNames.resolvePeerNameByIp(ipAddress);
+    public String resolvePeerIdByIp(String ipAddress) {
+        return forResolvingPeerIds.resolvePeerIdByIp(ipAddress);
     }
 
     // --- GetPeerConfigUseCase ---
@@ -323,28 +323,28 @@ public class VpnService implements
     // --- GenerateDockerComposeUseCase ---
 
     @Override
-    public String generateWireguardClientDockerCompose(String peerName, String serverUrl, String serverPort) {
-        log.info("Generating docker-compose for peer: {}", peerName);
+    public String generateWireguardClientDockerCompose(String peerId, String serverUrl, String serverPort) {
+        log.info("Generating docker-compose for peer: {}", peerId);
         ForGeneratingDockerComposeFiles.DockerComposeConfig config =
-            new ForGeneratingDockerComposeFiles.DockerComposeConfig(peerName, serverUrl, serverPort);
+            new ForGeneratingDockerComposeFiles.DockerComposeConfig(peerId, serverUrl, serverPort);
         return dockerComposeGenerator.generateWireguardClientDockerCompose(config);
     }
 
     // --- GeneratePeerSetupScriptUseCase ---
 
     @Override
-    public Optional<String> generateSetupScript(String peerName, String serverUrl, String serverPort) {
-        log.info("Generating setup script for peer: {}", peerName);
+    public Optional<String> generateSetupScript(String peerId, String serverUrl, String serverPort) {
+        log.info("Generating setup script for peer: {}", peerId);
 
-        return getPeerConfig(peerName).map(peerConfig -> PeerSetupScript.generate(
-            peerName, peerConfig.ipAddress(), serverUrl, serverPort,
+        return getPeerConfig(peerId).map(peerConfig -> PeerSetupScript.generate(
+            peerId, peerConfig.ipAddress(), serverUrl, serverPort,
             peerConfig.configContent(), peerConfig.lanCidr(), vpnSubnet));
     }
 
     // --- UpdateLanCidrUseCase ---
 
     @Override
-    public void updateLanCidr(String peerName, String lanCidr) {
+    public void updateLanCidr(String peerId, String lanCidr) {
         // Strict CIDR validation BEFORE any peer lookup or state change. Closes #195 —
         // keeps shell-injection payloads out of `wg set ... allowed-ips` and `ip route del`.
         // Null/blank means "clear the lanCidr" — that's allowed without validation.
@@ -352,8 +352,8 @@ public class VpnService implements
             net.vaier.domain.Cidr.validateLanCidr(lanCidr);
         }
 
-        ForGettingPeerConfigurations.PeerConfiguration peer = peerConfigProvider.getPeerConfigByName(peerName)
-            .orElseThrow(() -> new PeerNotFoundException("Peer not found: " + peerName));
+        ForGettingPeerConfigurations.PeerConfiguration peer = peerConfigProvider.getPeerConfigByName(peerId)
+            .orElseThrow(() -> new PeerNotFoundException("Peer not found: " + peerId));
 
         String normalized = (lanCidr == null || lanCidr.isBlank()) ? null : lanCidr.trim();
 
@@ -370,8 +370,8 @@ public class VpnService implements
 
         String newAllowedIps = WireGuardPeerConfig.serverAllowedIps(peer.ipAddress(), normalized);
         forUpdatingServerAllowedIps.setPeerAllowedIps(peer.ipAddress(), newAllowedIps);
-        forUpdatingPeerConfigurations.updateLanCidr(peerName, lanCidr);
-        log.info("Updated lanCidr for peer {} to {} (server-side AllowedIPs: {})", peerName, normalized, newAllowedIps);
+        forUpdatingPeerConfigurations.updateLanCidr(peerId, lanCidr);
+        log.info("Updated lanCidr for peer {} to {} (server-side AllowedIPs: {})", peerId, normalized, newAllowedIps);
 
         syncLanRoutes();
     }
@@ -394,27 +394,27 @@ public class VpnService implements
     public void deletePeer(String peerIdentifier) {
         log.info("Deleting VPN peer: {}", peerIdentifier);
 
-        String peerName = peerIdentifier;
+        String peerId = peerIdentifier;
         if (net.vaier.domain.Cidr.isIpv4(peerIdentifier)) {
-            String resolvedName = forResolvingPeerNames.resolvePeerNameByIp(peerIdentifier);
-            if (resolvedName.equals(peerIdentifier)) {
-                log.error("Could not find peer name for IP: {}", peerIdentifier);
+            String resolved = forResolvingPeerIds.resolvePeerIdByIp(peerIdentifier);
+            if (resolved.equals(peerIdentifier)) {
+                log.error("Could not find a peer for IP: {}", peerIdentifier);
                 throw new PeerNotFoundException("Peer not found for IP: " + peerIdentifier);
             }
-            peerName = resolvedName;
-            log.info("Resolved IP {} to peer name: {}", peerIdentifier, peerName);
+            peerId = resolved;
+            log.info("Resolved IP {} to peer id: {}", peerIdentifier, peerId);
         }
 
-        deletePublishedServicesForPeer(peerName);
+        deletePublishedServicesForPeer(peerId);
 
-        vpnPeerDeleter.deletePeer(peerName);
-        log.info("Successfully deleted peer: {}", peerName);
+        vpnPeerDeleter.deletePeer(peerId);
+        log.info("Successfully deleted peer: {}", peerId);
     }
 
-    private void deletePublishedServicesForPeer(String peerName) {
-        peerConfigProvider.getPeerConfigByName(peerName).ifPresent(config -> {
+    private void deletePublishedServicesForPeer(String peerId) {
+        peerConfigProvider.getPeerConfigByName(peerId).ifPresent(config -> {
             String peerIp = config.ipAddress();
-            log.info("Looking for published services pointing to peer {} (IP: {})", peerName, peerIp);
+            log.info("Looking for published services pointing to peer {} (IP: {})", peerId, peerIp);
 
             List<ReverseProxyRoute> routes = forPersistingReverseProxyRoutes.getReverseProxyRoutes();
             routes.stream()
@@ -422,7 +422,7 @@ public class VpnService implements
                 .filter(route -> peerIp.equals(route.getAddress()))
                 .forEach(route -> {
                     log.info("Deleting published service {} (path: {}) pointing to peer {}",
-                        route.getDomainName(), route.getPathPrefix(), peerName);
+                        route.getDomainName(), route.getPathPrefix(), peerId);
                     deletePublishedServiceUseCase.deleteService(route.getDomainName(), route.getPathPrefix());
                 });
         });
@@ -431,18 +431,18 @@ public class VpnService implements
     // --- CreatePeerUseCase ---
 
     @Override
-    public CreatedPeerUco createPeer(String peerName) {
-        return createPeer(peerName, null, null, null, null);
+    public CreatedPeerUco createPeer(String name) {
+        return createPeer(name, null, null, null, null);
     }
 
     @Override
-    public CreatedPeerUco createPeer(String peerName, MachineType peerType, String lanCidr) {
-        return createPeer(peerName, peerType, lanCidr, null, null);
+    public CreatedPeerUco createPeer(String name, MachineType peerType, String lanCidr) {
+        return createPeer(name, peerType, lanCidr, null, null);
     }
 
     @Override
-    public CreatedPeerUco createPeer(String peerName, MachineType peerType, String lanCidr, String lanAddress) {
-        return createPeer(peerName, peerType, lanCidr, lanAddress, null);
+    public CreatedPeerUco createPeer(String name, MachineType peerType, String lanCidr, String lanAddress) {
+        return createPeer(name, peerType, lanCidr, lanAddress, null);
     }
 
     @Override

@@ -15,7 +15,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 public record PublishableService(
     PublishableSource source,
     String machineId,
-    String peerName,
+    String peerId,
     String address,
     String containerName,
     int port,
@@ -26,10 +26,14 @@ public record PublishableService(
 
     // Stable identity used by the ignored-services persistence layer. Lives on the entity so the
     // frontend doesn't recompute it from the source enum (and so the two can never drift apart).
+    //
+    // The peer part is the peer's ID — its WireGuard config directory — which is why this key survived
+    // the identity refactor untouched: it never held a display name, whatever the field used to be
+    // called. The VALUE must not change, or every service an operator has ignored comes back.
     @JsonProperty("ignoreKey")
     public String ignoreKey() {
         return switch (source) {
-            case PEER         -> peerName + "/" + containerName + ":" + port;
+            case PEER         -> peerId + "/" + containerName + ":" + port;
             case LAN_SERVER   -> address  + "/" + containerName + ":" + port;
             case VAIER_SERVER -> containerName + ":" + port;
         };
@@ -50,13 +54,13 @@ public record PublishableService(
 
     /**
      * The subdomain the publish modal pre-fills. Vaier-server services get the container name
-     * alone; peer- and LAN-hosted services get {@code containerName.peerName} so multiple peers
+     * alone; peer- and LAN-hosted services get {@code containerName.peerId} so multiple peers
      * publishing the same container don't collide on one DNS label.
      */
     @JsonProperty("suggestedSubdomain")
     public String suggestedSubdomain() {
         return source == PublishableSource.VAIER_SERVER
             ? containerName
-            : containerName + "." + peerName;
+            : containerName + "." + peerId;
     }
 }

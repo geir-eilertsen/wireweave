@@ -295,10 +295,10 @@ public class BackupRestController {
     }
 
     /**
-     * What to call a machine in a response body. The browser is still keyed by name while the stores are
-     * keyed by identity, so every response resolves the id back once, here at the driving edge. A record
-     * pointing at a machine that has left the fleet answers {@code null} rather than a stale name — "this
-     * job's machine is gone" is a fact the UI should be able to show, not one to paper over.
+     * What to call a machine in a response body — a display label beside the {@code machineId} the browser
+     * actually keys on, resolved once here at the driving edge. A record pointing at a machine that has left
+     * the fleet answers {@code null} rather than a stale name: "this job's machine is gone" is a fact the UI
+     * should be able to show, not one to paper over.
      */
     private String machineNameOf(MachineId machineId) {
         return getMachines.getAllMachines().stream()
@@ -425,15 +425,15 @@ public class BackupRestController {
      * domain) decides that a newly-created job means "ready this host" and returns that outcome — this handler
      * only maps it onto the response.
      */
-    @PostMapping("/machines/{machine}/backup/paths")
-    public ResponseEntity<ProtectPathsResponse> protectPaths(@PathVariable String machine,
+    @PostMapping("/machines/{machineId}/backup/paths")
+    public ResponseEntity<ProtectPathsResponse> protectPaths(@PathVariable String machineId,
                                                     @RequestBody ProtectPathsRequest request) {
-        Optional<Machine> target = findMachine(machine);
+        Optional<Machine> target = findMachine(machineId);
         if (target.isEmpty()) {
             return ResponseEntity.notFound().build();
         }
         log.info("Backing up {} paths on machine {}",
-            request.paths() == null ? 0 : request.paths().size(), LogSafe.forLog(machine));
+            request.paths() == null ? 0 : request.paths().size(), LogSafe.forLog(machineId));
         ProtectionOutcome outcome = protectMachinePaths.protect(target.get(), request.paths());
         ProvisioningResponse provisioning = outcome.readying() == null
             ? null : ProvisioningResponse.from(outcome.readying());
@@ -452,15 +452,15 @@ public class BackupRestController {
      * that as "Stopped backing up 1 item." while the folder went on being backed up. The controller does not
      * work any of that out — {@link net.vaier.domain.Unprotection} is the domain's own account of what it did.
      */
-    @DeleteMapping("/machines/{machine}/backup/paths")
-    public ResponseEntity<UnprotectPathsResponse> unprotectPaths(@PathVariable String machine,
+    @DeleteMapping("/machines/{machineId}/backup/paths")
+    public ResponseEntity<UnprotectPathsResponse> unprotectPaths(@PathVariable String machineId,
                                                                  @RequestBody ProtectPathsRequest request) {
-        Optional<Machine> target = findMachine(machine);
+        Optional<Machine> target = findMachine(machineId);
         if (target.isEmpty()) {
             return ResponseEntity.<UnprotectPathsResponse>notFound().build();
         }
         log.info("Stopping backup of {} paths on machine {}",
-            request.paths() == null ? 0 : request.paths().size(), LogSafe.forLog(machine));
+            request.paths() == null ? 0 : request.paths().size(), LogSafe.forLog(machineId));
         Unprotection outcome = protectMachinePaths.unprotect(target.get().id(), request.paths());
         if (outcome.jobDeleted()) {
             return ResponseEntity.noContent().build();
@@ -729,7 +729,7 @@ public class BackupRestController {
     record ProtectPathsRequest(List<String> paths) {}
 
     /**
-     * The {@code POST /machines/{machine}/backup/paths} response: the updated job (the same fields
+     * The {@code POST /machines/{machineId}/backup/paths} response: the updated job (the same fields
      * {@link JobResponse} carries) plus a nullable {@code provisioning} object. The provisioning object is
      * populated only on a machine's FIRST back-up — when the job was newly created and Vaier readied the host
      * automatically — and is {@code null} when the job already existed (adding paths never re-provisions).
@@ -761,7 +761,7 @@ public class BackupRestController {
     }
 
     /**
-     * The {@code DELETE /machines/{machine}/backup/paths} response: whether anything actually stopped being
+     * The {@code DELETE /machines/{machineId}/backup/paths} response: whether anything actually stopped being
      * backed up, which of the requested paths did, and the job as it now stands ({@code null} when the machine
      * has no job at all — the job-was-deleted case answers {@code 204} instead and has no body).
      *

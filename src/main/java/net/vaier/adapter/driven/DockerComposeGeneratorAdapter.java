@@ -11,7 +11,7 @@ public class DockerComposeGeneratorAdapter implements ForGeneratingDockerCompose
 
     @Override
     public String generateWireguardClientDockerCompose(DockerComposeConfig config) {
-        log.debug("Generating docker-compose for peer: {}", config.peerName());
+        log.debug("Generating docker-compose for peer: {}", config.peerId());
 
         return WireguardClientCompose.standalone()
             + "\n"
@@ -24,6 +24,6 @@ public class DockerComposeGeneratorAdapter implements ForGeneratingDockerCompose
                 # 4. Verify connection: docker exec wireguard-client wg show
                 #
                 # Server: %s:%s
-                """, config.peerName(), config.peerName(), config.serverUrl(), config.serverPort());
+                """, config.peerId(), config.peerId(), config.serverUrl(), config.serverPort());
     }
 }

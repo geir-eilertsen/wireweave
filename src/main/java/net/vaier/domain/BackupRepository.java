@@ -22,6 +22,8 @@ package net.vaier.domain;
  * @param appendOnly whether the client key is restricted to append-only (documents a hardening choice;
  *                   V1 ships a delete-capable key so nightly prune/compact work)
  */
+import java.util.Collection;
+
 public record BackupRepository(
     String name,
     String serverName,
@@ -87,6 +89,33 @@ public record BackupRepository(
             throw new IllegalArgumentException("Backup repository name is empty after sanitisation");
         }
         return cleaned;
+    }
+
+    /**
+     * A slug for {@code raw} that no one has taken yet: the {@link #sanitizedName sanitised} name when it is
+     * free, otherwise the first {@code -2}, {@code -3}, … that is.
+     *
+     * <p>Needed because a machine's repository and its job are both named after the machine, and machine
+     * names stopped needing to be unique (§6.22). Two machines called "NAS" would otherwise compute the same
+     * slug — and the consequence is not a clash an operator sees but two silent ones: the second machine
+     * would back up into the <em>first</em> machine's borg repository, and its job would overwrite the
+     * first's in a store that upserts by job name, so the first machine would stop being backed up with
+     * nothing said. Stepping aside costs a suffix.
+     *
+     * <p>Only ever consulted when a slug is first minted. A machine that already has a job keeps it — its
+     * job is found by identity — so no established repository is renamed by this.
+     */
+    public static String freeName(String raw, Collection<String> taken) {
+        String base = sanitizedName(raw);
+        if (taken == null || !taken.contains(base)) {
+            return base;
+        }
+        for (int suffix = 2; ; suffix++) {
+            String candidate = base + "-" + suffix;
+            if (!taken.contains(candidate)) {
+                return candidate;
+            }
+        }
     }
 
     /**

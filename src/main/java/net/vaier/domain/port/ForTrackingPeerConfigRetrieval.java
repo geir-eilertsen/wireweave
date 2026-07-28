@@ -15,22 +15,22 @@ package net.vaier.domain.port;
 public interface ForTrackingPeerConfigRetrieval {
 
     /**
-     * Atomically marks {@code peerName} as viewed if it isn't already. Returns {@code true}
+     * Atomically marks {@code peerId} as viewed if it isn't already. Returns {@code true}
      * if this call burned the budget (first view, caller may serve the secret), {@code false}
      * if the marker was already set (caller must return 410 Gone).
      *
      * Throws if the peer directory doesn't exist — distinguishable so the caller can return
      * 404 instead of 410 for unknown peers.
      */
-    boolean markViewedIfNotAlready(String peerName);
+    boolean markViewedIfNotAlready(String peerId);
 
-    /** True iff the marker is already set for {@code peerName}. Read-only — does not mark. */
-    boolean isAlreadyViewed(String peerName);
+    /** True iff the marker is already set for {@code peerId}. Read-only — does not mark. */
+    boolean isAlreadyViewed(String peerId);
 
     /**
-     * Clears the viewed marker for {@code peerName}, re-opening the one-shot retrieval budget so
+     * Clears the viewed marker for {@code peerId}, re-opening the one-shot retrieval budget so
      * the config can be delivered once more. Used by a {@code Reissue} (which deliberately
      * re-exposes the preserved secret). A no-op when no marker is set.
      */
-    void resetViewed(String peerName);
+    void resetViewed(String peerId);
 }

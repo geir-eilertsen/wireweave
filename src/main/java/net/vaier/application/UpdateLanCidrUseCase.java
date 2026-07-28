@@ -13,5 +13,5 @@ public interface UpdateLanCidrUseCase {
      * @throws PeerNotFoundException if the peer does not exist
      * @throws ConflictException if another peer already owns the CIDR
      */
-    void updateLanCidr(String peerName, String lanCidr);
+    void updateLanCidr(String peerId, String lanCidr);
 }

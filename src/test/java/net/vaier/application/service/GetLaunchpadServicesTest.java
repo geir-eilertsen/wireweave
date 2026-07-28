@@ -20,7 +20,7 @@ import net.vaier.domain.port.ForPersistingDnsRecords;
 import net.vaier.domain.port.ForPersistingLanServers;
 import net.vaier.domain.port.ForPersistingReverseProxyRoutes;
 import net.vaier.domain.port.ForProbingServiceVersion;
-import net.vaier.domain.port.ForResolvingPeerNames;
+import net.vaier.domain.port.ForResolvingPeerIds;
 import net.vaier.domain.port.ForResolvingServerLanCidr;
 import net.vaier.domain.port.ForResolvingServiceGroup;
 import org.junit.jupiter.api.BeforeEach;
@@ -56,7 +56,7 @@ class GetLaunchpadServicesTest {
     ForGettingVpnClients forGettingVpnClients;
 
     @Mock
-    ForResolvingPeerNames forResolvingPeerNames;
+    ForResolvingPeerIds forResolvingPeerIds;
 
     @Mock
     ForGettingPeerConfigurations forGettingPeerConfigurations;
@@ -119,7 +119,7 @@ class GetLaunchpadServicesTest {
         lenient().when(vaierServerIdentity.identity()).thenReturn(TestMachineIds.of("Vaier server"));
         lenient().when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of());
         lenient().when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.empty());
-        lenient().when(forResolvingPeerNames.resolvePeerNameByIp(org.mockito.ArgumentMatchers.anyString()))
+        lenient().when(forResolvingPeerIds.resolvePeerIdByIp(org.mockito.ArgumentMatchers.anyString()))
             .thenAnswer(inv -> inv.getArgument(0));
         lenient().when(discoverPeerContainers.discoverAll()).thenReturn(List.of());
         lenient().when(getLanServerScrape.getLanServerContainers()).thenReturn(List.of());

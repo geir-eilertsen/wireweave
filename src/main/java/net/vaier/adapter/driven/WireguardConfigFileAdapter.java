@@ -8,7 +8,7 @@ import net.vaier.domain.MachineType;
 import net.vaier.domain.PeerId;
 import net.vaier.domain.WireGuardPeerConfig;
 import net.vaier.domain.port.ForGettingPeerConfigurations;
-import net.vaier.domain.port.ForResolvingPeerNames;
+import net.vaier.domain.port.ForResolvingPeerIds;
 import net.vaier.domain.port.ForUpdatingPeerConfigurations;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -22,7 +22,7 @@ import java.util.Optional;
 
 @Component
 @Slf4j
-public class WireguardConfigFileAdapter implements ForGettingPeerConfigurations, ForResolvingPeerNames,
+public class WireguardConfigFileAdapter implements ForGettingPeerConfigurations, ForResolvingPeerIds,
         ForUpdatingPeerConfigurations {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
@@ -51,17 +51,17 @@ public class WireguardConfigFileAdapter implements ForGettingPeerConfigurations,
      * <p>A peer's identity is read, never minted. Inventing one here would hand back a peer that looks
      * right but is a stranger to its own credential, host-key pin and backup job.
      */
-    private static net.vaier.domain.MachineId readMachineId(String peerName, VaierMetadata meta) {
+    private static net.vaier.domain.MachineId readMachineId(String peerId, VaierMetadata meta) {
         if (meta.id() == null || meta.id().isBlank()) {
             log.error("Peer '{}' has no id in its # VAIER: metadata — refusing to load it. "
-                + "Add an \"id\" (a UUID) to that line.", peerName.replaceAll("[\r\n]+", "_"));
+                + "Add an \"id\" (a UUID) to that line.", peerId.replaceAll("[\r\n]+", "_"));
             return null;
         }
         try {
             return net.vaier.domain.MachineId.of(meta.id());
         } catch (IllegalArgumentException e) {
             log.error("Peer '{}' has a malformed id in its # VAIER: metadata — refusing to load it: {}",
-                peerName.replaceAll("[\r\n]+", "_"), e.getMessage());
+                peerId.replaceAll("[\r\n]+", "_"), e.getMessage());
             return null;
         }
     }
@@ -75,10 +75,10 @@ public class WireguardConfigFileAdapter implements ForGettingPeerConfigurations,
     }
 
     @Override
-    public Optional<PeerConfiguration> getPeerConfigByName(String peerName) {
+    public Optional<PeerConfiguration> getPeerConfigByName(String peerId) {
         try {
             Path configDir = Paths.get(wireguardConfigPath);
-            Path peerConfigPath = configDir.resolve(peerName).resolve(peerName + ".conf");
+            Path peerConfigPath = configDir.resolve(peerId).resolve(peerId + ".conf");
 
             if (!Files.exists(peerConfigPath)) {
                 log.warn("Peer config not found: {}", peerConfigPath);
@@ -88,12 +88,12 @@ public class WireguardConfigFileAdapter implements ForGettingPeerConfigurations,
             String configContent = Files.readString(peerConfigPath);
             String ipAddress = WireGuardPeerConfig.readIpAddress(configContent);
             VaierMetadata meta = extractVaierMetadata(configContent);
-            net.vaier.domain.MachineId machineId = readMachineId(peerName, meta);
+            net.vaier.domain.MachineId machineId = readMachineId(peerId, meta);
             if (machineId == null) {
                 return Optional.empty();
             }
 
-            return Optional.of(new PeerConfiguration(peerName, effectiveName(peerName, meta), ipAddress,
+            return Optional.of(new PeerConfiguration(peerId, effectiveName(peerId, meta), ipAddress,
                     configContent, parseMachineType(meta.peerType()), meta.lanCidr(), meta.lanAddress(),
                     meta.description(), parseDeviceCategory(meta.deviceCategory()), meta.sshAccess(),
                     machineId));
@@ -127,16 +127,16 @@ public class WireguardConfigFileAdapter implements ForGettingPeerConfigurations,
                     return Optional.empty();
                 }
 
-                String peerName = foundPeerDir.get().getFileName().toString();
-                Path peerConfigPath = foundPeerDir.get().resolve(peerName + ".conf");
+                String peerId = foundPeerDir.get().getFileName().toString();
+                Path peerConfigPath = foundPeerDir.get().resolve(peerId + ".conf");
                 String configContent = Files.readString(peerConfigPath);
                 VaierMetadata meta = extractVaierMetadata(configContent);
-                net.vaier.domain.MachineId machineId = readMachineId(peerName, meta);
+                net.vaier.domain.MachineId machineId = readMachineId(peerId, meta);
                 if (machineId == null) {
                     return Optional.empty();
                 }
 
-                return Optional.of(new PeerConfiguration(peerName, effectiveName(peerName, meta), ipAddress,
+                return Optional.of(new PeerConfiguration(peerId, effectiveName(peerId, meta), ipAddress,
                         configContent, parseMachineType(meta.peerType()), meta.lanCidr(), meta.lanAddress(),
                         meta.description(), parseDeviceCategory(meta.deviceCategory()), meta.sshAccess(),
                         machineId));
@@ -161,8 +161,8 @@ public class WireguardConfigFileAdapter implements ForGettingPeerConfigurations,
                     .filter(dir -> !dir.getFileName().toString().equals("wg_confs"))
                     .filter(dir -> !dir.getFileName().toString().startsWith("."))
                     .forEach(dir -> {
-                        String peerName = dir.getFileName().toString();
-                        getPeerConfigByName(peerName).ifPresent(configs::add);
+                        String peerId = dir.getFileName().toString();
+                        getPeerConfigByName(peerId).ifPresent(configs::add);
                     });
         } catch (Exception e) {
             log.error("Failed to list peer configs: {}", e.getMessage(), e);
@@ -172,7 +172,7 @@ public class WireguardConfigFileAdapter implements ForGettingPeerConfigurations,
     }
 
     @Override
-    public String resolvePeerNameByIp(String ipAddress) {
+    public String resolvePeerIdByIp(String ipAddress) {
         try {
             Path configDir = Paths.get(wireguardConfigPath);
             log.debug("Searching for peer with IP {} in directory: {}", ipAddress, configDir.toAbsolutePath());
@@ -312,11 +312,11 @@ public class WireguardConfigFileAdapter implements ForGettingPeerConfigurations,
      * Rewrites the single-line {@code # VAIER:} metadata comment in a peer's {@code .conf},
      * preserving every field the {@code mutator} does not touch. Adds the comment if missing.
      */
-    private void rewriteVaierMetadata(String peerName, String fieldName, String newValue,
+    private void rewriteVaierMetadata(String peerId, String fieldName, String newValue,
                                       java.util.function.UnaryOperator<VaierMetadata> mutator) {
-        Path peerConfigPath = Paths.get(wireguardConfigPath, peerName, peerName + ".conf");
+        Path peerConfigPath = Paths.get(wireguardConfigPath, peerId, peerId + ".conf");
         if (!Files.exists(peerConfigPath)) {
-            throw new net.vaier.domain.PeerNotFoundException("Peer not found: " + peerName);
+            throw new net.vaier.domain.PeerNotFoundException("Peer not found: " + peerId);
         }
         try {
             String content = Files.readString(peerConfigPath);
@@ -337,10 +337,10 @@ public class WireguardConfigFileAdapter implements ForGettingPeerConfigurations,
                 rewritten = newLine + "\n" + content;
             }
             Files.writeString(peerConfigPath, rewritten);
-            log.info("Updated {} for peer {} to {}", fieldName, peerName, newValue);
+            log.info("Updated {} for peer {} to {}", fieldName, peerId, newValue);
         } catch (Exception e) {
             throw new RuntimeException(
-                "Failed to update " + fieldName + " for peer " + peerName + ": " + e.getMessage(), e);
+                "Failed to update " + fieldName + " for peer " + peerId + ": " + e.getMessage(), e);
         }
     }
 

@@ -135,7 +135,7 @@ class DockerServiceRestControllerIT extends VaierWebMvcIntegrationBase {
 
         mockMvc.perform(get("/docker-services/peers"))
                .andExpect(status().isOk())
-               .andExpect(jsonPath("$[0].peerName").value("peer1"))
+               .andExpect(jsonPath("$[0].peerId").value("peer1"))
                .andExpect(jsonPath("$[0].vpnIp").value("10.13.13.2"))
                .andExpect(jsonPath("$[0].status").value("OK"))
                .andExpect(jsonPath("$[0].containers[0].containerName").value("svc"))
@@ -160,7 +160,7 @@ class DockerServiceRestControllerIT extends VaierWebMvcIntegrationBase {
 
         mockMvc.perform(get("/docker-services/peers"))
                .andExpect(status().isOk())
-               .andExpect(jsonPath("$[0].peerName").value("peer2"))
+               .andExpect(jsonPath("$[0].peerId").value("peer2"))
                .andExpect(jsonPath("$[0].status").value("UNREACHABLE"))
                .andExpect(jsonPath("$[0].containers").isEmpty());
     }

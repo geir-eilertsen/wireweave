@@ -5,7 +5,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.domain.port.ForPublishingEvents;
 import net.vaier.application.GetVpnClientsUseCase;
-import net.vaier.application.ResolveVpnPeerNameUseCase;
+import net.vaier.application.ResolveVpnPeerIdUseCase;
 import net.vaier.domain.VpnClient;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -19,7 +19,7 @@ import java.util.Map;
 public class PeerStatsScheduler {
 
     private final GetVpnClientsUseCase vpnClients;
-    private final ResolveVpnPeerNameUseCase peerNameResolver;
+    private final ResolveVpnPeerIdUseCase peerIdResolver;
     private final ForPublishingEvents eventPublisher;
     private final ObjectMapper objectMapper;
 
@@ -30,9 +30,9 @@ public class PeerStatsScheduler {
             List<Map<String, Object>> stats = clients.stream()
                     .map(client -> {
                         String peerIp = client.vpnIp();
-                        String peerName = peerNameResolver.resolvePeerNameByIp(peerIp);
+                        String peerId = peerIdResolver.resolvePeerIdByIp(peerIp);
                         return Map.<String, Object>of(
-                                "name", peerName != null ? peerName : peerIp,
+                                "name", peerId != null ? peerId : peerIp,
                                 "latestHandshake", client.latestHandshake(),
                                 "connected", client.isConnected(),
                                 "transferRx", client.transferRx(),

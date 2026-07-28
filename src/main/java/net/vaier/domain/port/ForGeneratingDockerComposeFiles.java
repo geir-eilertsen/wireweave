@@ -5,7 +5,7 @@ public interface ForGeneratingDockerComposeFiles {
     String generateWireguardClientDockerCompose(DockerComposeConfig config);
 
     record DockerComposeConfig(
-        String peerName,
+        String peerId,
         String serverUrl,
         String serverPort
     ) {}

@@ -70,7 +70,7 @@ public class InMemoryContainerSnapshotStore implements
     @Override
     public List<PeerContainers> discoverAll() {
         return peerContainersSnapshot.stream()
-            .map(peer -> new PeerContainers(peer.machineId(), peer.peerName(), peer.vpnIp(), peer.status(),
+            .map(peer -> new PeerContainers(peer.machineId(), peer.peerId(), peer.vpnIp(), peer.status(),
                 withUpdateVerdicts(peer.machineId(), peer.containers()),
                 peer.wireguardOutdated(), peer.wireguardExpectedImage()))
             .toList();

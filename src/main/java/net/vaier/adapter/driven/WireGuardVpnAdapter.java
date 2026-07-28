@@ -203,14 +203,14 @@ public class WireGuardVpnAdapter implements ForGettingVpnClients, ForDeletingVpn
     }
 
     @Override
-    public void deletePeer(String peerName) {
-        log.info("Deleting peer {} from interface {}", peerName, wireguardInterface);
+    public void deletePeer(String peerId) {
+        log.info("Deleting peer {} from interface {}", peerId, wireguardInterface);
 
         try {
-            Path peerConfigPath = Paths.get(wireguardConfigPath, peerName, peerName + ".conf");
+            Path peerConfigPath = Paths.get(wireguardConfigPath, peerId, peerId + ".conf");
             if (!Files.exists(peerConfigPath)) {
                 log.warn("Peer config not found: {}", peerConfigPath);
-                throw new RuntimeException("Peer not found: " + peerName);
+                throw new RuntimeException("Peer not found: " + peerId);
             }
 
             String configContent = Files.readString(peerConfigPath);
@@ -241,10 +241,10 @@ public class WireGuardVpnAdapter implements ForGettingVpnClients, ForDeletingVpn
                 wireguardContainerName, "wg-quick", "save", wireguardInterface);
             log.info("Save config output: {}", saveOutput);
 
-            deleteDirectory(Paths.get(wireguardConfigPath, peerName));
-            log.info("Deleted peer directory: {}", peerName);
+            deleteDirectory(Paths.get(wireguardConfigPath, peerId));
+            log.info("Deleted peer directory: {}", peerId);
 
-            log.info("Peer deleted successfully: {}", peerName);
+            log.info("Peer deleted successfully: {}", peerId);
 
         } catch (IOException | InterruptedException e) {
             log.error("Error deleting peer", e);

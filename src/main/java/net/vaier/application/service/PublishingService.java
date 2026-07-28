@@ -48,7 +48,7 @@ import net.vaier.domain.port.ForPersistingReverseProxyRoutes;
 import net.vaier.domain.port.ForProbingServiceVersion;
 import net.vaier.domain.port.ForPublishingEvents;
 import net.vaier.domain.port.ForResolvingDns;
-import net.vaier.domain.port.ForResolvingPeerNames;
+import net.vaier.domain.port.ForResolvingPeerIds;
 import net.vaier.domain.port.ForResolvingServerLanCidr;
 import net.vaier.domain.port.ForResolvingServiceGroup;
 import net.vaier.domain.port.ForResolvingVaierServerIdentity;
@@ -80,7 +80,7 @@ public class PublishingService implements
     private final ForGettingServerInfo forGettingServerInfo;
     private final ForPersistingDnsRecords forPersistingDnsRecords;
     private final ForGettingVpnClients forGettingVpnClients;
-    private final ForResolvingPeerNames forResolvingPeerNames;
+    private final ForResolvingPeerIds forResolvingPeerIds;
     private final ForGettingPeerConfigurations forGettingPeerConfigurations;
     private final ForResolvingServerLanCidr forResolvingServerLanCidr;
     private final ForPersistingLanServers forPersistingLanServers;
@@ -115,7 +115,7 @@ public class PublishingService implements
                              ForGettingServerInfo forGettingServerInfo,
                              ForPersistingDnsRecords forPersistingDnsRecords,
                              ForGettingVpnClients forGettingVpnClients,
-                             ForResolvingPeerNames forResolvingPeerNames,
+                             ForResolvingPeerIds forResolvingPeerIds,
                              ForGettingPeerConfigurations forGettingPeerConfigurations,
                              ForResolvingServerLanCidr forResolvingServerLanCidr,
                              ForPersistingLanServers forPersistingLanServers,
@@ -136,7 +136,7 @@ public class PublishingService implements
         this.forGettingServerInfo = forGettingServerInfo;
         this.forPersistingDnsRecords = forPersistingDnsRecords;
         this.forGettingVpnClients = forGettingVpnClients;
-        this.forResolvingPeerNames = forResolvingPeerNames;
+        this.forResolvingPeerIds = forResolvingPeerIds;
         this.forGettingPeerConfigurations = forGettingPeerConfigurations;
         this.forResolvingServerLanCidr = forResolvingServerLanCidr;
         this.forPersistingLanServers = forPersistingLanServers;
@@ -227,7 +227,7 @@ public class PublishingService implements
                         r.launchpadUrl(callerIp, peers, vpnClients, baseDomain),
                         r.launchpadDisplayName(baseDomain), r.subdomain(baseDomain),
                         r.launchpadIconQuery(),
-                        r.hostDisplayName(vpnClients, forResolvingPeerNames, peers),
+                        r.hostDisplayName(vpnClients, forResolvingPeerIds, peers),
                         backing == null ? null : backing.image(),
                         probedVersion != null ? probedVersion
                             : (backing == null ? null : backing.version()));
@@ -306,15 +306,15 @@ public class PublishingService implements
             images.peerContainersByVpnIp(), images.lanServerContainersByAddress()).orElse(null);
         String probedVersion = route.hasVersionEndpoint() ? probedVersions.get(route.getName()) : null;
         return new PublishedServiceUco(
-            route.displayName(baseDomain, localServices, vpnClients, forResolvingPeerNames, peers),
-            route.shortName(baseDomain, vpnClients, forResolvingPeerNames, peers),
+            route.displayName(baseDomain, localServices, vpnClients, forResolvingPeerIds, peers),
+            route.shortName(baseDomain, vpnClients, forResolvingPeerIds, peers),
             // Whose machine this service is on, as an identity. The browser used to work it out from the
             // display name, which put a service under the wrong machine card whenever two names agreed.
             route.hostMachineId(peers, lanServers, vaierServerIdentity.identity())
                 .map(MachineId::value).orElse(null),
-            route.hostDisplayName(vpnClients, forResolvingPeerNames, peers),
+            route.hostDisplayName(vpnClients, forResolvingPeerIds, peers),
             route.lanServerName(lanServers).orElse(null),
-            route.serviceLocation(vpnClients, forResolvingPeerNames, peers),
+            route.serviceLocation(vpnClients, forResolvingPeerIds, peers),
             dnsState == DnsState.OK && hostState == Server.State.OK,
             route.getDomainName(),
             dnsState,
@@ -706,7 +706,7 @@ public class PublishingService implements
                     .filter(p -> existingRoutes.stream()
                         .noneMatch(r -> r.getAddress().equals(peer.vpnIp()) && r.getPort() == p.publicPort()))
                     .filter(p -> !pendingPublicationsService.isPending(peer.vpnIp(), p.publicPort()))
-                    .map(p -> new PublishableService(PublishableSource.PEER, peer.machineId(), peer.peerName(),
+                    .map(p -> new PublishableService(PublishableSource.PEER, peer.machineId(), peer.peerId(),
                         peer.vpnIp(), container.containerName(), p.publicPort(), null, false))
                 )
             )
@@ -735,7 +735,7 @@ public class PublishingService implements
 
         Set<String> ignoredKeys = forManagingIgnoredServices.getIgnoredServiceKeys();
         return publishable.stream().distinct()
-            .map(s -> new PublishableService(s.source(), s.machineId(), s.peerName(), s.address(),
+            .map(s -> new PublishableService(s.source(), s.machineId(), s.peerId(), s.address(),
                 s.containerName(), s.port(), s.rootRedirectPath(), ignoredKeys.contains(s.ignoreKey())))
             .toList();
     }

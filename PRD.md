@@ -1870,6 +1870,25 @@ session under `null`, where every such window shares one bucket.
 resolves a name when given no id, and **refuses to guess** between two matches rather than open a shell on
 the wrong host.
 
+   2i. **The audit, and the regression it caught ✅ (2026-07-28).** Sweeping for anything that still
+   identifies a machine by its name turned up one **real regression that dropping the guard had created**:
+   a machine's backup **job and repository are both named after it**, so two machines called "NAS" computed
+   the same slug — and neither failure would have been visible. The second machine would have backed up
+   into the *first* one's borg repository, mixing two machines' archives, and its job would have overwritten
+   the first's in a store that upserts by job name, so **the first machine would silently stop being backed
+   up**. `BackupRepository.freeName` now hands a new machine the first slug nobody has taken (`NAS`,
+   `NAS-2`, …), consulted only when a slug is first minted — a machine that already has a job keeps it,
+   because its job is found by identity, so no established repository is renamed. Also fixed: the map placed
+   a LAN server on the Vaier server's dot by comparing its relay's *name* to `"Vaier server"`, which a peer
+   an operator had since called that would have satisfied; it tests for the absence of a relay identity now.
+
+   The sweep also closed the last naming lies, which is the class of bug that caused every defect in this
+   refactor: `ForResolvingPeerNames.resolvePeerNameByIp` returned a peer **id**, and about twenty
+   signatures, two DTO fields and a REST path variable called that id a "peer name". They say `peerId` now.
+   The audit script lives in the session scratchpad; it strips comments so it asks about code, not prose,
+   and it distinguishes a **machine** key from a record's own name (a backup job's `name` is its own
+   identity, like a route's FQDN, and is untouched).
+
 **No config migration is outstanding.** The stores' on-disk shapes did not change in this pass — peers and
 LAN servers already carried `id:` from the earlier slices, and `ignoreKey` was deliberately left alone so
 the ignored-services file does not orphan. The one visible break is that setup links minted before this

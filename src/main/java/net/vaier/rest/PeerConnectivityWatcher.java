@@ -4,7 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import net.vaier.application.GetPeerConfigUseCase;
 import net.vaier.application.GetVpnClientsUseCase;
 import net.vaier.application.NotifyAdminsOfPeerTransitionUseCase;
-import net.vaier.application.ResolveVpnPeerNameUseCase;
+import net.vaier.application.ResolveVpnPeerIdUseCase;
 import net.vaier.domain.PeerConnectivityTracker;
 import net.vaier.domain.PeerSnapshot;
 import net.vaier.domain.MachineType;
@@ -20,17 +20,17 @@ import java.util.Optional;
 public class PeerConnectivityWatcher {
 
     private final GetVpnClientsUseCase vpnClients;
-    private final ResolveVpnPeerNameUseCase peerNameResolver;
+    private final ResolveVpnPeerIdUseCase peerIdResolver;
     private final GetPeerConfigUseCase peerConfigs;
     private final NotifyAdminsOfPeerTransitionUseCase notifier;
     private final PeerConnectivityTracker tracker = new PeerConnectivityTracker();
 
     public PeerConnectivityWatcher(GetVpnClientsUseCase vpnClients,
-                                   ResolveVpnPeerNameUseCase peerNameResolver,
+                                   ResolveVpnPeerIdUseCase peerIdResolver,
                                    GetPeerConfigUseCase peerConfigs,
                                    NotifyAdminsOfPeerTransitionUseCase notifier) {
         this.vpnClients = vpnClients;
-        this.peerNameResolver = peerNameResolver;
+        this.peerIdResolver = peerIdResolver;
         this.peerConfigs = peerConfigs;
         this.notifier = notifier;
     }
@@ -55,7 +55,7 @@ public class PeerConnectivityWatcher {
         String peerIp = client.vpnIp();
         if (peerIp.isEmpty()) return null;
 
-        String name = peerNameResolver.resolvePeerNameByIp(peerIp);
+        String name = peerIdResolver.resolvePeerIdByIp(peerIp);
         Optional<GetPeerConfigUseCase.PeerConfigResult> cfg = peerConfigs.getPeerConfigByIp(peerIp);
         MachineType type = cfg.map(GetPeerConfigUseCase.PeerConfigResult::peerType).orElse(MachineType.defaultType());
         String lanAddress = cfg.map(GetPeerConfigUseCase.PeerConfigResult::lanAddress).orElse(null);

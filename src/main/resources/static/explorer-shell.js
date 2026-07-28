@@ -131,13 +131,13 @@
         services: [],                    // GET /published-services/discover — the whole fleet's routes
         publishable: [],                 // GET /published-services/publishable — container ports that could be published (and which are ignored)
         access: {},                      // GET /access/services — dnsAddress -> the groups allowed through
-        containers: new Map(),           // machine name -> its containers, as Vaier last scraped them
+        containers: new Map(),           // machine identity -> its containers, as Vaier last scraped them
         containersRead: false,           // whether the fleet-wide Docker scrape has landed at least once
-        disks: new Map(),                // machine name -> its filesystems: state, the list, the failure's words
-        roots: new Map(),                // (machine, at) -> where a file tree begins (its SFTP root, #326)
+        disks: new Map(),                // machine identity -> its filesystems: state, the list, the failure's words
+        roots: new Map(),                // (machine identity, at) -> where a file tree begins (its SFTP root, #326)
         at: null,                        // the archive being browsed, or null for the present — the live filesystem
-        archives: new Map(),             // machine name -> { state, list, error }: its archives, the rail's stops
-        nudges: new Map(),               // machine name -> { state, list }: its progressive-adoption nudges (GET /machines/{name}/nudges), read once per machine
+        archives: new Map(),             // machine identity -> { state, list, error }: its archives, the rail's stops
+        nudges: new Map(),               // machine identity -> { state, list }: its nudges (GET /machines/{machineId}/nudges), read once per machine
         clipboard: [],                   // held file coordinates {machine, path, at, name, directory, size} — the Clipboard
         transfers: new Map(),            // id -> a live/settled Transfer, streamed in over the transfers SSE topic
         sel: [],                         // the fleet-wide selection: {machine, path, at, name, directory, size, backedUp}
@@ -148,8 +148,8 @@
         repoArchives: new Map(),         // repo name -> { state, list, error }: the archives in a repository, read when looked at
         backupJobs: [],                  // GET /backup-jobs — the jobs, each backing one machine up to a repository
         jobRuns: new Map(),              // job name -> { state, run }: its last run, read on view and on the run-settled push
-        preparing: new Set(),            // machine names Vaier is readying to back up (first back-up), cleared on prepare-client-settled
-        readying: new Map(),             // machine name -> the one `sudo bash …` line Vaier staged where it could not gain root itself
+        preparing: new Set(),            // machine identities Vaier is readying to back up (first back-up), cleared on prepare-client-settled
+        readying: new Map(),             // machine identity -> the one `sudo bash …` line Vaier staged where it could not gain root itself
         provisionWatch: null,            // { serverName, bodyEl } while a provision dialog awaits its provision-settled push
         settings: { state: 'idle', config: null, version: '', edition: '' },   // the native Settings entry, read on view
         palSel: 0,
@@ -439,13 +439,11 @@
     // Vaier scrapes Docker per kind of machine, so this is three endpoints and one map. All three already
     // exist — this is the Infrastructure page's own data, re-filed under the machines it belongs to.
     //
-    // The filing is the whole difficulty. A peer's containers arrive keyed by the peer's *id* — the WireGuard
-    // directory name, "apalveien5" — while the tree, /machines and every SSH lookup speak the canonical
-    // machine name, "Apalveien 5". Filing them by id would hang them under a machine that does not exist in
-    // the tree, and every peer would show an empty `containers` entry while Vaier could see its containers
-    // perfectly well. The shell already holds the id -> name map for exactly this reason (the stats stream is
-    // keyed by id too), so containers go through it. LAN servers and the Vaier server already carry their
-    // canonical names.
+    // The filing used to be the whole difficulty: a peer's containers arrived keyed by the peer's *id* (the
+    // WireGuard directory, "apalveien5") while the tree spoke the display name ("Apalveien 5"), so either
+    // choice needed a crossing, and one character of disagreement showed a machine with no containers while
+    // Vaier could see them perfectly well. Every scrape carries the machine's identity now, so there is no
+    // crossing left to get wrong — the cache is keyed by the same thing the tree stands on.
     async function loadContainers() {
         const next = new Map();
         try {
@@ -1095,7 +1093,11 @@
         Array.from(S.lan.values()).forEach((s) => {
             if (!s.relayPeerName) return;
             let lat, lon;
-            if (s.relayPeerName === VAIER_SERVER) {
+            // Anchored at the Vaier server's own LAN, which is the case where there IS no relay peer — so
+            // the absence of a relay identity is the test, not the relay's name. Tested by name, a peer an
+            // operator had called "Vaier server" (allowed since names stopped needing to be unique) would
+            // have put every machine behind it on the hub's dot instead of its own.
+            if (!s.relayMachineId) {
                 if (!hasLoc) return; lat = loc.latitude; lon = loc.longitude;
             } else {
                 // The feed says which machine relays this LAN, by identity. It used to say only the
@@ -4308,10 +4310,8 @@
     // whether to read as root are Vaier's to decide, not knobs to turn. So the whole entry is a readout with a
     // single intent — run it now — and one way out — stop backing this machine up.
     function renderJobsBackup(body, machineId, jobs) {
-        // S.preparing is keyed by NAME because the settle event that clears it carries one; the crossing is
-        // made here rather than by keying this pane on something it does not stand on.
         const machineName = nameOf(machineId);
-        if (S.preparing.has(machineName)) {
+        if (S.preparing.has(machineId)) {
             const prep = el('div', 'ex-runline');
             prep.textContent = 'Getting this machine ready to back up — installing borg and trusting its key…';
             body.appendChild(prep);
@@ -4440,8 +4440,8 @@
         // the error text to work it out — and the fix is offered on the spot rather than named and left to
         // be hunted for. The command below appears only where Vaier could not gain root itself.
         const needsReady = held && held.state === 'ready' && held.run.needsClientReadying;
-        const staged = S.readying.get(machineName);
-        if (needsReady && !S.preparing.has(machineName)) {
+        const staged = S.readying.get(machineId);
+        if (needsReady && !S.preparing.has(machineId)) {
             body.appendChild(note('This machine has no borg client yet — nothing else is wrong. Vaier can '
                 + 'install it, and tonight’s backup will run.', true));
         }
@@ -4456,9 +4456,9 @@
         const running = held && held.state === 'ready' && held.run.status === 'RUNNING';
         const acts = el('div', 'ex-lactions is-static');
         if (needsReady) {
-            const ready = selVerb('shield', S.preparing.has(machineName) ? 'Getting ready…' : 'Get this machine ready',
+            const ready = selVerb('shield', S.preparing.has(machineId) ? 'Getting ready…' : 'Get this machine ready',
                 'ex-btn is-accent', () => readyClient(job));
-            if (S.preparing.has(machineName)) ready.disabled = true;
+            if (S.preparing.has(machineId)) ready.disabled = true;
             acts.appendChild(ready);
         }
         const run = selVerb('refresh', running ? 'Backing up…' : 'Back up now',
@@ -4594,10 +4594,11 @@
         // finished on the host. Clear the "getting ready" state and say how it went — no polling, we were told.
         events.addEventListener('prepare-client-settled', (e) => {
             const d = JSON.parse(e.data);   // { machineName, state }
-            if (!S.preparing.has(d.machineName)) return;
-            S.preparing.delete(d.machineName);
+            // The event carries both halves; we watch by identity and speak by name.
+            if (!S.preparing.has(d.machineId)) return;
+            S.preparing.delete(d.machineId);
             // The staged command was a standing instruction; a readying that landed on its own retires it.
-            if (d.state === 'SUCCESS') S.readying.delete(d.machineName);
+            if (d.state === 'SUCCESS') S.readying.delete(d.machineId);
             toast(d.state === 'SUCCESS'
                 ? d.machineName + ' is ready — its backup will run tonight, or now if you like.'
                 : 'Vaier could not finish getting ' + d.machineName + ' ready — try backing it up again.');
@@ -5656,7 +5657,7 @@
                 done += paths.length;
                 // First back-up on a machine: the backend rings the host to be readied (borg installed, key
                 // trusted) and tells us here. The install runs detached; we watch prepare-client-settled.
-                if (body && body.provisioning) startReadying(nameOf(machineId), body.provisioning);
+                if (body && body.provisioning) startReadying(machineId, body.provisioning);
             } catch (e) { failed.push(nameOf(machineId)); }
         }
         await loadBackup();   // the jobs changed — reload so the backup entries are current
@@ -5674,36 +5675,37 @@
     // that already had a job deliberately never re-did it. No endpoint was opened; this route outlived the
     // page that used to call it.
     async function readyClient(job) {
-        const machine = job.machineName;
-        S.readying.delete(machine);
+        const machineName = nameOf(job.machineId);
+        S.readying.delete(job.machineId);
         try {
             const res = await fetch('/backup-jobs/' + encodeURIComponent(job.name) + '/prepare-client',
                 { method: 'POST' });
             if (!res.ok) {
-                toast('Vaier could not start getting ' + machine + ' ready.');
+                toast('Vaier could not start getting ' + machineName + ' ready.');
                 return;
             }
-            startReadying(machine, await res.json());
+            startReadying(job.machineId, await res.json());
         } catch (e) {
-            toast('Vaier could not start getting ' + machine + ' ready.');
+            toast('Vaier could not start getting ' + machineName + ' ready.');
         }
     }
 
     // What Vaier does behind the first back-up: ready the host (install borg, trust its key). It's silent by
     // design — a quiet "Getting X ready…" and nothing more — unless it hits the one wall it can't pass on its
     // own, a host where it lacks the root to install borg, in which case it names the single command to run.
-    function startReadying(machineName, p) {
+    function startReadying(machineId, p) {
+        const machineName = nameOf(machineId);
         if (p.scriptOnly && p.stagedScriptPath) {
             // A command someone has to retype into another machine cannot live in a toast — it is gone
             // before it has been read, let alone copied. It is kept against the machine and rendered on its
             // Backup entry, where the failure that needs it is already reported, until the readying lands.
-            S.readying.set(machineName, 'sudo bash ' + p.stagedScriptPath);
+            S.readying.set(machineId, 'sudo bash ' + p.stagedScriptPath);
             toast('One command left to run on ' + machineName + ' — it is on its Backup entry.');
             render();
             return;
         }
         if (p.started) {
-            S.preparing.add(machineName);
+            S.preparing.add(machineId);
             toast('Getting ' + machineName + ' ready to back up…');
             render();
         } else if (p.message) {

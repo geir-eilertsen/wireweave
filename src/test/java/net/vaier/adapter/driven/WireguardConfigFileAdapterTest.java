@@ -170,27 +170,27 @@ class WireguardConfigFileAdapterTest {
         assertThat(result.get().name()).isEqualTo("laptop");
     }
 
-    // --- resolvePeerNameByIp ---
+    // --- resolvePeerIdByIp ---
 
     @Test
-    void resolvePeerNameByIp_returnsPeerNameWhenFound() throws IOException {
+    void resolvePeerIdByIp_returnsPeerNameWhenFound() throws IOException {
         createPeerConf("my-server", "10.13.13.4");
 
-        assertThat(adapter.resolvePeerNameByIp("10.13.13.4")).isEqualTo("my-server");
+        assertThat(adapter.resolvePeerIdByIp("10.13.13.4")).isEqualTo("my-server");
     }
 
     @Test
-    void resolvePeerNameByIp_returnsIpWhenNoPeerFound() throws IOException {
+    void resolvePeerIdByIp_returnsIpWhenNoPeerFound() throws IOException {
         createPeerConf("laptop", "10.13.13.2");
 
-        assertThat(adapter.resolvePeerNameByIp("10.13.13.99")).isEqualTo("10.13.13.99");
+        assertThat(adapter.resolvePeerIdByIp("10.13.13.99")).isEqualTo("10.13.13.99");
     }
 
     @Test
-    void resolvePeerNameByIp_returnsIpWhenConfigDirMissing() {
+    void resolvePeerIdByIp_returnsIpWhenConfigDirMissing() {
         ReflectionTestUtils.setField(adapter, "wireguardConfigPath", "/nonexistent/path");
 
-        assertThat(adapter.resolvePeerNameByIp("10.13.13.2")).isEqualTo("10.13.13.2");
+        assertThat(adapter.resolvePeerIdByIp("10.13.13.2")).isEqualTo("10.13.13.2");
     }
 
     // --- VAIER metadata (peerType / lanCidr) ---

@@ -30,15 +30,9 @@ public final class ImageUpdateSweep {
     /**
      * One machine's running containers, so the sweep can scope each verdict to the host it runs on.
      *
-     * @param machine    the machine's name — {@code LanAnchor.VAIER_SERVER_NAME} for the Vaier server's own
-     *                   containers, or a server peer's name
+     * @param machineId  the machine's identity — what each verdict is scoped to, so a rename between sweeps
+     *                   does not read as every image on that machine having just gone stale
      * @param containers the containers scraped from that machine
-     */
-    /**
-     * One machine's containers for the sweep.
-     *
-     * @param machineId the machine's identity — what each verdict is scoped to, so a rename between sweeps
-     *                  does not read as every image on that machine having just gone stale
      */
     public record MachineContainers(String machineId, List<DockerService> containers) {}
 

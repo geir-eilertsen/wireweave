@@ -35,7 +35,7 @@ import net.vaier.domain.port.ForGettingServerInfo;
 import net.vaier.domain.port.ForGettingVaierServerDockerServices;
 import net.vaier.domain.port.ForGettingVpnClients;
 import net.vaier.domain.port.ForPublishingEvents;
-import net.vaier.domain.port.ForResolvingPeerNames;
+import net.vaier.domain.port.ForResolvingPeerIds;
 import net.vaier.domain.port.ForResolvingRegistryDigest;
 import net.vaier.domain.port.ForResolvingVaierServerIdentity;
 import net.vaier.domain.port.ForStoringContainerSnapshots;
@@ -60,7 +60,7 @@ public class ContainerService implements
 
     private final ForGettingServerInfo forGettingServerInfo;
     private final ForGettingVpnClients forGettingVpnClients;
-    private final ForResolvingPeerNames forResolvingPeerNames;
+    private final ForResolvingPeerIds forResolvingPeerIds;
     private final ForGettingPeerConfigurations forGettingPeerConfigurations;
     private final ForResolvingRegistryDigest forResolvingRegistryDigest;
     private final ForPublishingEvents forPublishingEvents;
@@ -90,7 +90,7 @@ public class ContainerService implements
 
     public ContainerService(ForGettingServerInfo forGettingServerInfo,
                             ForGettingVpnClients forGettingVpnClients,
-                            ForResolvingPeerNames forResolvingPeerNames,
+                            ForResolvingPeerIds forResolvingPeerIds,
                             ForGettingPeerConfigurations forGettingPeerConfigurations,
                             ForResolvingRegistryDigest forResolvingRegistryDigest,
                             ForPublishingEvents forPublishingEvents,
@@ -104,7 +104,7 @@ public class ContainerService implements
                             ForResolvingVaierServerIdentity vaierServerIdentity) {
         this.forGettingServerInfo = forGettingServerInfo;
         this.forGettingVpnClients = forGettingVpnClients;
-        this.forResolvingPeerNames = forResolvingPeerNames;
+        this.forResolvingPeerIds = forResolvingPeerIds;
         this.forGettingPeerConfigurations = forGettingPeerConfigurations;
         this.forResolvingRegistryDigest = forResolvingRegistryDigest;
         this.forPublishingEvents = forPublishingEvents;
@@ -243,7 +243,7 @@ public class ContainerService implements
 
         for (VpnClient client : clients) {
             String vpnIp = client.vpnIp();
-            String peerName = forResolvingPeerNames.resolvePeerNameByIp(vpnIp);
+            String peerId = forResolvingPeerIds.resolvePeerIdByIp(vpnIp);
 
             var storedConfig = forGettingPeerConfigurations.getPeerConfigByIp(vpnIp);
             MachineType peerType = storedConfig
@@ -257,24 +257,24 @@ public class ContainerService implements
                     .orElse(null);
 
             if (!peerType.isVpnPeer() || !peerType.isServerType()) {
-                log.debug("Skipping Docker discovery for non-server peer {} ({}) of type {}", peerName, vpnIp, peerType);
+                log.debug("Skipping Docker discovery for non-server peer {} ({}) of type {}", peerId, vpnIp, peerType);
                 continue;
             }
 
             if (!client.isConnected()) {
-                log.debug("Skipping Docker discovery for disconnected peer {} ({})", peerName, vpnIp);
-                results.add(new PeerContainers(machineId, peerName, vpnIp, "UNREACHABLE", List.of(), false, WireguardClientImage.EXPECTED));
+                log.debug("Skipping Docker discovery for disconnected peer {} ({})", peerId, vpnIp);
+                results.add(new PeerContainers(machineId, peerId, vpnIp, "UNREACHABLE", List.of(), false, WireguardClientImage.EXPECTED));
                 continue;
             }
 
             try {
                 Server server = new Server(vpnIp, 2375, false);
                 List<DockerService> containers = forGettingServerInfo.getServicesWithExposedPorts(server);
-                log.info("Discovered {} containers on peer {} ({})", containers.size(), peerName, vpnIp);
-                results.add(new PeerContainers(machineId, peerName, vpnIp, "OK", containers, WireguardClientImage.anyOutdated(containers), WireguardClientImage.EXPECTED));
+                log.info("Discovered {} containers on peer {} ({})", containers.size(), peerId, vpnIp);
+                results.add(new PeerContainers(machineId, peerId, vpnIp, "OK", containers, WireguardClientImage.anyOutdated(containers), WireguardClientImage.EXPECTED));
             } catch (Exception e) {
-                log.warn("Failed to query Docker on peer {} ({}): {}", peerName, vpnIp, e.getMessage());
-                results.add(new PeerContainers(machineId, peerName, vpnIp, "UNREACHABLE", List.of(), false, WireguardClientImage.EXPECTED));
+                log.warn("Failed to query Docker on peer {} ({}): {}", peerId, vpnIp, e.getMessage());
+                results.add(new PeerContainers(machineId, peerId, vpnIp, "UNREACHABLE", List.of(), false, WireguardClientImage.EXPECTED));
             }
         }
 

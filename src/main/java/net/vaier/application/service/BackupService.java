@@ -29,8 +29,10 @@ import net.vaier.domain.port.ForReadyingBackupClients.ReadyingOutcome;
 import net.vaier.domain.port.ForRecordingBackupRuns;
 import org.springframework.stereotype.Service;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * The single fleet-backup domain service: pure CRUD/query over the backup repository and job stores.
@@ -149,8 +151,14 @@ public class BackupService implements
         BackupServer server = theBackupServer();
         // The machine arrives whole because both halves of it are needed and must agree: its identity keys
         // the job store, while its name seeds the repository/job slug an operator reads on the NAS.
-        String slug = BackupRepository.sanitizedName(machine.name());
         Optional<BackupJob> existing = jobs.getByMachine(machine.id()).stream().findFirst();
+        // Only a machine with no job yet needs a slug, and it must be one nobody has taken: machine names
+        // need not be unique (§6.22), so two machines called "NAS" would otherwise compute the same one —
+        // the second backing up into the first's repository, and its job overwriting the first's in a store
+        // that upserts by job name. A machine that already has a job keeps its slug untouched; the domain
+        // decides what "free" means.
+        String slug = existing.map(BackupJob::name)
+            .orElseGet(() -> BackupRepository.freeName(machine.name(), takenSlugs()));
         boolean firstBackup = existing.isEmpty();
         BackupRepository repository = existing
             .flatMap(job -> repositories.getByName(job.repositoryName()))
@@ -186,6 +194,18 @@ public class BackupService implements
             jobs.save(outcome.job());
         }
         return outcome;
+    }
+
+    /**
+     * Every slug already in use, across both stores. Jobs and repositories are named alike and an operator
+     * reads both on the NAS, so a new machine steps aside from either — a job named {@code NAS} with no
+     * repository left, or a repository with no job, must not be walked into by the next machine of that name.
+     */
+    private Set<String> takenSlugs() {
+        Set<String> taken = new HashSet<>();
+        jobs.getAll().forEach(j -> taken.add(j.name()));
+        repositories.getAll().forEach(r -> taken.add(r.name()));
+        return taken;
     }
 
     /** The fleet's single backup server, or a {@code 409}-mapped conflict when none is designated yet. */

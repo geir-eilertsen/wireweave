@@ -10,17 +10,17 @@ public final class PeerSetupScript {
 
     private PeerSetupScript() {}
 
-    public static String generate(String peerName, String vpnIp, String serverUrl, String serverPort,
+    public static String generate(String peerId, String vpnIp, String serverUrl, String serverPort,
                                   String wgConfig, String lanCidr, String vpnSubnet) {
         var sb = new StringBuilder();
         sb.append("#!/bin/bash\n");
         sb.append("set -euo pipefail\n");
         sb.append("\n");
-        sb.append("# Vaier peer setup script for: ").append(peerName).append("\n");
+        sb.append("# Vaier peer setup script for: ").append(peerId).append("\n");
         sb.append("# VPN IP: ").append(vpnIp).append("\n");
         sb.append("# Server: ").append(serverUrl).append(":").append(serverPort).append("\n");
         sb.append("\n");
-        sb.append("PEER_NAME=\"").append(peerName).append("\"\n");
+        sb.append("PEER_NAME=\"").append(peerId).append("\"\n");
         sb.append("VPN_IP=\"").append(vpnIp).append("\"\n");
         sb.append("INSTALL_DIR=\"$HOME/vaier\"\n");
         sb.append("\n");
@@ -28,7 +28,7 @@ public final class PeerSetupScript {
         // address yet — the peer has no tunnel until this script builds one — so the guard leans on
         // the Vaier-server probes, the machine stamp, and the CIDRs the config about to be installed
         // would route into the tunnel.
-        sb.append(SetupScriptGuard.preamble(peerName,
+        sb.append(SetupScriptGuard.preamble(peerId,
             SetupScriptGuard.tunneledCidrs(wgConfig, vpnSubnet), null));
         sb.append("\n");
         sb.append("docker_compose_up() {\n");
@@ -73,7 +73,7 @@ public final class PeerSetupScript {
         sb.append("\n");
         sb.append("# --- Write .env file ---\n");
         sb.append("cat > \"$INSTALL_DIR/.env\" << ENV_FILE\n");
-        sb.append("PEER_NAME=").append(peerName).append("\n");
+        sb.append("PEER_NAME=").append(peerId).append("\n");
         sb.append("VPN_IP=").append(vpnIp).append("\n");
         sb.append("SERVER_URL=").append(serverUrl).append("\n");
         sb.append("SERVER_PORT=").append(serverPort).append("\n");
@@ -217,7 +217,7 @@ public final class PeerSetupScript {
         sb.append("    sleep 10\n");
         sb.append("fi\n");
         sb.append("\n");
-        sb.append(SetupScriptGuard.stamp(peerName));
+        sb.append(SetupScriptGuard.stamp(peerId));
         sb.append("\n");
         sb.append("# WireGuard runs in host network mode, so it survives Docker restart\n");
         sb.append("echo \"\"\n");

@@ -23,7 +23,7 @@ import net.vaier.domain.port.ForGettingPeerConfigurations;
 import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
 import net.vaier.domain.port.ForGettingVpnClients;
 import net.vaier.domain.port.ForPersistingReverseProxyRoutes;
-import net.vaier.domain.port.ForResolvingPeerNames;
+import net.vaier.domain.port.ForResolvingPeerIds;
 import net.vaier.domain.port.ForResolvingPublicHost;
 import net.vaier.domain.port.ForResolvingPublicHost.PublicHost;
 import net.vaier.domain.port.ForResolvingServerLanCidr;
@@ -61,7 +61,7 @@ class VpnServiceTest {
 
     @Mock ConfigResolver configResolver;
     @Mock ForGettingVpnClients forGettingVpnClients;
-    @Mock ForResolvingPeerNames forResolvingPeerNames;
+    @Mock ForResolvingPeerIds forResolvingPeerIds;
     @Mock ForGettingPeerConfigurations peerConfigProvider;
     @Mock ForDeletingVpnPeers vpnPeerDeleter;
     @Mock ForPersistingReverseProxyRoutes forPersistingReverseProxyRoutes;
@@ -98,20 +98,20 @@ class VpnServiceTest {
         assertThat(service.getClients()).isEmpty();
     }
 
-    // --- resolvePeerNameByIp ---
+    // --- resolvePeerIdByIp ---
 
     @Test
-    void resolvePeerNameByIp_delegatesToPort() {
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("alice");
+    void resolvePeerIdByIp_delegatesToPort() {
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice");
 
-        assertThat(service.resolvePeerNameByIp("10.13.13.2")).isEqualTo("alice");
+        assertThat(service.resolvePeerIdByIp("10.13.13.2")).isEqualTo("alice");
     }
 
     @Test
-    void resolvePeerNameByIp_returnsNullWhenNotFound() {
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.99")).thenReturn(null);
+    void resolvePeerIdByIp_returnsNullWhenNotFound() {
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.99")).thenReturn(null);
 
-        assertThat(service.resolvePeerNameByIp("10.13.13.99")).isNull();
+        assertThat(service.resolvePeerIdByIp("10.13.13.99")).isNull();
     }
 
     // --- getPeerConfig ---
@@ -203,7 +203,7 @@ class VpnServiceTest {
         service.generateWireguardClientDockerCompose("bob", "server.net", "51820");
 
         DockerComposeConfig config = captor.getValue();
-        assertThat(config.peerName()).isEqualTo("bob");
+        assertThat(config.peerId()).isEqualTo("bob");
         assertThat(config.serverUrl()).isEqualTo("server.net");
         assertThat(config.serverPort()).isEqualTo("51820");
     }
@@ -536,23 +536,23 @@ class VpnServiceTest {
         service.deletePeer("alice");
 
         verify(vpnPeerDeleter).deletePeer("alice");
-        verifyNoInteractions(forResolvingPeerNames);
+        verifyNoInteractions(forResolvingPeerIds);
     }
 
     @Test
     void deletePeer_byIp_resolvesToNameBeforeDeleting() {
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("alice");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice");
         when(peerConfigProvider.getPeerConfigByName("alice")).thenReturn(Optional.empty());
 
         service.deletePeer("10.13.13.2");
 
-        verify(forResolvingPeerNames).resolvePeerNameByIp("10.13.13.2");
+        verify(forResolvingPeerIds).resolvePeerIdByIp("10.13.13.2");
         verify(vpnPeerDeleter).deletePeer("alice");
     }
 
     @Test
     void deletePeer_ipNotResolved_throwsPeerNotFound() {
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.99")).thenReturn("10.13.13.99");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.99")).thenReturn("10.13.13.99");
 
         assertThatThrownBy(() -> service.deletePeer("10.13.13.99"))
             .isInstanceOf(PeerNotFoundException.class)
@@ -561,7 +561,7 @@ class VpnServiceTest {
 
     @Test
     void deletePeer_ipNotResolved_doesNotCallDeleter() {
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.99")).thenReturn("10.13.13.99");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.99")).thenReturn("10.13.13.99");
 
         assertThatThrownBy(() -> service.deletePeer("10.13.13.99"))
             .isInstanceOf(PeerNotFoundException.class);
@@ -648,7 +648,7 @@ class VpnServiceTest {
 
     @Test
     void deletePeer_byIp_usesResolvedIpForServiceCleanup() {
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("alice");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice");
         when(peerConfigProvider.getPeerConfigByName("alice"))
             .thenReturn(Optional.of(new PeerConfiguration("alice", "10.13.13.2", "config")));
 
@@ -1174,7 +1174,7 @@ class VpnServiceTest {
     void getVpnPeers_assemblesFromClientPlusPeerConfigPlusGeo() {
         VpnClient client = new VpnClient("pub", "10.13.13.2/32", "203.0.113.10", "51820", "0", "0", "0");
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("alice-1");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice-1");
         when(peerConfigProvider.getPeerConfigByIp("10.13.13.2")).thenReturn(Optional.of(
             new PeerConfiguration("alice-1", "Alice", "10.13.13.2", "[Interface]",
                 MachineType.UBUNTU_SERVER, "192.168.1.0/24", "192.168.1.10", "alice's box")));
@@ -1207,7 +1207,7 @@ class VpnServiceTest {
         // on-disk config — it must load that config once per peer, not twice (perf regression guard).
         VpnClient client = new VpnClient("pub", "10.13.13.2/32", "203.0.113.10", "51820", "0", "0", "0");
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("alice-1");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice-1");
         when(peerConfigProvider.getPeerConfigByIp("10.13.13.2")).thenReturn(Optional.of(
             new PeerConfiguration("alice-1", "Alice", "10.13.13.2", "[Interface]",
                 MachineType.UBUNTU_SERVER, "192.168.1.0/24", "192.168.1.10", "alice's box")));
@@ -1221,7 +1221,7 @@ class VpnServiceTest {
     void getVpnPeers_mobileClient_isClientNotServer_andOffersQrCode() {
         VpnClient client = new VpnClient("pub", "10.13.13.5/32", "", "", "0", "0", "0");
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.5")).thenReturn("phone");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.5")).thenReturn("phone");
         when(peerConfigProvider.getPeerConfigByIp("10.13.13.5")).thenReturn(Optional.of(
             new PeerConfiguration("phone", "Phone", "10.13.13.5", "",
                 MachineType.MOBILE_CLIENT, null, null, null)));
@@ -1241,7 +1241,7 @@ class VpnServiceTest {
     void getVpnPeers_fallsBackToDefaultTypeAndDisplayLabelWhenNoPeerConfig() {
         VpnClient client = new VpnClient("pub", "10.13.13.2/32", "", "", "0", "0", "0");
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("orphan-1");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("orphan-1");
         when(peerConfigProvider.getPeerConfigByIp("10.13.13.2")).thenReturn(Optional.empty());
 
         var view = service.getVpnPeers().get(0);
@@ -1262,7 +1262,7 @@ class VpnServiceTest {
         MachineId identity = MachineId.generate();
         VpnClient client = new VpnClient("pub", "10.13.13.2/32", "", "", "0", "0", "0");
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("alice-1");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice-1");
         when(peerConfigProvider.getPeerConfigByIp("10.13.13.2")).thenReturn(Optional.of(
             new PeerConfiguration("alice-1", "Alice", "10.13.13.2", "[Interface]",
                 MachineType.UBUNTU_SERVER, null, null, null, null, null, identity)));
@@ -1279,7 +1279,7 @@ class VpnServiceTest {
     void getVpnPeers_hasNoIdentityForAPeerWithNoStoredConfig() {
         VpnClient client = new VpnClient("pub", "10.13.13.2/32", "", "", "0", "0", "0");
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("orphan-1");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("orphan-1");
         when(peerConfigProvider.getPeerConfigByIp("10.13.13.2")).thenReturn(Optional.empty());
 
         assertThat(service.getVpnPeers().get(0).machineId()).isNull();
@@ -1289,7 +1289,7 @@ class VpnServiceTest {
     void getVpnPeers_skipsGeolocationWhenEndpointIsBlank() {
         VpnClient client = new VpnClient("pub", "10.13.13.2/32", "", "", "0", "0", "0");
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("alice-1");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice-1");
         when(peerConfigProvider.getPeerConfigByIp("10.13.13.2")).thenReturn(Optional.empty());
 
         var view = service.getVpnPeers().get(0);
@@ -1302,7 +1302,7 @@ class VpnServiceTest {
     void getVpnPeers_emptyGeoOptionalWhenLookupFails() {
         VpnClient client = new VpnClient("pub", "10.13.13.2/32", "203.0.113.10", "51820", "0", "0", "0");
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("alice-1");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice-1");
         when(peerConfigProvider.getPeerConfigByIp("10.13.13.2")).thenReturn(Optional.empty());
         when(forGeolocatingIps.locate("203.0.113.10")).thenReturn(Optional.empty());
 
@@ -1417,7 +1417,7 @@ class VpnServiceTest {
             MachineType.UBUNTU_SERVER, null, null, "10.13.13.0/24", null, "apalveien5", null);
         VpnClient client = new VpnClient("pub", "10.13.13.6/32", "", "", "0", "0", "0");
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.6")).thenReturn("apalveien5");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.6")).thenReturn("apalveien5");
         when(peerConfigProvider.getPeerConfigByIp("10.13.13.6")).thenReturn(Optional.of(
             new PeerConfiguration("apalveien5", "apalveien5", "10.13.13.6", existing,
                 MachineType.UBUNTU_SERVER, null, null, null)));
@@ -1434,7 +1434,7 @@ class VpnServiceTest {
         // No server pubkey stubbed → drift can't be computed; must not false-flag.
         VpnClient client = new VpnClient("pub", "10.13.13.6/32", "", "", "0", "0", "0");
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client));
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.6")).thenReturn("apalveien5");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.6")).thenReturn("apalveien5");
         when(peerConfigProvider.getPeerConfigByIp("10.13.13.6")).thenReturn(Optional.of(
             new PeerConfiguration("apalveien5", "apalveien5", "10.13.13.6", "[Interface]",
                 MachineType.UBUNTU_SERVER, null, null, null)));

@@ -3,7 +3,7 @@ package net.vaier.rest;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import net.vaier.domain.port.ForPublishingEvents;
 import net.vaier.application.GetVpnClientsUseCase;
-import net.vaier.application.ResolveVpnPeerNameUseCase;
+import net.vaier.application.ResolveVpnPeerIdUseCase;
 import net.vaier.domain.VpnClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,16 +17,16 @@ import static org.mockito.Mockito.*;
 class PeerStatsSchedulerTest {
 
     GetVpnClientsUseCase vpnClients;
-    ResolveVpnPeerNameUseCase peerNameResolver;
+    ResolveVpnPeerIdUseCase peerIdResolver;
     ForPublishingEvents eventPublisher;
     PeerStatsScheduler scheduler;
 
     @BeforeEach
     void setUp() {
         vpnClients = mock(GetVpnClientsUseCase.class);
-        peerNameResolver = mock(ResolveVpnPeerNameUseCase.class);
+        peerIdResolver = mock(ResolveVpnPeerIdUseCase.class);
         eventPublisher = mock(ForPublishingEvents.class);
-        scheduler = new PeerStatsScheduler(vpnClients, peerNameResolver, eventPublisher, new ObjectMapper());
+        scheduler = new PeerStatsScheduler(vpnClients, peerIdResolver, eventPublisher, new ObjectMapper());
     }
 
     @Test
@@ -34,7 +34,7 @@ class PeerStatsSchedulerTest {
         when(vpnClients.getClients()).thenReturn(List.of(
                 new VpnClient("pubkey1", "10.0.0.2/32", "1.2.3.4", "51820", "1700000000", "1024", "2048")
         ));
-        when(peerNameResolver.resolvePeerNameByIp("10.0.0.2")).thenReturn("myserver");
+        when(peerIdResolver.resolvePeerIdByIp("10.0.0.2")).thenReturn("myserver");
 
         scheduler.publishPeerStats();
 
@@ -47,7 +47,7 @@ class PeerStatsSchedulerTest {
         when(vpnClients.getClients()).thenReturn(List.of(
                 new VpnClient("pubkey1", "10.0.0.2/32", "1.2.3.4", "51820", recent, "1024", "2048")
         ));
-        when(peerNameResolver.resolvePeerNameByIp("10.0.0.2")).thenReturn("myserver");
+        when(peerIdResolver.resolvePeerIdByIp("10.0.0.2")).thenReturn("myserver");
 
         scheduler.publishPeerStats();
 
@@ -59,7 +59,7 @@ class PeerStatsSchedulerTest {
         when(vpnClients.getClients()).thenReturn(List.of(
                 new VpnClient("pubkey1", "10.0.0.2/32", "1.2.3.4", "51820", "0", "1024", "2048")
         ));
-        when(peerNameResolver.resolvePeerNameByIp("10.0.0.2")).thenReturn("myserver");
+        when(peerIdResolver.resolvePeerIdByIp("10.0.0.2")).thenReturn("myserver");
 
         scheduler.publishPeerStats();
 

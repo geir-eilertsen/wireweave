@@ -18,10 +18,13 @@ public interface ForDiscoveringPeerContainers {
      *                  against the machine rather than against whatever it is currently called. Null only
      *                  for a live WireGuard peer with no stored config — it is in no registry, so it has
      *                  no identity to report and inventing one would join it to nothing.
+     * @param peerId    the peer's WireGuard config directory. Never its display name — it was called
+     *                  {@code peerName} and held this same value, which is the sort of lie a later reader
+     *                  compares against a name.
      */
     record PeerContainers(
             String machineId,
-            String peerName,
+            String peerId,
             String vpnIp,
             String status,
             List<DockerService> containers,

@@ -30,7 +30,7 @@ import net.vaier.domain.port.ForPersistingReverseProxyRoutes;
 import net.vaier.domain.port.ForProbingServiceVersion;
 import net.vaier.domain.port.ForPublishingEvents;
 import net.vaier.domain.port.ForResolvingDns;
-import net.vaier.domain.port.ForResolvingPeerNames;
+import net.vaier.domain.port.ForResolvingPeerIds;
 import net.vaier.domain.port.ForResolvingServerLanCidr;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -71,7 +71,7 @@ class PublishingServiceTest {
     ForGettingVpnClients forGettingVpnClients;
 
     @Mock
-    ForResolvingPeerNames forResolvingPeerNames;
+    ForResolvingPeerIds forResolvingPeerIds;
 
     @Mock
     ForGettingPeerConfigurations forGettingPeerConfigurations;
@@ -426,7 +426,7 @@ class PublishingServiceTest {
         when(forGettingVpnClients.getClients()).thenReturn(
             List.of(new VpnClient("pubkey", "10.13.13.2/32", "1.2.3.4", "51820", recentHandshake, "0", "0"))
         );
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("alice");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice");
         setupEmptyVaierServerServices();
 
         PublishedServiceUco result = service.getPublishedServices().get(0);
@@ -441,7 +441,7 @@ class PublishingServiceTest {
         when(forGettingVpnClients.getClients()).thenReturn(
             List.of(new VpnClient("pubkey", "10.13.13.2/32", "1.2.3.4", "51820", "0", "0", "0"))
         );
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("alice");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice");
         setupEmptyVaierServerServices();
 
         PublishedServiceUco result = service.getPublishedServices().get(0);
@@ -600,7 +600,7 @@ class PublishingServiceTest {
         when(forGettingVpnClients.getClients()).thenReturn(
             List.of(new VpnClient("pubkey", "10.13.13.2/32", "1.2.3.4", "51820", recentHandshake, "0", "0"))
         );
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.2")).thenReturn("myserver");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("myserver");
         setupEmptyVaierServerServices();
 
         PublishedServiceUco result = service.getPublishedServices().get(0);
@@ -640,7 +640,7 @@ class PublishingServiceTest {
         when(forGettingVpnClients.getClients()).thenReturn(
             List.of(new VpnClient("pubkey", "10.13.13.3/32", "1.2.3.4", "51820", recentHandshake, "0", "0"))
         );
-        when(forResolvingPeerNames.resolvePeerNameByIp("10.13.13.3")).thenReturn("myserver");
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.3")).thenReturn("myserver");
         // Local traefik also listens on port 8080
         when(forGettingServerInfo.getServicesWithExposedPorts(any(Server.class))).thenReturn(
             List.of(new DockerService("id", "traefik", "image", "latest",
@@ -1389,7 +1389,7 @@ class PublishingServiceTest {
         assertThat(result).hasSize(1);
         PublishableService svc = result.getFirst();
         assertThat(svc.source()).isEqualTo(PublishableSource.LAN_SERVER);
-        assertThat(svc.peerName()).isEqualTo("apalveien");
+        assertThat(svc.peerId()).isEqualTo("apalveien");
         assertThat(svc.address()).isEqualTo("192.168.1.50");
         assertThat(svc.containerName()).isEqualTo("pihole");
         assertThat(svc.port()).isEqualTo(80);

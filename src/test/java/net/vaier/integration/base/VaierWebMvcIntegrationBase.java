@@ -106,7 +106,7 @@ public abstract class VaierWebMvcIntegrationBase {
     protected GetVpnPeersUseCase getVpnPeersUseCase;
 
     @MockBean
-    protected ResolveVpnPeerNameUseCase resolveVpnPeerNameUseCase;
+    protected ResolveVpnPeerIdUseCase resolveVpnPeerNameUseCase;
 
     @MockBean
     protected GetPeerConfigUseCase getPeerConfigUseCase;

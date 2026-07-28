@@ -223,6 +223,32 @@ class BackupServiceTest {
     }
 
     @Test
+    void protectGivesASecondMachineOfTheSameNameItsOwnRepositoryAndJob() {
+        // Machine names stopped needing to be unique (§6.22), and a machine's repository and job are both
+        // named after it. Two machines called "NAS" would otherwise compute the same slug, and neither
+        // failure would be visible: the second would back up into the FIRST one's borg repository, mixing
+        // two machines' archives, and its job would overwrite the first's in a store that upserts by job
+        // name — so the first machine would silently stop being backed up altogether.
+        service.saveBackupServer(server());
+        Machine here = new Machine(TestMachineIds.of("nas-apalveien"), "NAS",
+            MachineType.UBUNTU_SERVER, null, null, null, null, null, null, null, null,
+            null, false, null, DeviceCategory.SERVER, null);
+        Machine there = new Machine(TestMachineIds.of("nas-colina"), "NAS",
+            MachineType.UBUNTU_SERVER, null, null, null, null, null, null, null, null,
+            null, false, null, DeviceCategory.SERVER, null);
+
+        BackupJob first = service.protect(here, List.of("/home")).job();
+        BackupJob second = service.protect(there, List.of("/home")).job();
+
+        assertThat(first.name()).isNotEqualTo(second.name());
+        assertThat(first.repositoryName()).isNotEqualTo(second.repositoryName());
+        assertThat(service.getBackupJobs()).hasSize(2);
+        // And each still backs up its own machine.
+        assertThat(first.machineId()).isEqualTo(TestMachineIds.of("nas-apalveien"));
+        assertThat(second.machineId()).isEqualTo(TestMachineIds.of("nas-colina"));
+    }
+
+    @Test
     void protectReusesTheExistingRepositoryAndJobForTheMachine() {
         service.saveBackupServer(server());
         service.protect(machine("Colina 27"), List.of("/home/geir"));

@@ -8,7 +8,7 @@ import net.vaier.domain.DnsRecord.DnsRecordType;
 import net.vaier.domain.Server.State;
 import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
 import net.vaier.domain.port.ForProbingServiceVersion;
-import net.vaier.domain.port.ForResolvingPeerNames;
+import net.vaier.domain.port.ForResolvingPeerIds;
 import net.vaier.domain.port.ForResolvingServiceGroup;
 
 import java.net.URLEncoder;
@@ -563,7 +563,7 @@ public class ReverseProxyRoute {
      * {@code prober} driven port. The route owns the interaction end to end: it decides whether
      * there is an endpoint worth probing and builds the URL, then delegates the HTTP call to the
      * port — the application service only passes the port in. Mirrors how {@link #displayName}
-     * takes {@link ForResolvingPeerNames}; the service must never call the port itself and feed
+     * takes {@link ForResolvingPeerIds}; the service must never call the port itself and feed
      * the result back. Empty when no endpoint is configured or the probe yields nothing.
      */
     public java.util.Optional<String> probeVersion(ForProbingServiceVersion prober) {
@@ -572,15 +572,15 @@ public class ReverseProxyRoute {
     }
 
     public String displayName(String baseDomain, List<DockerService> localServices,
-                              List<VpnClient> vpnClients, ForResolvingPeerNames peerNameResolver) {
-        return displayName(baseDomain, localServices, vpnClients, peerNameResolver, List.of());
+                              List<VpnClient> vpnClients, ForResolvingPeerIds peerIdResolver) {
+        return displayName(baseDomain, localServices, vpnClients, peerIdResolver, List.of());
     }
 
     public String displayName(String baseDomain, List<DockerService> localServices,
-                              List<VpnClient> vpnClients, ForResolvingPeerNames peerNameResolver,
+                              List<VpnClient> vpnClients, ForResolvingPeerIds peerIdResolver,
                               List<PeerConfiguration> peers) {
         String subdomain = extractSubdomain(baseDomain);
-        ServerIdentity server = resolveServer(vpnClients, peerNameResolver, peers);
+        ServerIdentity server = resolveServer(vpnClients, peerIdResolver, peers);
         return stripRedundantPeerSuffix(subdomain, server) + " @ " + server.displayName();
     }
 
@@ -591,9 +591,9 @@ public class ReverseProxyRoute {
      * reverse the composite by splitting on the delimiter.
      */
     public String shortName(String baseDomain, List<VpnClient> vpnClients,
-                            ForResolvingPeerNames peerNameResolver, List<PeerConfiguration> peers) {
+                            ForResolvingPeerIds peerIdResolver, List<PeerConfiguration> peers) {
         return stripRedundantPeerSuffix(extractSubdomain(baseDomain),
-            resolveServer(vpnClients, peerNameResolver, peers));
+            resolveServer(vpnClients, peerIdResolver, peers));
     }
 
     /**
@@ -603,10 +603,10 @@ public class ReverseProxyRoute {
      * doesn't reverse-engineer this from the host display label.
      */
     public ServiceLocation serviceLocation(List<VpnClient> vpnClients,
-                                           ForResolvingPeerNames peerNameResolver,
+                                           ForResolvingPeerIds peerIdResolver,
                                            List<PeerConfiguration> peers) {
         if (isLanService) return ServiceLocation.LAN_SERVICE;
-        return resolveServer(vpnClients, peerNameResolver, peers).id() == null
+        return resolveServer(vpnClients, peerIdResolver, peers).id() == null
             ? ServiceLocation.VAIER_SERVER
             : ServiceLocation.PEER_SERVER;
     }
@@ -684,9 +684,9 @@ public class ReverseProxyRoute {
      * and labels tiles by this (issue #209): VPN peer names are the operator-set display labels,
      * the Vaier server name is fixed.
      */
-    public String hostDisplayName(List<VpnClient> vpnClients, ForResolvingPeerNames peerNameResolver,
+    public String hostDisplayName(List<VpnClient> vpnClients, ForResolvingPeerIds peerIdResolver,
                                   List<PeerConfiguration> peers) {
-        return resolveServer(vpnClients, peerNameResolver, peers).displayName();
+        return resolveServer(vpnClients, peerIdResolver, peers).displayName();
     }
 
     /**
@@ -790,7 +790,7 @@ public class ReverseProxyRoute {
      * {@link #displayName}'s suffix strip (which needs the id) and the labels (which need the
      * display name) consistent — they would drift if derived from two separate lookups.
      */
-    private ServerIdentity resolveServer(List<VpnClient> vpnClients, ForResolvingPeerNames peerNameResolver,
+    private ServerIdentity resolveServer(List<VpnClient> vpnClients, ForResolvingPeerIds peerIdResolver,
                                          List<PeerConfiguration> peers) {
         if (isLanService) {
             PeerConfiguration relay = findRelayWhoseLanContains(peers, address);
@@ -811,7 +811,7 @@ public class ReverseProxyRoute {
             .findFirst()
             .map(p -> new ServerIdentity(p.id(), p.name()))
             .orElseGet(() -> {
-                String resolvedId = peerNameResolver.resolvePeerNameByIp(address);
+                String resolvedId = peerIdResolver.resolvePeerIdByIp(address);
                 return resolvedId.equals(address)
                     ? new ServerIdentity(null, address)
                     : new ServerIdentity(resolvedId, PeerId.display(resolvedId));
