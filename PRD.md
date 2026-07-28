@@ -1926,17 +1926,25 @@ the wrong host.
       `--restrict-to-path` per repository, so a moved repository is `Repository path not allowed` until the
       client is re-authorised — after the config change, since the allowed paths are derived from it.
 
-   **Roon server's repository could not be moved, and that uncovered a live fault.** It opens with neither
-   the passphrase Vaier holds nor the leftover `Roon-server.pass` still on the host — so its archives are
-   unreadable, and were before this work (verified at its original path, which is where it has been left).
-   It had been invisible because the archive listing answered `200 []` for a repository it had failed to
-   read; "holds no archives" and "could not be read" looked identical on the one screen an operator opens
-   to get a file back. That is fixed (below), and the fault is now stated rather than implied. The
-   repository is 108 KB — an init with nothing in it — which fits `Roon server has never backed up`.
+   **Roon server's repository nearly cost a night's backup, and the near-miss was mine.** It failed to move
+   with `passphrase … is incorrect`, and the reason was two layers deep. Vaier's *stored* passphrase for it
+   was wrong — an old orphaning, and the reason its archives had always read as empty. Its nightly runs
+   worked anyway, because the *client* holds its own pass file (`~/.vaier-backup/<repo>.pass`) written when
+   the repository was provisioned, and that one was right. Renaming the repository then made
+   `ensurePassFile` write a **new** file, named for the new repository, from Vaier's wrong stored
+   passphrase — and `ensurePassFile` is create-if-absent, so it would never have corrected itself. Tonight's
+   run would have failed where last night's succeeded. Repaired by taking the working passphrase off the
+   host into Vaier's store and removing the stale file; the repository holds **6 archives**, so
+   `Roon server has never backed up` was never true — it only looked that way because a failed read
+   answered `200 []`.
 
-   **Three orphan directories are on the NAS**, untouched: `NUC-02` (118 MB), `NUC02` (88 KB) — the two
-   dead jobs that started this whole refactor, still occupying space — and `colina27` (45 MB), superseded
-   by `Colina-27`. They belong to no machine and no job; what to do with them is the operator's call.
+   **A repository's passphrase lives in two places and they can drift.** That is the standing hazard this
+   exposed: Vaier's store, and a create-if-absent file on each client. Renaming a repository or rotating a
+   passphrase updates one and not the other, and nothing says so until a run fails.
+
+   **The three orphan directories were deleted** (`NUC-02` 118 MB, `NUC02` 88 KB, `colina27` 45 MB) —
+   confirmed as churn from testing the identity work, not backups of anything. 163 MB reclaimed; the four
+   live repositories were listed back afterwards to prove they were untouched.
 
    2l. **An unreadable repository says so ✅ (2026-07-28).** `listArchives` returned an empty list when borg
    failed, and logged the reason at `debug`. "This repository holds no archives" and "I could not read this
@@ -1945,6 +1953,11 @@ the wrong host.
    failure is upstream and Vaier is relaying borg's own words ("Repository path not allowed",
    "passphrase … is incorrect"), which are worth more than any status Vaier could invent. Found by being
    misled by it: the first migration attempt reported success against a repository borg had refused.
+
+   **With one exception, found by an operator testing it.** A repository that does not exist *yet* is the
+   ordinary state of a machine just ticked for backup — borg creates it on the first run — so that reads as
+   empty, not as a fault. Reported as a failure, every machine looks broken between being selected and its
+   first nightly run. Matched on borg's own wording, since no exit code distinguishes it.
 
    2k. **The terminal dock is deleted ✅ (2026-07-28).** `terminal-dock.js` (1,334 lines), admin.html's
    terminal panel and tab, and ~360 lines of its CSS are gone. It tiled shells inside admin.html and was

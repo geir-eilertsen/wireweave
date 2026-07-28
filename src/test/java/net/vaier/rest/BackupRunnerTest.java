@@ -436,6 +436,23 @@ class BackupRunnerTest {
     }
 
     @Test
+    void aRepositoryThatDoesNotExistYet_isEmpty_notAFailure() {
+        // The ordinary state of a machine an operator has just ticked for backup: Vaier records the
+        // repository, and borg creates it on the first run. Until then there is nothing on the server, and
+        // borg says so. That is "nothing backed up yet" — the honest answer — and must not be dressed up as
+        // a fault, or every machine looks broken between being selected and its first nightly run.
+        when(repositories.getBackupRepositories()).thenReturn(List.of(repo()));
+        when(jobs.getBackupJobs()).thenReturn(List.of(job()));
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
+        hasCredential("Colina 27");
+        when(runner.run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("borg list --json")))
+            .thenReturn(new CommandResult(2, "",
+                "Repository ssh://borg@192.168.3.3:8022/home/borg/backups/x does not exist.", false, null));
+
+        assertThat(backupRunner.listArchives("nas-borg")).isEmpty();
+    }
+
+    @Test
     void aRepositoryThatCannotBeRead_saysSoRatherThanLookingEmpty() {
         // "This repository holds no archives" and "I could not read this repository" are different facts,
         // and the second one matters far more — it is the only sign that a machine's backups have become

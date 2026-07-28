@@ -315,9 +315,19 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
         try {
             CommandResult result = remoteCommand.run(machine.get().id(), command.exec());
             if (result.timedOut() || result.exitCode() != 0) {
-                // Not an empty list. A repository Vaier could not open is the one thing an operator needs
-                // told, and emptiness is indistinguishable from a repository that simply holds nothing —
-                // on the screen they open when they want a file back. borg's own words go with it.
+                // A repository that does not exist YET is not a failure — it is the ordinary state of a
+                // machine an operator has just ticked for backup, since borg creates the repository on the
+                // first run. Reporting that as a fault makes every machine look broken between being
+                // selected and its first nightly run.
+                if (!result.timedOut() && repositoryNotCreatedYet(result.stderr())) {
+                    log.debug("Repository {} has not been created on the server yet — nothing backed up",
+                        LogSafe.forLog(repositoryName));
+                    return List.of();
+                }
+                // Otherwise: not an empty list. A repository Vaier could not open is the one thing an
+                // operator needs told, and emptiness is indistinguishable from a repository that simply
+                // holds nothing — on the screen they open when they want a file back. borg's own words
+                // go with it.
                 String reason = result.timedOut() ? "the host did not answer in time"
                     : firstLine(result.stderr());
                 log.warn("borg list for repository {} on {} failed (exit={}, timedOut={}): {}",
@@ -542,6 +552,16 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
      * exception. Only the {@link BorgCommand.BuiltCommand#redacted() redacted} form is logged so the
      * plaintext never reaches the log.
      */
+    /**
+     * Whether borg's complaint is simply that the repository is not there yet. Matched on borg's own
+     * wording because there is no exit code that distinguishes it — and the distinction matters: "not
+     * created yet" is the normal first state of every backed-up machine, while everything else this method
+     * does not match is a repository that exists and would not open.
+     */
+    private static boolean repositoryNotCreatedYet(String stderr) {
+        return stderr != null && stderr.toLowerCase().contains("does not exist");
+    }
+
     /** borg's first line of complaint — the useful one; the rest is a stack of context an operator skips. */
     private static String firstLine(String stderr) {
         if (stderr == null || stderr.isBlank()) return null;
