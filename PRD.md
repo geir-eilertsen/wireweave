@@ -1885,9 +1885,45 @@ the wrong host.
    The sweep also closed the last naming lies, which is the class of bug that caused every defect in this
    refactor: `ForResolvingPeerNames.resolvePeerNameByIp` returned a peer **id**, and about twenty
    signatures, two DTO fields and a REST path variable called that id a "peer name". They say `peerId` now.
-   The audit script lives in the session scratchpad; it strips comments so it asks about code, not prose,
-   and it distinguishes a **machine** key from a record's own name (a backup job's `name` is its own
-   identity, like a route's FQDN, and is untouched).
+   The audit script lives in the session scratchpad; it strips comments so it asks about code, not prose.
+
+   2j. **Backups are keyed by identity end to end ✅ (2026-07-28).** The `freeName` step-aside above was a
+   patch over the real problem, which was that a **job** was keyed by its name and a **run** by its job's
+   name. Both are labels. `ForPersistingBackupJobs` upserts and deletes by `MachineId`, `ForRecordingBackupRuns`
+   records and reads by it, the `run-settled` SSE event carries it, and every `/backup-jobs/{…}` endpoint
+   addresses the machine rather than the job — so the browser's run cache is keyed by the same thing the
+   tree stands on. `JobRequest` lost its `machineId`: the path already says which machine, and two places to
+   say it is two places to disagree.
+
+   **Repositories are named by identity too**, which is a decision with a real cost and was taken
+   deliberately. A repository is a *directory on the backup server*, and its name was the one identifier in
+   Vaier meant to be read by a human with no Vaier — SSH into the NAS and `Apalveien-5` tells you what you
+   are looking at where a UUID does not. The operator's call was to name them by identity and let the
+   **survival kit** carry the mapping, which it does: the sheet prints the machine's name beside the
+   repository's full `ssh://` URL, and now names a *departed* machine from the repository's own name rather
+   than writing it off as "no machine" — an orphan directory is a UUID, so "no machine" would leave nothing
+   to attach it to. `RecoverySheet` also stopped calling `Map.get(null)` on that path, which throws on an
+   immutable map: an NPE while rendering the one page that exists for when everything else has failed.
+
+   What a store is *called* is now a separate question from what it is *named*, answered by
+   `BackupStoreLabel` in the domain: the machine's name, plus where the machine is when another machine
+   shares that name. The browser reads that label off the feed and never re-derives it — two surfaces
+   working out which store is which is how they come to disagree, and being wrong means restoring the wrong
+   machine's data.
+
+   **Migration (done on the live instance, by hand).** The four existing repositories were renamed to their
+   machines' identities with `repoPath` pinned to the directory they already occupy, so **nothing moved on
+   the NAS** and borg still talks to the same archives — verified by listing them back through the renamed
+   repository. Moving the directories to match is available as a separate, deliberate step; it touches the
+   only copy of the data, so it is not folded into a code change.
+
+   2k. **The terminal dock is deleted ✅ (2026-07-28).** `terminal-dock.js` (1,334 lines), admin.html's
+   terminal panel and tab, and ~360 lines of its CSS are gone. It tiled shells inside admin.html and was
+   reached from a Terminal button on the Infrastructure page — a page the Explorer replaced (#323) — so
+   nothing had called it since; its own empty state still told operators to open a shell from a button that
+   no longer existed. Two shell systems is two places for session ownership to drift, which is the bug
+   `terminal-panes.js` exists to prevent. Its lifetime guards moved to `terminal-window.js`, the surface
+   that is actually live.
 
 **No config migration is outstanding.** The stores' on-disk shapes did not change in this pass — peers and
 LAN servers already carried `id:` from the earlier slices, and `ignoreKey` was deliberately left alone so

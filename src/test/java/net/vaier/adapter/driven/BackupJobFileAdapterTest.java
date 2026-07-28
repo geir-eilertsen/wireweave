@@ -3,6 +3,7 @@ package net.vaier.adapter.driven;
 import java.nio.file.Files;
 import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.BackupJob;
+import net.vaier.domain.MachineId;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -100,13 +101,23 @@ class BackupJobFileAdapterTest {
     }
 
     @Test
-    void getByMachine_returnsEveryJobForThatMachine() {
+    void getByMachine_returnsThatMachinesJob() {
         adapter.save(new BackupJob("a", TestMachineIds.of("Colina 27"), "nas-borg", List.of("/a"), List.of(), 1, 0, 0, "zstd,6", true, false));
-        adapter.save(new BackupJob("b", TestMachineIds.of("Colina 27"), "nas-borg", List.of("/b"), List.of(), 1, 0, 0, "zstd,6", true, false));
         adapter.save(new BackupJob("c", TestMachineIds.of("Apalveien 5"), "nas-borg", List.of("/c"), List.of(), 1, 0, 0, "zstd,6", true, false));
 
         assertThat(adapter.getByMachine(TestMachineIds.of("Colina 27"))).extracting(BackupJob::name)
-            .containsExactlyInAnyOrder("a", "b");
+            .containsExactly("a");
+    }
+
+    @Test
+    void save_aSecondJobForOneMachine_replacesTheFirst() {
+        // Vaier makes exactly one job per machine, and the machine is now what keys the store — so writing
+        // a second is writing the same one. It still READS a hand-edited file that holds two (see
+        // BackupJobProtectedPathsAdapter, which folds them into one protection) rather than picking one.
+        adapter.save(new BackupJob("a", TestMachineIds.of("Colina 27"), "nas-borg", List.of("/a"), List.of(), 1, 0, 0, "zstd,6", true, false));
+        adapter.save(new BackupJob("b", TestMachineIds.of("Colina 27"), "nas-borg", List.of("/b"), List.of(), 1, 0, 0, "zstd,6", true, false));
+
+        assertThat(adapter.getAll()).extracting(BackupJob::name).containsExactly("b");
     }
 
     @Test
@@ -119,11 +130,11 @@ class BackupJobFileAdapterTest {
     }
 
     @Test
-    void deleteByName_removesEntry() {
+    void deleteByMachine_removesEntry() {
         adapter.save(new BackupJob("a", TestMachineIds.of("Colina 27"), "nas-borg", List.of("/a"), List.of(), 1, 0, 0, "zstd,6", true, false));
-        adapter.save(new BackupJob("b", TestMachineIds.of("Colina 27"), "nas-borg", List.of("/b"), List.of(), 1, 0, 0, "zstd,6", true, false));
+        adapter.save(new BackupJob("b", TestMachineIds.of("Apalveien 5"), "nas-borg", List.of("/b"), List.of(), 1, 0, 0, "zstd,6", true, false));
 
-        adapter.deleteByName("a");
+        adapter.deleteByMachine(TestMachineIds.of("Colina 27"));
 
         assertThat(adapter.getAll()).extracting(BackupJob::name).containsExactly("b");
     }
@@ -177,5 +188,58 @@ class BackupJobFileAdapterTest {
             """);
 
         assertThat(adapter.getAll()).isEmpty();
+    }
+
+    // --- a job belongs to a machine, and that is what keys it (§6.22) --------------------------------
+
+    @Test
+    void save_sameMachine_replacesTheJob() {
+        MachineId nas = MachineId.generate();
+        adapter.save(job("NAS", nas, List.of("/home")));
+
+        BackupJob renamed = job("The Norway box", nas, List.of("/home", "/etc"));
+        adapter.save(renamed);
+
+        assertThat(adapter.getAll()).containsExactly(renamed);
+    }
+
+    @Test
+    void save_twoMachinesSharingAJobName_keepsBoth() {
+        // A job's name is a label now — the machine is what identifies it. Keyed by name, the second of two
+        // machines called "NAS" overwrote the first's job in this file, and the first silently stopped
+        // being backed up: no error, and its nightly run simply never happened again.
+        BackupJob here = job("NAS", MachineId.generate(), List.of("/home"));
+        BackupJob there = job("NAS", MachineId.generate(), List.of("/home"));
+
+        adapter.save(here);
+        adapter.save(there);
+
+        assertThat(adapter.getAll()).containsExactlyInAnyOrder(here, there);
+    }
+
+    @Test
+    void deleteByMachine_removesOnlyThatMachinesJob() {
+        BackupJob keep = job("NAS", MachineId.generate(), List.of("/home"));
+        BackupJob go = job("NAS", MachineId.generate(), List.of("/home"));
+        adapter.save(keep);
+        adapter.save(go);
+
+        adapter.deleteByMachine(go.machineId());
+
+        assertThat(adapter.getAll()).containsExactly(keep);
+    }
+
+    @Test
+    void deleteByMachine_unknownMachine_isNoOp() {
+        adapter.save(job("NAS", MachineId.generate(), List.of("/home")));
+
+        adapter.deleteByMachine(MachineId.generate());
+
+        assertThat(adapter.getAll()).hasSize(1);
+    }
+
+    private static BackupJob job(String name, MachineId machineId, List<String> paths) {
+        return new BackupJob(name, machineId, "nas-borg", paths, List.of(),
+            7, 4, 6, "zstd,6", true, false);
     }
 }

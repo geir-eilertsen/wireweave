@@ -3,6 +3,7 @@ package net.vaier.adapter.driven;
 import java.nio.file.Files;
 import net.vaier.domain.BackupRun;
 import net.vaier.domain.BackupRunStatus;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.TestMachineIds;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,15 +27,37 @@ class BackupRunFileAdapterTest {
     }
 
     private BackupRun run(String runId, String jobName, BackupRunStatus status, Integer exitCode) {
-        return new BackupRun(runId, jobName, "nas-borg", TestMachineIds.of("Colina 27"), status,
+        // The job name is the label; the machine is what a run is filed under, so a fixture that means two
+        // different machines has to say so.
+        return run(runId, jobName, TestMachineIds.of(jobName), status, exitCode);
+    }
+
+    private BackupRun run(String runId, String jobName, MachineId machineId, BackupRunStatus status,
+                          Integer exitCode) {
+        return new BackupRun(runId, jobName, "nas-borg", machineId, status,
             Instant.parse("2026-07-08T02:00:00Z"),
             status.isTerminal() ? Instant.parse("2026-07-08T02:05:00Z") : null,
             exitCode, "{hostname}-{now:%Y-%m-%dT%H:%M:%S}", "Backup completed");
     }
 
     @Test
-    void latestForJob_emptyWhenNothingRecorded() {
-        assertThat(adapter.latestForJob("colina-home")).isEmpty();
+    void latestForMachine_emptyWhenNothingRecorded() {
+        assertThat(adapter.latestForMachine(TestMachineIds.of("colina-home"))).isEmpty();
+    }
+
+    @Test
+    void twoMachinesSharingAJobName_keepTheirOwnRuns() {
+        // A run used to be filed under its job's NAME, so two machines called "NAS" shared one history: the
+        // second machine's run replaced the first's, and the first then read as backed up on the strength of
+        // a run that happened on another host entirely.
+        MachineId here = MachineId.generate();
+        MachineId there = MachineId.generate();
+
+        adapter.record(run("run-here", "NAS", here, BackupRunStatus.SUCCESS, 0));
+        adapter.record(run("run-there", "NAS", there, BackupRunStatus.FAILED, 2));
+
+        assertThat(adapter.latestForMachine(here)).map(BackupRun::runId).contains("run-here");
+        assertThat(adapter.latestForMachine(there)).map(BackupRun::runId).contains("run-there");
     }
 
     @Test
@@ -46,9 +69,9 @@ class BackupRunFileAdapterTest {
         // A fresh adapter reads the persisted file — the latest run per job survives a restart.
         BackupRunFileAdapter fresh = new BackupRunFileAdapter(tempDir.toString());
 
-        assertThat(fresh.latestForJob("colina-home"))
+        assertThat(fresh.latestForMachine(TestMachineIds.of("colina-home")))
             .contains(run("run-2", "colina-home", BackupRunStatus.SUCCESS, 0));
-        assertThat(fresh.latestForJob("roon"))
+        assertThat(fresh.latestForMachine(TestMachineIds.of("roon")))
             .contains(run("run-3", "roon", BackupRunStatus.FAILED, 2));
         // Only the latest run per job is retained (one per job), not the full history.
         assertThat(fresh.getAll()).hasSize(2);
@@ -61,7 +84,7 @@ class BackupRunFileAdapterTest {
 
         BackupRunFileAdapter fresh = new BackupRunFileAdapter(tempDir.toString());
 
-        assertThat(fresh.latestForJob("colina-home"))
+        assertThat(fresh.latestForMachine(TestMachineIds.of("colina-home")))
             .contains(run("run-w", "colina-home", BackupRunStatus.WARNING, 1));
     }
 

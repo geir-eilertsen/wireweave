@@ -79,15 +79,15 @@ public class BackupJobFileAdapter implements ForPersistingBackupJobs {
     @Override
     public synchronized void save(BackupJob job) {
         List<BackupJob> current = new ArrayList<>(getAll());
-        current.removeIf(j -> j.name().equals(job.name()));
+        current.removeIf(j -> j.machineId().equals(job.machineId()));
         current.add(job);
         writeAll(current);
     }
 
     @Override
-    public synchronized void deleteByName(String name) {
+    public synchronized void deleteByMachine(MachineId machineId) {
         List<BackupJob> current = new ArrayList<>(getAll());
-        boolean removed = current.removeIf(j -> j.name().equals(name));
+        boolean removed = current.removeIf(j -> j.machineId().equals(machineId));
         if (removed) writeAll(current);
     }
 

@@ -147,7 +147,7 @@
         backupRepos: [],                 // GET /backup-repositories — the repositories that live on it
         repoArchives: new Map(),         // repo name -> { state, list, error }: the archives in a repository, read when looked at
         backupJobs: [],                  // GET /backup-jobs — the jobs, each backing one machine up to a repository
-        jobRuns: new Map(),              // job name -> { state, run }: its last run, read on view and on the run-settled push
+        jobRuns: new Map(),              // machine identity -> { state, run }: its last run, read on view and on the run-settled push
         preparing: new Set(),            // machine identities Vaier is readying to back up (first back-up), cleared on prepare-client-settled
         readying: new Map(),             // machine identity -> the one `sudo bash …` line Vaier staged where it could not gain root itself
         provisionWatch: null,            // { serverName, bodyEl } while a provision dialog awaits its provision-settled push
@@ -271,15 +271,15 @@
 
     // What a store on the backup server is, to a person: the backups of a machine. "Repository" is a borg
     // noun and the operator never chose one — Vaier creates exactly one per machine, behind the Back up verb,
-    // and names it after the machine. So the job that targets it is the truth of whose backups are inside,
-    // and that is what the tree and the server's entry show.
+    // and names it after the machine's IDENTITY, so two machines called "NAS" cannot compete for one
+    // directory. That name says nothing to a person, so the backend supplies the label (BackupStoreLabel):
+    // the machine's name, and where it is when another machine shares that name.
     //
-    // A store no job claims keeps its own name instead. Those are real — one adopted from before Vaier, or
-    // the leftover of a machine that was renamed — and both wrong answers are worse: a machine name would
-    // invent a machine, and hiding it would leave backups nobody is watching.
+    // Deliberately not re-derived here. Two surfaces working out which store is which is how they come to
+    // disagree, and being wrong about that means restoring the wrong machine's data.
     function repoLabel(repoName) {
-        const job = S.backupJobs.find((j) => j.repositoryName === repoName);
-        return job ? job.machineName : repoName;
+        const repo = S.backupRepos.find((r) => r.name === repoName);
+        return repo && repo.label ? repo.label : repoName;
     }
     // The backup jobs that back a machine up. A job carries the identity of the machine it protects, so this
     // is how a machine learns it is backed up — and grows a `backup` entry even when it is not the server.
@@ -4386,8 +4386,8 @@
         body.appendChild(sched);
 
         // The last run, read on view and refreshed when the backend says it settled.
-        const held = S.jobRuns.get(job.name);
-        if (held === undefined) loadJobRun(job.name);
+        const held = S.jobRuns.get(job.machineId);
+        if (held === undefined) loadJobRun(job.machineId);
         body.appendChild(section('Last run'));
         const runLine = el('div', 'ex-runline');
         if (held === undefined || held.state === 'loading') {
@@ -4480,32 +4480,33 @@
     // The tree's backup dot reads the outcome off the job list, which is loaded once at boot — so anything
     // that learns a newer outcome has to write it back there, or the tree would keep showing last night's
     // result all day. This is that write-back: one line, called wherever a run's outcome becomes known.
-    function noteRunStatus(jobName, status) {
-        const job = S.backupJobs.find((j) => j.name === jobName);
+    function noteRunStatus(machineId, status) {
+        const job = S.backupJobs.find((j) => j.machineId === machineId);
         if (job) job.lastRunStatus = status;
     }
 
     // The last run, read on view (404 means it has never run) and again on the run-settled push. Not skipped on
     // 'ready' — the push calls this to replace a RUNNING run with its outcome — but skipped while a read is in
     // flight, and only ever the latest run, so a machine's whole history is not dragged into the browser.
-    async function loadJobRun(name) {
-        const held = S.jobRuns.get(name);
+    async function loadJobRun(machineId) {
+        const held = S.jobRuns.get(machineId);
         if (held && held.state === 'loading') return;
-        S.jobRuns.set(name, { state: 'loading', run: held ? held.run : null });
+        S.jobRuns.set(machineId, { state: 'loading', run: held ? held.run : null });
         try {
-            const res = await fetch('/backup-jobs/' + encodeURIComponent(name) + '/runs', { cache: 'no-store' });
+            const res = await fetch('/backup-jobs/' + encodeURIComponent(machineId) + '/runs',
+                { cache: 'no-store' });
             if (res.status === 404) {
-                S.jobRuns.set(name, { state: 'none', run: null });
-                noteRunStatus(name, null);
+                S.jobRuns.set(machineId, { state: 'none', run: null });
+                noteRunStatus(machineId, null);
             } else if (res.ok) {
                 const run = await res.json();
-                S.jobRuns.set(name, { state: 'ready', run: run });
-                noteRunStatus(name, run.status);
+                S.jobRuns.set(machineId, { state: 'ready', run: run });
+                noteRunStatus(machineId, run.status);
             } else {
-                S.jobRuns.set(name, { state: 'error', run: null });
+                S.jobRuns.set(machineId, { state: 'error', run: null });
             }
         } catch (e) {
-            S.jobRuns.set(name, { state: 'error', run: null });
+            S.jobRuns.set(machineId, { state: 'error', run: null });
         }
         render();
     }
@@ -4514,7 +4515,7 @@
     // (watchBackups) as run-settled, so this shows RUNNING and never waits or polls for the end.
     async function runNow(job) {
         try {
-            const res = await fetch('/backup-jobs/' + encodeURIComponent(job.name) + '/runs', { method: 'POST' });
+            const res = await fetch('/backup-jobs/' + encodeURIComponent(job.machineId) + '/runs', { method: 'POST' });
             if (!res.ok) {
                 toast(res.status === 404
                     ? 'Cannot start the backup — its repository or the server is missing.'
@@ -4522,8 +4523,8 @@
                 return;
             }
             const started = await res.json();                                     // RUNNING
-            S.jobRuns.set(job.name, { state: 'ready', run: started });
-            noteRunStatus(job.name, started.status);   // the tree goes amber-idle while it runs, from here
+            S.jobRuns.set(job.machineId, { state: 'ready', run: started });
+            noteRunStatus(job.machineId, started.status);   // the tree goes amber-idle while it runs, from here
             toast('Backing up ' + job.machineName + '…');
             render();
         } catch (e) {
@@ -4541,10 +4542,10 @@
         job.backupAsRoot = on;
         render();
         try {
-            const res = await fetch('/backup-jobs/' + encodeURIComponent(job.name), {
+            const res = await fetch('/backup-jobs/' + encodeURIComponent(job.machineId), {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ machineId: job.machineId, repositoryName: job.repositoryName,
+                body: JSON.stringify({ repositoryName: job.repositoryName,
                     sourcePaths: job.sourcePaths, excludes: job.excludes, keepDaily: job.keepDaily,
                     keepWeekly: job.keepWeekly, keepMonthly: job.keepMonthly, compression: job.compression,
                     enabled: job.enabled, backupAsRoot: on }),
@@ -4571,11 +4572,11 @@
             + 'stops. The archives already made are untouched; they stay on the server.', 'Stop backing up');
         if (!ok) return;
         try {
-            const res = await fetch('/backup-jobs/' + encodeURIComponent(job.name), { method: 'DELETE' });
+            const res = await fetch('/backup-jobs/' + encodeURIComponent(job.machineId), { method: 'DELETE' });
             if (!res.ok && res.status !== 404) { toast('Vaier could not stop the backup.'); return; }
         } catch (e) { toast('Vaier could not stop the backup.'); return; }
         const machineId = job.machineId;
-        S.jobRuns.delete(job.name);
+        S.jobRuns.delete(job.machineId);
         await loadBackup();
         toast('Stopped backing up ' + job.machineName + '.');
         go(['fleet', machineId]);   // the `backup` entry is gone now; the machine always stands
@@ -4588,7 +4589,7 @@
         const events = new EventSource('/backup-jobs/events');
         events.addEventListener('run-settled', (e) => {
             const d = JSON.parse(e.data);
-            if (S.backupJobs.some((j) => j.name === d.jobName)) loadJobRun(d.jobName);
+            if (S.backupJobs.some((j) => j.machineId === d.machineId)) loadJobRun(d.machineId);
         });
         // The other half of the readying we started under a first back-up: the detached borg install has
         // finished on the host. Clear the "getting ready" state and say how it went — no polling, we were told.
@@ -5678,7 +5679,7 @@
         const machineName = nameOf(job.machineId);
         S.readying.delete(job.machineId);
         try {
-            const res = await fetch('/backup-jobs/' + encodeURIComponent(job.name) + '/prepare-client',
+            const res = await fetch('/backup-jobs/' + encodeURIComponent(job.machineId) + '/prepare-client',
                 { method: 'POST' });
             if (!res.ok) {
                 toast('Vaier could not start getting ' + machineName + ' ready.');

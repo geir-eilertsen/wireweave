@@ -36,6 +36,7 @@ import net.vaier.application.WriteSurvivalKitUseCase.SurvivalKitReport;
 import net.vaier.domain.Archive;
 import net.vaier.domain.BackupJob;
 import net.vaier.domain.BackupRepository;
+import net.vaier.domain.BackupStoreLabel;
 import net.vaier.domain.BackupRun;
 import net.vaier.domain.BackupRunStatus;
 import net.vaier.domain.BackupServer;
@@ -75,11 +76,11 @@ import java.util.Optional;
  * {@link IllegalArgumentException} (from the domain records or {@code BackupService}) → {@code 400}
  * via {@link GlobalExceptionHandler}. Every user-supplied name passes through {@link LogSafe#forLog}.
  *
- * <p>Beyond CRUD, a job can be run on demand — {@code POST /backup-jobs/{name}/runs} loads the job and
+ * <p>Beyond CRUD, a job can be run on demand — {@code POST /backup-jobs/{machineId}/runs} loads the job and
  * its repository, triggers the run through {@link RunBackupJobUseCase} (the controller reaches the
  * rest-layer runner only through that use-case seam, as every controller does) and returns
  * {@code 202 Accepted} with the {@code RUNNING} run — and its latest outcome read back with
- * {@code GET /backup-jobs/{name}/runs}. Archive listing and provisioning arrive in later slices.
+ * {@code GET /backup-jobs/{machineId}/runs}. Archive listing and provisioning arrive in later slices.
  */
 @RestController
 @RequiresEnterprise
@@ -368,7 +369,7 @@ public class BackupRestController {
      * Every job, each carrying its last outcome. The outcome rides along because the Explorer's tree colours
      * a machine's backup entry from it: a failed run has to be visible from the fleet's root, not only to an
      * operator who happens to open that machine. It is one cheap lookup per job against the same run store
-     * {@code GET /backup-jobs/{name}/runs} reads, composed here at the driving edge rather than by making
+     * {@code GET /backup-jobs/{machineId}/runs} reads, composed here at the driving edge rather than by making
      * either domain reach for the other.
      */
     @GetMapping("/backup-jobs")
@@ -376,25 +377,28 @@ public class BackupRestController {
         return ResponseEntity.ok(getBackupJobs.getBackupJobs().stream().map(this::withLastRun).toList());
     }
 
-    @GetMapping("/backup-jobs/{name}")
-    public ResponseEntity<JobResponse> getJob(@PathVariable String name) {
-        return getBackupJobs.getBackupJobs().stream()
-            .filter(j -> j.name().equals(name)).findFirst()
+    @GetMapping("/backup-jobs/{machineId}")
+    public ResponseEntity<JobResponse> getJob(@PathVariable String machineId) {
+        return findJob(machineId)
             .map(job -> ResponseEntity.ok(withLastRun(job)))
             .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     /** A job with its latest run's status attached, or {@code null} status when it has never run. */
     private JobResponse withLastRun(BackupJob job) {
-        return JobResponse.from(job, machineNameOf(job.machineId()), getBackupRuns.latestForJob(job.name())
-            .map(BackupRun::status).map(Enum::name).orElse(null));
+        return JobResponse.from(job, machineNameOf(job.machineId()),
+            getBackupRuns.latestForMachine(job.machineId())
+                .map(BackupRun::status).map(Enum::name).orElse(null));
     }
 
-    @PutMapping("/backup-jobs/{name}")
-    public ResponseEntity<JobResponse> saveJob(@PathVariable String name,
+    @PutMapping("/backup-jobs/{machineId}")
+    public ResponseEntity<JobResponse> saveJob(@PathVariable String machineId,
                                                @RequestBody JobRequest request) {
-        log.info("Saving backup job {}", LogSafe.forLog(name));
-        Machine machine = machine(request.machineId());
+        log.info("Saving the backup job for machine {}", LogSafe.forLog(machineId));
+        Machine machine = machine(machineId);
+        // A job's name is a label; the machine is what identifies it. Keep whatever the job is already
+        // called, and fall back to the machine's name for one being written for the first time.
+        String name = findJob(machineId).map(BackupJob::name).orElseGet(machine::name);
         BackupJob job = new BackupJob(name, machine.id(), request.repositoryName(),
             request.sourcePaths(), request.excludes(),
             request.keepDaily(), request.keepWeekly(), request.keepMonthly(),
@@ -403,10 +407,10 @@ public class BackupRestController {
         return ResponseEntity.ok(JobResponse.from(job, machine.name()));
     }
 
-    @DeleteMapping("/backup-jobs/{name}")
-    public ResponseEntity<Void> deleteJob(@PathVariable String name) {
-        log.info("Deleting backup job {}", LogSafe.forLog(name));
-        deleteBackupJob.deleteBackupJob(name);
+    @DeleteMapping("/backup-jobs/{machineId}")
+    public ResponseEntity<Void> deleteJob(@PathVariable String machineId) {
+        log.info("Deleting the backup job for machine {}", LogSafe.forLog(machineId));
+        deleteBackupJob.deleteBackupJob(MachineId.of(machineId));
         return ResponseEntity.noContent().build();
     }
 
@@ -475,10 +479,10 @@ public class BackupRestController {
      * unknown), launches the run through {@link RunBackupJobUseCase} and returns {@code 202 Accepted} with
      * the {@code RUNNING} run — a poll settles it to its outcome later.
      */
-    @PostMapping("/backup-jobs/{name}/runs")
-    public ResponseEntity<RunResponse> runJob(@PathVariable String name) {
-        log.info("Running backup job {} on demand", LogSafe.forLog(name));
-        Optional<BackupJob> job = findJob(name);
+    @PostMapping("/backup-jobs/{machineId}/runs")
+    public ResponseEntity<RunResponse> runJob(@PathVariable String machineId) {
+        log.info("Backing up machine {} on demand", LogSafe.forLog(machineId));
+        Optional<BackupJob> job = findJob(machineId);
         if (job.isEmpty()) {
             return ResponseEntity.notFound().build();
         }
@@ -492,9 +496,9 @@ public class BackupRestController {
     }
 
     /** The latest run for the named job, or {@code 404} when it has never run (matches the CRUD lookups). */
-    @GetMapping("/backup-jobs/{name}/runs")
-    public ResponseEntity<RunResponse> getRuns(@PathVariable String name) {
-        return getBackupRuns.latestForJob(name)
+    @GetMapping("/backup-jobs/{machineId}/runs")
+    public ResponseEntity<RunResponse> getRuns(@PathVariable String machineId) {
+        return getBackupRuns.latestForMachine(MachineId.of(machineId))
             .map(run -> ResponseEntity.ok(RunResponse.from(run, machineNameOf(run.machineId()))))
             .orElseGet(() -> ResponseEntity.notFound().build());
     }
@@ -508,9 +512,9 @@ public class BackupRestController {
      * {@link CheckBackupPrerequisitesUseCase}; neither check throws, so a negative just reports the
      * relevant flag false.
      */
-    @GetMapping("/backup-jobs/{name}/provision/check")
-    public ResponseEntity<ProvisionCheckResponse> provisionCheck(@PathVariable String name) {
-        Optional<BackupJob> job = findJob(name);
+    @GetMapping("/backup-jobs/{machineId}/provision/check")
+    public ResponseEntity<ProvisionCheckResponse> provisionCheck(@PathVariable String machineId) {
+        Optional<BackupJob> job = findJob(machineId);
         if (job.isEmpty()) {
             return ResponseEntity.notFound().build();
         }
@@ -518,7 +522,7 @@ public class BackupRestController {
         if (repo.isEmpty() || findServer(repo.get().serverName()).isEmpty()) {
             return ResponseEntity.notFound().build();
         }
-        log.info("Checking backup prerequisites for job {}", LogSafe.forLog(name));
+        log.info("Checking backup prerequisites for machine {}", LogSafe.forLog(machineId));
         BorgAvailability borg = checkBackupPrerequisites.checkBorg(job.get().machineId());
         RepoReachability nas = checkBackupPrerequisites.checkNas(job.get().repositoryName(),
             job.get().machineId());
@@ -565,13 +569,13 @@ public class BackupRestController {
      * {@code 404} when the job is unknown; otherwise {@code 200} with the outcome — {@code started} (poll the
      * status endpoint) or {@code scriptOnly} (run the staged {@code sudo bash <path>}). Never fails opaquely.
      */
-    @PostMapping("/backup-jobs/{name}/prepare-client")
-    public ResponseEntity<PrepareClientResponse> prepareClient(@PathVariable String name) {
-        Optional<BackupJob> job = findJob(name);
+    @PostMapping("/backup-jobs/{machineId}/prepare-client")
+    public ResponseEntity<PrepareClientResponse> prepareClient(@PathVariable String machineId) {
+        Optional<BackupJob> job = findJob(machineId);
         if (job.isEmpty()) {
             return ResponseEntity.notFound().build();
         }
-        log.info("Preparing backup client for job {}", LogSafe.forLog(name));
+        log.info("Preparing the backup client on machine {}", LogSafe.forLog(machineId));
         PrepareResult result = prepareBackupClient.prepareClient(job.get().machineId());
         return ResponseEntity.ok(PrepareClientResponse.from(result));
     }
@@ -582,9 +586,9 @@ public class BackupRestController {
      * this for the outcome: {@code RUNNING} until the install settles, then {@code SUCCESS}/{@code FAILED}
      * with a log tail. {@code 404} when the job is unknown.
      */
-    @GetMapping("/backup-jobs/{name}/prepare-client/status")
-    public ResponseEntity<PrepareClientStatusResponse> prepareClientStatus(@PathVariable String name) {
-        Optional<BackupJob> job = findJob(name);
+    @GetMapping("/backup-jobs/{machineId}/prepare-client/status")
+    public ResponseEntity<PrepareClientStatusResponse> prepareClientStatus(@PathVariable String machineId) {
+        Optional<BackupJob> job = findJob(machineId);
         if (job.isEmpty()) {
             return ResponseEntity.notFound().build();
         }
@@ -601,9 +605,11 @@ public class BackupRestController {
             .or(() -> all.stream().filter(j -> j.repositoryName().equals(repositoryName)).findFirst());
     }
 
-    private Optional<BackupJob> findJob(String name) {
+    /** The job backing up this machine, or empty when it has none. A machine has one job; that keys it. */
+    private Optional<BackupJob> findJob(String machineId) {
+        MachineId id = MachineId.of(machineId);
         return getBackupJobs.getBackupJobs().stream()
-            .filter(j -> j.name().equals(name)).findFirst();
+            .filter(j -> j.machineId().equals(id)).findFirst();
     }
 
     private java.util.Optional<BackupRepository> findRepository(String name) {
@@ -631,7 +637,35 @@ public class BackupRestController {
             .map(r::repoPathOn)
             .orElse(r.repoPath());
         boolean hasPassphrase = r.passphrase() != null && !r.passphrase().isBlank();
-        return new RepositoryResponse(r.name(), r.serverName(), effectivePath, r.appendOnly(), hasPassphrase);
+        return new RepositoryResponse(r.name(), storeLabel(r), r.serverName(), effectivePath,
+            r.appendOnly(), hasPassphrase);
+    }
+
+    /**
+     * What to call this store where a person reads it. A repository is named after the machine's identity,
+     * so its own name says nothing — and the browser must not work the label out for itself, or two
+     * surfaces end up disagreeing about which store is which, which is the failure the label exists to
+     * prevent. {@link BackupStoreLabel} owns the rule; this only finds the machine to ask it about.
+     */
+    private String storeLabel(BackupRepository repository) {
+        List<Machine> fleet = getMachines.getAllMachines();
+        return getBackupJobs.getBackupJobs().stream()
+            .filter(j -> repository.name().equals(j.repositoryName()))
+            .findFirst()
+            .flatMap(job -> fleet.stream().filter(m -> m.id().equals(job.machineId())).findFirst())
+            .map(machine -> BackupStoreLabel.of(machine, fleet))
+            // No job claims it, so its machine has left the fleet — or never had one. The name IS an
+            // identity, so say that plainly rather than showing a bare UUID an operator cannot place.
+            .orElseGet(() -> Machine.labelFor(machineIdOrNull(repository.name()), Optional.empty()));
+    }
+
+    /** The repository's name read as an identity, or null when it predates identity-named repositories. */
+    private static MachineId machineIdOrNull(String repositoryName) {
+        try {
+            return MachineId.of(repositoryName);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     // --- DTOs ---
@@ -722,7 +756,11 @@ public class BackupRestController {
      * The repository as returned to the browser — reports the <em>effective</em> repo path and only whether
      * a passphrase is held (never the secret itself).
      */
-    record RepositoryResponse(String name, String serverName, String repoPath,
+    /**
+     * @param name  the repository's own name — the machine's identity, and the directory on the server
+     * @param label what to call it where a person reads it ({@link BackupStoreLabel})
+     */
+    record RepositoryResponse(String name, String label, String serverName, String repoPath,
                               boolean appendOnly, boolean hasPassphrase) {}
 
     /** The paths an operator selected to start or stop backing up, from the Explorer's "Back up" action. */
@@ -776,7 +814,9 @@ public class BackupRestController {
     }
 
     /** Create/update a backup job. */
-    record JobRequest(String machineId, String repositoryName, List<String> sourcePaths,
+    /** No {@code machineId}: the path already says which machine's job this is, and two places to say it
+     *  is two places to disagree. */
+    record JobRequest(String repositoryName, List<String> sourcePaths,
                       List<String> excludes, int keepDaily, int keepWeekly, int keepMonthly,
                       String compression, boolean enabled, boolean backupAsRoot) {}
 

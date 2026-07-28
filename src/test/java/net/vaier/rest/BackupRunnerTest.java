@@ -72,8 +72,8 @@ class BackupRunnerTest {
 
         @Override public void record(BackupRun run) { recorded.add(run); }
 
-        @Override public Optional<BackupRun> latestForJob(String jobName) {
-            return recorded.stream().filter(r -> r.jobName().equals(jobName))
+        @Override public Optional<BackupRun> latestForMachine(MachineId machineId) {
+            return recorded.stream().filter(r -> r.machineId().equals(machineId))
                 .reduce((first, second) -> second);
         }
 
@@ -319,7 +319,7 @@ class BackupRunnerTest {
 
         backupRunner.pollRunningRuns();
 
-        BackupRun latest = runs.latestForJob("colina-home").orElseThrow();
+        BackupRun latest = runs.latestForMachine(TestMachineIds.of("Colina 27")).orElseThrow();
         assertThat(latest.status()).isEqualTo(BackupRunStatus.SUCCESS);
         assertThat(latest.exitCode()).isEqualTo(0);
         assertThat(latest.summary()).contains("Deduplicated size");
@@ -337,7 +337,7 @@ class BackupRunnerTest {
         backupRunner.pollRunningRuns();
 
         assertThat(runs.getAll()).hasSize(1);
-        assertThat(runs.latestForJob("colina-home").orElseThrow().status())
+        assertThat(runs.latestForMachine(TestMachineIds.of("Colina 27")).orElseThrow().status())
             .isEqualTo(BackupRunStatus.RUNNING);
     }
 
@@ -357,7 +357,7 @@ class BackupRunnerTest {
 
         restarted.pollRunningRuns();
 
-        assertThat(runs.latestForJob("colina-home").orElseThrow().status())
+        assertThat(runs.latestForMachine(TestMachineIds.of("Colina 27")).orElseThrow().status())
             .isEqualTo(BackupRunStatus.SUCCESS);
     }
 
@@ -372,7 +372,7 @@ class BackupRunnerTest {
 
         backupRunner.pollRunningRuns();
 
-        assertThat(runs.latestForJob("colina-home").orElseThrow().status())
+        assertThat(runs.latestForMachine(TestMachineIds.of("Colina 27")).orElseThrow().status())
             .isEqualTo(BackupRunStatus.UNKNOWN);
     }
 
@@ -572,13 +572,13 @@ class BackupRunnerTest {
         // which is a separate SSH call, so the launch is asserted specifically by its detached shape.)
         verify(runner, times(1)).run(eq(mid("Colina 27")),
             org.mockito.ArgumentMatchers.contains("nohup sh -c \""));
-        assertThat(runs.latestForJob("colina-home").orElseThrow().status())
+        assertThat(runs.latestForMachine(TestMachineIds.of("Colina 27")).orElseThrow().status())
             .isEqualTo(BackupRunStatus.RUNNING);
         // The already-succeeded job still shows its prior SUCCESS, not a fresh RUNNING run.
-        assertThat(runs.latestForJob("apalveien-srv").orElseThrow().status())
+        assertThat(runs.latestForMachine(TestMachineIds.of("Apalveien 5")).orElseThrow().status())
             .isEqualTo(BackupRunStatus.SUCCESS);
         // The disabled job never produced a run at all.
-        assertThat(runs.latestForJob("roon-media")).isEmpty();
+        assertThat(runs.latestForMachine(TestMachineIds.of("Roon"))).isEmpty();
     }
 
     @Test
@@ -617,7 +617,7 @@ class BackupRunnerTest {
         backupRunner.pollRunningRuns();
         backupRunner.pollRunningRuns();
 
-        assertThat(runs.latestForJob("colina-home").orElseThrow().status())
+        assertThat(runs.latestForMachine(TestMachineIds.of("Colina 27")).orElseThrow().status())
             .isEqualTo(BackupRunStatus.FAILED);
         org.mockito.ArgumentCaptor<BackupRun> captor = org.mockito.ArgumentCaptor.forClass(BackupRun.class);
         verify(backupNotifier, times(1)).notifyAdminsOfBackupFailure(captor.capture(), any());
@@ -651,7 +651,7 @@ class BackupRunnerTest {
 
         backupRunner.pollRunningRuns();
 
-        assertThat(runs.latestForJob("colina-home").orElseThrow().status())
+        assertThat(runs.latestForMachine(TestMachineIds.of("Colina 27")).orElseThrow().status())
             .isEqualTo(BackupRunStatus.RUNNING);
         verify(backupNotifier, never()).notifyAdminsOfBackupFailure(any(), any());
         verify(backupNotifier, never()).notifyAdminsOfBackupRecovery(any(), any());
@@ -682,7 +682,7 @@ class BackupRunnerTest {
 
         backupRunner.pollRunningRuns();
 
-        assertThat(runs.latestForJob("colina-home").orElseThrow().status())
+        assertThat(runs.latestForMachine(TestMachineIds.of("Colina 27")).orElseThrow().status())
             .isEqualTo(BackupRunStatus.WARNING);
         verify(backupNotifier, never()).notifyAdminsOfBackupFailure(any(), any());
         verify(backupNotifier, never()).notifyAdminsOfBackupRecovery(any(), any());
@@ -703,7 +703,7 @@ class BackupRunnerTest {
         backupRunner.pollRunningRuns();
         backupRunner.pollRunningRuns();
 
-        BackupRun settled = runs.latestForJob("colina-home").orElseThrow();
+        BackupRun settled = runs.latestForMachine(TestMachineIds.of("Colina 27")).orElseThrow();
         assertThat(settled.status()).isEqualTo(BackupRunStatus.INCOMPLETE);
         assertThat(settled.unreadableFiles().total()).isEqualTo(2);
         // Once, on the crossing — the second tick finds a terminal run and never re-polls it.
@@ -794,7 +794,7 @@ class BackupRunnerTest {
 
         backupRunner.pollRunningRuns();
 
-        assertThat(runs.latestForJob("colina-home").orElseThrow().status())
+        assertThat(runs.latestForMachine(TestMachineIds.of("Colina 27")).orElseThrow().status())
             .isEqualTo(BackupRunStatus.SUCCESS);
     }
 }

@@ -118,8 +118,8 @@ class BackupRestControllerTest {
         @Override public List<BackupJob> getByMachine(MachineId machineId) {
             return store.stream().filter(j -> j.machineId().equals(machineId)).toList();
         }
-        @Override public void save(BackupJob j) { store.removeIf(x -> x.name().equals(j.name())); store.add(j); }
-        @Override public void deleteByName(String name) { store.removeIf(j -> j.name().equals(name)); }
+        @Override public void save(BackupJob j) { store.removeIf(x -> x.machineId().equals(j.machineId())); store.add(j); }
+        @Override public void deleteByMachine(MachineId machineId) { store.removeIf(j -> j.machineId().equals(machineId)); }
     }
 
     static final class InMemoryServers implements ForPersistingBackupServers {
@@ -135,11 +135,14 @@ class BackupRestControllerTest {
     static final class InMemoryRuns implements ForRecordingBackupRuns {
         final List<BackupRun> store = new ArrayList<>();
         @Override public void record(BackupRun run) { store.add(run); }
-        @Override public Optional<BackupRun> latestForJob(String jobName) {
-            return store.stream().filter(r -> r.jobName().equals(jobName)).reduce((a, b) -> b);
+        @Override public Optional<BackupRun> latestForMachine(MachineId machineId) {
+            return store.stream().filter(r -> r.machineId().equals(machineId)).reduce((a, b) -> b);
         }
         @Override public List<BackupRun> getAll() { return List.copyOf(store); }
     }
+
+    /** The machine the fixture job ("colina-home") backs up — the address of every job endpoint now. */
+    private static final MachineId COLINA = TestMachineIds.of("Colina 27");
 
     @BeforeEach
     void setUp() {
@@ -328,7 +331,7 @@ class BackupRestControllerTest {
             Instant.parse("2026-07-08T02:00:00Z"));
         when(runBackupJob.runJob(any(), any())).thenReturn(running);
 
-        ResponseEntity<RunResponse> response = controller.runJob("colina-home");
+        ResponseEntity<RunResponse> response = controller.runJob(COLINA.value());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
         assertThat(response.getBody()).isNotNull();
@@ -339,7 +342,7 @@ class BackupRestControllerTest {
 
     @Test
     void postRunUnknownJobReturns404() {
-        ResponseEntity<RunResponse> response = controller.runJob("does-not-exist");
+        ResponseEntity<RunResponse> response = controller.runJob(MachineId.generate().value());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         verify(runBackupJob, never()).runJob(any(), any());
@@ -351,7 +354,7 @@ class BackupRestControllerTest {
         repositories.save(repo());
         jobs.save(job());
 
-        ResponseEntity<RunResponse> response = controller.runJob("colina-home");
+        ResponseEntity<RunResponse> response = controller.runJob(COLINA.value());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         verify(runBackupJob, never()).runJob(any(), any());
@@ -362,7 +365,7 @@ class BackupRestControllerTest {
         runs.record(BackupRun.started(job(), "run-old", Instant.parse("2026-07-07T02:00:00Z")));
         runs.record(BackupRun.started(job(), "run-new", Instant.parse("2026-07-08T02:00:00Z")));
 
-        ResponseEntity<RunResponse> response = controller.getRuns("colina-home");
+        ResponseEntity<RunResponse> response = controller.getRuns(COLINA.value());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).isNotNull();
@@ -372,7 +375,7 @@ class BackupRestControllerTest {
 
     @Test
     void getRunsWhenNoneYetReturns404() {
-        ResponseEntity<RunResponse> response = controller.getRuns("colina-home");
+        ResponseEntity<RunResponse> response = controller.getRuns(COLINA.value());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }
@@ -390,7 +393,7 @@ class BackupRestControllerTest {
         runs.record(BackupRun.fromExitCode(job(), "run-warn", Instant.parse("2026-07-13T00:07:41Z"),
             Instant.parse("2026-07-13T00:08:02Z"), 1, summary));
 
-        ResponseEntity<RunResponse> response = controller.getRuns("colina-home");
+        ResponseEntity<RunResponse> response = controller.getRuns(COLINA.value());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).isNotNull();
@@ -407,7 +410,7 @@ class BackupRestControllerTest {
         runs.record(BackupRun.fromExitCode(job(), "run-ok", Instant.parse("2026-07-13T02:00:00Z"),
             Instant.parse("2026-07-13T02:05:00Z"), 0, "{\n    \"archive\": {}\n}"));
 
-        ResponseEntity<RunResponse> response = controller.getRuns("colina-home");
+        ResponseEntity<RunResponse> response = controller.getRuns(COLINA.value());
 
         assertThat(response.getBody()).isNotNull();
         // The happy path has nothing to disclose — the UI shows no affordance for this.
@@ -465,7 +468,7 @@ class BackupRestControllerTest {
             .thenReturn(new ServerBorgAuth(true, Optional.of(new BorgVersion(1, 4, 3)), true));
 
         ResponseEntity<BackupRestController.ProvisionCheckResponse> response =
-            controller.provisionCheck("colina-home");
+            controller.provisionCheck(COLINA.value());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).isNotNull();
@@ -494,7 +497,7 @@ class BackupRestControllerTest {
             .thenReturn(new ServerBorgAuth(false, Optional.empty(), false));
 
         BackupRestController.ProvisionCheckResponse body =
-            controller.provisionCheck("colina-home").getBody();
+            controller.provisionCheck(COLINA.value()).getBody();
 
         assertThat(body).isNotNull();
         // borg and the port both look fine...
@@ -520,14 +523,15 @@ class BackupRestControllerTest {
         backupServers.save(server());
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
 
-        ResponseEntity<BackupRestController.JobResponse> response = controller.saveJob("colina-home",
-            new BackupRestController.JobRequest(TestMachineIds.of("Colina 27").value(), "nas-borg", List.of("/home/geir"),
+        ResponseEntity<BackupRestController.JobResponse> response = controller.saveJob(COLINA.value(),
+            new BackupRestController.JobRequest("nas-borg", List.of("/home/geir"),
                 List.of(), 7, 4, 6, "zstd,6", true, true));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().backupAsRoot()).isTrue();
-        assertThat(jobs.getByName("colina-home").orElseThrow().backupAsRoot()).isTrue();
+        assertThat(jobs.getByMachine(COLINA)).singleElement()
+            .extracting(BackupJob::backupAsRoot).isEqualTo(true);
     }
 
     /**
@@ -541,14 +545,16 @@ class BackupRestControllerTest {
         backupServers.save(server());
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
 
-        assertThatThrownBy(() -> controller.saveJob("nuc02",
-            new BackupRestController.JobRequest(TestMachineIds.of("NUC02").value(), "nas-borg", List.of("/home/geir"),
+        MachineId nuc02 = TestMachineIds.of("NUC02");
+
+        assertThatThrownBy(() -> controller.saveJob(nuc02.value(),
+            new BackupRestController.JobRequest("nas-borg", List.of("/home/geir"),
                 List.of(), 7, 4, 6, "zstd,6", true, false)))
             .isInstanceOf(NotFoundException.class)
-            // The identity that was asked for, since that is what the request carried — there is no name in
-            // it to echo back, which is the point: a job can no longer be stored against a string.
-            .hasMessageContaining(TestMachineIds.of("NUC02").value());
-        assertThat(jobs.getByName("nuc02")).isEmpty();
+            // The identity that was addressed, since that is the whole address — there is no name in it to
+            // echo back, which is the point: a job can no longer be stored against a string.
+            .hasMessageContaining(nuc02.value());
+        assertThat(jobs.getByMachine(nuc02)).isEmpty();
     }
 
     /** Opting out is just as explicit — and is the default a job is created with. */
@@ -558,12 +564,13 @@ class BackupRestControllerTest {
         backupServers.save(server());
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
 
-        ResponseEntity<BackupRestController.JobResponse> response = controller.saveJob("colina-home",
-            new BackupRestController.JobRequest(TestMachineIds.of("Colina 27").value(), "nas-borg", List.of("/home/geir"),
+        ResponseEntity<BackupRestController.JobResponse> response = controller.saveJob(COLINA.value(),
+            new BackupRestController.JobRequest("nas-borg", List.of("/home/geir"),
                 List.of(), 7, 4, 6, "zstd,6", true, false));
 
         assertThat(response.getBody().backupAsRoot()).isFalse();
-        assertThat(jobs.getByName("colina-home").orElseThrow().backupAsRoot()).isFalse();
+        assertThat(jobs.getByMachine(COLINA)).singleElement()
+            .extracting(BackupJob::backupAsRoot).isEqualTo(false);
     }
 
     /**
@@ -584,7 +591,7 @@ class BackupRestControllerTest {
             .thenReturn(new CheckBackupPrerequisitesUseCase.RootBorgAvailability(true));
 
         BackupRestController.ProvisionCheckResponse body =
-            controller.provisionCheck("colina-home").getBody();
+            controller.provisionCheck(COLINA.value()).getBody();
 
         assertThat(body.backupAsRoot()).isTrue();
         assertThat(body.rootBorgOk()).isTrue();
@@ -605,7 +612,7 @@ class BackupRestControllerTest {
             .thenReturn(new CheckBackupPrerequisitesUseCase.RootBorgAvailability(false));
 
         BackupRestController.ProvisionCheckResponse body =
-            controller.provisionCheck("colina-home").getBody();
+            controller.provisionCheck(COLINA.value()).getBody();
 
         assertThat(body.backupAsRoot()).isTrue();
         assertThat(body.rootBorgOk()).isFalse();
@@ -627,7 +634,7 @@ class BackupRestControllerTest {
             .thenReturn(new ServerBorgAuth(true, Optional.of(new BorgVersion(1, 4, 3)), true));
 
         BackupRestController.ProvisionCheckResponse body =
-            controller.provisionCheck("colina-home").getBody();
+            controller.provisionCheck(COLINA.value()).getBody();
 
         assertThat(body.backupAsRoot()).isFalse();
         // Not probed at all — no pointless SSH round trip for a check that cannot apply.
@@ -637,7 +644,7 @@ class BackupRestControllerTest {
     @Test
     void provisionCheckUnknownJobReturns404() {
         ResponseEntity<BackupRestController.ProvisionCheckResponse> response =
-            controller.provisionCheck("does-not-exist");
+            controller.provisionCheck(MachineId.generate().value());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         verify(checkPrerequisites, never()).checkBorg(any());
@@ -650,7 +657,7 @@ class BackupRestControllerTest {
         jobs.save(job());
 
         ResponseEntity<BackupRestController.ProvisionCheckResponse> response =
-            controller.provisionCheck("colina-home");
+            controller.provisionCheck(COLINA.value());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         verify(checkPrerequisites, never()).checkBorg(any());
@@ -669,7 +676,7 @@ class BackupRestControllerTest {
             .thenReturn(new ServerBorgAuth(false, Optional.empty(), false));
 
         BackupRestController.ProvisionCheckResponse body =
-            controller.provisionCheck("colina-home").getBody();
+            controller.provisionCheck(COLINA.value()).getBody();
 
         assertThat(body).isNotNull();
         assertThat(body.borgInstalled()).isFalse();
@@ -701,7 +708,7 @@ class BackupRestControllerTest {
     @Test
     void provisionInitUnknownRepositoryReturns404() {
         ResponseEntity<BackupRestController.ProvisionInitResponse> response =
-            controller.provisionInit("does-not-exist");
+            controller.provisionInit(MachineId.generate().value());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         verify(initBackupRepository, never()).initRepo(any(), any());
@@ -730,7 +737,7 @@ class BackupRestControllerTest {
             .thenReturn(new PrepareResult(false, false, true, "Preparing client on Colina 27", null));
 
         ResponseEntity<BackupRestController.PrepareClientResponse> response =
-            controller.prepareClient("colina-home");
+            controller.prepareClient(COLINA.value());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).isNotNull();
@@ -751,7 +758,7 @@ class BackupRestControllerTest {
                 "/home/geir/.vaier-backup/prepare-client-Colina-27.sh"));
 
         BackupRestController.PrepareClientResponse body =
-            controller.prepareClient("colina-home").getBody();
+            controller.prepareClient(COLINA.value()).getBody();
 
         assertThat(body).isNotNull();
         assertThat(body.scriptOnly()).isTrue();
@@ -761,7 +768,7 @@ class BackupRestControllerTest {
     @Test
     void prepareClientUnknownJobReturns404() {
         ResponseEntity<BackupRestController.PrepareClientResponse> response =
-            controller.prepareClient("does-not-exist");
+            controller.prepareClient(MachineId.generate().value());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         verify(prepareBackupClient, never()).prepareClient(any());
@@ -774,7 +781,7 @@ class BackupRestControllerTest {
             .thenReturn(new PrepareStatus(PrepareState.SUCCESS, "==> Vaier Backup client setup complete."));
 
         ResponseEntity<BackupRestController.PrepareClientStatusResponse> response =
-            controller.prepareClientStatus("colina-home");
+            controller.prepareClientStatus(COLINA.value());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).isNotNull();
@@ -786,7 +793,7 @@ class BackupRestControllerTest {
     @Test
     void prepareClientStatusUnknownJobReturns404() {
         ResponseEntity<BackupRestController.PrepareClientStatusResponse> response =
-            controller.prepareClientStatus("does-not-exist");
+            controller.prepareClientStatus(MachineId.generate().value());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         verify(prepareBackupClient, never()).prepareClientStatus(any());
@@ -1016,7 +1023,7 @@ class BackupRestControllerTest {
             new BackupRestController.ProtectPathsRequest(List.of("/home/geir")));
 
         assertThat(byId.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(jobs.getByName("Colina-27")).isPresent();
+        assertThat(jobs.getByMachine(COLINA)).isNotEmpty();
 
         assertThat(controller.protectPaths("Colina 27",
             new BackupRestController.ProtectPathsRequest(List.of("/etc"))).getStatusCode())
@@ -1038,13 +1045,14 @@ class BackupRestControllerTest {
         assertThat(response.getBody().machineName()).isEqualTo("Colina 27");
         assertThat(response.getBody().sourcePaths()).containsExactlyInAnyOrder("/home/geir", "/etc/nginx");
 
-        // A repository was created for the machine — by its sanitized name — with a strong, backend-owned
-        // passphrase (never taken from the client).
-        BackupRepository createdRepo = repositories.getByName("Colina-27").orElseThrow();
+        // A repository was created for the machine — named after its identity — with a strong,
+        // backend-owned passphrase (never taken from the client).
+        BackupRepository createdRepo = repositories.getByName(COLINA.value()).orElseThrow();
         assertThat(createdRepo.serverName()).isEqualTo("nas-borg");
         assertThat(createdRepo.passphrase()).matches("[A-Za-z0-9]{32}");
         // The job references that repository.
-        assertThat(jobs.getByName("Colina-27").orElseThrow().repositoryName()).isEqualTo("Colina-27");
+        assertThat(jobs.getByMachine(COLINA)).singleElement()
+            .extracting(BackupJob::repositoryName).isEqualTo(COLINA.value());
     }
 
     @Test
@@ -1266,13 +1274,48 @@ class BackupRestControllerTest {
         backupServers.save(server());
         when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
 
-        ResponseEntity<BackupRestController.JobResponse> response = controller.saveJob("colina-home",
-            new BackupRestController.JobRequest(TestMachineIds.of("Colina 27").value(), "nas-borg",
+        ResponseEntity<BackupRestController.JobResponse> response = controller.saveJob(COLINA.value(),
+            new BackupRestController.JobRequest("nas-borg",
                 List.of("/home/geir"), List.of(), 7, 4, 6, "zstd,6", true, false));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(jobs.getByName("colina-home").orElseThrow().machineId())
-            .isEqualTo(TestMachineIds.of("Colina 27"));
+        assertThat(jobs.getByMachine(COLINA)).singleElement()
+            .extracting(BackupJob::machineId).isEqualTo(COLINA);
+    }
+
+    // --- what a store is called on screen -----------------------------------------------------------
+
+    @Test
+    void repositoriesCarryAReadableLabel_sinceTheirNameIsAnIdentityNow() {
+        // A repository is named after the machine's identity, so its own name says nothing to a person.
+        // The label is the domain's answer (BackupStoreLabel), resolved here at the driving edge — the
+        // browser must not re-derive it, or two surfaces eventually disagree about which store is which.
+        Machine colina = machine("Colina 27");
+        repositories.save(new BackupRepository(colina.id().value(), "nas-borg", null, "s3cr3t", false));
+        jobs.save(new BackupJob("Colina 27", colina.id(), colina.id().value(),
+            List.of("/home"), List.of(), 7, 4, 6, "zstd,6", true, false));
+        when(getMachines.getAllMachines()).thenReturn(List.of(colina));
+
+        var body = controller.listRepositories().getBody();
+
+        assertThat(body).singleElement()
+            .extracting(BackupRestController.RepositoryResponse::label).isEqualTo("Colina 27");
+    }
+
+    @Test
+    void aStoreWhoseMachineIsGone_saysSoRatherThanShowingABareIdentity() {
+        // The orphan case, and the reason it matters more now: the directory is a UUID, so an operator
+        // reading the list has nothing else to go on. It must not look like a machine that is simply
+        // called something odd.
+        MachineId departed = TestMachineIds.of("departed");
+        repositories.save(new BackupRepository(departed.value(), "nas-borg", null, "s3cr3t", false));
+        when(getMachines.getAllMachines()).thenReturn(List.of());
+
+        var body = controller.listRepositories().getBody();
+
+        assertThat(body).singleElement()
+            .extracting(BackupRestController.RepositoryResponse::label).asString()
+            .contains("no longer in this fleet").contains(departed.value());
     }
 
     // --- survival kit ------------------------------------------------------------------------------------

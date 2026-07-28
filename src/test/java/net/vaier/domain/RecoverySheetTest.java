@@ -126,4 +126,39 @@ class RecoverySheetTest {
 
         assertThat(sheet.toLowerCase()).contains("no backup server");
     }
+
+    // --- the sheet is the mapping, now that a repository is named by identity ------------------------
+
+    @Test
+    void aRepositoryNamedByIdentity_isStillReadAsItsMachine() {
+        // Repositories are named after the machine's identity, so the directory on the server says nothing
+        // to a person. This page is where that mapping lives once Vaier is gone — it has to carry both, the
+        // machine's name and the repository the archives are actually in.
+        MachineId colina = MachineId.generate();
+        BackupRepository repo = new BackupRepository(colina.value(), "nas-borg", null, "s3cr3t", false);
+        BackupJob job = new BackupJob("Colina 27", colina, colina.value(),
+            List.of("/home"), List.of(), 7, 4, 6, "zstd,6", true, false);
+
+        String sheet = RecoverySheet.render(server(), List.of(repo), List.of(job),
+            Map.of(colina, "Colina 27"), "config-key");
+
+        assertThat(sheet).contains("Colina 27");
+        assertThat(sheet).as("and the directory those archives are actually in").contains(colina.value());
+    }
+
+    @Test
+    void aRepositoryNoJobClaims_saysWhichMachineHasLeft_ratherThanNothing() {
+        // The orphan, and it matters more than it did: the directory is an identity, so "no machine" alone
+        // leaves an operator holding a UUID with nothing to attach it to. The name IS the machine, so say
+        // which one — a machine that has left the fleet still has archives worth reading.
+        MachineId departed = MachineId.generate();
+        BackupRepository orphan = new BackupRepository(departed.value(), "nas-borg", null, "s3cr3t", false);
+
+        String sheet = RecoverySheet.render(server(), List.of(orphan), List.of(),
+            Map.of(), "config-key");
+
+        // Asserted on the repository's OWN line: the server's line happens to carry the same phrase for its
+        // own reasons, and a test that passes on that would pass whatever this line said.
+        assertThat(sheet).contains("Backups of    a machine no longer in this fleet (" + departed.value() + ")");
+    }
 }

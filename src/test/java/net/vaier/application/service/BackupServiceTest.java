@@ -73,15 +73,15 @@ class BackupServiceTest {
         @Override public List<BackupJob> getByMachine(MachineId machineId) {
             return store.stream().filter(j -> j.machineId().equals(machineId)).toList();
         }
-        @Override public void save(BackupJob j) { store.removeIf(x -> x.name().equals(j.name())); store.add(j); }
-        @Override public void deleteByName(String name) { store.removeIf(j -> j.name().equals(name)); }
+        @Override public void save(BackupJob j) { store.removeIf(x -> x.machineId().equals(j.machineId())); store.add(j); }
+        @Override public void deleteByMachine(MachineId machineId) { store.removeIf(j -> j.machineId().equals(machineId)); }
     }
 
     static final class InMemoryRunRecorder implements ForRecordingBackupRuns {
         final List<BackupRun> recorded = new ArrayList<>();
         @Override public void record(BackupRun run) { recorded.add(run); }
-        @Override public Optional<BackupRun> latestForJob(String jobName) {
-            return recorded.stream().filter(r -> r.jobName().equals(jobName)).reduce((a, b) -> b);
+        @Override public Optional<BackupRun> latestForMachine(MachineId machineId) {
+            return recorded.stream().filter(r -> r.machineId().equals(machineId)).reduce((a, b) -> b);
         }
         @Override public List<BackupRun> getAll() { return List.copyOf(recorded); }
     }
@@ -128,7 +128,7 @@ class BackupServiceTest {
         service.saveBackupJob(job());
         assertThat(service.getBackupJobs()).containsExactly(job());
 
-        service.deleteBackupJob("colina-home");
+        service.deleteBackupJob(TestMachineIds.of("Colina 27"));
         assertThat(service.getBackupJobs()).isEmpty();
 
         service.deleteBackupRepository("nas-borg");
@@ -157,16 +157,16 @@ class BackupServiceTest {
     }
 
     @Test
-    void latestForJobIsServedFromTheRunRecorderPort() {
+    void latestForMachineIsServedFromTheRunRecorderPort() {
         // GetBackupRunsUseCase reads purely from the driven run-recorder port — no SSH, no rest layer.
-        assertThat(service.latestForJob("colina-home")).isEmpty();
+        assertThat(service.latestForMachine(TestMachineIds.of("Colina 27"))).isEmpty();
 
         BackupRun older = BackupRun.started(job(), "run-1", Instant.parse("2026-07-07T02:00:00Z"));
         BackupRun newer = BackupRun.started(job(), "run-2", Instant.parse("2026-07-08T02:00:00Z"));
         runs.record(older);
         runs.record(newer);
 
-        assertThat(service.latestForJob("colina-home")).contains(newer);
+        assertThat(service.latestForMachine(TestMachineIds.of("Colina 27"))).contains(newer);
     }
 
     @Test
@@ -209,26 +209,40 @@ class BackupServiceTest {
 
         BackupJob created = service.protect(machine("Colina 27"), List.of("/home/geir")).job();
 
-        // The repository is created by the machine's sanitized name, on the single server, with a strong
+        // The repository is named after the machine's identity, on the single server, with a strong
         // backend-generated passphrase (never taken from a client).
-        BackupRepository repo = repositories.getByName("Colina-27").orElseThrow();
+        BackupRepository repo = repositories.getByName(TestMachineIds.of("Colina 27").value()).orElseThrow();
         assertThat(repo.serverName()).isEqualTo("nas-borg");
         assertThat(repo.passphrase()).matches("[A-Za-z0-9]{32}");
         // The job is created for the machine, referencing that repository, with the retention defaults.
         assertThat(created.machineId()).isEqualTo(TestMachineIds.of("Colina 27"));
-        assertThat(created.repositoryName()).isEqualTo("Colina-27");
+        assertThat(created.repositoryName()).isEqualTo(TestMachineIds.of("Colina 27").value());
         assertThat(created.sourcePaths()).containsExactly("/home/geir");
         assertThat(created.keepDaily()).isEqualTo(7);
         assertThat(created.enabled()).isTrue();
     }
 
     @Test
+    void protectNamesTheRepositoryAfterTheMachinesIdentity() {
+        // A repository is a directory on the backup server, and its name is what Vaier keys it by. Named
+        // after the machine, two machines called "NAS" competed for one directory; named after the machine's
+        // identity, they cannot. What a person calls each store is a separate question, answered by
+        // BackupStoreLabel on the screen and by the survival kit when there is no screen.
+        service.saveBackupServer(server());
+        Machine nas = machine("NAS");
+
+        BackupJob created = service.protect(nas, List.of("/home")).job();
+
+        assertThat(created.repositoryName()).isEqualTo(nas.id().value());
+        assertThat(service.getBackupRepositories()).extracting(BackupRepository::name)
+            .containsExactly(nas.id().value());
+    }
+
+    @Test
     void protectGivesASecondMachineOfTheSameNameItsOwnRepositoryAndJob() {
-        // Machine names stopped needing to be unique (§6.22), and a machine's repository and job are both
-        // named after it. Two machines called "NAS" would otherwise compute the same slug, and neither
-        // failure would be visible: the second would back up into the FIRST one's borg repository, mixing
-        // two machines' archives, and its job would overwrite the first's in a store that upserts by job
-        // name — so the first machine would silently stop being backed up altogether.
+        // Machine names stopped needing to be unique (§6.22). Two machines called "NAS" must not share a
+        // borg repository — that would mix two machines' archives — nor a job, since the store upserts and
+        // the loser would silently stop being backed up.
         service.saveBackupServer(server());
         Machine here = new Machine(TestMachineIds.of("nas-apalveien"), "NAS",
             MachineType.UBUNTU_SERVER, null, null, null, null, null, null, null, null,
@@ -240,10 +254,8 @@ class BackupServiceTest {
         BackupJob first = service.protect(here, List.of("/home")).job();
         BackupJob second = service.protect(there, List.of("/home")).job();
 
-        assertThat(first.name()).isNotEqualTo(second.name());
         assertThat(first.repositoryName()).isNotEqualTo(second.repositoryName());
         assertThat(service.getBackupJobs()).hasSize(2);
-        // And each still backs up its own machine.
         assertThat(first.machineId()).isEqualTo(TestMachineIds.of("nas-apalveien"));
         assertThat(second.machineId()).isEqualTo(TestMachineIds.of("nas-colina"));
     }
@@ -264,20 +276,20 @@ class BackupServiceTest {
 
     @Test
     void protectNeverRegeneratesThePassphraseOfARepositoryThatAlreadyExists() {
-        // The orphaning bug: a machine already has a borg repository whose passphrase seals it on the NAS,
-        // but its job's repositoryName no longer resolves to it (a historical name/slug mismatch). The
-        // get-or-create lookup misses, and minting a fresh repository would overwrite the live passphrase —
-        // orphaning the repo, since borg can no longer decrypt it. Reuse-by-name must win over regenerate.
+        // The orphaning bug: a machine already has a borg repository whose passphrase seals it on the NAS.
+        // Minting a fresh one over the top would overwrite that passphrase and leave the archives
+        // undecryptable — so an existing repository is reused, never regenerated.
         service.saveBackupServer(server());
-        repositories.store.add(new BackupRepository("Colina-27", "nas-borg", null,
+        String repoName = TestMachineIds.of("Colina 27").value();
+        repositories.store.add(new BackupRepository(repoName, "nas-borg", null,
             "theRealPassphraseThatSealsTheRepo", false));
-        jobs.store.add(new BackupJob("Colina-27", TestMachineIds.of("Colina 27"), "Colina 27",
+        jobs.store.add(new BackupJob("Colina 27", TestMachineIds.of("Colina 27"), repoName,
             List.of("/home/geir"), List.of(), 7, 4, 6, "zstd,6", true, false));
 
         service.protect(machine("Colina 27"), List.of("/etc/nginx"));
 
         // The repository's passphrase is untouched, and there is still exactly one repository.
-        assertThat(repositories.getByName("Colina-27").orElseThrow().passphrase())
+        assertThat(repositories.getByName(TestMachineIds.of("Colina 27").value()).orElseThrow().passphrase())
             .isEqualTo("theRealPassphraseThatSealsTheRepo");
         assertThat(repositories.getAll()).hasSize(1);
     }
@@ -332,7 +344,7 @@ class BackupServiceTest {
         assertThat(result.jobDeleted()).isTrue();
         assertThat(result.job()).isNull();
         assertThat(jobs.getAll()).isEmpty();
-        assertThat(repositories.getByName("Colina-27")).isPresent();
+        assertThat(repositories.getByName(TestMachineIds.of("Colina 27").value())).isPresent();
     }
 
     @Test

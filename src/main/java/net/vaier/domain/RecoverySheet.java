@@ -69,8 +69,7 @@ public final class RecoverySheet {
             sb.append("None yet — nothing has been backed up.\n");
         } else {
             for (BackupRepository repo : repositories) {
-                row(sb, "Backups of", machineFor(repo, jobs, machineNames)
-                    .orElse("no machine (kept, not added to)"));
+                row(sb, "Backups of", machineFor(repo, jobs, machineNames));
                 row(sb, "Repository", repo.borgRepoUrl(server));
                 // A blank here would read as "no passphrase needed" and send someone away from the one
                 // repository that actually needs attention.
@@ -100,16 +99,34 @@ public final class RecoverySheet {
         return sb.toString();
     }
 
-    /** The human name of the machine a repository holds the backups of, via the job that targets it. */
-    private static Optional<String> machineFor(BackupRepository repo, List<BackupJob> jobs,
-                                               Map<MachineId, String> machineNames) {
-        if (jobs == null) {
-            return Optional.empty();
-        }
-        return jobs.stream()
+    /**
+     * Whose backups are in this repository, said to a person.
+     *
+     * <p>This page is the mapping. A repository is named after the machine's {@link MachineId}, so the
+     * directory on the server is a UUID and tells an operator nothing — and this is the sheet they are
+     * holding on the day there is no Vaier to ask. Normally the job that targets the repository names the
+     * machine; when no job does, the repository's own <em>name</em> is the identity, so the machine can
+     * still be named as one that has left the fleet rather than written off as "no machine".
+     */
+    private static String machineFor(BackupRepository repo, List<BackupJob> jobs,
+                                     Map<MachineId, String> machineNames) {
+        Optional<String> claimed = jobs == null ? Optional.empty() : jobs.stream()
             .filter(j -> repo.name().equals(j.repositoryName()))
             .map(j -> nameOf(j.machineId(), machineNames))
             .findFirst();
+        return claimed.orElseGet(() -> nameOf(identityNamedBy(repo), machineNames));
+    }
+
+    /**
+     * The repository's name read as a {@link MachineId}, or null when it is not one — a repository adopted
+     * from before Vaier, or one created before repositories were named by identity.
+     */
+    private static MachineId identityNamedBy(BackupRepository repo) {
+        try {
+            return MachineId.of(repo.name());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     /**
@@ -118,8 +135,10 @@ public final class RecoverySheet {
      * and an operator has to be able to tell a live machine from a departed one on every one of them.
      */
     private static String nameOf(MachineId machineId, Map<MachineId, String> machineNames) {
-        return Machine.labelFor(machineId,
-            Optional.ofNullable(machineNames == null ? null : machineNames.get(machineId)));
+        // Never look a null id up: an immutable Map (Map.of()) throws on get(null), and this runs while
+        // rendering the one page that has to survive everything else going wrong.
+        String name = machineId == null || machineNames == null ? null : machineNames.get(machineId);
+        return Machine.labelFor(machineId, Optional.ofNullable(name));
     }
 
     /** One aligned label/value line. Values are never wrapped — a broken passphrase is a useless passphrase. */

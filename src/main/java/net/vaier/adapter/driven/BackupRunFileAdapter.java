@@ -44,14 +44,14 @@ public class BackupRunFileAdapter implements ForRecordingBackupRuns {
     @Override
     public synchronized void record(BackupRun run) {
         List<BackupRun> current = new ArrayList<>(getAll());
-        current.removeIf(r -> r.jobName().equals(run.jobName()));
+        current.removeIf(r -> r.machineId().equals(run.machineId()));
         current.add(run);
         writeAll(current);
     }
 
     @Override
-    public synchronized Optional<BackupRun> latestForJob(String jobName) {
-        return getAll().stream().filter(r -> r.jobName().equals(jobName)).findFirst();
+    public synchronized Optional<BackupRun> latestForMachine(MachineId machineId) {
+        return getAll().stream().filter(r -> r.machineId().equals(machineId)).findFirst();
     }
 
     @Override

@@ -25,8 +25,8 @@ class BackupJobProtectedPathsAdapterTest {
         @Override public List<BackupJob> getByMachine(MachineId machineId) {
             return store.stream().filter(j -> j.machineId().equals(machineId)).toList();
         }
-        @Override public void save(BackupJob j) { store.removeIf(x -> x.name().equals(j.name())); store.add(j); }
-        @Override public void deleteByName(String name) { store.removeIf(j -> j.name().equals(name)); }
+        @Override public void save(BackupJob j) { store.removeIf(x -> x.machineId().equals(j.machineId())); store.add(j); }
+        @Override public void deleteByMachine(MachineId machineId) { store.removeIf(j -> j.machineId().equals(machineId)); }
     }
 
     InMemoryJobs jobs;
@@ -70,8 +70,11 @@ class BackupJobProtectedPathsAdapterTest {
 
     @Test
     void severalJobsOnOneMachineAreReadAsOneProtection() {
-        jobs.save(job("apalveien-5", List.of("/home"), List.of("/home/openhab")));
-        jobs.save(job("apalveien-5-etc", List.of("/etc"), List.of()));
+        // Vaier writes one job per machine — the store is keyed by the machine — but a hand-edited file may
+        // still hold two, and reading only the first would silently under-report what is protected. Put
+        // straight into the store rather than through save(), which is the write path and upserts.
+        jobs.store.add(job("apalveien-5", List.of("/home"), List.of("/home/openhab")));
+        jobs.store.add(job("apalveien-5-etc", List.of("/etc"), List.of()));
 
         ProtectedPaths paths = adapter.protectedPathsFor(TestMachineIds.of("Apalveien 5"));
 

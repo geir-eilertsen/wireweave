@@ -1,6 +1,7 @@
 package net.vaier.application;
 
 import net.vaier.domain.BackupRun;
+import net.vaier.domain.MachineId;
 
 import java.util.Optional;
 
@@ -11,5 +12,5 @@ import java.util.Optional;
 public interface GetBackupRunsUseCase {
 
     /** The most recent {@link BackupRun} recorded for {@code jobName}, or empty when it has never run. */
-    Optional<BackupRun> latestForJob(String jobName);
+    Optional<BackupRun> latestForMachine(MachineId machineId);
 }

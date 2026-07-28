@@ -1163,7 +1163,8 @@ class ExplorerShellTest {
         assertThat(from).isPositive();
         String body = js.substring(from, js.indexOf("\n    }", from));
 
-        assertThat(body).contains("'/backup-jobs/' + encodeURIComponent(job.name)");
+        assertThat(body).as("addressed by the machine whose job it is, not by the job's label")
+            .contains("'/backup-jobs/' + encodeURIComponent(job.machineId)");
         assertThat(body).contains("method: 'PUT'");
         assertThat(body).as("every field is carried through, so a toggle never drops the job's paths")
             .contains("backupAsRoot: on");
@@ -1437,16 +1438,17 @@ class ExplorerShellTest {
     void theBackupServer_listsTheMachinesItKeeps_notRepositories() throws IOException {
         // "Repository" is a borg noun. The operator's model is that the NAS keeps the backups of machines,
         // and that is true by construction: Vaier creates exactly one store per machine and names it after
-        // it. So the store is shown as the machine whose backups are in it, and the job it belongs to is
-        // what says which machine that is.
+        // the machine's IDENTITY — so the directory name says nothing to a person, and the label has to
+        // come from somewhere. It comes from the backend (BackupStoreLabel), never re-derived here: two
+        // surfaces working out which store is which is how they come to disagree, and being wrong about
+        // that means restoring the wrong machine's data.
         String js = read("explorer-shell.js");
         int from = js.indexOf("function repoLabel(");
         assertThat(from).as("a store knows how to say whose backups it holds").isPositive();
         String body = js.substring(from, js.indexOf("\n    }", from));
 
-        assertThat(body).as("read from the job, which is the truth of the mapping")
-            .contains("repositoryName");
-        assertThat(body).contains("machineName");
+        assertThat(body).as("read off the feed").contains("repo.label");
+        assertThat(body).as("never re-derived from the jobs").doesNotContain("S.backupJobs");
     }
 
     @Test

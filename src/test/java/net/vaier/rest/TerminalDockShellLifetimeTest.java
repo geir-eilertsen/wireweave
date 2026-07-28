@@ -21,8 +21,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class TerminalDockShellLifetimeTest {
 
-    private String dock() throws Exception {
-        return Files.readString(Path.of("src/main/resources/static/terminal-dock.js"));
+    private String window() throws Exception {
+        return read("terminal-window.js");
     }
 
     private String panes() throws Exception {
@@ -34,20 +34,18 @@ class TerminalDockShellLifetimeTest {
     }
 
     @Test
-    void closingAPane_tellsTheServerToEndTheShell() throws Exception {
+    void endingAShell_tellsTheServerToEndIt() throws Exception {
         // Without this frame the server cannot distinguish "I am done" from "my tunnel dropped", and a
         // persistent shell is built to survive the latter — so the session would linger forever.
-        String dock = dock();
-        assertThat(dock).contains("type: 'end-shell'");
-        assertThat(dock).contains("function closeShell(id)");
+        assertThat(window()).contains("type: 'end-shell'");
     }
 
     @Test
     void theEndShellFrameGoesOutBeforeTheSocketIsClosed() throws Exception {
         // Ordering is the whole point: a frame queued after close() never reaches the server.
-        String dock = dock();
-        int endShell = dock.indexOf("type: 'end-shell'");
-        int closeSocket = dock.indexOf("s.ws.onclose = null; s.ws.close();");
+        String js = window();
+        int endShell = js.indexOf("send({ type: 'end-shell' })");
+        int closeSocket = js.indexOf("state.ws.onclose = null; state.ws.close();");
         assertThat(endShell).isGreaterThan(0);
         assertThat(closeSocket).isGreaterThan(endShell);
     }
@@ -62,20 +60,9 @@ class TerminalDockShellLifetimeTest {
         assertThat(panes).contains("localStorage.getItem");
         assertThat(panes).contains("localStorage.setItem");
         assertThat(panes).contains("'vaier.terminal.panes'");
-        // The dock reaches that persistence only through the shared module now.
-        assertThat(dock()).contains("VaierPanes.claim(");
-        assertThat(dock()).contains("VaierPanes.release(");
-    }
-
-    @Test
-    void openingAShell_reusesAnOwnedPaneIdBeforeMintingANewOne() throws Exception {
-        // The reattach path: if we already own a session for this machine that is not on screen, open that one
-        // rather than creating a second and leaving the first stranded.
-        String dock = dock();
-        assertThat(dock).contains("function claimPaneId(machineId, machineName)");
-        assertThat(dock).contains("paneId: claimPaneId(machineId, machineName)");
-        // The fresh-id fallback must not be reachable directly from open() any more.
-        assertThat(dock).doesNotContain("paneId: randomPaneId()");
+        // The shell window reaches that persistence only through the shared module.
+        assertThat(window()).contains("VaierPanes.claim(");
+        assertThat(window()).contains("VaierPanes.release(");
     }
 
     // --- sessions are owned per machine IDENTITY (§6.22) -------------------------------------------
@@ -112,7 +99,6 @@ class TerminalDockShellLifetimeTest {
         // The name is passed for exactly one purpose — the one-time move above — so a caller that forgets
         // it silently strands that machine's running shells. Pinned here because the failure is invisible:
         // the new shell opens fine, and only the orphan on the host says anything went wrong.
-        assertThat(dock()).contains("VaierPanes.claim(machineId, machineName)");
         assertThat(read("terminal-window.js")).contains("VaierPanes.adopt(machineId, paneId, machine)")
             .contains("VaierPanes.claim(machineId, machine)")
             .contains("VaierPanes.release(machineId, paneId, machine)");
@@ -134,8 +120,18 @@ class TerminalDockShellLifetimeTest {
     @Test
     void endingAShell_releasesItsPaneId() throws Exception {
         // An id we no longer own must not be handed to the next shell, or it would reattach to a dead session.
-        String dock = dock();
-        assertThat(dock).contains("function releasePaneId(machineId, paneId, machineName)");
-        assertThat(dock).contains("releasePaneId(s.machineId, s.paneId, s.machine)");
+        assertThat(window()).contains("VaierPanes.release(machineId, paneId, machine)");
+    }
+
+    @Test
+    void theDockIsGone_soThereIsOneShellSystem() throws Exception {
+        // terminal-dock.js tiled shells inside admin.html and was reached from a Terminal button on the
+        // Infrastructure page — a page the Explorer replaced (#323). Nothing had called it since; its own
+        // empty state still told operators to open a shell from a button that no longer existed. Two shell
+        // systems is two places for session ownership to drift, which is the bug terminal-panes.js exists
+        // to prevent.
+        assertThat(Path.of("src/main/resources/static/terminal-dock.js")).doesNotExist();
+        assertThat(read("admin.html")).doesNotContain("TerminalDock").doesNotContain("term-panel");
+        assertThat(read("styles.css")).as("its styles went with it").doesNotContain("term-");
     }
 }

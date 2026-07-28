@@ -793,15 +793,6 @@ button.ex-lname:focus-visible { outline: 2px solid var(--accent); outline-offset
 }
 .ex-pane.is-bridged { overflow: hidden; }
 
-/* --- terminal dock ---------------------------------------------------------------------------------- */
-
-/* The dock is a row of the shell, not a page inside it — no iframe stands between a shell and its host any
-   more. It is sized here; everything inside it is terminal-dock.js's, unchanged. */
-#terminalPanel {
-    height: min(42vh, 460px);
-    border-top: 1px solid var(--border);
-}
-
 /* --- ⌘K: one namespace, one search ------------------------------------------------------------------ */
 
 .ex-scrim {

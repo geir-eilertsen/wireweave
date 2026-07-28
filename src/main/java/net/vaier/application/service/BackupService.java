@@ -29,10 +29,8 @@ import net.vaier.domain.port.ForReadyingBackupClients.ReadyingOutcome;
 import net.vaier.domain.port.ForRecordingBackupRuns;
 import org.springframework.stereotype.Service;
 
-import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 
 /**
  * The single fleet-backup domain service: pure CRUD/query over the backup repository and job stores.
@@ -119,13 +117,13 @@ public class BackupService implements
     }
 
     @Override
-    public void deleteBackupJob(String name) {
-        jobs.deleteByName(name);
+    public void deleteBackupJob(MachineId machineId) {
+        jobs.deleteByMachine(machineId);
     }
 
     @Override
-    public Optional<BackupRun> latestForJob(String jobName) {
-        return runs.latestForJob(jobName);
+    public Optional<BackupRun> latestForMachine(MachineId machineId) {
+        return runs.latestForMachine(machineId);
     }
 
     /**
@@ -149,23 +147,22 @@ public class BackupService implements
     @Override
     public ProtectionOutcome protect(Machine machine, List<String> paths) {
         BackupServer server = theBackupServer();
-        // The machine arrives whole because both halves of it are needed and must agree: its identity keys
-        // the job store, while its name seeds the repository/job slug an operator reads on the NAS.
+        // The machine arrives whole because both halves of it are needed: its identity names the repository
+        // and keys the job, while its name is what the job is labelled with for a person to read.
         Optional<BackupJob> existing = jobs.getByMachine(machine.id()).stream().findFirst();
-        // Only a machine with no job yet needs a slug, and it must be one nobody has taken: machine names
-        // need not be unique (§6.22), so two machines called "NAS" would otherwise compute the same one —
-        // the second backing up into the first's repository, and its job overwriting the first's in a store
-        // that upserts by job name. A machine that already has a job keeps its slug untouched; the domain
-        // decides what "free" means.
-        String slug = existing.map(BackupJob::name)
-            .orElseGet(() -> BackupRepository.freeName(machine.name(), takenSlugs()));
         boolean firstBackup = existing.isEmpty();
+        // A repository is a directory on the backup server, and the machine's identity names it. Named after
+        // the machine, two machines called "NAS" competed for one directory — one backing up into the
+        // other's archives. An identity cannot collide, so there is no stepping aside to do. What a person
+        // calls each store is a separate question: BackupStoreLabel answers it on screen, and the survival
+        // kit answers it on the day there is no screen (it prints machine -> repository, which is the only
+        // mapping that survives Vaier).
         BackupRepository repository = existing
             .flatMap(job -> repositories.getByName(job.repositoryName()))
-            .orElseGet(() -> createRepository(slug, server));
+            .orElseGet(() -> createRepository(machine.id().value(), server));
         BackupJob job = existing
             .map(existingJob -> existingJob.protecting(paths))
-            .orElseGet(() -> BackupJob.firstFor(slug, machine.id(), repository.name(), paths));
+            .orElseGet(() -> BackupJob.firstFor(machine.name(), machine.id(), repository.name(), paths));
         jobs.save(job);
         ReadyingOutcome readying = job.readyClientHostForFirstBackup(firstBackup, readier).orElse(null);
         return new ProtectionOutcome(job, readying);
@@ -189,24 +186,13 @@ public class BackupService implements
         }
         Unprotection outcome = existing.get().unprotecting(paths);
         if (outcome.jobDeleted()) {
-            jobs.deleteByName(existing.get().name());
+            jobs.deleteByMachine(machineId);
         } else if (outcome.changed()) {
             jobs.save(outcome.job());
         }
         return outcome;
     }
 
-    /**
-     * Every slug already in use, across both stores. Jobs and repositories are named alike and an operator
-     * reads both on the NAS, so a new machine steps aside from either — a job named {@code NAS} with no
-     * repository left, or a repository with no job, must not be walked into by the next machine of that name.
-     */
-    private Set<String> takenSlugs() {
-        Set<String> taken = new HashSet<>();
-        jobs.getAll().forEach(j -> taken.add(j.name()));
-        repositories.getAll().forEach(r -> taken.add(r.name()));
-        return taken;
-    }
 
     /** The fleet's single backup server, or a {@code 409}-mapped conflict when none is designated yet. */
     private BackupServer theBackupServer() {

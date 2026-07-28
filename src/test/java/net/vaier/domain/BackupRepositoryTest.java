@@ -117,26 +117,4 @@ class BackupRepositoryTest {
         assertThat(withSecret).isEqualTo(
             new BackupRepository("colina27", "nas-borg", "./adopted", "unlocked", true));
     }
-
-    // --- a slug free of the ones already taken (§6.22: machine names need not be unique) -------------
-
-    @Test
-    void freeName_whenNothingIsTaken_isJustTheSanitisedName() {
-        assertThat(BackupRepository.freeName("NUC 02", java.util.Set.of())).isEqualTo("NUC-02");
-    }
-
-    @Test
-    void freeName_stepsAsideWhenTheSlugIsAlreadyTaken() {
-        // Machine names stopped needing to be unique, and a machine's repository and job are both named
-        // after it. Two machines called "NAS" would otherwise compute the same slug — the second would back
-        // up into the FIRST one's borg repository, and its job would overwrite the first machine's job in
-        // the store, which upserts by job name. The first machine would silently stop being backed up.
-        assertThat(BackupRepository.freeName("NAS", java.util.Set.of("NAS"))).isEqualTo("NAS-2");
-        assertThat(BackupRepository.freeName("NAS", java.util.Set.of("NAS", "NAS-2"))).isEqualTo("NAS-3");
-    }
-
-    @Test
-    void freeName_comparesTheSanitisedForm_notTheRawInput() {
-        assertThat(BackupRepository.freeName("NUC 02", java.util.Set.of("NUC-02"))).isEqualTo("NUC-02-2");
-    }
 }

@@ -252,7 +252,7 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
         LocalDate today = LocalDate.now(clock);
         for (BackupJob job : jobs.getBackupJobs()) {
             try {
-                if (!job.isDue(today, clock.getZone(), runs.latestForJob(job.name()))) {
+                if (!job.isDue(today, clock.getZone(), runs.latestForMachine(job.machineId()))) {
                     continue;
                 }
                 Optional<BackupRepository> repo = repositories.getBackupRepositories().stream()
@@ -452,9 +452,16 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
         }
     }
 
-    /** The SSE payload for a settled run: {@code {"jobName":"…","status":"SUCCESS"}} (JSON-escaped). */
+    /**
+     * The SSE payload for a settled run: {@code {"machineId":"…","jobName":"…","status":"SUCCESS"}}.
+     *
+     * <p>Carries the machine's identity because that is what the browser watches on — a job's name is a
+     * label, and two machines that shared one had one run's outcome painted onto both of their entries.
+     */
     private static String runSettledJson(BackupRun run) {
-        return "{\"jobName\":\"" + jsonEscape(run.jobName()) + "\",\"status\":\"" + run.status().name() + "\"}";
+        return "{\"machineId\":\"" + jsonEscape(run.machineId().value()) + "\""
+            + ",\"jobName\":\"" + jsonEscape(run.jobName()) + "\""
+            + ",\"status\":\"" + run.status().name() + "\"}";
     }
 
     /** Escape a value for embedding in a double-quoted JSON string (backslash and double quote). */
