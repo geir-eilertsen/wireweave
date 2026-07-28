@@ -1,5 +1,6 @@
 package net.vaier.application;
 
+import net.vaier.domain.MachineId;
 import net.vaier.domain.MachineType;
 
 public interface ReissuePeerConfigUseCase {
@@ -18,6 +19,7 @@ public interface ReissuePeerConfigUseCase {
      */
     record ReissuedPeerUco(
         String id,
+        MachineId machineId,
         String name,
         String ipAddress,
         String publicKey,

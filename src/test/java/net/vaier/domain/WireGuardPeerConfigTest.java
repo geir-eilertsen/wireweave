@@ -537,4 +537,62 @@ class WireGuardPeerConfigTest {
 
         assertThat(json).doesNotContain("deviceCategory");
     }
+
+    // --- the peer's identity travels in its metadata (§6.22) ---------------------------------------
+
+    @Test
+    void generate_writesTheMachineIdIntoTheVaierMetadata() {
+        // Without this a freshly created peer has no id on disk, and the config adapter — correctly —
+        // refuses to load a peer whose identity is missing rather than inventing one. The peer is added
+        // to the WireGuard server and then is invisible to Vaier: no machine, no credential, no backup.
+        MachineId identity = MachineId.generate();
+
+        String config = WireGuardPeerConfig.generate("privkey", "10.13.13.9", "srvpub", "psk",
+            "vpn.example.com:51820", MachineType.UBUNTU_SERVER, null, null, "10.13.13.0/24",
+            null, "NUC 02", null, null, identity);
+
+        assertThat(config).contains("\"id\":\"" + identity.value() + "\"");
+    }
+
+    @Test
+    void reissue_carriesTheExistingIdentityThrough() {
+        // A Reissue re-renders the whole config from current logic. Minting a new identity here would be
+        // just as bad as dropping one: the peer's credential, host-key pin and backup job all hang off
+        // the id it had a moment ago. Identity is read, never minted — including here.
+        MachineId identity = MachineId.generate();
+        String existing = WireGuardPeerConfig.generate("privkey", "10.13.13.9", "oldpub", "psk",
+            "old.example.com:51820", MachineType.UBUNTU_SERVER, null, null, "10.13.13.0/24",
+            null, "NUC 02", null, null, identity);
+
+        String reissued = WireGuardPeerConfig.reissue(existing, MachineType.UBUNTU_SERVER, null, null,
+            null, "NUC 02", "newpub", "new.example.com:51820", "10.13.13.0/24", null);
+
+        assertThat(reissued).contains("\"id\":\"" + identity.value() + "\"");
+        assertThat(reissued).contains("new.example.com:51820");
+    }
+
+    @Test
+    void reissue_aConfigWithNoIdentity_staysWithoutOne() {
+        // A pre-§6.22 config that was never migrated has no id to carry. Reissue must not quietly supply
+        // one — that would hand the peer a brand-new identity and orphan everything keyed to its old
+        // records, which is precisely the failure this refactor exists to remove.
+        String legacy = """
+            # VAIER: {"peerType":"UBUNTU_SERVER","name":"NUC 02"}
+            [Interface]
+            PrivateKey = privkey
+            Address = 10.13.13.9/32
+
+            [Peer]
+            PublicKey = oldpub
+            PresharedKey = psk
+            Endpoint = old.example.com:51820
+            AllowedIPs = 10.13.13.0/24
+            PersistentKeepalive = 25
+            """;
+
+        String reissued = WireGuardPeerConfig.reissue(legacy, MachineType.UBUNTU_SERVER, null, null,
+            null, "NUC 02", "newpub", "new.example.com:51820", "10.13.13.0/24", null);
+
+        assertThat(reissued).doesNotContain("\"id\"");
+    }
 }

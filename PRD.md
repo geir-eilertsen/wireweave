@@ -1929,7 +1929,39 @@ What is left is one step — the payoff step:
    parameter called `machineId`. Both now run clean, and no variable in the shell called `machine` holds a
    name — that ambiguity was the whole bug, so the convention is the guard.
 
-   2d. **Then the guard, and the payoff.** `Machine.nameIsTaken`, `Machine.hasSameName` and the four
+   2d. **The LAN-server store is keyed by identity ✅ (2026-07-28) — and 2d turned out to be a
+   prerequisite nobody had written down.** Deleting the uniqueness guard would have been unsafe while
+   `lan-servers.yml` was keyed by name: `save()` upserted with `removeIf(name equals)`, `deleteByName()`
+   removed by name and `LanServer.findByName` was the lookup, so two machines called "NAS" would have
+   overwritten each other in the store and a delete would have removed whichever `getAll()` returned
+   first — silent mis-routing, one layer below the one the guard was protecting. The port is
+   `save`/`deleteById`, the domain lookup is `findById`, and `/lan-servers/{machineId}` addresses every
+   write, the setup-script download and the tokenized setup route. `publishLanService` takes a
+   `MachineId` too: publishing writes a DNS record and a route at whatever address the lookup returns, so
+   a name matching the wrong machine would put a service on the internet in front of a host nobody chose.
+   A rename now *replaces* its own entry instead of writing-then-deleting, which is the whole difference
+   an identity-keyed store makes. Deleting an unknown machine is a `404` rather than a silent success.
+   VPN peers needed none of this: their `{peerName}` path segment was always the immutable WireGuard
+   config id, whatever it was called.
+
+   2e. **Creating a peer wrote no identity at all — a live defect found by doing 2d.** `vaierJson` never
+   emitted an `id`, and `WireguardConfigFileAdapter` refuses (rightly) to load a peer whose metadata has
+   none rather than inventing one. So **every peer created since the identity slice landed joined the
+   WireGuard server and was then invisible to Vaier**: no machine, no credential, no backup, and no error
+   anywhere — `wg show` would list it while `/machines` did not. `WireGuardPeerConfig.generate` now stamps
+   the `MachineId` that `VpnService.createPeer` mints, which is the one moment in Vaier an identity is
+   created rather than read. **`reissue` had the same hole from the other side**: it re-renders the whole
+   config, so it was erasing the id of any peer it touched. It carries the existing one through now —
+   read off the config being reissued, and left absent when there is none, so reissuing a never-migrated
+   config does not quietly mint an identity and orphan the records keyed to the old one. The live fleet's
+   four peers were checked and all carry ids; the exposure was to peers created after the refactor.
+
+   2f. **The create endpoints answer with the identity ✅ (2026-07-28).** `CreatePeerResponse`,
+   `RegisterResponse` and `AdoptResponse` carry `machineId`, so `justCreated(name)` — the shell's last
+   name→identity lookup, which re-read the fleet and matched on the name the operator had just typed — is
+   **deleted**. Nothing in the browser resolves a machine by name any more.
+
+   2g. **Then the guard, and the payoff.** `Machine.nameIsTaken`, `Machine.hasSameName` and the four
    uniqueness checks in `VpnService`/`LanServerService` go, and **machine names stop needing to be
    unique**.
 

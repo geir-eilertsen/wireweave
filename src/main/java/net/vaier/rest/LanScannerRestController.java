@@ -221,13 +221,13 @@ public class LanScannerRestController {
      * credentialStored} in the vault, plus the {@code hostKeyFingerprint} the host presented. Never
      * echoes the secret.
      */
-    public record AdoptResponse(String name, String lanAddress, boolean runsDocker, Integer dockerPort,
+    public record AdoptResponse(String machineId, String name, String lanAddress, boolean runsDocker, Integer dockerPort,
                                 String description, String deviceCategory,
                                 boolean deviceCategoryOverridden,
                                 boolean credentialProvided, boolean credentialVerified,
                                 boolean credentialStored, String hostKeyFingerprint) {
         static AdoptResponse from(LanServer s) {
-            return new AdoptResponse(s.name(), s.lanAddress(), s.runsDocker(), s.dockerPort(),
+            return new AdoptResponse(s.machineId().value(), s.name(), s.lanAddress(), s.runsDocker(), s.dockerPort(),
                 s.description(), s.effectiveDeviceCategory().name(), s.deviceCategoryOverridden(),
                 false, false, false, null);
         }
@@ -235,7 +235,7 @@ public class LanScannerRestController {
         static AdoptResponse from(AdoptionOutcome outcome) {
             LanServer s = outcome.server();
             SshCredentialVerification v = outcome.credentialVerification();
-            return new AdoptResponse(s.name(), s.lanAddress(), s.runsDocker(), s.dockerPort(),
+            return new AdoptResponse(s.machineId().value(), s.name(), s.lanAddress(), s.runsDocker(), s.dockerPort(),
                 s.description(), s.effectiveDeviceCategory().name(), s.deviceCategoryOverridden(),
                 true, v != null && v.authenticated(), outcome.credentialStored(),
                 v == null ? null : v.fingerprint());

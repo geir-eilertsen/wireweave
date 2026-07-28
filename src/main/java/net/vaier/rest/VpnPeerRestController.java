@@ -21,6 +21,7 @@ import net.vaier.domain.port.ForUpdatingPeerConfigurations;
 import net.vaier.domain.port.ForVendingSetupTokens;
 import net.vaier.config.ServiceNames;
 import net.vaier.domain.MachineIntent;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.MachineType;
 
 import lombok.RequiredArgsConstructor;
@@ -148,7 +149,7 @@ public class VpnPeerRestController {
         // inline payload so it never burns the budget; a raw curl GET can still recover any one
         // artefact once (then 410 forever).
         CreatePeerResponse response = buildConfigDeliveryResponse(
-                createdPeer.id(), createdPeer.name(), createdPeer.ipAddress(),
+                createdPeer.id(), createdPeer.machineId(), createdPeer.name(), createdPeer.ipAddress(),
                 createdPeer.publicKey(), createdPeer.clientConfigFile(), createdPeer.peerType());
 
         forPublishingEvents.publish("vpn-peers", "peers-updated", "");
@@ -170,7 +171,7 @@ public class VpnPeerRestController {
             reissuePeerConfigUseCase.reissuePeerConfig(peerId);
 
         CreatePeerResponse response = buildConfigDeliveryResponse(
-                reissued.id(), reissued.name(), reissued.ipAddress(),
+                reissued.id(), reissued.machineId(), reissued.name(), reissued.ipAddress(),
                 reissued.publicKey(), reissued.clientConfigFile(), reissued.peerType());
 
         forPublishingEvents.publish("vpn-peers", "peers-updated", "");
@@ -182,8 +183,8 @@ public class VpnPeerRestController {
      * shared by create and reissue. The five GET endpoints stay gated by the one-shot marker (#202);
      * the UI consumes only this inline payload so it never burns the budget.
      */
-    private CreatePeerResponse buildConfigDeliveryResponse(String id, String name, String ipAddress,
-            String publicKey, String configFile, MachineType peerType) {
+    private CreatePeerResponse buildConfigDeliveryResponse(String id, MachineId machineId, String name,
+            String ipAddress, String publicKey, String configFile, MachineType peerType) {
         java.util.Set<net.vaier.domain.PeerArtifact> artefacts =
             net.vaier.domain.PeerArtifact.forPeerType(peerType);
 
@@ -206,7 +207,8 @@ public class VpnPeerRestController {
             : null;
 
         return new CreatePeerResponse(
-                id, name, ipAddress, publicKey, configFile, peerType.name(),
+                id, machineId == null ? null : machineId.value(), name, ipAddress, publicKey,
+                configFile, peerType.name(),
                 artefacts.stream().map(Enum::name).sorted().toList(),
                 qrCodePngBase64, dockerCompose, setupScript, setupToken);
     }
@@ -559,6 +561,7 @@ public class VpnPeerRestController {
 
     public record CreatePeerResponse(
             String id,
+            String machineId,
             String name,
             String ipAddress,
             String publicKey,

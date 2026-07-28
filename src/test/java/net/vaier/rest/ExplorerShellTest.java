@@ -196,11 +196,12 @@ class ExplorerShellTest {
     void theTree_addressesMachinesByIdentity_andCrossesToANameOnlyToShowOne() throws IOException {
         String js = read("explorer-shell.js");
 
-        // The lookup this refactor exists to delete. Its one surviving form is named for the moment it
-        // serves, so a reader can tell a leftover from a deliberate crossing.
-        assertThat(js).as("no name -> id lookup outside machine creation").doesNotContain("function midOf(");
+        // The lookup this refactor exists to delete — now gone in every form. The last one to go was
+        // justCreated(), which re-read the fleet after a create and matched on the name the operator had
+        // just typed; every create endpoint answers with the machine's identity instead.
+        assertThat(js).as("no name -> id lookup anywhere").doesNotContain("function midOf(");
         assertThat(js).doesNotContain("window.vaierMachineIdOf");
-        assertThat(js).contains("function justCreated(");
+        assertThat(js).doesNotContain("function justCreated(");
 
         // The tree's own entries: the segment is the identity, the label is the name.
         assertThat(js).contains("{ name: m.id, kind: 'machine', label: m.name }");

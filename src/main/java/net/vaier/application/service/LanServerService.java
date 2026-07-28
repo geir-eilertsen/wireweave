@@ -16,6 +16,7 @@ import net.vaier.domain.DeviceCategory;
 import net.vaier.domain.DiscoveredLanMachine;
 import net.vaier.domain.LanAnchor;
 import net.vaier.domain.LanServer;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.Machine;
 import net.vaier.domain.NotFoundException;
 import net.vaier.domain.ConflictException;
@@ -234,82 +235,82 @@ public class LanServerService implements
     }
 
     @Override
-    public void updateDeviceCategory(String name, String deviceCategory) {
+    public void updateDeviceCategory(MachineId machineId, String deviceCategory) {
         // Validate the override value first: a non-blank value must be a valid DeviceCategory
         // (IllegalArgumentException -> 400). Null/blank parses to null = "clear the override".
         // The domain owns the parse rule; withDeviceCategory owns carrying everything else over.
         DeviceCategory parsed = DeviceCategory.fromString(deviceCategory);
-        LanServer existing = forPersistingLanServers.getAll().stream()
-            .filter(s -> s.hasName(name))
-            .findFirst()
-            .orElseThrow(() -> new NotFoundException("LAN server not found: " + name));
+        LanServer existing = requireById(machineId);
         forPersistingLanServers.save(existing.withDeviceCategory(parsed));
         log.info("Updated device category for LAN server {} to {}", forLog(existing.name()), parsed);
     }
 
     @Override
-    public void updateDescription(String name, String description) {
+    public void updateDescription(MachineId machineId, String description) {
         // withDescription owns the normalisation rule; the service only finds the entry and saves.
-        LanServer existing = forPersistingLanServers.getAll().stream()
-            .filter(s -> s.hasName(name))
-            .findFirst()
-            .orElseThrow(() -> new NotFoundException("LAN server not found: " + name));
+        LanServer existing = requireById(machineId);
         forPersistingLanServers.save(existing.withDescription(description));
         log.info("Updated description for LAN server {}", forLog(existing.name()));
     }
 
     @Override
-    public void delete(String name) {
-        log.info("Deleting LAN server: {}", forLog(name));
+    public void delete(MachineId machineId) {
+        LanServer existing = requireById(machineId);
+        log.info("Deleting LAN server: {}", forLog(existing.name()));
         // Cascade first: a LAN server's published services are keyed on its lanAddress (LAN routes
         // are published via host.lanAddress()), so without this they'd be orphaned. Mirrors
         // VpnService.deletePeer cascading into published-service deletion via the *UseCase port.
-        deletePublishedServicesForLanServer(name);
-        forPersistingLanServers.deleteByName(name);
+        deletePublishedServicesFor(existing);
+        forPersistingLanServers.deleteById(machineId);
     }
 
-    private void deletePublishedServicesForLanServer(String name) {
-        LanServer.findByName(name, forPersistingLanServers.getAll()).ifPresent(server -> {
-            String lanAddress = server.lanAddress();
-            if (lanAddress == null || lanAddress.isBlank()) return;
-            forPersistingReverseProxyRoutes.getReverseProxyRoutes().stream()
-                .filter(ReverseProxyRoute::isVaierManaged)
-                .filter(route -> lanAddress.equals(route.getAddress()))
-                .forEach(route -> {
-                    log.info("Deleting published service {} (path: {}) pointing to LAN server {}",
-                        route.getDomainName(), route.getPathPrefix(), forLog(name));
-                    deletePublishedServiceUseCase.deleteService(route.getDomainName(), route.getPathPrefix());
-                });
-        });
+    /**
+     * The LAN server with this identity, or a 404. The one lookup every write goes through, so a request
+     * naming a machine that has left the fleet fails where it is asked rather than part-way through a
+     * cascade.
+     */
+    private LanServer requireById(MachineId machineId) {
+        return LanServer.findById(machineId, forPersistingLanServers.getAll())
+            .orElseThrow(() -> new NotFoundException("LAN server not found: " + machineId.value()));
+    }
+
+    private void deletePublishedServicesFor(LanServer server) {
+        String lanAddress = server.lanAddress();
+        if (lanAddress == null || lanAddress.isBlank()) return;
+        forPersistingReverseProxyRoutes.getReverseProxyRoutes().stream()
+            .filter(ReverseProxyRoute::isVaierManaged)
+            .filter(route -> lanAddress.equals(route.getAddress()))
+            .forEach(route -> {
+                log.info("Deleting published service {} (path: {}) pointing to LAN server {}",
+                    route.getDomainName(), route.getPathPrefix(), forLog(server.name()));
+                deletePublishedServiceUseCase.deleteService(route.getDomainName(), route.getPathPrefix());
+            });
     }
 
     @Override
-    public void rename(String currentName, String newName) {
+    public void rename(MachineId machineId, String newName) {
         // The naming rule and the renamed-copy live on the LanServer entity; the service only
         // orchestrates the lookup, the collision guard and the persistence calls.
         List<LanServer> all = forPersistingLanServers.getAll();
-        LanServer existing = all.stream()
-            .filter(s -> s.hasName(currentName))
-            .findFirst()
-            .orElseThrow(() -> new NotFoundException("LAN server not found: " + currentName));
+        LanServer existing = LanServer.findById(machineId, all)
+            .orElseThrow(() -> new NotFoundException("LAN server not found: " + machineId.value()));
 
         LanServer renamed = existing.renamedTo(newName);
 
-        if (renamed.hasName(currentName)) {
+        if (renamed.hasName(existing.name())) {
             log.info("Rename no-op: LAN server {} already has that name", forLog(existing.name()));
             return;
         }
         // #284: the new name must be free across every machine — other LAN servers and VPN peers.
         // Reuse the already-loaded `all` list rather than re-reading the LAN-server file.
         List<String> otherNames = otherMachineNames(
-            forGettingPeerConfigurations.getAllPeerConfigs(), all, currentName);
+            forGettingPeerConfigurations.getAllPeerConfigs(), all, existing.machineId());
         if (Machine.nameIsTaken(renamed.name(), otherNames)) {
             throw new ConflictException("A machine named \"" + renamed.name() + "\" already exists");
         }
 
-        // save() upserts by name, so write the new entry then drop the old one.
+        // save() upserts by identity, so the renamed copy simply replaces the entry it came from.
         forPersistingLanServers.save(renamed);
-        forPersistingLanServers.deleteByName(currentName);
         // The published-services view caches each LAN route's resolved lanServerName; the rename
         // changed it, so drop the cache or the renamed machine card serves stale (old-name) data
         // and appears to lose its services until the name is changed back (#300).
@@ -333,10 +334,10 @@ public class LanServerService implements
     }
 
     @Override
-    public Optional<String> generateSetupScript(String lanServerName) {
+    public Optional<String> generateSetupScript(MachineId machineId) {
         // Orchestration only: read the LAN server and the inputs the domain needs from the driven
         // ports, then let the domain decide what the script must do and render it.
-        return LanServer.findByName(lanServerName, forPersistingLanServers.getAll())
+        return LanServer.findById(machineId, forPersistingLanServers.getAll())
             .flatMap(server -> LanServerSetupScript.forHost(server,
                 forGettingPeerConfigurations.getAllPeerConfigs(),
                 forResolvingServerLanCidr.resolve().orElse(null), vpnSubnet));
@@ -345,16 +346,16 @@ public class LanServerService implements
 
     /**
      * Names of every machine Vaier knows about — VPN peers and LAN servers — except the LAN
-     * server called {@code excludeLanServerName} (pass null to exclude nothing). The caller passes
+     * server with identity {@code excludeLanServer} (pass null to exclude nothing). The caller passes
      * the already-read peer configs and LAN servers so each source is read at most once per
      * operation. Orchestration only: the domain ({@link Machine#nameIsTaken}) decides whether a
      * candidate name is free across all of Vaier.
      */
     private List<String> otherMachineNames(List<PeerConfiguration> peers, List<LanServer> lanServers,
-                                           String excludeLanServerName) {
+                                           MachineId excludeLanServer) {
         Stream<String> peerNames = peers.stream().map(PeerConfiguration::name);
         Stream<String> lanServerNames = lanServers.stream()
-            .filter(s -> excludeLanServerName == null || !s.hasName(excludeLanServerName))
+            .filter(s -> excludeLanServer == null || !s.machineId().equals(excludeLanServer))
             .map(LanServer::name);
         // The Vaier server host is a machine too (#311); its canonical name is reserved so an
         // operator can never register a peer or LAN server that shadows it.

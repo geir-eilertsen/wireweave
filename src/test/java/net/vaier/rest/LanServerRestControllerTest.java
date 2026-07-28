@@ -16,6 +16,8 @@ import net.vaier.application.ResolveLanAnchorUseCase;
 import net.vaier.application.UpdateLanServerDescriptionUseCase;
 import net.vaier.domain.LanAnchor;
 import net.vaier.domain.LanServer;
+import net.vaier.domain.MachineId;
+import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.SetupToken;
 import net.vaier.domain.port.ForVendingSetupTokens;
 import org.junit.jupiter.api.Test;
@@ -64,6 +66,13 @@ class LanServerRestControllerTest {
 
     @InjectMocks
     LanServerRestController controller;
+
+    // Identities for the fixtures below. TestMachineIds keeps them stable and readable — production
+    // never derives an id from a name, but a test that stubs one and asserts on it has to agree.
+    private static final MachineId NAS = TestMachineIds.of("nas");
+    private static final MachineId NUC02 = TestMachineIds.of("nuc02");
+    private static final MachineId PRINTER = TestMachineIds.of("printer");
+    private static final MachineId GHOST = TestMachineIds.of("ghost");
 
     // --- lan-anchor ---
 
@@ -164,6 +173,10 @@ class LanServerRestControllerTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         var body = (LanServerRestController.RegisterResponse) response.getBody();
         assertThat(body.name()).isEqualTo("roon");
+        // The identity of the machine just made. Without it the browser had to re-read the whole fleet and
+        // match on the name the operator typed — a lookup that is wrong the moment two machines share a name,
+        // and the reason justCreated() had to exist at all.
+        assertThat(body.machineId()).isEqualTo(created.machineId().value());
         assertThat(body.credentialProvided()).isTrue();
         assertThat(body.credentialVerified()).isTrue();
         assertThat(body.credentialStored()).isTrue();
@@ -212,33 +225,35 @@ class LanServerRestControllerTest {
 
     @Test
     void delete_callsUseCase() {
-        ResponseEntity<Void> response = controller.delete("nas");
+        MachineId nas = TestMachineIds.of("nas");
+
+        ResponseEntity<Void> response = controller.delete(nas.value());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-        verify(deleteLanServerUseCase).delete("nas");
+        verify(deleteLanServerUseCase).delete(nas);
     }
 
     // --- {name}/setup.sh (#249) ---
 
     @Test
     void downloadSetupScript_returns200WithShellAttachment() {
-        when(generateLanServerSetupScriptUseCase.generateSetupScript("nuc02"))
+        when(generateLanServerSetupScriptUseCase.generateSetupScript(NUC02))
             .thenReturn(Optional.of("#!/usr/bin/env bash\nip route replace 172.31.16.0/20 via 192.168.3.121\n"));
 
-        ResponseEntity<?> response = controller.downloadSetupScript("nuc02");
+        ResponseEntity<?> response = controller.downloadSetupScript(NUC02.value());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.parseMediaType("application/x-sh"));
         assertThat(response.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION))
-            .contains("filename=nuc02-setup.sh");
+            .contains("filename=" + NUC02.value() + "-setup.sh");
         assertThat(response.getBody()).asString().contains("ip route replace 172.31.16.0/20 via 192.168.3.121");
     }
 
     @Test
     void downloadSetupScript_returns404WhenNothingToSetUp() {
-        when(generateLanServerSetupScriptUseCase.generateSetupScript("ghost")).thenReturn(Optional.empty());
+        when(generateLanServerSetupScriptUseCase.generateSetupScript(GHOST)).thenReturn(Optional.empty());
 
-        assertThat(controller.downloadSetupScript("ghost").getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(controller.downloadSetupScript(GHOST.value()).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }
 
     @Test
@@ -246,23 +261,23 @@ class LanServerRestControllerTest {
         // With produces="application/x-sh" a JSON/API client (Accept: application/json) couldn't
         // even match the handler, so the 409 ApiError was unreachable (406). Without the constraint
         // the conflict renders as the JSON envelope through the real dispatcher + handler.
-        when(generateLanServerSetupScriptUseCase.generateSetupScript("nuc02"))
+        when(generateLanServerSetupScriptUseCase.generateSetupScript(NUC02))
             .thenThrow(new ConflictException("Relay peer apalveien5 has no LAN address set"));
         MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
 
-        mockMvc.perform(get("/lan-servers/nuc02/setup.sh").accept(MediaType.APPLICATION_JSON))
+        mockMvc.perform(get("/lan-servers/" + NUC02.value() + "/setup.sh").accept(MediaType.APPLICATION_JSON))
                .andExpect(status().isConflict())
                .andExpect(jsonPath("$.code").value("CONFLICT"));
     }
 
     @Test
     void downloadSetupScript_propagatesConflictWhenRelayHasNoLanAddress() {
-        when(generateLanServerSetupScriptUseCase.generateSetupScript("nuc02"))
+        when(generateLanServerSetupScriptUseCase.generateSetupScript(NUC02))
             .thenThrow(new ConflictException("Relay peer apalveien5 has no LAN address set"));
 
-        assertThatThrownBy(() -> controller.downloadSetupScript("nuc02"))
+        assertThatThrownBy(() -> controller.downloadSetupScript(NUC02.value()))
             .isInstanceOf(ConflictException.class);
     }
 
@@ -270,28 +285,28 @@ class LanServerRestControllerTest {
 
     @Test
     void mintSetupToken_returnsTokenAndTtlInSeconds() {
-        when(generateLanServerSetupScriptUseCase.generateSetupScript("nuc02"))
+        when(generateLanServerSetupScriptUseCase.generateSetupScript(NUC02))
             .thenReturn(Optional.of("#!/usr/bin/env bash\n"));
-        when(forVendingSetupTokens.issue("nuc02"))
+        when(forVendingSetupTokens.issue(NUC02.value()))
             .thenReturn(SetupToken.issue("nuc02", "s3cret-value", 0L));
 
-        ResponseEntity<?> response = controller.mintSetupToken("nuc02");
+        ResponseEntity<?> response = controller.mintSetupToken(NUC02.value());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         LanServerRestController.SetupTokenResponse body =
             (LanServerRestController.SetupTokenResponse) response.getBody();
         assertThat(body.token()).isEqualTo("s3cret-value");
         assertThat(body.expiresInSeconds()).isEqualTo(SetupToken.TTL.toSeconds());
-        verify(forVendingSetupTokens).issue("nuc02");
+        verify(forVendingSetupTokens).issue(NUC02.value());
     }
 
     @Test
     void mintSetupToken_noSetupScript_returns204AndMintsNothing() {
         // A host with nothing to install (no Docker, no LAN to anchor) has no setup script — so there is
         // no command to hand over, and no token is minted.
-        when(generateLanServerSetupScriptUseCase.generateSetupScript("printer")).thenReturn(Optional.empty());
+        when(generateLanServerSetupScriptUseCase.generateSetupScript(PRINTER)).thenReturn(Optional.empty());
 
-        ResponseEntity<?> response = controller.mintSetupToken("printer");
+        ResponseEntity<?> response = controller.mintSetupToken(PRINTER.value());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
         verify(forVendingSetupTokens, never()).issue(anyString());
@@ -299,11 +314,11 @@ class LanServerRestControllerTest {
 
     @Test
     void serveTokenizedSetupScript_validToken_returns200TextPlainScript() {
-        when(forVendingSetupTokens.consume("nuc02", "good")).thenReturn(true);
-        when(generateLanServerSetupScriptUseCase.generateSetupScript("nuc02"))
+        when(forVendingSetupTokens.consume(NUC02.value(), "good")).thenReturn(true);
+        when(generateLanServerSetupScriptUseCase.generateSetupScript(NUC02))
             .thenReturn(Optional.of("#!/usr/bin/env bash\nip route replace 172.31.16.0/20 via 192.168.3.121\n"));
 
-        ResponseEntity<?> response = controller.serveTokenizedSetupScript("nuc02", "good");
+        ResponseEntity<?> response = controller.serveTokenizedSetupScript(NUC02.value(), "good");
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.TEXT_PLAIN);
@@ -312,7 +327,7 @@ class LanServerRestControllerTest {
 
     @Test
     void serveTokenizedSetupScript_missingToken_returns401AndServesNothing() {
-        ResponseEntity<?> response = controller.serveTokenizedSetupScript("nuc02", null);
+        ResponseEntity<?> response = controller.serveTokenizedSetupScript(NUC02.value(), null);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
         assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.TEXT_PLAIN);
@@ -322,9 +337,9 @@ class LanServerRestControllerTest {
 
     @Test
     void serveTokenizedSetupScript_spentOrInvalidToken_returns401AndServesNothing() {
-        when(forVendingSetupTokens.consume("nuc02", "spent")).thenReturn(false);
+        when(forVendingSetupTokens.consume(NUC02.value(), "spent")).thenReturn(false);
 
-        ResponseEntity<?> response = controller.serveTokenizedSetupScript("nuc02", "spent");
+        ResponseEntity<?> response = controller.serveTokenizedSetupScript(NUC02.value(), "spent");
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
         org.mockito.Mockito.verifyNoInteractions(generateLanServerSetupScriptUseCase);
@@ -332,10 +347,10 @@ class LanServerRestControllerTest {
 
     @Test
     void serveTokenizedSetupScript_validTokenUnknownMachine_returns404() {
-        when(forVendingSetupTokens.consume("ghost", "good")).thenReturn(true);
-        when(generateLanServerSetupScriptUseCase.generateSetupScript("ghost")).thenReturn(Optional.empty());
+        when(forVendingSetupTokens.consume(GHOST.value(), "good")).thenReturn(true);
+        when(generateLanServerSetupScriptUseCase.generateSetupScript(GHOST)).thenReturn(Optional.empty());
 
-        ResponseEntity<?> response = controller.serveTokenizedSetupScript("ghost", "good");
+        ResponseEntity<?> response = controller.serveTokenizedSetupScript(GHOST.value(), "good");
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }
@@ -363,6 +378,24 @@ class LanServerRestControllerTest {
         assertThat(response.get(1).runsDocker()).isFalse();
         assertThat(response.get(1).dockerPort()).isNull();
         assertThat(response.get(1).reachability()).isEqualTo("OK");
+    }
+
+    @Test
+    void list_namesEachServersIdentity_soTheBrowserNeedNotJoinOnADisplayName() {
+        // A LAN server has carried a MachineId since §6.22, but this feed only ever said its name — so the
+        // Explorer had to key its liveness map by that name and cross to it from an identity on every read.
+        // A name is editable and two machines may yet share one, which is the whole reason identity exists.
+        MachineId nas = MachineId.generate();
+        when(getLanServersUseCase.getAll()).thenReturn(List.of(
+            new LanServerView(new LanServer("nas", "192.168.3.50", true, 2375, null, null, null, nas),
+                "apalveien5")
+        ));
+        when(reachabilityUseCase.getReachability("192.168.3.50")).thenReturn(Reachability.OK);
+        when(getLanServerScrapeUseCase.getLanServerContainers()).thenReturn(List.of());
+
+        var response = controller.list();
+
+        assertThat(response.get(0).machineId()).isEqualTo(nas.value());
     }
 
     @Test
@@ -419,36 +452,40 @@ class LanServerRestControllerTest {
 
     @Test
     void rename_returns204OnSuccess() {
-        var response = controller.rename("nas", new LanServerRestController.RenameRequest("media-nas"));
+        MachineId nas = TestMachineIds.of("nas");
+
+        var response = controller.rename(nas.value(), new LanServerRestController.RenameRequest("media-nas"));
 
         assertThat(response.getStatusCode().value()).isEqualTo(204);
-        verify(renameLanServerUseCase).rename("nas", "media-nas");
+        verify(renameLanServerUseCase).rename(nas, "media-nas");
     }
 
     @Test
     void rename_propagatesNotFound() {
+        MachineId ghost = TestMachineIds.of("ghost");
         doThrow(new NotFoundException("LAN server not found: ghost"))
-            .when(renameLanServerUseCase).rename("ghost", "phantom");
+            .when(renameLanServerUseCase).rename(ghost, "phantom");
 
-        assertThatThrownBy(() -> controller.rename("ghost", new LanServerRestController.RenameRequest("phantom")))
+        assertThatThrownBy(() ->
+            controller.rename(ghost.value(), new LanServerRestController.RenameRequest("phantom")))
             .isInstanceOf(NotFoundException.class);
     }
 
     @Test
     void rename_propagatesConflict() {
         doThrow(new ConflictException("A LAN server named printer already exists"))
-            .when(renameLanServerUseCase).rename("nas", "printer");
+            .when(renameLanServerUseCase).rename(NAS, "printer");
 
-        assertThatThrownBy(() -> controller.rename("nas", new LanServerRestController.RenameRequest("printer")))
+        assertThatThrownBy(() -> controller.rename(NAS.value(), new LanServerRestController.RenameRequest("printer")))
             .isInstanceOf(ConflictException.class);
     }
 
     @Test
     void rename_propagatesInvalidName() {
         doThrow(new IllegalArgumentException("New LAN server name must not be blank"))
-            .when(renameLanServerUseCase).rename("nas", "  ");
+            .when(renameLanServerUseCase).rename(NAS, "  ");
 
-        assertThatThrownBy(() -> controller.rename("nas", new LanServerRestController.RenameRequest("  ")))
+        assertThatThrownBy(() -> controller.rename(NAS.value(), new LanServerRestController.RenameRequest("  ")))
             .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -511,46 +548,46 @@ class LanServerRestControllerTest {
     @Test
     void updateDeviceCategory_returns204OnSuccess() {
         var response = controller.updateDeviceCategory(
-            "nas", new LanServerRestController.UpdateDeviceCategoryRequest("NAS"));
+            NAS.value(), new LanServerRestController.UpdateDeviceCategoryRequest("NAS"));
 
         assertThat(response.getStatusCode().value()).isEqualTo(204);
-        verify(updateLanServerDeviceCategoryUseCase).updateDeviceCategory("nas", "NAS");
+        verify(updateLanServerDeviceCategoryUseCase).updateDeviceCategory(NAS, "NAS");
     }
 
     @Test
     void updateDeviceCategory_nullBodyIsTreatedAsClear() {
-        var response = controller.updateDeviceCategory("nas", null);
+        var response = controller.updateDeviceCategory(NAS.value(), null);
 
         assertThat(response.getStatusCode().value()).isEqualTo(204);
-        verify(updateLanServerDeviceCategoryUseCase).updateDeviceCategory("nas", null);
+        verify(updateLanServerDeviceCategoryUseCase).updateDeviceCategory(NAS, null);
     }
 
     @Test
     void updateDeviceCategory_propagatesInvalidValue() {
         doThrow(new IllegalArgumentException("bad category"))
-            .when(updateLanServerDeviceCategoryUseCase).updateDeviceCategory("nas", "BANANA");
+            .when(updateLanServerDeviceCategoryUseCase).updateDeviceCategory(NAS, "BANANA");
 
         assertThatThrownBy(() -> controller.updateDeviceCategory(
-            "nas", new LanServerRestController.UpdateDeviceCategoryRequest("BANANA")))
+            NAS.value(), new LanServerRestController.UpdateDeviceCategoryRequest("BANANA")))
             .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void updateDescription_returns204OnSuccess() {
         var response = controller.updateDescription(
-                "nas", new LanServerRestController.UpdateDescriptionRequest("Synology in the closet"));
+                NAS.value(), new LanServerRestController.UpdateDescriptionRequest("Synology in the closet"));
 
         assertThat(response.getStatusCode().value()).isEqualTo(204);
-        verify(updateLanServerDescriptionUseCase).updateDescription("nas", "Synology in the closet");
+        verify(updateLanServerDescriptionUseCase).updateDescription(NAS, "Synology in the closet");
     }
 
     @Test
     void updateDescription_propagatesNotFound() {
         doThrow(new NotFoundException("LAN server not found: ghost"))
-            .when(updateLanServerDescriptionUseCase).updateDescription("ghost", "anything");
+            .when(updateLanServerDescriptionUseCase).updateDescription(GHOST, "anything");
 
         assertThatThrownBy(() -> controller.updateDescription(
-                "ghost", new LanServerRestController.UpdateDescriptionRequest("anything")))
+                GHOST.value(), new LanServerRestController.UpdateDescriptionRequest("anything")))
             .isInstanceOf(NotFoundException.class);
     }
 

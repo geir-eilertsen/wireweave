@@ -53,12 +53,14 @@ public record LanServer(String name, String lanAddress, boolean runsDocker, Inte
     }
 
     /**
-     * Find the LAN server in {@code servers} whose {@link #name()} equals {@code name} (exact,
-     * case-sensitive). Returns empty when no server matches — callers decide how to react
-     * (typically reject the operation that referenced the unknown machine).
+     * Find the LAN server in {@code servers} with this {@link #machineId()}.
+     *
+     * <p>The lookup every operation on a particular machine goes through. A name would answer the wrong
+     * question: it is editable, and two machines may share one, so a name-match returns "a machine called
+     * that" where the caller asked for "the machine that is this one".
      */
-    public static Optional<LanServer> findByName(String name, Collection<LanServer> servers) {
-        return servers.stream().filter(s -> s.hasName(name)).findFirst();
+    public static Optional<LanServer> findById(MachineId machineId, Collection<LanServer> servers) {
+        return servers.stream().filter(s -> s.machineId().equals(machineId)).findFirst();
     }
 
     /**

@@ -23,6 +23,7 @@ import net.vaier.domain.DnsZone;
 import net.vaier.domain.DockerService;
 import net.vaier.domain.LanAnchor;
 import net.vaier.domain.LanServer;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.LaunchpadVisibility;
 import net.vaier.domain.PublishableService;
 import net.vaier.domain.PublishableService.PublishableSource;
@@ -395,11 +396,11 @@ public class PublishingService implements
     // --- PublishLanServiceUseCase ---
 
     @Override
-    public void publishLanService(String subdomain, String machineName, int port, String protocol,
+    public void publishLanService(String subdomain, MachineId machineId, int port, String protocol,
                                   boolean requiresAuth, boolean directUrlDisabled, String rootRedirectPath,
                                   String pathPrefix) {
-        LanServer machine = LanServer.findByName(machineName, forPersistingLanServers.getAll())
-            .orElseThrow(() -> new IllegalArgumentException("Unknown machine: " + machineName));
+        LanServer machine = LanServer.findById(machineId, forPersistingLanServers.getAll())
+            .orElseThrow(() -> new IllegalArgumentException("Unknown machine: " + machineId.value()));
         publishLanRoute(subdomain, machine.lanAddress(), port, protocol,
             requiresAuth, directUrlDisabled, rootRedirectPath, pathPrefix);
     }

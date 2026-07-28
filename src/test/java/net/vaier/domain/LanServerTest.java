@@ -259,35 +259,39 @@ class LanServerTest {
         assertThat(renamed.description()).isEqualTo("Synology");
     }
 
-    // --- findByName (#221) ---
+    // --- findById (#221, by identity since §6.22) ---
 
     @Test
-    void findByName_returnsTheMatchingServer() {
+    void findById_returnsTheMatchingServer() {
         LanServer nas = new LanServer("nas", "192.168.3.50", true, 2375);
         LanServer printer = new LanServer("printer", "192.168.3.20", false, null);
 
-        Optional<LanServer> hit = LanServer.findByName("printer", List.of(nas, printer));
+        Optional<LanServer> hit = LanServer.findById(printer.machineId(), List.of(nas, printer));
 
         assertThat(hit).contains(printer);
     }
 
     @Test
-    void findByName_unknownName_returnsEmpty() {
+    void findById_unknownIdentity_returnsEmpty() {
         LanServer nas = new LanServer("nas", "192.168.3.50", true, 2375);
 
-        assertThat(LanServer.findByName("ghost", List.of(nas))).isEmpty();
+        assertThat(LanServer.findById(MachineId.generate(), List.of(nas))).isEmpty();
     }
 
     @Test
-    void findByName_isCaseSensitive() {
-        LanServer nas = new LanServer("nas", "192.168.3.50", true, 2375);
+    void findById_tellsApartTwoServersSharingAName() {
+        // The reason this lookup is by identity. Under findByName the first match won, so an operation
+        // meant for the second machine would silently land on the first — and the two are different
+        // hosts at different addresses, so it would land somewhere real and wrong.
+        LanServer here = new LanServer("nas", "192.168.3.50", true, 2375);
+        LanServer there = new LanServer("nas", "192.168.1.50", true, 2375);
 
-        assertThat(LanServer.findByName("NAS", List.of(nas))).isEmpty();
+        assertThat(LanServer.findById(there.machineId(), List.of(here, there))).contains(there);
     }
 
     @Test
-    void findByName_emptyList_returnsEmpty() {
-        assertThat(LanServer.findByName("nas", List.of())).isEmpty();
+    void findById_emptyList_returnsEmpty() {
+        assertThat(LanServer.findById(MachineId.generate(), List.of())).isEmpty();
     }
 
     // --- device category (override + effective) ---

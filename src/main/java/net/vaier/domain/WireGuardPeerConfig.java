@@ -1,5 +1,8 @@
 package net.vaier.domain;
 
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 public final class WireGuardPeerConfig {
 
     private WireGuardPeerConfig() {}
@@ -25,6 +28,27 @@ public final class WireGuardPeerConfig {
                                   MachineType peerType, String lanCidr, String lanAddress, String vpnSubnet,
                                   String description, String name, String serverLanCidr,
                                   String deviceCategory) {
+        return generate(privateKey, ipAddress, serverPublicKey, presharedKey, serverEndpoint,
+            peerType, lanCidr, lanAddress, vpnSubnet, description, name, serverLanCidr,
+            deviceCategory, null);
+    }
+
+    /**
+     * Render a peer's installable config, stamping {@code machineId} into its {@code # VAIER:} metadata.
+     *
+     * <p>The identity has to be written here because this is the only moment it can be: the config file
+     * <em>is</em> the peer's record, and the adapter that reads it back refuses — rightly — to load a peer
+     * whose id is missing rather than inventing one. A config rendered without an id therefore produces a
+     * peer that is added to the WireGuard server and is then invisible to Vaier.
+     *
+     * <p>Null is allowed, and means "this config carries no identity": the pre-§6.22 shape, kept so a
+     * {@link #reissue} of a config that was never migrated does not quietly mint one.
+     */
+    public static String generate(String privateKey, String ipAddress, String serverPublicKey,
+                                  String presharedKey, String serverEndpoint,
+                                  MachineType peerType, String lanCidr, String lanAddress, String vpnSubnet,
+                                  String description, String name, String serverLanCidr,
+                                  String deviceCategory, MachineId machineId) {
         // lanCidr is intentionally NOT appended to the client-side AllowedIPs: doing so makes
         // wg-quick install a route for that CIDR via wg0 on the relay peer, which hijacks the
         // relay's own LAN. lanCidr is still recorded in the # VAIER metadata below so that
@@ -42,7 +66,8 @@ public final class WireGuardPeerConfig {
             allowedIps = allowedIps + "," + serverLanCidr.trim();
         }
 
-        String vaierJson = vaierJson(peerType, lanCidr, lanAddress, description, name, deviceCategory);
+        String vaierJson = vaierJson(peerType, lanCidr, lanAddress, description, name, deviceCategory,
+            machineId);
 
         String dnsLine = peerType.isServerType()
                 ? ""
@@ -86,6 +111,9 @@ public final class WireGuardPeerConfig {
                                  String lanAddress, String description, String name,
                                  String serverPublicKey, String serverEndpoint, String vpnSubnet,
                                  String serverLanCidr, String deviceCategory) {
+        // The identity is READ off the config being reissued, never minted: a Reissue re-renders the
+        // whole file, so an id that is not carried through is an id that is erased — and the peer's
+        // credential, host-key pin and backup job all hang off it.
         return generate(
                 readDirective(existingContent, "PrivateKey"),
                 readIpAddress(existingContent),
@@ -93,7 +121,7 @@ public final class WireGuardPeerConfig {
                 readDirective(existingContent, "PresharedKey"),
                 serverEndpoint,
                 peerType, lanCidr, lanAddress, vpnSubnet, description, name, serverLanCidr,
-                deviceCategory);
+                deviceCategory, readMachineId(existingContent));
     }
 
     /**
@@ -129,6 +157,12 @@ public final class WireGuardPeerConfig {
 
     public static String vaierJson(MachineType peerType, String lanCidr, String lanAddress,
                                    String description, String name, String deviceCategory) {
+        return vaierJson(peerType, lanCidr, lanAddress, description, name, deviceCategory, null);
+    }
+
+    public static String vaierJson(MachineType peerType, String lanCidr, String lanAddress,
+                                   String description, String name, String deviceCategory,
+                                   MachineId machineId) {
         StringBuilder sb = new StringBuilder();
         sb.append("{\"peerType\":\"").append(peerType.name()).append("\"");
         // name is the operator's display label for the peer — free text, JSON-escaped, and (like
@@ -155,8 +189,29 @@ public final class WireGuardPeerConfig {
         if (deviceCategory != null && !deviceCategory.isBlank()) {
             sb.append(",\"deviceCategory\":\"").append(escapeJson(deviceCategory)).append("\"");
         }
+        // The peer's identity, last so the rest of the line reads as it always did. Omitted entirely
+        // when there is none, which is what keeps a never-migrated config unchanged by a Reissue.
+        if (machineId != null) {
+            sb.append(",\"id\":\"").append(machineId.value()).append("\"");
+        }
         sb.append("}");
         return sb.toString();
+    }
+
+    /**
+     * The {@link MachineId} stamped in {@code content}'s {@code # VAIER:} metadata, or null when it has
+     * none or the value is not a valid identity. Deliberately lenient about a malformed value here: this
+     * feeds a re-render, and the adapter that loads peers is where a bad id must stop the peer dead.
+     */
+    private static MachineId readMachineId(String content) {
+        if (content == null) return null;
+        Matcher m = Pattern.compile("\"id\"\\s*:\\s*\"([^\"]+)\"").matcher(content);
+        if (!m.find()) return null;
+        try {
+            return MachineId.of(m.group(1));
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     /**

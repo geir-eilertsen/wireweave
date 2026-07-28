@@ -118,7 +118,7 @@
         machines: [],                    // GET /machines
         peers: new Map(),                // machine id -> its live WireGuard peer (tunnel address, liveness)
         peersById: new Map(),            // WireGuard peer id -> the same peer (the SSE keys stats that way)
-        lan: new Map(),                  // machine name -> its LAN server (the domain's MachineStatus)
+        lan: new Map(),                  // machine identity -> its LAN server (the domain's MachineStatus)
         serverLocation: null,            // GET /vpn/peers/server-location — the Vaier server's geo (Frankfurt), for the map
         lanScan: null,                   // GET /lan-scan — the discovered-machines snapshot { status, machines, lastScanCompleted }, or { gated } on Community
         lanScanLans: null,               // GET /lan-scan/lans — the LANs an operator can pick to scan [{ anchor, name, cidr }]
@@ -667,7 +667,7 @@
             return m && !SERVER_TYPES.has(m.type) ? 'is-idle' : 'is-down';
         }
 
-        const server = S.lan.get(nameOf(machineId));
+        const server = S.lan.get(machineId);
         if (server) return STATUS_DOT[server.status] || 'is-idle';
 
         return 'is-idle';   // a machine with no liveness source at all — honest, not a bug
@@ -981,20 +981,6 @@
         return renderDirectory(pane);
     }
 
-    /**
-     * The identity of a machine Vaier has just created, found once by the name it was created under.
-     *
-     * <p>The last name→identity crossing in the shell, and confined to that one moment: a create response
-     * says what it made but not which machine it became, so the fleet is re-read and the new machine is
-     * matched by the name the operator just typed. Every other coordinate in this file is an identity
-     * already. It goes when the create endpoints answer with the machine's id, which is what has to happen
-     * before two machines may share a name.
-     */
-    function justCreated(machineName) {
-        const m = S.machines.find((x) => x.name === machineName);
-        return m ? m.id : machineName;
-    }
-
     function renderFleet(pane) {
         const online = S.machines.filter((m) => livenessOf(m.id) === 'is-up').length;
         pane.appendChild(paneHead('Fleet', false,
@@ -1178,7 +1164,7 @@
             // are all empty, and four dashes are noise, not information. It gets only what is true of it.
             rows.push(['Role', 'The fleet’s hub — WireGuard server, reverse proxy and DNS']);
         } else if (isLan) {
-            const lan = S.lan.get(m.name);
+            const lan = S.lan.get(m.id);
             rows.push(['LAN address', m.lanAddress || m.lanCidr]);
             rows.push(['Last seen', lan ? agoFromEpochSeconds(lan.lastSeen) : '']);
         } else {
@@ -1268,7 +1254,7 @@
             const edit = el('div', 'ex-lactions is-static');
             edit.appendChild(selVerb('gear', 'Edit details', 'ex-btn', () => editMachine(m)));
             if (m.type === 'LAN_SERVER') {
-                edit.appendChild(selVerb('shell', 'Setup command', 'ex-btn', () => lanSetupScript(m.name)));
+                edit.appendChild(selVerb('shell', 'Setup command', 'ex-btn', () => lanSetupScript(m.id)));
             }
             body.appendChild(edit);
 
@@ -1331,8 +1317,9 @@
         const pid = peer ? peer.id : null;
         if (!isLan && !pid) { toast('Vaier cannot edit that machine.'); return; }
         const enc = encodeURIComponent;
-        const base = isLan ? '/lan-servers/' + enc(m.name) : '/vpn/peers/' + enc(pid);
-        const rec = S.peers.get(m.id) || S.lan.get(m.name) || {};
+        // A LAN server is addressed by its identity; a peer by its WireGuard id, which a rename never moves.
+        const base = isLan ? '/lan-servers/' + enc(m.id) : '/vpn/peers/' + enc(pid);
+        const rec = S.peers.get(m.id) || S.lan.get(m.id) || {};
         let ok = true, renamedTo = m.name;
 
         if (v.description !== (rec.description || '')) {
@@ -1356,7 +1343,7 @@
                 'Could not save the device category.') && ok;
         }
         if (v.name && v.name !== m.name) {
-            const url = isLan ? '/lan-servers/' + enc(m.name) : '/vpn/peers/' + enc(pid);
+            const url = isLan ? '/lan-servers/' + enc(m.id) : '/vpn/peers/' + enc(pid);
             const renamed = await patchJson(url, { newName: v.name },
                 'Could not rename the machine — is the name taken?');
             ok = renamed && ok;
@@ -1376,7 +1363,7 @@
     // are Vaier's.
     function editMachineForm(m) {
         return new Promise((resolve) => {
-            const rec = S.peers.get(m.id) || S.lan.get(m.name) || {};
+            const rec = S.peers.get(m.id) || S.lan.get(m.id) || {};
             const isServerPeer = S.peers.has(m.id) && SERVER_TYPES.has(m.type);
             const scrim = el('div', 'ex-scrim is-on');
             const dialog = el('div', 'ex-dialog');
@@ -1483,9 +1470,9 @@
     // Mint a single-use setup token for a LAN host, or learn there is nothing to set up. Returns
     // { needed: true, token } when the host has a setup script, { needed: false } when it has none
     // (204 — runs no Docker, anchors no LAN), or null on a real failure.
-    async function mintLanSetupToken(machine) {
+    async function mintLanSetupToken(machineId) {
         try {
-            const res = await fetch('/lan-servers/' + encodeURIComponent(machine) + '/setup-token',
+            const res = await fetch('/lan-servers/' + encodeURIComponent(machineId) + '/setup-token',
                 { method: 'POST' });
             if (res.status === 204) return { needed: false };
             if (!res.ok) return null;
@@ -1498,20 +1485,21 @@
     // host: the box pulls the script over HTTPS from Vaier's token-gated /setup route. It needs sudo because it
     // installs Docker. The in-console setup.sh download stays a by-hand fallback. (A VPN peer's setup script is
     // shown once with its config; reissue or regenerate to see it again.)
-    async function lanSetupScript(machine) {
-        const mint = await mintLanSetupToken(machine);
-        if (!mint) { toast('Vaier could not prepare the setup command for ' + machine + '.'); return; }
-        if (!mint.needed) { toast('Nothing to set up on ' + machine + ' — Vaier manages it as-is.'); return; }
+    async function lanSetupScript(machineId) {
+        const machineName = nameOf(machineId);
+        const mint = await mintLanSetupToken(machineId);
+        if (!mint) { toast('Vaier could not prepare the setup command for ' + machineName + '.'); return; }
+        if (!mint.needed) { toast('Nothing to set up on ' + machineName + ' — Vaier manages it as-is.'); return; }
         const origin = window.location.origin;
-        const runUrl = origin + '/lan-servers/' + encodeURIComponent(machine)
+        const runUrl = origin + '/lan-servers/' + encodeURIComponent(machineId)
             + '/setup?t=' + encodeURIComponent(mint.token);
         setupScriptDialog({
-            title: 'Setup command for ' + machine,
-            body: 'Run this on ' + machine + ' itself (it needs sudo) to open its Docker engine API to Vaier '
+            title: 'Setup command for ' + machineName,
+            body: 'Run this on ' + machineName + ' itself (it needs sudo) to open its Docker engine API to Vaier '
                 + 'and install routes to the fleet via its relay peer. It’s idempotent — safe to run once at '
                 + 'onboarding or again later, e.g. after rebuilding the host. The link works once.',
             curl: "curl -fsSL '" + runUrl + "' | sudo bash",
-            downloadUrl: origin + '/lan-servers/' + encodeURIComponent(machine) + '/setup.sh',
+            downloadUrl: origin + '/lan-servers/' + encodeURIComponent(machineId) + '/setup.sh',
         });
     }
 
@@ -1931,7 +1919,7 @@
                 await loadFleet(); await loadLanScan();
                 const credNote = resp.credentialProvided && !resp.credentialStored
                     ? ' Its SSH login couldn’t be saved — set one from the machine.' : '';
-                adopted = { name: resp.name, credNote: credNote };
+                adopted = { machineId: resp.machineId, name: resp.name, credNote: credNote };
                 screen('lanHandoff');
             } catch (e) { toast('Vaier could not add that machine.'); restore(); }
         }
@@ -1946,7 +1934,7 @@
             titleEl.textContent = a.name + ' — let Vaier manage it';
             content.innerHTML = '';
 
-            const mint = await mintLanSetupToken(a.name);
+            const mint = await mintLanSetupToken(a.machineId);
             const sub = el('div', 'ex-dialog-body');
             if (mint && mint.needed) {
                 sub.textContent = a.name + ' is registered.' + (a.credNote || '') + ' To let Vaier manage its '
@@ -1954,7 +1942,8 @@
                 content.appendChild(sub);
 
                 const curl = "curl -fsSL '" + window.location.origin + '/lan-servers/'
-                    + encodeURIComponent(a.name) + '/setup?t=' + encodeURIComponent(mint.token) + "' | sudo bash";
+                    + encodeURIComponent(a.machineId) + '/setup?t=' + encodeURIComponent(mint.token)
+                    + "' | sudo bash";
                 content.appendChild(copyableCommand(curl));
 
                 const fb = el('details', 'ex-fallback');
@@ -1963,7 +1952,7 @@
                 fb.appendChild(summ);
                 const dl = el('button', 'ex-btn'); dl.textContent = 'Download setup.sh';
                 dl.onclick = () => { window.location.href = window.location.origin + '/lan-servers/'
-                    + encodeURIComponent(a.name) + '/setup.sh'; };
+                    + encodeURIComponent(a.machineId) + '/setup.sh'; };
                 fb.appendChild(dl);
                 content.appendChild(fb);
             } else if (mint && !mint.needed) {
@@ -1983,8 +1972,7 @@
             const done = el('button', 'ex-btn is-accent'); done.textContent = 'Done';
             done.onclick = () => {
                 close();
-                const id = justCreated(a.name);
-                S.open.add(key(['fleet', id])); go(['fleet', id]);
+                S.open.add(key(['fleet', a.machineId])); go(['fleet', a.machineId]);
             };
             actions.appendChild(done);
             content.appendChild(actions);
@@ -2308,8 +2296,7 @@
             const done = el('button', 'ex-btn is-accent'); done.textContent = 'Done';
             done.onclick = () => {
                 close();
-                const id = justCreated(p.name);
-                S.open.add(key(['fleet', id])); go(['fleet', id]);
+                S.open.add(key(['fleet', p.machineId])); go(['fleet', p.machineId]);
             };
             actions.appendChild(done);
             content.appendChild(actions);
@@ -2496,7 +2483,7 @@
                 ? ' Its SSH login couldn’t be saved — set one from the machine.' : '';
             await loadFleet();
             toast(body.name + ' added.' + credNote);
-            const added = justCreated(body.name);
+            const added = resp.machineId;
             S.open.add(key(['fleet', added]));
             go(['fleet', added]);
             return true;
@@ -2514,7 +2501,7 @@
             + 'confirm.', m.name, 'Remove');
         if (!ok) return;
         const url = isPeer ? '/vpn/peers/' + encodeURIComponent(S.peers.get(m.id).id)
-                           : '/lan-servers/' + encodeURIComponent(m.name);
+                           : '/lan-servers/' + encodeURIComponent(m.id);
         try {
             const res = await fetch(url, { method: 'DELETE' });
             if (!res.ok && res.status !== 204) { toast('Vaier could not remove ' + m.name + '.'); return; }
@@ -2992,14 +2979,11 @@
     // the context; the operator names the subdomain, the port, whether it speaks http or https, and whether it
     // needs a login. Vaier makes the DNS record and the route.
     function lanPublish(machineId) {
-        // The one place both forms of address are needed at once: the endpoint still takes a machine NAME in
-        // its body, while the coordinate we return to is an identity. Crossing once, here, keeps that seam
-        // out of the caller.
-        const machineName = nameOf(machineId);
-        lanPublishForm(machineName).then((body) => {
+        // The identity goes to the endpoint; the name only into the dialog's title, where a person reads it.
+        lanPublishForm(nameOf(machineId)).then((body) => {
             if (!body) return;
             saveJson('/published-services/lan', 'POST', {
-                subdomain: body.subdomain, machineName: machineName, port: body.port, protocol: body.protocol,
+                subdomain: body.subdomain, machineId: machineId, port: body.port, protocol: body.protocol,
                 requireAuth: body.requireAuth, directUrlDisabled: body.directUrlDisabled,
                 rootRedirectPath: body.rootRedirectPath, pathPrefix: body.pathPrefix,
             }, 'Publishing ' + body.subdomain + '…', () => reloadServices(machineId), 'Could not publish that.');
@@ -6310,7 +6294,7 @@
         try {
             const res = await fetch('/lan-servers');
             const servers = res.ok ? await res.json() : [];
-            S.lan = new Map(servers.map((s) => [s.name, s]));
+            S.lan = new Map(servers.map((s) => [s.machineId, s]));
         } catch (e) { /* a fleet with no LAN servers is a fleet, not a failure */ }
     }
 

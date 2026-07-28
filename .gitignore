@@ -64,3 +64,5 @@ Thumbs.db
 # Claude Code — keep checked-in agents/skills, ignore local/ephemeral state
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+# A test writes a Traefik config to the literal path "null" when no config dir is set.
+/null/

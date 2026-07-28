@@ -260,6 +260,9 @@ class LanScannerRestControllerTest {
             new SshCredentialDraft("root", AuthMethod.PASSWORD, "pw", null));
         AdoptResponse body = response.getBody();
         assertThat(body.name()).isEqualTo("nas");
+        // The identity of the machine just adopted, so the browser can stand on its coordinate without
+        // going back to the fleet and matching on the name it happened to be given.
+        assertThat(body.machineId()).isEqualTo(created.machineId().value());
         assertThat(body.credentialProvided()).isTrue();
         assertThat(body.credentialVerified()).isTrue();
         assertThat(body.credentialStored()).isTrue();

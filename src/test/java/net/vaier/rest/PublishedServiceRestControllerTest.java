@@ -1,5 +1,7 @@
 package net.vaier.rest;
 
+import net.vaier.domain.MachineId;
+import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.port.ForPublishingEvents;
 import net.vaier.domain.port.ForSubscribingToEvents;
 import net.vaier.application.DeletePublishedServiceUseCase;
@@ -55,42 +57,45 @@ class PublishedServiceRestControllerTest {
     }
 
     @Test
-    void publishLanService_forwardsMachineNameVerbatimToUseCase() {
+    void publishLanService_forwardsTheMachineIdentityToUseCase() {
+        MachineId printer = TestMachineIds.of("printer");
         var request = new PublishedServiceRestController.PublishLanRequest(
-            "printer-ui", "printer", 9100, "http", false, false, null, null);
+            "printer-ui", printer.value(), 9100, "http", false, false, null, null);
 
         ResponseEntity<?> response = controller.publishLanService(request);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         verify(publishLanServiceUseCase).publishLanService(
-            "printer-ui", "printer", 9100, "http", false, false, null, null);
+            "printer-ui", printer, 9100, "http", false, false, null, null);
     }
 
     @Test
     void publishLanService_forwardsRootRedirectPathToUseCase() {
+        MachineId rig = TestMachineIds.of("rig");
         var request = new PublishedServiceRestController.PublishLanRequest(
-            "app", "rig", 3000, "http", false, false, "/builder/ui/", null);
+            "app", rig.value(), 3000, "http", false, false, "/builder/ui/", null);
 
         ResponseEntity<?> response = controller.publishLanService(request);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         verify(publishLanServiceUseCase).publishLanService(
-            "app", "rig", 3000, "http", false, false, "/builder/ui/", null);
+            "app", rig, 3000, "http", false, false, "/builder/ui/", null);
     }
 
     @Test
     void publishLanService_useCaseThrowsIllegalArgument_propagatesToGlobalHandler() {
-        doThrow(new IllegalArgumentException("Unknown machine: ghost"))
+        MachineId ghost = TestMachineIds.of("ghost");
+        doThrow(new IllegalArgumentException("Unknown machine: " + ghost.value()))
             .when(publishLanServiceUseCase).publishLanService(
-                "x", "ghost", 80, "http", false, false, null, null);
+                "x", ghost, 80, "http", false, false, null, null);
         var request = new PublishedServiceRestController.PublishLanRequest(
-            "x", "ghost", 80, "http", false, false, null, null);
+            "x", ghost.value(), 80, "http", false, false, null, null);
 
         // The controller no longer hand-rolls a 400 body; the validation exception
         // propagates to GlobalExceptionHandler, which renders the uniform ApiError 400.
         assertThatThrownBy(() -> controller.publishLanService(request))
             .isInstanceOf(IllegalArgumentException.class)
-            .hasMessage("Unknown machine: ghost");
+            .hasMessage("Unknown machine: " + ghost.value());
     }
 
     @Test

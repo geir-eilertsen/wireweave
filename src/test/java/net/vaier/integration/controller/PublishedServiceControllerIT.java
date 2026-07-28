@@ -1,5 +1,7 @@
 package net.vaier.integration.controller;
 
+import net.vaier.domain.MachineId;
+import net.vaier.domain.TestMachineIds;
 import net.vaier.application.GetPublishedServicesUseCase.PublishedServiceUco;
 import net.vaier.application.PublishPeerServiceUseCase.PublishStatus;
 import net.vaier.application.UpdatePublishedServiceUseCase.PublishedServicePatch;
@@ -38,18 +40,19 @@ class PublishedServiceControllerIT extends VaierWebMvcIntegrationBase {
 
     @Test
     void publishLanService_validationFailure_returnsUniformApiError() throws Exception {
-        doThrow(new IllegalArgumentException("Unknown machine: ghost"))
+        MachineId ghost = TestMachineIds.of("ghost");
+        doThrow(new IllegalArgumentException("Unknown machine: " + ghost.value()))
                 .when(publishLanServiceUseCase).publishLanService(
                         any(), any(), anyInt(), any(), anyBoolean(), anyBoolean(), any(), any());
 
         mockMvc.perform(post("/published-services/lan")
                        .contentType(MediaType.APPLICATION_JSON)
                        .content("""
-                           {"subdomain":"x","machineName":"ghost","port":80,"protocol":"http"}
-                           """))
+                           {"subdomain":"x","machineId":"%s","port":80,"protocol":"http"}
+                           """.formatted(ghost.value())))
                .andExpect(status().isBadRequest())
                .andExpect(jsonPath("$.code").value("BAD_REQUEST"))
-               .andExpect(jsonPath("$.message").value("Unknown machine: ghost"));
+               .andExpect(jsonPath("$.message").value("Unknown machine: " + ghost.value()));
     }
 
     @Test

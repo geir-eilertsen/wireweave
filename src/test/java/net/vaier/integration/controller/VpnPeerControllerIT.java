@@ -1,5 +1,6 @@
 package net.vaier.integration.controller;
 
+import net.vaier.domain.TestMachineIds;
 import net.vaier.application.CreatePeerUseCase.CreatedPeerUco;
 import net.vaier.application.GetPeerConfigUseCase.PeerConfigResult;
 import net.vaier.application.GetVpnPeersUseCase.VpnPeerView;
@@ -53,7 +54,8 @@ class VpnPeerControllerIT extends VaierWebMvcIntegrationBase {
     @Test
     void createPeer_returns200WithCreatedPeerInfo() throws Exception {
         CreatedPeerUco created = new CreatedPeerUco(
-                "peer1", "peer1", "10.13.13.2", "pubkey", "privkey", "[Interface]\n...", MachineType.UBUNTU_SERVER);
+                "peer1", TestMachineIds.of("peer1"), "peer1", "10.13.13.2", "pubkey", "privkey",
+                "[Interface]\n...", MachineType.UBUNTU_SERVER);
         when(createPeerUseCase.createPeer(eq("peer1"), eq(MachineType.UBUNTU_SERVER), any(), any(), any()))
                 .thenReturn(created);
 
@@ -75,7 +77,8 @@ class VpnPeerControllerIT extends VaierWebMvcIntegrationBase {
         // type to UBUNTU_SERVER is the domain's job (GetVpnPeersUseCase/CreatePeerUseCase),
         // not the controller's. So an omitted peerType reaches the use case as null.
         CreatedPeerUco created = new CreatedPeerUco(
-                "peer1", "peer1", "10.13.13.2", "pubkey", "privkey", "[Interface]", MachineType.UBUNTU_SERVER);
+                "peer1", TestMachineIds.of("peer1"), "peer1", "10.13.13.2", "pubkey", "privkey",
+                "[Interface]", MachineType.UBUNTU_SERVER);
         when(createPeerUseCase.createPeer(eq("peer1"), isNull(), any(), any(), any()))
                 .thenReturn(created);
 
@@ -227,7 +230,8 @@ class VpnPeerControllerIT extends VaierWebMvcIntegrationBase {
     @Test
     void createPeer_doesNotBurnTheOneShotBudget_soAFirstGetStillSucceeds() throws Exception {
         CreatedPeerUco created = new CreatedPeerUco(
-                "peer1", "peer1", "10.13.13.2", "pubkey", "privkey", "[Interface]\n...", MachineType.UBUNTU_SERVER);
+                "peer1", TestMachineIds.of("peer1"), "peer1", "10.13.13.2", "pubkey", "privkey",
+                "[Interface]\n...", MachineType.UBUNTU_SERVER);
         when(createPeerUseCase.createPeer(eq("peer1"), eq(MachineType.UBUNTU_SERVER), any(), any(), any()))
                 .thenReturn(created);
 
@@ -247,7 +251,7 @@ class VpnPeerControllerIT extends VaierWebMvcIntegrationBase {
     @Test
     void reissuePeer_returns200WithFreshConfigAndReopensTheOneShotGate() throws Exception {
         var reissued = new net.vaier.application.ReissuePeerConfigUseCase.ReissuedPeerUco(
-                "peer1", "peer1", "10.13.13.6", "pubkey",
+                "peer1", TestMachineIds.of("peer1"), "peer1", "10.13.13.6", "pubkey",
                 "# VAIER: {\"peerType\":\"UBUNTU_SERVER\"}\n[Interface]\nPrivateKey = abc\n"
                     + "Address = 10.13.13.6/32\n[Peer]\nAllowedIPs = 10.13.13.0/24,172.31.16.0/20\n",
                 MachineType.UBUNTU_SERVER);
@@ -277,7 +281,7 @@ class VpnPeerControllerIT extends VaierWebMvcIntegrationBase {
     @Test
     void createPeer_responseIncludesInlineQrPng() throws Exception {
         CreatedPeerUco created = new CreatedPeerUco(
-                "peer1", "peer1", "10.13.13.2", "pubkey", "privkey",
+                "peer1", TestMachineIds.of("peer1"), "peer1", "10.13.13.2", "pubkey", "privkey",
                 "[Interface]\nPrivateKey = abc\n", MachineType.MOBILE_CLIENT);
         when(createPeerUseCase.createPeer(eq("peer1"), eq(MachineType.MOBILE_CLIENT), any(), any(), any()))
                 .thenReturn(created);

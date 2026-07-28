@@ -126,31 +126,59 @@ class LanServerFileAdapterTest {
     }
 
     @Test
-    void save_existingName_replacesEntry() {
-        LanServer replacement = new LanServer("nas", "192.168.3.99", true, 2376);
+    void save_sameIdentity_replacesTheEntry() {
+        MachineId nas = MachineId.generate();
 
-        adapter.save(new LanServer("nas", "192.168.3.50", true, 2375));
-        adapter.save(replacement);
+        adapter.save(new LanServer("nas", "192.168.3.50", true, 2375, null, null, null, nas));
+        LanServer moved = new LanServer("nas", "192.168.3.99", true, 2376, null, null, null, nas);
+        adapter.save(moved);
 
-        assertThat(adapter.getAll()).containsExactly(replacement);
+        assertThat(adapter.getAll()).containsExactly(moved);
     }
 
     @Test
-    void deleteByName_existingServer_removesIt() {
+    void save_sameNameDifferentIdentity_keepsBoth() {
+        // The whole point of identity. Two machines may be called "nas" — a second site, a replacement
+        // standing beside the box it replaces — and upserting on the name would silently drop one of them
+        // from lan-servers.yml, leaving an operator looking at a machine Vaier had already forgotten.
+        LanServer first = new LanServer("nas", "192.168.3.50", true, 2375, null, null, null, MachineId.generate());
+        LanServer second = new LanServer("nas", "192.168.1.50", true, 2375, null, null, null, MachineId.generate());
+
+        adapter.save(first);
+        adapter.save(second);
+
+        assertThat(adapter.getAll()).containsExactlyInAnyOrder(first, second);
+    }
+
+    @Test
+    void deleteById_existingServer_removesIt() {
         LanServer printer = new LanServer("printer", "192.168.3.20", false, null);
-        adapter.save(new LanServer("nas", "192.168.3.50", true, 2375));
+        LanServer nas = new LanServer("nas", "192.168.3.50", true, 2375);
+        adapter.save(nas);
         adapter.save(printer);
 
-        adapter.deleteByName("nas");
+        adapter.deleteById(nas.machineId());
 
         assertThat(adapter.getAll()).containsExactly(printer);
     }
 
     @Test
-    void deleteByName_unknownServer_isNoOp() {
+    void deleteById_removesOnlyTheMachineAsked_whenTwoShareAName() {
+        LanServer keep = new LanServer("nas", "192.168.3.50", true, 2375);
+        LanServer go = new LanServer("nas", "192.168.1.50", true, 2375);
+        adapter.save(keep);
+        adapter.save(go);
+
+        adapter.deleteById(go.machineId());
+
+        assertThat(adapter.getAll()).containsExactly(keep);
+    }
+
+    @Test
+    void deleteById_unknownServer_isNoOp() {
         adapter.save(new LanServer("nas", "192.168.3.50", true, 2375));
 
-        adapter.deleteByName("does-not-exist");
+        adapter.deleteById(MachineId.generate());
 
         assertThat(adapter.getAll()).hasSize(1);
     }

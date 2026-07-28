@@ -494,9 +494,14 @@ public class VpnService implements
             Files.createDirectories(peerDir);
 
             String serverLanCidr = forResolvingServerLanCidr.resolve().orElse(null);
+            // The one place a machine's identity is minted rather than read. It is stamped into the
+            // config's # VAIER: metadata, which IS the peer's record — a config written without one
+            // produces a peer the adapter refuses to load, so it joins the WireGuard server and is
+            // then invisible to Vaier: no machine, no credential, no backup, and no error to see.
+            MachineId machineId = MachineId.generate();
             String clientConfig = WireGuardPeerConfig.generate(
                     privateKey, ipAddress, serverPublicKey, presharedKey, serverEndpoint, resolvedType, lanCidr, lanAddress, vpnSubnet,
-                    description, name, serverLanCidr);
+                    description, name, serverLanCidr, null, machineId);
 
             Path peerConfigPath = peerDir.resolve(id + ".conf");
             Files.writeString(peerConfigPath, clientConfig);
@@ -507,7 +512,8 @@ public class VpnService implements
 
             log.info("Peer created successfully: {} with IP {}", id, ipAddress);
 
-            return new CreatedPeerUco(id, name, ipAddress, publicKey, privateKey, clientConfig, resolvedType);
+            return new CreatedPeerUco(id, machineId, name, ipAddress, publicKey, privateKey, clientConfig,
+                    resolvedType);
 
         } catch (IOException | InterruptedException e) {
             log.error("Error creating peer", e);
@@ -550,8 +556,8 @@ public class VpnService implements
                 .executeWithInput(wireguardContainerName, privateKey, "wg", "pubkey").trim();
 
             log.info("Reissued config for peer {} (serverLanCidr: {})", peer.id(), serverLanCidr);
-            return new ReissuedPeerUco(peer.id(), peer.name(), peer.ipAddress(), publicKey,
-                newContent, peer.peerType());
+            return new ReissuedPeerUco(peer.id(), peer.machineId(), peer.name(), peer.ipAddress(),
+                publicKey, newContent, peer.peerType());
         } catch (IOException | InterruptedException e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
             throw new RuntimeException("Failed to reissue config for peer " + peerId + ": " + e.getMessage(), e);

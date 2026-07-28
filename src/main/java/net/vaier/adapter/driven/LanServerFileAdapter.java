@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.domain.LanServer;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.port.ForPersistingLanServers;
 import org.springframework.stereotype.Component;
 import org.yaml.snakeyaml.DumperOptions;
@@ -94,7 +95,7 @@ public class LanServerFileAdapter implements ForPersistingLanServers {
                     net.vaier.domain.DeviceCategory deviceCategory =
                         parseDeviceCategory(asString(m.get("deviceCategory")));
                     Boolean sshAccessOverride = m.get("sshAccessOverride") instanceof Boolean b2 ? b2 : null;
-                    net.vaier.domain.MachineId machineId = readMachineId(asString(m.get("id")), name);
+                    MachineId machineId = readMachineId(asString(m.get("id")), name);
                     if (name != null && lanAddress != null && machineId != null) {
                         result.add(new LanServer(name, lanAddress, runsDocker, dockerPort, description,
                             deviceCategory, sshAccessOverride, machineId));
@@ -111,15 +112,15 @@ public class LanServerFileAdapter implements ForPersistingLanServers {
     @Override
     public synchronized void save(LanServer server) {
         List<LanServer> current = new ArrayList<>(getAll());
-        current.removeIf(s -> s.name().equals(server.name()));
+        current.removeIf(s -> s.machineId().equals(server.machineId()));
         current.add(server);
         writeAll(current);
     }
 
     @Override
-    public synchronized void deleteByName(String name) {
+    public synchronized void deleteById(MachineId machineId) {
         List<LanServer> current = new ArrayList<>(getAll());
-        boolean removed = current.removeIf(s -> s.name().equals(name));
+        boolean removed = current.removeIf(s -> s.machineId().equals(machineId));
         if (removed) writeAll(current);
     }
 
@@ -170,7 +171,7 @@ public class LanServerFileAdapter implements ForPersistingLanServers {
     }
 
     /**
-     * The stored {@link net.vaier.domain.MachineId} for an entry, or null when it has none or the value
+     * The stored {@link MachineId} for an entry, or null when it has none or the value
      * is malformed — the caller then skips the entry.
      *
      * <p>A stored machine's identity is <em>read</em>, never minted. Inventing an id here would produce a
@@ -178,7 +179,7 @@ public class LanServerFileAdapter implements ForPersistingLanServers {
      * its host-key pin, its backup jobs. Skipping loudly leaves the operator a file to fix; a silent mint
      * would leave them a fleet to debug.
      */
-    private static net.vaier.domain.MachineId readMachineId(String raw, String name) {
+    private static MachineId readMachineId(String raw, String name) {
         // name comes from lan-servers.yml, which can be hand-edited — collapse any CR/LF so a
         // malformed value can't forge multiline log entries.
         String safeName = name == null ? "(unnamed)" : name.replaceAll("[\r\n]+", "_");
@@ -188,7 +189,7 @@ public class LanServerFileAdapter implements ForPersistingLanServers {
             return null;
         }
         try {
-            return net.vaier.domain.MachineId.of(raw);
+            return MachineId.of(raw);
         } catch (IllegalArgumentException e) {
             log.error("LAN server '{}' in {} has a malformed id — skipping it: {}",
                 safeName, FILE_NAME, e.getMessage());

@@ -7,6 +7,7 @@ import net.vaier.domain.ConflictException;
 import net.vaier.domain.ReverseProxyRoute;
 import net.vaier.domain.port.ForGettingLanServers.LanServerView;
 import net.vaier.domain.LanServer;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.MachineType;
 import net.vaier.domain.port.ForGettingPeerConfigurations;
 import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
@@ -481,52 +482,53 @@ class LanServerServiceTest {
     // --- delete ---
 
     @Test
-    void delete_callsAdapterWithName() {
-        // Unknown server (no matching LanServer): no cascade, but still deletes the record.
+    void delete_unknownIdentity_is404AndTouchesNothing() {
+        // Under name-keying an unknown machine still "succeeded" — deleteByName removed nothing and the
+        // caller got a 200 for a machine that was never there. An identity has one answer: no such machine.
         when(forPersistingLanServers.getAll()).thenReturn(List.of());
 
-        service.delete("nas");
-
-        verify(forPersistingLanServers).deleteByName("nas");
+        assertThatThrownBy(() -> service.delete(MachineId.generate()))
+            .isInstanceOf(NotFoundException.class);
+        verify(forPersistingLanServers, never()).deleteById(any());
         verify(deletePublishedServiceUseCase, never()).deleteService(any(), any());
     }
 
     @Test
     void delete_cascadesIntoPublishedServiceOnMatchingLanAddress() {
-        when(forPersistingLanServers.getAll()).thenReturn(List.of(
-            new LanServer("pump", "192.168.1.101", false, null)));
+        LanServer pump = new LanServer("pump", "192.168.1.101", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(pump));
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(
             lanRoute("pump-router", "pump.eilertsen.family", "192.168.1.101", 80, null)));
 
-        service.delete("pump");
+        service.delete(pump.machineId());
 
         verify(deletePublishedServiceUseCase).deleteService("pump.eilertsen.family", null);
-        verify(forPersistingLanServers).deleteByName("pump");
+        verify(forPersistingLanServers).deleteById(pump.machineId());
     }
 
     @Test
     void delete_doesNotDeleteRouteBelongingToADifferentMachine() {
-        when(forPersistingLanServers.getAll()).thenReturn(List.of(
-            new LanServer("pump", "192.168.1.101", false, null)));
+        LanServer pump = new LanServer("pump", "192.168.1.101", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(pump));
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(
             lanRoute("nas-router", "nas.eilertsen.family", "192.168.1.50", 80, null)));
 
-        service.delete("pump");
+        service.delete(pump.machineId());
 
         verify(deletePublishedServiceUseCase, never()).deleteService(any(), any());
-        verify(forPersistingLanServers).deleteByName("pump");
+        verify(forPersistingLanServers).deleteById(pump.machineId());
     }
 
     @Test
     void delete_noMatchingRoutes_deletesRecordAndNeverCascades() {
-        when(forPersistingLanServers.getAll()).thenReturn(List.of(
-            new LanServer("pump", "192.168.1.101", false, null)));
+        LanServer pump = new LanServer("pump", "192.168.1.101", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(pump));
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of());
 
-        service.delete("pump");
+        service.delete(pump.machineId());
 
         verify(deletePublishedServiceUseCase, never()).deleteService(any(), any());
-        verify(forPersistingLanServers).deleteByName("pump");
+        verify(forPersistingLanServers).deleteById(pump.machineId());
     }
 
     @Test
@@ -534,30 +536,30 @@ class LanServerServiceTest {
         // A Traefik API-only route (name@provider, e.g. @docker) has no file entry, so deleting it
         // would throw "Router not found" and abort the LAN-server deletion. Even when it happens to
         // share the LAN server's address, the cascade must skip it — only Vaier-managed file routes cascade.
-        when(forPersistingLanServers.getAll()).thenReturn(List.of(
-            new LanServer("pump", "192.168.1.101", false, null)));
+        LanServer pump = new LanServer("pump", "192.168.1.101", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(pump));
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(
             lanRoute("pump@docker", "pump.eilertsen.family", "192.168.1.101", 80, null)));
 
-        service.delete("pump");
+        service.delete(pump.machineId());
 
         verify(deletePublishedServiceUseCase, never()).deleteService(any(), any());
-        verify(forPersistingLanServers).deleteByName("pump");
+        verify(forPersistingLanServers).deleteById(pump.machineId());
     }
 
     @Test
     void delete_cascadesIntoEveryRouteOnTheSameLanAddress() {
-        when(forPersistingLanServers.getAll()).thenReturn(List.of(
-            new LanServer("pump", "192.168.1.101", false, null)));
+        LanServer pump = new LanServer("pump", "192.168.1.101", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(pump));
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(
             lanRoute("pump-router", "pump.eilertsen.family", "192.168.1.101", 80, null),
             lanRoute("pump-ui-router", "pump.eilertsen.family", "192.168.1.101", 8080, "/ui")));
 
-        service.delete("pump");
+        service.delete(pump.machineId());
 
         verify(deletePublishedServiceUseCase).deleteService("pump.eilertsen.family", null);
         verify(deletePublishedServiceUseCase).deleteService("pump.eilertsen.family", "/ui");
-        verify(forPersistingLanServers).deleteByName("pump");
+        verify(forPersistingLanServers).deleteById(pump.machineId());
     }
 
     // --- getAll ---
@@ -578,10 +580,10 @@ class LanServerServiceTest {
 
     @Test
     void rename_persistsNewNameAndRemovesOldKeepingAddressAndDockerSettings() {
-        when(forPersistingLanServers.getAll())
-            .thenReturn(List.of(new LanServer("nas", "192.168.1.50", true, 2375)));
+        LanServer nas = new LanServer("nas", "192.168.1.50", true, 2375);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nas));
 
-        service.rename("nas", "media-nas");
+        service.rename(nas.machineId(), "media-nas");
 
         ArgumentCaptor<LanServer> saved = ArgumentCaptor.forClass(LanServer.class);
         verify(forPersistingLanServers).save(saved.capture());
@@ -589,7 +591,10 @@ class LanServerServiceTest {
         assertThat(saved.getValue().lanAddress()).isEqualTo("192.168.1.50");
         assertThat(saved.getValue().runsDocker()).isTrue();
         assertThat(saved.getValue().dockerPort()).isEqualTo(2375);
-        verify(forPersistingLanServers).deleteByName("nas");
+        // The renamed copy keeps its identity, so save() replaces the entry it came from — nothing is
+        // deleted, which is the whole difference between an identity-keyed store and a name-keyed one.
+        assertThat(saved.getValue().machineId()).isEqualTo(nas.machineId());
+        verify(forPersistingLanServers, never()).deleteById(any());
     }
 
     @Test
@@ -599,10 +604,10 @@ class LanServerServiceTest {
         // so a rename changes it — but without invalidating the cache the discover endpoint keeps
         // serving the old name and the renamed machine card shows no services. Renaming back made
         // the stale key match again, which is exactly how the bug surfaced.
-        when(forPersistingLanServers.getAll())
-            .thenReturn(List.of(new LanServer("nas", "192.168.1.50", true, 2375)));
+        LanServer nas = new LanServer("nas", "192.168.1.50", true, 2375);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nas));
 
-        service.rename("nas", "media-nas");
+        service.rename(nas.machineId(), "media-nas");
 
         verify(publishedServicesCacheInvalidator).invalidatePublishedServicesCache();
     }
@@ -615,10 +620,10 @@ class LanServerServiceTest {
      */
     @Test
     void rename_leavesTheSshCredentialAndHostKeyPinUntouched() {
-        when(forPersistingLanServers.getAll())
-            .thenReturn(List.of(new LanServer("nas", "192.168.1.50", true, 2375)));
+        LanServer nas = new LanServer("nas", "192.168.1.50", true, 2375);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nas));
 
-        service.rename("nas", "media-nas");
+        service.rename(nas.machineId(), "media-nas");
 
         verify(forPersistingHostCredentials, never()).save(any());
         verify(forPersistingHostCredentials, never()).deleteByMachine(any());
@@ -629,10 +634,10 @@ class LanServerServiceTest {
 
     @Test
     void rename_noOpSameName_leavesSshStateIntact() {
-        when(forPersistingLanServers.getAll())
-            .thenReturn(List.of(new LanServer("nas", "192.168.1.50", false, null)));
+        LanServer nas = new LanServer("nas", "192.168.1.50", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nas));
 
-        service.rename("nas", "nas");
+        service.rename(nas.machineId(), "nas");
 
         verify(forPersistingHostCredentials, never()).deleteByMachine(any());
         verify(forTrackingHostKeys, never()).clear(any());
@@ -641,10 +646,10 @@ class LanServerServiceTest {
     @Test
     void rename_noOp_doesNotInvalidatePublishedServicesCache() {
         // No name change means no derived-field change, so don't churn the cache.
-        when(forPersistingLanServers.getAll())
-            .thenReturn(List.of(new LanServer("nas", "192.168.1.50", false, null)));
+        LanServer nas = new LanServer("nas", "192.168.1.50", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nas));
 
-        service.rename("nas", "nas");
+        service.rename(nas.machineId(), "nas");
 
         verify(publishedServicesCacheInvalidator, never()).invalidatePublishedServicesCache();
     }
@@ -653,61 +658,61 @@ class LanServerServiceTest {
     void rename_throwsWhenLanServerNotFound() {
         when(forPersistingLanServers.getAll()).thenReturn(List.of());
 
-        assertThatThrownBy(() -> service.rename("ghost", "phantom"))
+        assertThatThrownBy(() -> service.rename(MachineId.generate(), "phantom"))
             .isInstanceOf(NotFoundException.class);
         verify(forPersistingLanServers, never()).save(any());
-        verify(forPersistingLanServers, never()).deleteByName(any());
+        verify(forPersistingLanServers, never()).deleteById(any());
     }
 
     @Test
     void rename_rejectsNameAlreadyUsedByAnotherLanServer() {
+        LanServer nas = new LanServer("nas", "192.168.1.50", false, null);
         when(forPersistingLanServers.getAll()).thenReturn(List.of(
-            new LanServer("nas", "192.168.1.50", false, null),
+            nas,
             new LanServer("printer", "192.168.1.60", false, null)
         ));
 
-        assertThatThrownBy(() -> service.rename("nas", "printer"))
+        assertThatThrownBy(() -> service.rename(nas.machineId(), "printer"))
             .isInstanceOf(ConflictException.class);
         verify(forPersistingLanServers, never()).save(any());
-        verify(forPersistingLanServers, never()).deleteByName(any());
+        verify(forPersistingLanServers, never()).deleteById(any());
     }
 
     @Test
     void rename_rejectsNameAlreadyUsedByAVpnPeer() {
         // #284: renaming a LAN server onto a VPN peer's name collides across machines too.
-        when(forPersistingLanServers.getAll()).thenReturn(List.of(
-            new LanServer("nas", "192.168.1.50", false, null)
-        ));
+        LanServer nas = new LanServer("nas", "192.168.1.50", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nas));
         when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
             relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
         ));
 
-        assertThatThrownBy(() -> service.rename("nas", "apalveien5"))
+        assertThatThrownBy(() -> service.rename(nas.machineId(), "apalveien5"))
             .isInstanceOf(ConflictException.class);
         verify(forPersistingLanServers, never()).save(any());
-        verify(forPersistingLanServers, never()).deleteByName(any());
+        verify(forPersistingLanServers, never()).deleteById(any());
     }
 
     @Test
     void rename_isNoOpWhenNameUnchanged() {
-        when(forPersistingLanServers.getAll())
-            .thenReturn(List.of(new LanServer("nas", "192.168.1.50", false, null)));
+        LanServer nas = new LanServer("nas", "192.168.1.50", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nas));
 
-        service.rename("nas", "nas");
+        service.rename(nas.machineId(), "nas");
 
         verify(forPersistingLanServers, never()).save(any());
-        verify(forPersistingLanServers, never()).deleteByName(any());
+        verify(forPersistingLanServers, never()).deleteById(any());
     }
 
     @Test
     void rename_rejectsBlankNewName() {
-        when(forPersistingLanServers.getAll())
-            .thenReturn(List.of(new LanServer("nas", "192.168.1.50", false, null)));
+        LanServer nas = new LanServer("nas", "192.168.1.50", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nas));
 
-        assertThatThrownBy(() -> service.rename("nas", "  "))
+        assertThatThrownBy(() -> service.rename(nas.machineId(), "  "))
             .isInstanceOf(IllegalArgumentException.class);
         verify(forPersistingLanServers, never()).save(any());
-        verify(forPersistingLanServers, never()).deleteByName(any());
+        verify(forPersistingLanServers, never()).deleteById(any());
     }
 
     // --- description (#54) ---
@@ -727,10 +732,10 @@ class LanServerServiceTest {
 
     @Test
     void updateDescription_savesLanServerWithNewDescription() {
-        when(forPersistingLanServers.getAll())
-            .thenReturn(List.of(new LanServer("nas", "192.168.1.50", true, 2375)));
+        LanServer nas = new LanServer("nas", "192.168.1.50", true, 2375);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nas));
 
-        service.updateDescription("nas", "Synology in the closet");
+        service.updateDescription(nas.machineId(), "Synology in the closet");
 
         ArgumentCaptor<LanServer> captor = ArgumentCaptor.forClass(LanServer.class);
         verify(forPersistingLanServers).save(captor.capture());
@@ -743,7 +748,7 @@ class LanServerServiceTest {
     void updateDescription_throwsWhenLanServerNotFound() {
         when(forPersistingLanServers.getAll()).thenReturn(List.of());
 
-        assertThatThrownBy(() -> service.updateDescription("ghost", "anything"))
+        assertThatThrownBy(() -> service.updateDescription(MachineId.generate(), "anything"))
             .isInstanceOf(NotFoundException.class);
         verify(forPersistingLanServers, never()).save(any());
     }
@@ -780,10 +785,10 @@ class LanServerServiceTest {
 
     @Test
     void updateDeviceCategory_savesOverrideKeepingEverythingElse() {
-        when(forPersistingLanServers.getAll())
-            .thenReturn(List.of(new LanServer("nas", "192.168.1.50", true, 2375, "desc")));
+        LanServer nas = new LanServer("nas", "192.168.1.50", true, 2375, "desc");
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nas));
 
-        service.updateDeviceCategory("nas", "NAS");
+        service.updateDeviceCategory(nas.machineId(), "NAS");
 
         ArgumentCaptor<LanServer> captor = ArgumentCaptor.forClass(LanServer.class);
         verify(forPersistingLanServers).save(captor.capture());
@@ -794,11 +799,11 @@ class LanServerServiceTest {
 
     @Test
     void updateDeviceCategory_blankClearsOverride() {
-        when(forPersistingLanServers.getAll())
-            .thenReturn(List.of(new LanServer("nas", "192.168.1.50", false, null, null,
-                net.vaier.domain.DeviceCategory.NAS)));
+        LanServer nas = new LanServer("nas", "192.168.1.50", false, null, null,
+            net.vaier.domain.DeviceCategory.NAS);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nas));
 
-        service.updateDeviceCategory("nas", "  ");
+        service.updateDeviceCategory(nas.machineId(), "  ");
 
         ArgumentCaptor<LanServer> captor = ArgumentCaptor.forClass(LanServer.class);
         verify(forPersistingLanServers).save(captor.capture());
@@ -807,7 +812,7 @@ class LanServerServiceTest {
 
     @Test
     void updateDeviceCategory_rejectsInvalidValueWithoutSaving() {
-        assertThatThrownBy(() -> service.updateDeviceCategory("nas", "BANANA"))
+        assertThatThrownBy(() -> service.updateDeviceCategory(MachineId.generate(), "BANANA"))
             .isInstanceOf(IllegalArgumentException.class);
         verify(forPersistingLanServers, never()).save(any());
     }
@@ -816,7 +821,7 @@ class LanServerServiceTest {
     void updateDeviceCategory_throwsWhenLanServerNotFound() {
         when(forPersistingLanServers.getAll()).thenReturn(List.of());
 
-        assertThatThrownBy(() -> service.updateDeviceCategory("ghost", "NAS"))
+        assertThatThrownBy(() -> service.updateDeviceCategory(MachineId.generate(), "NAS"))
             .isInstanceOf(NotFoundException.class);
         verify(forPersistingLanServers, never()).save(any());
     }
@@ -828,14 +833,14 @@ class LanServerServiceTest {
     @Test
     void generateSetupScript_relayAnchored_passesPortDataAndVpnSubnetToDomain() {
         org.springframework.test.util.ReflectionTestUtils.setField(service, "vpnSubnet", "10.13.13.0/24");
-        when(forPersistingLanServers.getAll()).thenReturn(List.of(
-            new LanServer("nuc02", "192.168.3.50", false, null, null)));
+        LanServer nuc02 = new LanServer("nuc02", "192.168.3.50", false, null, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nuc02));
         when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
             new PeerConfiguration("apalveien5", "apalveien5", "10.13.13.9", "[Interface]",
                 MachineType.UBUNTU_SERVER, "192.168.3.0/24", "192.168.3.121", null)));
         when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.of("172.31.16.0/20"));
 
-        String s = service.generateSetupScript("nuc02").orElseThrow();
+        String s = service.generateSetupScript(nuc02.machineId()).orElseThrow();
 
         assertThat(s).contains("ip route replace 172.31.16.0/20 via 192.168.3.121"); // server LAN CIDR
         assertThat(s).contains("ip route replace 10.13.13.0/24 via 192.168.3.121");  // the vpnSubnet
@@ -845,6 +850,6 @@ class LanServerServiceTest {
     void generateSetupScript_unknownServer_empty() {
         when(forPersistingLanServers.getAll()).thenReturn(List.of());
 
-        assertThat(service.generateSetupScript("ghost")).isEmpty();
+        assertThat(service.generateSetupScript(MachineId.generate())).isEmpty();
     }
 }

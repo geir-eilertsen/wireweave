@@ -1013,11 +1013,11 @@ class PublishingServiceTest {
     // --- publishLanService (#175) ---
 
     @Test
-    void publishLanService_unknownMachineName_throws() {
+    void publishLanService_unknownIdentity_throws() {
         when(forPersistingLanServers.getAll()).thenReturn(List.of());
 
         assertThrows(IllegalArgumentException.class, () ->
-            service.publishLanService("nas", "ghost", 5000, "http", false, false, null)
+            service.publishLanService("nas", MachineId.generate(), 5000, "http", false, false, null, null)
         );
         verify(forPersistingDnsRecords, never()).addDnsRecord(any(), any());
         verify(forPersistingReverseProxyRoutes, never()).addLanReverseProxyRoute(
@@ -1026,15 +1026,15 @@ class PublishingServiceTest {
 
     @Test
     void publishLanService_targetIpOutsideEveryRelayLanCidr_throws() {
-        when(forPersistingLanServers.getAll()).thenReturn(List.of(
-            new LanServer("offsite", "10.99.99.99", false, null)));
+        LanServer offsite = new LanServer("offsite", "10.99.99.99", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(offsite));
         when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
             new net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration(
                 "apalveien5", "10.13.13.5", "", MachineType.UBUNTU_SERVER, "192.168.3.0/24", "192.168.3.5")
         ));
 
         assertThrows(IllegalArgumentException.class, () ->
-            service.publishLanService("nas", "offsite", 5000, "http", false, false, null)
+            service.publishLanService("nas", offsite.machineId(), 5000, "http", false, false, null, null)
         );
         verify(forPersistingDnsRecords, never()).addDnsRecord(any(), any());
         verify(forPersistingReverseProxyRoutes, never()).addLanReverseProxyRoute(
@@ -1043,14 +1043,14 @@ class PublishingServiceTest {
 
     @Test
     void publishLanService_targetIpInsideRelayLanCidr_createsCnameDnsRecord() {
-        when(forPersistingLanServers.getAll()).thenReturn(List.of(
-            new LanServer("nas-box", "192.168.3.50", false, null)));
+        LanServer nasBox = new LanServer("nas-box", "192.168.3.50", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nasBox));
         when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
             new net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration(
                 "apalveien5", "10.13.13.5", "", MachineType.UBUNTU_SERVER, "192.168.3.0/24", "192.168.3.5")
         ));
 
-        service.publishLanService("nas", "nas-box", 5000, "https", false, false, null);
+        service.publishLanService("nas", nasBox.machineId(), 5000, "https", false, false, null, null);
 
         ArgumentCaptor<DnsRecord> recordCaptor = ArgumentCaptor.forClass(DnsRecord.class);
         verify(forPersistingDnsRecords).addDnsRecord(recordCaptor.capture(), any());
@@ -1075,12 +1075,12 @@ class PublishingServiceTest {
 
     @Test
     void publishLanService_targetIpInsideServerLanCidr_createsCnameDnsRecord() {
-        when(forPersistingLanServers.getAll()).thenReturn(List.of(
-            new LanServer("server-box", "172.31.5.20", false, null)));
+        LanServer serverBox = new LanServer("server-box", "172.31.5.20", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(serverBox));
         when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of());
         when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.of("172.31.0.0/16"));
 
-        service.publishLanService("box", "server-box", 8080, "http", false, false, null);
+        service.publishLanService("box", serverBox.machineId(), 8080, "http", false, false, null, null);
 
         ArgumentCaptor<DnsRecord> recordCaptor = ArgumentCaptor.forClass(DnsRecord.class);
         verify(forPersistingDnsRecords).addDnsRecord(recordCaptor.capture(), any());
@@ -1089,13 +1089,13 @@ class PublishingServiceTest {
 
     @Test
     void publishLanService_targetIpOutsideRelaysAndServerLanCidr_throws() {
-        when(forPersistingLanServers.getAll()).thenReturn(List.of(
-            new LanServer("offsite", "10.99.99.99", false, null)));
+        LanServer offsite = new LanServer("offsite", "10.99.99.99", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(offsite));
         when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of());
         when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.of("172.31.0.0/16"));
 
         assertThrows(IllegalArgumentException.class, () ->
-            service.publishLanService("box", "offsite", 8080, "http", false, false, null));
+            service.publishLanService("box", offsite.machineId(), 8080, "http", false, false, null, null));
         verify(forPersistingDnsRecords, never()).addDnsRecord(any(), any());
     }
 

@@ -1,5 +1,6 @@
 package net.vaier.rest;
 
+import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.PeerNotFoundException;
 import net.vaier.domain.ConflictException;
 import net.vaier.domain.port.ForPublishingEvents;
@@ -236,7 +237,8 @@ class VpnPeerRestControllerTest {
         // The default ("unspecified peerType becomes UBUNTU_SERVER") is a domain rule that lives on
         // CreatePeerUseCase / VpnService now — the controller must not substitute it.
         var created = new CreatePeerUseCase.CreatedPeerUco(
-                "nas", "nas", "10.13.13.5", "pub", "priv", "[Interface]", MachineType.UBUNTU_SERVER);
+                "nas", TestMachineIds.of("nas"), "nas", "10.13.13.5", "pub", "priv", "[Interface]",
+                MachineType.UBUNTU_SERVER);
         when(createPeerUseCase.createPeer("nas", null, null, null, "Home media server"))
                 .thenReturn(created);
         var request = new VpnPeerRestController.CreatePeerRequest(
@@ -251,7 +253,8 @@ class VpnPeerRestControllerTest {
     @Test
     void createPeer_passesExplicitPeerTypeThrough() {
         var created = new CreatePeerUseCase.CreatedPeerUco(
-                "nas", "nas", "10.13.13.5", "pub", "priv", "[Interface]", MachineType.UBUNTU_SERVER);
+                "nas", TestMachineIds.of("nas"), "nas", "10.13.13.5", "pub", "priv", "[Interface]",
+                MachineType.UBUNTU_SERVER);
         when(createPeerUseCase.createPeer("nas", MachineType.UBUNTU_SERVER, null, null, "Home media server"))
                 .thenReturn(created);
         var request = new VpnPeerRestController.CreatePeerRequest(
@@ -269,7 +272,8 @@ class VpnPeerRestControllerTest {
         // Windows flag; the intent -> MachineType decision is the domain's (MachineIntent), and the
         // controller delegates to it before calling the unchanged use case.
         var created = new CreatePeerUseCase.CreatedPeerUco(
-                "laptop", "laptop", "10.13.13.9", "pub", "priv", "[Interface]", MachineType.WINDOWS_CLIENT);
+                "laptop", TestMachineIds.of("laptop"), "laptop", "10.13.13.9", "pub", "priv",
+                "[Interface]", MachineType.WINDOWS_CLIENT);
         when(createPeerUseCase.createPeer("laptop", MachineType.WINDOWS_CLIENT, null, null, null))
                 .thenReturn(created);
         var request = new VpnPeerRestController.CreatePeerRequest(
@@ -285,7 +289,8 @@ class VpnPeerRestControllerTest {
     @Test
     void createPeer_intentTakesPrecedenceAndTreatsAbsentWindowsFlagAsFalse() {
         var created = new CreatePeerUseCase.CreatedPeerUco(
-                "nuc", "nuc", "10.13.13.8", "pub", "priv", "[Interface]", MachineType.UBUNTU_SERVER);
+                "nuc", TestMachineIds.of("nuc"), "nuc", "10.13.13.8", "pub", "priv", "[Interface]",
+                MachineType.UBUNTU_SERVER);
         when(createPeerUseCase.createPeer("nuc", MachineType.UBUNTU_SERVER, null, null, null))
                 .thenReturn(created);
         var request = new VpnPeerRestController.CreatePeerRequest(
@@ -302,7 +307,7 @@ class VpnPeerRestControllerTest {
     @Test
     void reissuePeer_returnsFreshConfigAndArtefactsAndPublishesUpdate() {
         var reissued = new ReissuePeerConfigUseCase.ReissuedPeerUco(
-            "apalveien5", "apalveien5", "10.13.13.6", "pub",
+            "apalveien5", TestMachineIds.of("apalveien5"), "apalveien5", "10.13.13.6", "pub",
             "# VAIER: {\"peerType\":\"UBUNTU_SERVER\"}\n[Interface]\nPrivateKey = k\n"
                 + "Address = 10.13.13.6/32\n[Peer]\nAllowedIPs = 10.13.13.0/24,172.31.16.0/20\n",
             MachineType.UBUNTU_SERVER);

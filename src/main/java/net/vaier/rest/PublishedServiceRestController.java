@@ -2,6 +2,7 @@ package net.vaier.rest;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.vaier.domain.MachineId;
 import net.vaier.application.DeletePublishedServiceUseCase;
 import net.vaier.application.GetPublishedServicesUseCase;
 import net.vaier.application.GetPublishedServicesUseCase.PublishedServiceUco;
@@ -71,11 +72,11 @@ public class PublishedServiceRestController {
     @PostMapping("/lan")
     public ResponseEntity<Void> publishLanService(@RequestBody PublishLanRequest request) {
         log.info("Publishing LAN service: {}://{}:{} as {}.* (auth={}, directUrlDisabled={}, redirect={}, pathPrefix={})",
-            LogSafe.forLog(request.protocol()), LogSafe.forLog(request.machineName()), request.port(),
+            LogSafe.forLog(request.protocol()), LogSafe.forLog(request.machineId()), request.port(),
             LogSafe.forLog(request.subdomain()), request.requireAuth(), request.directUrlDisabled(),
             LogSafe.forLog(request.rootRedirectPath()), LogSafe.forLog(request.pathPrefix()));
         publishLanServiceUseCase.publishLanService(
-            request.subdomain(), request.machineName(), request.port(), request.protocol(),
+            request.subdomain(), MachineId.of(request.machineId()), request.port(), request.protocol(),
             request.requireAuth(), request.directUrlDisabled(), request.rootRedirectPath(),
             request.pathPrefix());
         return ResponseEntity.ok().build();
@@ -130,7 +131,7 @@ public class PublishedServiceRestController {
 
     record PublishRequest(String address, int port, String subdomain, boolean requiresAuth, String rootRedirectPath,
                           boolean directUrlDisabled, String pathPrefix) {}
-    record PublishLanRequest(String subdomain, String machineName, int port, String protocol, boolean requireAuth,
+    record PublishLanRequest(String subdomain, String machineId, int port, String protocol, boolean requireAuth,
                              boolean directUrlDisabled, String rootRedirectPath, String pathPrefix) {}
     record PublishStatusResponse(boolean dnsPropagated, boolean traefikActive) {}
     record IgnoreRequest(String key) {}

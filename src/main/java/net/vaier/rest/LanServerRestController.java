@@ -21,6 +21,7 @@ import net.vaier.domain.DiscoveredLanMachine;
 import net.vaier.domain.LanHostProbe;
 import net.vaier.domain.LanMachineRole;
 import net.vaier.domain.LanServer;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.SshCredentialDraft;
 import net.vaier.domain.SshCredentialVerification;
 import net.vaier.domain.port.ForDiscoveringLanServerContainers.LanServerContainers;
@@ -122,23 +123,23 @@ public class LanServerRestController {
         return ResponseEntity.ok(RegisterResponse.from(outcome));
     }
 
-    @PatchMapping("/{name}")
-    public ResponseEntity<Void> rename(@PathVariable String name,
+    @PatchMapping("/{machineId}")
+    public ResponseEntity<Void> rename(@PathVariable String machineId,
                                        @RequestBody(required = false) RenameRequest request) {
         String newName = request != null ? request.newName() : null;
-        log.info("Renaming LAN server {} to {}", LogSafe.forLog(name), LogSafe.forLog(newName));
+        log.info("Renaming LAN server {} to {}", LogSafe.forLog(machineId), LogSafe.forLog(newName));
         // not-found -> 404, name conflict -> 409, bad name -> 400 all render as ApiError
         // via GlobalExceptionHandler (NotFoundException / ConflictException / IllegalArgumentException).
-        renameLanServerUseCase.rename(name, newName);
+        renameLanServerUseCase.rename(MachineId.of(machineId), newName);
         return ResponseEntity.noContent().build();
     }
 
-    @PatchMapping("/{name}/description")
-    public ResponseEntity<Void> updateDescription(@PathVariable String name,
+    @PatchMapping("/{machineId}/description")
+    public ResponseEntity<Void> updateDescription(@PathVariable String machineId,
                                                   @RequestBody(required = false) UpdateDescriptionRequest request) {
         String description = request != null ? request.description() : null;
-        log.info("Updating description for LAN server {}", LogSafe.forLog(name));
-        updateLanServerDescriptionUseCase.updateDescription(name, description);
+        log.info("Updating description for LAN server {}", LogSafe.forLog(machineId));
+        updateLanServerDescriptionUseCase.updateDescription(MachineId.of(machineId), description);
         return ResponseEntity.noContent().build();
     }
 
@@ -147,20 +148,20 @@ public class LanServerRestController {
      * icon hint. An invalid category value propagates as {@code IllegalArgumentException} -> 400;
      * an unknown server as {@code NotFoundException} -> 404.
      */
-    @PatchMapping("/{name}/device-category")
-    public ResponseEntity<Void> updateDeviceCategory(@PathVariable String name,
+    @PatchMapping("/{machineId}/device-category")
+    public ResponseEntity<Void> updateDeviceCategory(@PathVariable String machineId,
                                                      @RequestBody(required = false) UpdateDeviceCategoryRequest request) {
         String deviceCategory = request != null ? request.deviceCategory() : null;
         log.info("Updating device category for LAN server {} to {}",
-            LogSafe.forLog(name), LogSafe.forLog(deviceCategory));
-        updateLanServerDeviceCategoryUseCase.updateDeviceCategory(name, deviceCategory);
+            LogSafe.forLog(machineId), LogSafe.forLog(deviceCategory));
+        updateLanServerDeviceCategoryUseCase.updateDeviceCategory(MachineId.of(machineId), deviceCategory);
         return ResponseEntity.noContent().build();
     }
 
-    @DeleteMapping("/{name}")
-    public ResponseEntity<Void> delete(@PathVariable String name) {
-        log.info("Deleting LAN server: {}", LogSafe.forLog(name));
-        deleteLanServerUseCase.delete(name);
+    @DeleteMapping("/{machineId}")
+    public ResponseEntity<Void> delete(@PathVariable String machineId) {
+        log.info("Deleting LAN server: {}", LogSafe.forLog(machineId));
+        deleteLanServerUseCase.delete(MachineId.of(machineId));
         return ResponseEntity.ok().build();
     }
 
@@ -172,13 +173,15 @@ public class LanServerRestController {
     // No `produces` constraint: the success path sets the x-sh content type explicitly, and
     // leaving it off lets error responses (e.g. a 409 ConflictException) render as JSON ApiError
     // instead of failing content negotiation with a 406.
-    @GetMapping(value = "/{name}/setup.sh")
-    public ResponseEntity<?> downloadSetupScript(@PathVariable String name) {
+    @GetMapping(value = "/{machineId}/setup.sh")
+    public ResponseEntity<?> downloadSetupScript(@PathVariable String machineId) {
         // A relay-without-LAN-address conflict propagates as ConflictException -> 409 ApiError;
         // an unknown/empty host stays a body-less 404 (GET of an optional artifact).
-        return generateLanServerSetupScriptUseCase.generateSetupScript(name)
+        // The filename is the identity, not the name: this is a download of a script for one machine and
+        // the segment is what names it here, while a display name could carry anything a person typed.
+        return generateLanServerSetupScriptUseCase.generateSetupScript(MachineId.of(machineId))
             .<ResponseEntity<?>>map(script -> ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=" + name + "-setup.sh")
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=" + machineId + "-setup.sh")
                 .contentType(MediaType.parseMediaType("application/x-sh"))
                 .body(script))
             .orElseGet(() -> ResponseEntity.notFound().build());
@@ -191,15 +194,15 @@ public class LanServerRestController {
      * {@code GET /{name}/setup?t=} route below. Parity with the peer setup flow (Slice 4b), reusing
      * the same token machinery — the id is simply the LAN server name.
      */
-    @PostMapping("/{name}/setup-token")
-    public ResponseEntity<?> mintSetupToken(@PathVariable String name) {
-        log.info("Minting setup token for LAN server {}", LogSafe.forLog(name));
+    @PostMapping("/{machineId}/setup-token")
+    public ResponseEntity<?> mintSetupToken(@PathVariable String machineId) {
+        log.info("Minting setup token for LAN server {}", LogSafe.forLog(machineId));
         // A host with nothing to set up (runs no Docker, anchors no LAN) has no setup script, so there is
         // no command to hand over — 204, and the UI shows "nothing to install" rather than a link that 404s.
-        if (generateLanServerSetupScriptUseCase.generateSetupScript(name).isEmpty()) {
+        if (generateLanServerSetupScriptUseCase.generateSetupScript(MachineId.of(machineId)).isEmpty()) {
             return ResponseEntity.noContent().build();
         }
-        SetupToken minted = forVendingSetupTokens.issue(name);
+        SetupToken minted = forVendingSetupTokens.issue(machineId);
         return ResponseEntity.ok(new SetupTokenResponse(minted.value(), SetupToken.TTL.toSeconds()));
     }
 
@@ -214,21 +217,21 @@ public class LanServerRestController {
      * #202 one-shot budget for LAN servers: the single-use token is the sole gate. Served as
      * {@code text/plain} so {@code curl … | sudo sh} works. NEVER log the token.
      */
-    @GetMapping(value = "/{name}/setup")
+    @GetMapping(value = "/{machineId}/setup")
     public ResponseEntity<?> serveTokenizedSetupScript(
-            @PathVariable String name,
+            @PathVariable String machineId,
             @RequestParam(name = "t", required = false) String token) {
-        log.info("Tokenized setup script requested for LAN server {}", LogSafe.forLog(name));
-        if (token == null || !forVendingSetupTokens.consume(name, token)) {
+        log.info("Tokenized setup script requested for LAN server {}", LogSafe.forLog(machineId));
+        if (token == null || !forVendingSetupTokens.consume(machineId, token)) {
             log.warn("Rejected tokenized setup for LAN server {}: missing, invalid, or already-used token",
-                LogSafe.forLog(name));
+                LogSafe.forLog(machineId));
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                 .contentType(MediaType.TEXT_PLAIN)
                 .body("This setup link is invalid or has already been used. Regenerate it in Vaier.\n");
         }
         // A relay-without-LAN-address conflict propagates as ConflictException -> 409 ApiError;
         // an unknown/empty host stays a body-less 404 (GET of an optional artifact).
-        return generateLanServerSetupScriptUseCase.generateSetupScript(name)
+        return generateLanServerSetupScriptUseCase.generateSetupScript(MachineId.of(machineId))
             .<ResponseEntity<?>>map(script -> ResponseEntity.ok()
                 .contentType(MediaType.TEXT_PLAIN)
                 .body(script))
@@ -294,14 +297,14 @@ public class LanServerRestController {
      * was stored in the vault, and {@code hostKeyFingerprint} is the key the host presented. Never echoes
      * the secret.
      */
-    record RegisterResponse(String name, String lanAddress, boolean runsDocker, Integer dockerPort,
+    record RegisterResponse(String machineId, String name, String lanAddress, boolean runsDocker, Integer dockerPort,
                             String description, String deviceCategory, boolean deviceCategoryOverridden,
                             boolean credentialProvided, boolean credentialVerified,
                             boolean credentialStored, String hostKeyFingerprint) {
         static RegisterResponse from(RegistrationOutcome outcome) {
             LanServer s = outcome.server();
             SshCredentialVerification v = outcome.credentialVerification();
-            return new RegisterResponse(s.name(), s.lanAddress(), s.runsDocker(), s.dockerPort(),
+            return new RegisterResponse(s.machineId().value(), s.name(), s.lanAddress(), s.runsDocker(), s.dockerPort(),
                 s.description(), s.effectiveDeviceCategory().name(), s.deviceCategoryOverridden(),
                 v != null, v != null && v.authenticated(), outcome.credentialStored(),
                 v == null ? null : v.fingerprint());
@@ -318,6 +321,7 @@ public class LanServerRestController {
     record LanAnchorResponse(boolean routable, String routedVia, String cidr) {}
 
     record LanServerResponse(
+        String machineId,
         String name,
         String lanAddress,
         boolean runsDocker,
@@ -333,6 +337,7 @@ public class LanServerRestController {
     ) {
         static LanServerResponse from(LanServerView view, String reachability, MachineStatus status, Long lastSeen) {
             return new LanServerResponse(
+                view.server().machineId().value(),
                 view.server().name(),
                 view.server().lanAddress(),
                 view.server().runsDocker(),
