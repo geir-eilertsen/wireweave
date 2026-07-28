@@ -1762,7 +1762,7 @@ Three things this buys that a set of pages structurally cannot:
 
 ---
 
-### 6.22 Machine identity 🟡 (in progress)
+### 6.22 Machine identity ✅
 
 **Why.** Vaier had no machine registry. It had three — WireGuard config directories, `lan-servers.yml`,
 and a flag in the Vaier config — unified only by a read projection that identified machines by their
@@ -1844,7 +1844,21 @@ missing or malformed does not load, rather than coming back as a stranger to its
   them by identity re-mints every primary and strands the tmux sessions currently running; a rename still
   orphans a live shell, which is the same bug class and the next step here.
 
-#### Remaining
+#### Done — the refactor is complete (2026-07-28)
+
+Every machine record, every REST path, every read feed and the whole browser address a machine by its
+`MachineId`. **Machine names need not be unique**, which was the point. Two things are name-shaped on
+purpose and documented as such: terminal **pane ids** (re-keying them strands the tmux sessions running
+now, so a rename still orphans a live shell — the next step here), and the pre-§6.22 **shell bookmark**
+fallback, which resolves a name only when given no id and refuses to guess between two matches.
+
+**No config migration is outstanding.** The stores' on-disk shapes did not change in this pass — peers and
+LAN servers already carried `id:` from the earlier slices, and `ignoreKey` was deliberately left alone so
+the ignored-services file does not orphan. The one visible break is that setup links minted before this
+deploy carry a name where the route now expects an identity; they are single-use and expire in ~15 minutes,
+so the answer is to mint a new one.
+
+#### How it got here
 
 The work that got this far is **committed and pushed** on `main`: the SSH path went id-native in
 `7969746`, the Explorer's coordinates in `5c843a5`, the rest of the machine-keyed backend in `7bf0d6f`,
