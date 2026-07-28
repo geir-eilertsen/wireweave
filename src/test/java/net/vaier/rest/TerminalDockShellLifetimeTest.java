@@ -26,7 +26,11 @@ class TerminalDockShellLifetimeTest {
     }
 
     private String panes() throws Exception {
-        return Files.readString(Path.of("src/main/resources/static/terminal-panes.js"));
+        return read("terminal-panes.js");
+    }
+
+    private String read(String asset) throws Exception {
+        return Files.readString(Path.of("src/main/resources/static/" + asset));
     }
 
     @Test
@@ -68,17 +72,70 @@ class TerminalDockShellLifetimeTest {
         // The reattach path: if we already own a session for this machine that is not on screen, open that one
         // rather than creating a second and leaving the first stranded.
         String dock = dock();
-        assertThat(dock).contains("function claimPaneId(machineName)");
-        assertThat(dock).contains("paneId: claimPaneId(machineName)");
+        assertThat(dock).contains("function claimPaneId(machineId, machineName)");
+        assertThat(dock).contains("paneId: claimPaneId(machineId, machineName)");
         // The fresh-id fallback must not be reachable directly from open() any more.
         assertThat(dock).doesNotContain("paneId: randomPaneId()");
+    }
+
+    // --- sessions are owned per machine IDENTITY (§6.22) -------------------------------------------
+
+    @Test
+    void shellSessionsAreOwnedByMachineIdentity_notByDisplayName() throws Exception {
+        // The last thing in Vaier keyed by a machine's name. A shell is a tmux session that outlives its
+        // socket, and the browser is the only thing that can ever end it — so filing the ids under a name
+        // meant a rename lost every shell you had open on that machine: new ids minted under the new name,
+        // the old sessions left running on the host with nothing left to reach them by. Two machines
+        // sharing a name would likewise have handed one machine's session to the other.
+        String panes = panes();
+        assertThat(panes).contains("function claim(machineId, machineName)");
+        assertThat(panes).contains("function primary(machineId, machineName)");
+        assertThat(panes).contains("function adopt(machineId, paneId, machineName)");
+        assertThat(panes).contains("function release(machineId, paneId, machineName)");
+    }
+
+    @Test
+    void aPreIdentitySessionIsMovedAcross_ratherThanStranded() throws Exception {
+        // Re-keying alone would have been the bug, not the fix: every session running at deploy time is
+        // filed under its machine's NAME, so the first lookup by identity would find nothing, mint a fresh
+        // id, and leave a live tmux session on the host that nothing can ever reach or kill again. The
+        // entry is moved once, and only when the identity has nothing filed yet.
+        String panes = panes();
+        assertThat(panes).contains("function migrateLegacyName(machineId, machineName)");
+        assertThat(panes).as("moved for both stores").contains("delete owned[machineName]")
+            .contains("delete prim[machineName]");
+        assertThat(panes).as("never clobbers what the identity already holds").contains("if (!prim[machineId])");
+    }
+
+    @Test
+    void everyCallerHandsInBothTheIdentityAndTheName() throws Exception {
+        // The name is passed for exactly one purpose — the one-time move above — so a caller that forgets
+        // it silently strands that machine's running shells. Pinned here because the failure is invisible:
+        // the new shell opens fine, and only the orphan on the host says anything went wrong.
+        assertThat(dock()).contains("VaierPanes.claim(machineId, machineName)");
+        assertThat(read("terminal-window.js")).contains("VaierPanes.adopt(machineId, paneId, machine)")
+            .contains("VaierPanes.claim(machineId, machine)")
+            .contains("VaierPanes.release(machineId, paneId, machine)");
+        assertThat(read("explorer-shell.js")).contains("VaierPanes.primary(machineId, machineName)");
+    }
+
+    @Test
+    void aWindowClaimsItsPaneOnlyOnceItKnowsWhichMachineItIsOn() throws Exception {
+        // A window opened from a pre-identity bookmark starts with no id and resolves one from /machines.
+        // Claiming before that resolves files the session under `null` — every such window would then share
+        // one bucket, and the first rename or reload would hand one machine's shell to another.
+        String js = read("terminal-window.js");
+        assertThat(js).contains("function claimPane()");
+        int claimFn = js.indexOf("function claimPane()");
+        int firstCall = js.indexOf("claimPane();", claimFn);
+        assertThat(firstCall).as("claimed after the identity is in hand, never at parse time").isGreaterThan(claimFn);
     }
 
     @Test
     void endingAShell_releasesItsPaneId() throws Exception {
         // An id we no longer own must not be handed to the next shell, or it would reattach to a dead session.
         String dock = dock();
-        assertThat(dock).contains("function releasePaneId(machineName, paneId)");
-        assertThat(dock).contains("releasePaneId(s.machine, s.paneId)");
+        assertThat(dock).contains("function releasePaneId(machineId, paneId, machineName)");
+        assertThat(dock).contains("releasePaneId(s.machineId, s.paneId, s.machine)");
     }
 }

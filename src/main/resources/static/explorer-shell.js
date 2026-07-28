@@ -4656,7 +4656,9 @@
             return;
         }
         // The machine's primary shell window — one per machine, so re-opening focuses the one already there.
-        const w = window.open('', 'vaier-shell-' + machineName, features);
+        // Named by identity: named by the display name, a rename opened a SECOND window onto the same machine
+        // while the first sat there holding the live session.
+        const w = window.open('', 'vaier-shell-' + encodeURIComponent(machineId), features);
         if (!w) { toast('Your browser blocked the shell window. Allow pop-ups for Vaier and try again.'); return; }
         // A fresh window lands on about:blank — point it at the terminal, carrying the machine's *stable* primary
         // pane id so it reattaches to the same session every time (never a random orphan, and never a surprise
@@ -4664,7 +4666,8 @@
         let href = '';
         try { href = w.location.href; } catch (e) { href = ''; }
         if (!href || href === 'about:blank') {
-            const pane = (window.VaierPanes && VaierPanes.primary) ? VaierPanes.primary(machineName) : '';
+            const pane = (window.VaierPanes && VaierPanes.primary)
+                ? VaierPanes.primary(machineId, machineName) : '';
             w.location.href = 'terminal.html?machine=' + encodeURIComponent(machineName)
                 + '&id=' + encodeURIComponent(machineId)
                 + (pane ? '&pane=' + encodeURIComponent(pane) : '');

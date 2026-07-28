@@ -27,11 +27,18 @@
 
     // The session id. Handed in for a pop-out (reattach the dock's shell) or on reload (reattach our own); a
     // fresh window mints one and writes it into its own URL, so a reload of this window reattaches too.
+    //
+    // Deliberately NOT claimed at parse time: sessions are owned per machine identity, and a window opened
+    // from a pre-identity bookmark does not know its identity yet — it resolves one from /machines below.
+    // Claiming before that would file the session under `null`, where every such window would share one
+    // bucket and the first reload could hand one machine's shell to another.
     let paneId = params.get('pane');
-    if (paneId) {
-        VaierPanes.adopt(machine, paneId);
-    } else {
-        paneId = VaierPanes.claim(machine, []);
+    function claimPane() {
+        if (paneId) {
+            VaierPanes.adopt(machineId, paneId, machine);
+            return;
+        }
+        paneId = VaierPanes.claim(machineId, machine);
         const url = new URL(window.location.href);
         url.searchParams.set('pane', paneId);
         window.history.replaceState(null, '', url);
@@ -164,7 +171,7 @@
         ws.onclose = (ev) => {
             if (state.ended) return;
             // A clean exit means the remote shell ended — the session is gone, so let it go and close the window.
-            if (ev.code === 1000) { state.ended = true; VaierPanes.release(machine, paneId); window.close(); setStatus('The shell ended.'); return; }
+            if (ev.code === 1000) { state.ended = true; VaierPanes.release(machineId, paneId, machine); window.close(); setStatus('The shell ended.'); return; }
             setDot('error');
             setPasswordPrompt(false);
             if (!PERMANENT.has(ev.code) && state.retries < MAX_RECONNECTS) {
@@ -255,7 +262,7 @@
         state.ended = true;
         releaseWakeLock();
         send({ type: 'end-shell' });
-        VaierPanes.release(machine, paneId);
+        VaierPanes.release(machineId, paneId, machine);
         if (state.ws) try { state.ws.onclose = null; state.ws.close(); } catch (e) { /* ignore */ }
         window.close();
         // If the browser refuses to close a window it did not script-open, leave a clear end state behind.
@@ -392,6 +399,7 @@
     // A window opened without an id (a bookmark from before this carried one) resolves the machine by name
     // once, here, rather than handing the name to a socket that can only reject it.
     if (machineId) {
+        claimPane();
         connect();
     } else {
         setStatus('Finding ' + machine + '…');
@@ -417,6 +425,7 @@
                 url.searchParams.set('id', machineId);
                 window.history.replaceState(null, '', url);
                 setStatus(null);
+                claimPane();   // only now is there an identity to file the session under
                 connect();
             })
             .catch(() => setStatus('Could not reach Vaier to find ' + machine + '.', true));

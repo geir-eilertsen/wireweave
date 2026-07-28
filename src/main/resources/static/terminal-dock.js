@@ -116,7 +116,10 @@
         return _machineIds.has(machineName) ? _machineIds.get(machineName) : machineName;
     }
 
-    function open(machineName) {
+    // Async because a session is owned by machine identity, and the dock holds only a name until /machines
+    // has answered. Claiming before that would file the shell under a name — the very thing this removed.
+    async function open(machineName) {
+        const machineId = await machineIdOf(machineName);
         const id = ++_seq;
         const pane = buildPane(id, machineName);
         const tab = buildTab(id, machineName);
@@ -139,7 +142,7 @@
         // promptShowing / claude are this shell's action state, pushed by the server. They live on the
         // shell rather than in the menu because the menu is transient — it must be able to open at any
         // moment and show the truth immediately, without asking the server again.
-        const state = { id, pane, tab, term, fit, ws: null, machine: machineName, paneId: claimPaneId(machineName),
+        const state = { id, pane, tab, term, fit, ws: null, machine: machineName, machineId, paneId: claimPaneId(machineId, machineName),
             retries: 0, reconnectTimer: 0, raf: 0, shellMode: null, pendingBanner: false, bannerTimer: 0,
             promptShowing: false, claude: null,
             loginScanTimer: 0, claudeLoginUrl: null, awaitingLoginCode: false, loginBanner: null };
@@ -165,7 +168,9 @@
         const { id, machine } = state;
         const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         // The pane id names the machine's tmux session, so this pane's reconnects reattach to the same shell.
-        const machineId = await machineIdOf(machine);
+        // The identity was resolved when the pane was opened and rides on its state — re-resolving it here
+        // would let a reconnect land on a different machine if a name had moved in between.
+        const machineId = state.machineId;
         const url = `${proto}//${window.location.host}/machines/${encodeURIComponent(machineId)}`
             + `/terminal?pane=${encodeURIComponent(state.paneId)}`;
         const ws = new WebSocket(url);
@@ -226,13 +231,17 @@
     // windows, so a shell moved between the dock and a window is coordinated (a heartbeat keeps the session
     // claimed by whichever document holds it, and only an unheld id is ever reused). Held only in memory, a
     // reload would forget every id and strand the sessions on the host; persisted, a reload reattaches.
-    function claimPaneId(machineName) {
-        const onScreen = [..._terminals.values()].filter((s) => s.machine === machineName).map((s) => s.paneId);
-        return VaierPanes.claim(machineName, onScreen);
+    // Owned per machine IDENTITY (§6.22), so a rename cannot lose the shells open on that machine and two
+    // machines sharing a name cannot be handed each other's session. The name travels alongside for one
+    // purpose only: moving a session filed under it before identities existed.
+    function claimPaneId(machineId, machineName) {
+        return VaierPanes.claim(machineId, machineName);
     }
 
     // The shell for this pane has been ended for good, so stop owning its id.
-    function releasePaneId(machineName, paneId) { VaierPanes.release(machineName, paneId); }
+    function releasePaneId(machineId, paneId, machineName) {
+        VaierPanes.release(machineId, paneId, machineName);
+    }
 
     // On a reconnect, wait for the server's shell-mode frame before writing the banner. If it never comes
     // (an older server), fall back to a neutral banner that claims no continuity it can't prove.
@@ -419,7 +428,7 @@
         if (s.ws && s.ws.readyState === WebSocket.OPEN) {
             try { s.ws.send(JSON.stringify({ type: 'end-shell' })); } catch (e) { /* best effort */ }
         }
-        releasePaneId(s.machine, s.paneId);
+        releasePaneId(s.machineId, s.paneId, s.machine);
         if (s.ws) try { s.ws.onclose = null; s.ws.close(); } catch (e) { /* ignore */ }
         if (s.term) try { s.term.dispose(); } catch (e) { /* ignore */ }
         if (s.pane && s.pane.parentNode) s.pane.parentNode.removeChild(s.pane);
@@ -463,11 +472,11 @@
     // wherever they like, and have several of at once. The window reattaches to this exact tmux session (its id
     // travels in the URL), so nothing is lost. Opened from the tab-menu click, which is the user gesture a
     // browser needs to let window.open through; if it is blocked anyway, the pane stays put and says so.
-    async function popOut(id) {
+    function popOut(id) {
         const s = _terminals.get(id);
         if (!s) return;
         const url = 'terminal.html?machine=' + encodeURIComponent(s.machine)
-            + '&id=' + encodeURIComponent(await machineIdOf(s.machine))
+            + '&id=' + encodeURIComponent(s.machineId)
             + '&pane=' + encodeURIComponent(s.paneId);
         // `popup` drops the browser's tab strip and address bar; the pane's own id names the window so a
         // second pop-out of the same shell focuses its window rather than opening another.

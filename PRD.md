@@ -1840,17 +1840,35 @@ missing or malformed does not load, rather than coming back as a stranger to its
   Explorer's Open shell, the dock's pop-out, the window's own Duplicate), and the name stays for what a
   name is for: the title, the header and the tooltips. A window opened without an id (a bookmark from
   before) resolves it from `/machines` once, writes it into its own URL, and says plainly when the name is
-  no longer in the fleet. **Pane ids are still keyed by machine name** — deliberately, since re-keying
-  them by identity re-mints every primary and strands the tmux sessions currently running; a rename still
-  orphans a live shell, which is the same bug class and the next step here.
+  no longer in the fleet. **Pane ids were still keyed by machine name** at this point — deliberately, since
+  re-keying them naively re-mints every primary and strands the tmux sessions running; they moved to
+  identity, with a migration, in the final slice below.
 
 #### Done — the refactor is complete (2026-07-28)
 
 Every machine record, every REST path, every read feed and the whole browser address a machine by its
-`MachineId`. **Machine names need not be unique**, which was the point. Two things are name-shaped on
-purpose and documented as such: terminal **pane ids** (re-keying them strands the tmux sessions running
-now, so a rename still orphans a live shell — the next step here), and the pre-§6.22 **shell bookmark**
-fallback, which resolves a name only when given no id and refuses to guess between two matches.
+`MachineId`. **Machine names need not be unique**, which was the point.
+
+**Shell sessions travel by identity too ✅ (2026-07-28) — the last name-keyed thing in Vaier.** A shell is
+a tmux session that deliberately outlives its WebSocket, and the browser is the only thing that can ever
+end one, so `terminal-panes.js` owning those ids under a machine's *name* meant a rename lost every shell
+open on that machine: fresh ids minted under the new name, and the old sessions left running on the host
+with nothing to reach or kill them by. Two machines sharing a name would likewise have handed one
+machine's session to the other. `claim`/`primary`/`adopt`/`release` key on the `MachineId` now, and the
+pop-out window's OS-level window name does too — named by the display name, a rename opened a *second*
+window onto a machine whose first window was holding the live session.
+
+**Re-keying alone would have been the bug, not the fix**, which is why this waited for its own slice:
+every session running at deploy time is filed under a name, so the first lookup by identity would find
+nothing, mint a fresh id, and abandon a live session. `migrateLegacyName` moves a machine's entries across
+the first time it is asked about — once, and never over what the identity already holds, because that is
+the newer truth. The name is passed in for that and nothing else. A window opened from a pre-identity
+bookmark claims its pane only *after* resolving its identity: claiming at parse time would file the
+session under `null`, where every such window shares one bucket.
+
+**One thing stays name-shaped, and it is not machinery:** the pre-§6.22 **shell bookmark** fallback
+resolves a name when given no id, and **refuses to guess** between two matches rather than open a shell on
+the wrong host.
 
 **No config migration is outstanding.** The stores' on-disk shapes did not change in this pass — peers and
 LAN servers already carried `id:` from the earlier slices, and `ignoreKey` was deliberately left alone so
