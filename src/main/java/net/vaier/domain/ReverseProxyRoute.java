@@ -704,6 +704,31 @@ public class ReverseProxyRoute {
             .map(LanServer::name);
     }
 
+    /**
+     * The identity of the machine this route's backend runs on: a LAN server bearing its address, a VPN
+     * peer whose tunnel address it is, or the Vaier server for anything else (its own hub routes, and a
+     * backend on the Docker bridge). Empty when nothing bears the address — a route left pointing at a
+     * machine that has since gone belongs to no machine, and saying so is better than guessing.
+     *
+     * <p>The decision is here rather than in the view assembler because it is the same question
+     * "whose service is this?" the publishable feed answers, and answering it two ways is how the same
+     * service came to appear under two different machines on two different pages.
+     */
+    public Optional<MachineId> hostMachineId(List<PeerConfiguration> peers, List<LanServer> lanServers,
+                                             MachineId vaierServerId) {
+        if (isLanService) {
+            return lanServers.stream()
+                .filter(s -> address.equals(s.lanAddress()))
+                .findFirst()
+                .map(LanServer::machineId);
+        }
+        return peers.stream()
+            .filter(p -> address.equals(p.ipAddress()))
+            .findFirst()
+            .map(PeerConfiguration::machineId)
+            .or(() -> Optional.ofNullable(vaierServerId));
+    }
+
     public String directUrl(String callerIp, List<PeerConfiguration> peers, List<VpnClient> vpnClients) {
         if (directUrlDisabled) return null;
         if (callerIp == null || callerIp.isBlank()) return null;

@@ -1961,9 +1961,43 @@ What is left is one step — the payoff step:
    name→identity lookup, which re-read the fleet and matched on the name the operator had just typed — is
    **deleted**. Nothing in the browser resolves a machine by name any more.
 
-   2g. **Then the guard, and the payoff.** `Machine.nameIsTaken`, `Machine.hasSameName` and the four
-   uniqueness checks in `VpnService`/`LanServerService` go, and **machine names stop needing to be
-   unique**.
+   2g. **The remaining feeds carry identities ✅ (2026-07-28).** `/docker-services/peers` and
+   `/docker-services/lan-servers` name their machine by `machineId`, so the Explorer's container cache is
+   keyed by the same thing the tree stands on and `peerDisplayName` — the crossing from a WireGuard peer id
+   to a display name — is **deleted**. `/published-services/discover` carries the identity of the machine a
+   route's backend runs on, decided in the domain (`ReverseProxyRoute.hostMachineId`) rather than
+   re-derived in JS from display names, which is how one service could appear under two different machines
+   on two different pages. The publishable feed carries it too, so `PublishableService.ownerMachineName`
+   (plus the Vaier-server-name and address→name maps that existed only to feed it) becomes
+   `belongsTo(MachineId)` — **the last `Machine.hasSameName` consumer**. `/machines` marks the Vaier
+   server (`vaierServer: true`), retiring six comparisons against the literal string `"Vaier server"`: a
+   name doing an identity's job, which stopped recognising the machine the moment someone renamed it. That
+   lookup is **guarded** — it reads config and shells into the WireGuard container, and a failure to label
+   one machine must not blank the whole fleet list. `LanServerView` carries `relayMachineId` beside
+   `relayPeerName`, so the map joins a LAN server to its relay by identity, and the scan's candidate rows
+   resolve their relay through the peer id instead of fuzzy-matching names.
+
+   **Image-update verdicts were name-scoped, and that was two bugs waiting.** `ScopedImage` keyed
+   "this image on this machine" by machine **name**, so two machines sharing one would have collapsed into
+   a single verdict — one of them silently stops being watched — and, because consecutive sweeps are diffed
+   to find what has *newly* gone stale, a rename would have read as every image on that machine going stale
+   at once and mailed the operator about it. The key is a `MachineId` now and the display name is supplied
+   at the moment the alert is written (`ScopedImage.label(name)`, `ImageUpdateRollup(images, machineNames)`)
+   — the same "a name is presentation, passed in, never held" rule the survival kit and the backup mails
+   follow.
+
+   2h. **The guard is gone, and machine names need not be unique ✅ (2026-07-28) — the payoff.**
+   `Machine.nameIsTaken`, `Machine.hasSameName`, the four uniqueness checks in
+   `VpnService`/`LanServerService` and both `otherMachineNames` helpers are **deleted**. Two machines may
+   now be called "NAS", and the reserved `"Vaier server"` name is reserved no longer. Nothing is keyed to a
+   label: identity is a `MachineId`, the peer id (a config directory, so genuinely unique) is still
+   deduplicated by `PeerId.generate`, and a duplicate name buys a machine nothing but the name.
+
+   **One thing is deliberately left name-shaped.** `terminal-window.js` still resolves a machine by name
+   when a pre-§6.22 bookmark supplies no `id` — but it now **refuses to guess**: more than one match and it
+   says so rather than opening a shell, because a shell on the wrong host is the one outcome worse than no
+   shell. Terminal *pane* ids also stay name-keyed (see the fourth defect above), so a rename still orphans
+   a live shell; re-keying them re-mints every primary and strands the tmux sessions running now.
 
 Then: run the hex checker over the whole range, sync `README.md` and `UBIQUITOUS_LANGUAGE.md`, and
 migrate. **The migration is by hand, no migration code** — back up `vaier/config/` first, and migrate the

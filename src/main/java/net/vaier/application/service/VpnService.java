@@ -455,14 +455,14 @@ public class VpnService implements
             net.vaier.domain.Cidr.validateLanCidr(lanCidr);
         }
         MachineType resolvedType = peerType != null ? peerType : MachineType.defaultType();
-        // Read the peer configs once (a filesystem scan) and reuse for both the name-collision
-        // check and id generation.
+        // Read the peer configs once (a filesystem scan), for id generation.
         List<ForGettingPeerConfigurations.PeerConfiguration> allPeers = peerConfigProvider.getAllPeerConfigs();
-        // #284: machine names are unique across Vaier — a new peer may not reuse the name of any
-        // existing peer or LAN server. Checked before any key/IP/state is created.
-        if (Machine.nameIsTaken(name, otherMachineNames(allPeers, null))) {
-            throw new ConflictException("A machine named \"" + name.trim() + "\" already exists");
-        }
+        // A machine's name no longer has to be free (§6.22): it is a label, and every record that used to
+        // hang off it hangs off a MachineId. Two houses may each have a "NAS"; Vaier tells them apart
+        // because it never told them apart by name in the first place.
+        //
+        // The peer ID still must be unique — it is the config directory — and PeerId.generate deduplicates
+        // it below. That is a filesystem constraint, not an opinion about what an operator may call things.
         // The id is the slug of the operator-typed name, deduplicated against existing peers and
         // frozen for the life of the peer (its config directory name). The typed name is kept
         // verbatim as the editable display label.
@@ -595,39 +595,13 @@ public class VpnService implements
         // one before the rename to migrate that state to the new label (#312).
         String oldName = peerConfig.name();
 
-        // #284: the resulting *effective* display label must be free across every other machine.
-        // Clearing the name (blank newName) reverts the peer to its humanised-id fallback, which is
-        // itself a label subject to the uniqueness rule — so check that fallback too, never skip it.
-        String effectiveLabel = (newName == null || newName.isBlank()) ? PeerId.display(peerId) : newName;
-        if (Machine.nameIsTaken(effectiveLabel, otherMachineNames(peerConfigProvider.getAllPeerConfigs(), peerId))) {
-            throw new ConflictException("A machine named \"" + effectiveLabel.trim() + "\" already exists");
-        }
-
+        // No collision check: a display name may be anything, including something another machine is
+        // already called. Nothing is keyed to it.
         forUpdatingPeerConfigurations.updateName(peerId, newName);
         log.info("Set display name of peer {} to '{}'", peerId, newName);
     }
 
 
-    /**
-     * Names of every machine Vaier knows about — VPN peers and LAN servers — except the peer with
-     * id {@code excludePeerId} (pass null to exclude nothing). The caller passes the already-read
-     * peer configs so the create/rename path scans the peer files only once; LAN-server names are
-     * read raw via {@code ForPersistingLanServers} (no anchor resolution — names are all we need).
-     * Orchestration only: the domain ({@link Machine#nameIsTaken}) decides whether a candidate
-     * name is free across all of Vaier (#284).
-     */
-    private List<String> otherMachineNames(
-            List<ForGettingPeerConfigurations.PeerConfiguration> peers, String excludePeerId) {
-        Stream<String> peerNames = peers.stream()
-            .filter(p -> excludePeerId == null || !p.id().equals(excludePeerId))
-            .map(ForGettingPeerConfigurations.PeerConfiguration::name);
-        Stream<String> lanServerNames = forPersistingLanServers.getAll().stream()
-            .map(LanServer::name);
-        // The Vaier server host is a machine too (#311); its canonical name is reserved so an
-        // operator can never create a peer that shadows it.
-        return Stream.concat(Stream.concat(peerNames, lanServerNames),
-            Stream.of(net.vaier.domain.LanAnchor.VAIER_SERVER_NAME)).toList();
-    }
 
     private String findNextAvailableIp() throws IOException {
         // Service-side I/O: collect every peer's assigned tunnel IP from its .conf on disk.

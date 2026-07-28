@@ -13,7 +13,14 @@ public interface ForDiscoveringPeerContainers {
 
     List<PeerContainers> discoverAll();
 
+    /**
+     * @param machineId the identity of the machine these containers are on, so a consumer can file them
+     *                  against the machine rather than against whatever it is currently called. Null only
+     *                  for a live WireGuard peer with no stored config — it is in no registry, so it has
+     *                  no identity to report and inventing one would join it to nothing.
+     */
     record PeerContainers(
+            String machineId,
             String peerName,
             String vpnIp,
             String status,

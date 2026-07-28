@@ -1,5 +1,6 @@
 package net.vaier.adapter.driven;
 
+import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.port.ForDiscoveringLanServerContainers.LanServerContainers;
 import org.junit.jupiter.api.Test;
 
@@ -13,7 +14,8 @@ class InMemoryLanServerScrapeCacheTest {
     private final InMemoryLanServerScrapeCache cache = new InMemoryLanServerScrapeCache();
 
     private static LanServerContainers containers(String name, String status) {
-        return new LanServerContainers(name, "192.168.3.50", 2375, "apalveien5", status, List.of());
+        return new LanServerContainers(TestMachineIds.of(name).value(), name, "192.168.3.50", 2375,
+            "apalveien5", status, List.of());
     }
 
     @Test

@@ -1,6 +1,7 @@
 package net.vaier.domain;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * The images that became out of date in one sweep, and how that reads as an email to admins.
@@ -13,10 +14,23 @@ import java.util.List;
  * <p>The mail says what Vaier saw and stops. It never offers to pull: Vaier is read-only about containers, and
  * the operator's move is theirs.
  *
- * @param images the images-on-a-machine newly found to have an update available, in the order they should be
- *               listed
+ * @param images       the images-on-a-machine newly found to have an update available, in the order they
+ *                     should be listed
+ * @param machineNames what to call each machine, by identity. Passed in rather than held on
+ *                     {@link ScopedImage}, which is a map key diffed across sweeps: a display name in
+ *                     that key would make a rename read as every image on the machine going stale at once.
+ *                     A machine missing from this map reads as its identity, which is ugly on purpose.
  */
-public record ImageUpdateRollup(List<ScopedImage> images) {
+public record ImageUpdateRollup(List<ScopedImage> images, Map<String, String> machineNames) {
+
+    /** A rollup with no names to hand — every machine then reads as its own identity. */
+    public ImageUpdateRollup(List<ScopedImage> images) {
+        this(images, Map.of());
+    }
+
+    private String nameOf(ScopedImage image) {
+        return machineNames == null ? null : machineNames.get(image.machineId());
+    }
 
     /** Whether there is anything to say. A sweep that changed nothing sends no mail at all. */
     public boolean worthSending() {
@@ -30,7 +44,7 @@ public record ImageUpdateRollup(List<ScopedImage> images) {
      */
     public String subject() {
         if (images.size() == 1) {
-            return "[Vaier] Update available: " + images.get(0).label();
+            return "[Vaier] Update available: " + images.get(0).label(nameOf(images.get(0)));
         }
         return "[Vaier] Update available: " + images.size() + " images";
     }
@@ -46,7 +60,7 @@ public record ImageUpdateRollup(List<ScopedImage> images) {
             ? "Update available for an image running in your fleet:\n\n"
             : "Update available for images running in your fleet:\n\n");
         for (ScopedImage image : images) {
-            body.append("  • ").append(image.label()).append("\n");
+            body.append("  • ").append(image.label(nameOf(image))).append("\n");
         }
         body.append("\nThe registry now serves a different digest for the tag each container runs.\n");
         body.append("Vaier does not pull or restart anything — updating is your call.\n");

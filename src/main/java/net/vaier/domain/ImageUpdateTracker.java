@@ -58,7 +58,9 @@ public class ImageUpdateTracker {
         }
 
         lastKnown.keySet().removeIf(scoped -> !verdicts.containsKey(scoped));
-        newlyOutOfDate.sort(Comparator.comparing(ScopedImage::label));
+        // Stable order for the mail. By identity then image, because the machine's NAME is not held here —
+        // it is supplied when the alert is written, so it is not available to sort on.
+        newlyOutOfDate.sort(Comparator.comparing(ScopedImage::machineId).thenComparing(ScopedImage::image));
         return newlyOutOfDate;
     }
 

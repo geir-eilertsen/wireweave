@@ -1,5 +1,7 @@
 package net.vaier.application.service;
 
+import net.vaier.domain.PeerId;
+import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.port.ForDiscoveringPeerContainers.PeerContainers;
 import net.vaier.domain.PublishableService;
 import net.vaier.domain.PublishableService.PublishableSource;
@@ -85,13 +87,15 @@ class ContainerServiceTest {
         // scrape in its own adapter — both real infrastructure fed by the same mocks, so the end-to-end
         // flows behave exactly as in production. One store instance backs the write side and the three
         // read ports.
-        var snapshotStore = new net.vaier.adapter.driven.InMemoryContainerSnapshotStore(VAIER_NETWORK, GATEWAY_IP);
+        var snapshotStore = new net.vaier.adapter.driven.InMemoryContainerSnapshotStore(
+            VAIER_NETWORK, GATEWAY_IP, () -> TestMachineIds.of("Vaier server"));
         var lanServerDiscovery =
             new net.vaier.adapter.driven.LanServerContainerDiscoveryAdapter(forGettingLanServers, forGettingServerInfo);
         service = new ContainerService(forGettingServerInfo, forGettingVpnClients,
             forResolvingPeerNames, forGettingPeerConfigurations,
             forResolvingRegistryDigest, forPublishingEvents, tracker, clock,
-            snapshotStore, snapshotStore, snapshotStore, snapshotStore, lanServerDiscovery);
+            snapshotStore, snapshotStore, snapshotStore, snapshotStore, lanServerDiscovery,
+            () -> TestMachineIds.of("Vaier server"));
     }
 
     // --- Update available (#57) ---
@@ -104,7 +108,7 @@ class ContainerServiceTest {
 
     /** An image on the Vaier server — the machine the local-container scrape reports under. */
     private static ScopedImage onVaierServer(String image) {
-        return new ScopedImage("Vaier server", image);
+        return new ScopedImage(TestMachineIds.of("Vaier server").value(), image);
     }
 
     @Test
@@ -179,7 +183,8 @@ class ContainerServiceTest {
         service.refresh();
 
         assertThat(service.sweepImageUpdates())
-            .containsEntry(new ScopedImage("Apalveien 5", "vaultwarden/server:latest"),
+            .containsEntry(new ScopedImage(TestMachineIds.of("Apalveien 5").value(),
+                    "vaultwarden/server:latest"),
                 UpdateAvailability.UPDATE_AVAILABLE);
     }
 
@@ -463,6 +468,10 @@ class ContainerServiceTest {
         assertThat(result).hasSize(1);
         assertThat(result.get(0).status()).isEqualTo("OK");
         assertThat(result.get(0).peerName()).isEqualTo("alice");
+        // The scrape says whose containers these are by identity. Without it the browser had to file them
+        // under a display name, which meant crossing from an identity on every read and getting an empty
+        // list for any machine whose two names disagreed by a character.
+        assertThat(result.get(0).machineId()).isEqualTo(TestMachineIds.of("alice").value());
         assertThat(result.get(0).vpnIp()).isEqualTo("10.13.13.2");
         assertThat(result.get(0).containers()).isSameAs(containers);
     }
@@ -936,7 +945,9 @@ class ContainerServiceTest {
     }
 
     private PeerConfiguration peerConfig(String name, String ip, MachineType type) {
-        return new PeerConfiguration(name, ip, "", type, null);
+        // A stable identity per name, so a test can stub the scrape and assert on the id it files under.
+        return new PeerConfiguration(name, PeerId.display(name), ip, "", type, null, null, null, null,
+            null, TestMachineIds.of(name));
     }
 
     // --- discoverAllLanServerContainers (#177, #184) ---

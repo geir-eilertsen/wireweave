@@ -15,6 +15,7 @@ import net.vaier.domain.ImageUpdateSweep;
 import net.vaier.domain.ImageUpdateSweep.MachineContainers;
 import net.vaier.domain.ImageUpdateTracker;
 import net.vaier.domain.LanAnchor;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.MachineType;
 import net.vaier.domain.ScopedImage;
 import net.vaier.domain.UpdateAvailability;
@@ -36,6 +37,7 @@ import net.vaier.domain.port.ForGettingVpnClients;
 import net.vaier.domain.port.ForPublishingEvents;
 import net.vaier.domain.port.ForResolvingPeerNames;
 import net.vaier.domain.port.ForResolvingRegistryDigest;
+import net.vaier.domain.port.ForResolvingVaierServerIdentity;
 import net.vaier.domain.port.ForStoringContainerSnapshots;
 import org.springframework.stereotype.Service;
 
@@ -72,6 +74,9 @@ public class ContainerService implements
     private final ForDiscoveringPeerContainers peerContainers;
     private final ForGettingVaierServerDockerServices vaierServerDockerServices;
     private final ForDiscoveringLanServerContainers lanServerContainers;
+    // The Vaier server's own identity — the one machine that appears in no store, so its containers have
+    // no other way to be scoped to a host.
+    private final ForResolvingVaierServerIdentity vaierServerIdentity;
 
     /**
      * Where a settled update-available verdict is pushed. The container payloads already ride this
@@ -95,7 +100,8 @@ public class ContainerService implements
                             ForDiscoveringVaierServerContainers vaierServerContainers,
                             ForDiscoveringPeerContainers peerContainers,
                             ForGettingVaierServerDockerServices vaierServerDockerServices,
-                            ForDiscoveringLanServerContainers lanServerContainers) {
+                            ForDiscoveringLanServerContainers lanServerContainers,
+                            ForResolvingVaierServerIdentity vaierServerIdentity) {
         this.forGettingServerInfo = forGettingServerInfo;
         this.forGettingVpnClients = forGettingVpnClients;
         this.forResolvingPeerNames = forResolvingPeerNames;
@@ -115,6 +121,7 @@ public class ContainerService implements
         this.peerContainers = peerContainers;
         this.vaierServerDockerServices = vaierServerDockerServices;
         this.lanServerContainers = lanServerContainers;
+        this.vaierServerIdentity = vaierServerIdentity;
     }
 
     /** Cache read — backed by {@link #refresh()}; the launchpad never scrapes Docker on-thread. */
@@ -181,16 +188,19 @@ public class ContainerService implements
     }
 
     /**
-     * The Vaier server's own containers and its server peers', each group carrying the machine it came from so
-     * the sweep can scope every verdict to a host. The Vaier server's containers sit under the reserved name
-     * {@link LanAnchor#VAIER_SERVER_NAME}; each peer's under its own peer name. LAN-server containers are not
-     * swept yet.
+     * The Vaier server's own containers and its server peers', each group carrying the IDENTITY of the
+     * machine it came from so the sweep can scope every verdict to a host. A peer in no machine registry has
+     * no identity, so its containers are not swept — there is nothing to scope a verdict to, and scoping it
+     * to a name would fold two machines' verdicts together the moment they shared one. LAN-server containers
+     * are not swept yet.
      */
     private List<MachineContainers> everyContainerVaierCanSee() {
         List<MachineContainers> machines = new ArrayList<>();
-        machines.add(new MachineContainers(LanAnchor.VAIER_SERVER_NAME, snapshotStore.vaierServerContainers()));
-        snapshotStore.peerContainers().forEach(peer ->
-            machines.add(new MachineContainers(peer.peerName(), peer.containers())));
+        machines.add(new MachineContainers(vaierServerIdentity.identity().value(),
+            snapshotStore.vaierServerContainers()));
+        snapshotStore.peerContainers().stream()
+            .filter(peer -> peer.machineId() != null)
+            .forEach(peer -> machines.add(new MachineContainers(peer.machineId(), peer.containers())));
         return machines;
     }
 
@@ -235,9 +245,16 @@ public class ContainerService implements
             String vpnIp = client.vpnIp();
             String peerName = forResolvingPeerNames.resolvePeerNameByIp(vpnIp);
 
-            MachineType peerType = forGettingPeerConfigurations.getPeerConfigByIp(vpnIp)
+            var storedConfig = forGettingPeerConfigurations.getPeerConfigByIp(vpnIp);
+            MachineType peerType = storedConfig
                     .map(ForGettingPeerConfigurations.PeerConfiguration::peerType)
                     .orElse(MachineType.UBUNTU_SERVER);
+            // Read, never minted: a live WireGuard peer with no config on disk is in no machine registry,
+            // so it reports no identity rather than a fabricated one that would join to nothing.
+            String machineId = storedConfig
+                    .map(ForGettingPeerConfigurations.PeerConfiguration::machineId)
+                    .map(MachineId::value)
+                    .orElse(null);
 
             if (!peerType.isVpnPeer() || !peerType.isServerType()) {
                 log.debug("Skipping Docker discovery for non-server peer {} ({}) of type {}", peerName, vpnIp, peerType);
@@ -246,7 +263,7 @@ public class ContainerService implements
 
             if (!client.isConnected()) {
                 log.debug("Skipping Docker discovery for disconnected peer {} ({})", peerName, vpnIp);
-                results.add(new PeerContainers(peerName, vpnIp, "UNREACHABLE", List.of(), false, WireguardClientImage.EXPECTED));
+                results.add(new PeerContainers(machineId, peerName, vpnIp, "UNREACHABLE", List.of(), false, WireguardClientImage.EXPECTED));
                 continue;
             }
 
@@ -254,10 +271,10 @@ public class ContainerService implements
                 Server server = new Server(vpnIp, 2375, false);
                 List<DockerService> containers = forGettingServerInfo.getServicesWithExposedPorts(server);
                 log.info("Discovered {} containers on peer {} ({})", containers.size(), peerName, vpnIp);
-                results.add(new PeerContainers(peerName, vpnIp, "OK", containers, WireguardClientImage.anyOutdated(containers), WireguardClientImage.EXPECTED));
+                results.add(new PeerContainers(machineId, peerName, vpnIp, "OK", containers, WireguardClientImage.anyOutdated(containers), WireguardClientImage.EXPECTED));
             } catch (Exception e) {
                 log.warn("Failed to query Docker on peer {} ({}): {}", peerName, vpnIp, e.getMessage());
-                results.add(new PeerContainers(peerName, vpnIp, "UNREACHABLE", List.of(), false, WireguardClientImage.EXPECTED));
+                results.add(new PeerContainers(machineId, peerName, vpnIp, "UNREACHABLE", List.of(), false, WireguardClientImage.EXPECTED));
             }
         }
 

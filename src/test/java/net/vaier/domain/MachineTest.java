@@ -92,51 +92,24 @@ class MachineTest {
             .isEqualTo(DeviceCategory.PRINTER);
     }
 
-    // --- hasSameName: the one rule for when two machine names mean the same machine ---
+    // --- names are labels: two machines may wear the same one (§6.22) ---
 
     @Test
-    void hasSameName_isCaseInsensitiveAndIgnoresSurroundingWhitespace() {
-        assertThat(Machine.hasSameName("NAS", "  nas ")).isTrue();
-    }
+    void twoMachinesMayShareAName_andAreStillDifferentMachines() {
+        // What the whole identity refactor was for. Machine.nameIsTaken and Machine.hasSameName are gone:
+        // they existed because records were keyed by name, so a duplicate silently overwrote or mis-routed.
+        // Everything is keyed by MachineId now, so a name is free to be whatever an operator finds useful —
+        // and two houses may each have a "NAS" without Vaier ever confusing one for the other.
+        Machine here = new Machine(MachineId.generate(), "NAS", MachineType.LAN_SERVER,
+            null, null, null, null, null, null, null,
+            "192.168.3.0/24", "192.168.3.50", true, 2375, DeviceCategory.NAS, null);
+        Machine there = new Machine(MachineId.generate(), "NAS", MachineType.LAN_SERVER,
+            null, null, null, null, null, null, null,
+            "192.168.1.0/24", "192.168.1.50", true, 2375, DeviceCategory.NAS, null);
 
-    @Test
-    void hasSameName_falseForDifferentNames() {
-        assertThat(Machine.hasSameName("nas", "media-nas")).isFalse();
-    }
-
-    @Test
-    void hasSameName_falseWhenEitherIsNullOrBlank() {
-        assertThat(Machine.hasSameName(null, "nas")).isFalse();
-        assertThat(Machine.hasSameName("nas", null)).isFalse();
-        assertThat(Machine.hasSameName("  ", "nas")).isFalse();
-    }
-
-    // --- nameIsTaken: machine names are unique across Vaier (#284) ---
-
-    @Test
-    void nameIsTaken_trueWhenAnotherMachineHasTheSameName() {
-        assertThat(Machine.nameIsTaken("nas", List.of("router", "nas", "printer"))).isTrue();
-    }
-
-    @Test
-    void nameIsTaken_falseWhenNameIsFree() {
-        assertThat(Machine.nameIsTaken("media-nas", List.of("router", "nas"))).isFalse();
-    }
-
-    @Test
-    void nameIsTaken_isCaseInsensitiveAndIgnoresSurroundingWhitespace() {
-        assertThat(Machine.nameIsTaken("  NAS ", List.of("nas"))).isTrue();
-    }
-
-    @Test
-    void nameIsTaken_nullOrBlankCandidateNeverCollides() {
-        assertThat(Machine.nameIsTaken(null, List.of("nas"))).isFalse();
-        assertThat(Machine.nameIsTaken("   ", List.of("nas"))).isFalse();
-    }
-
-    @Test
-    void nameIsTaken_ignoresNullAndBlankExistingNames() {
-        assertThat(Machine.nameIsTaken("nas", java.util.Arrays.asList(null, "", "  "))).isFalse();
+        assertThat(here.name()).isEqualTo(there.name());
+        assertThat(here.id()).isNotEqualTo(there.id());
+        assertThat(here).isNotEqualTo(there);
     }
 
     // --- SSH-access default derivation (#307) ---

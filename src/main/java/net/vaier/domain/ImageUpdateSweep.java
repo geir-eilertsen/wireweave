@@ -34,7 +34,13 @@ public final class ImageUpdateSweep {
      *                   containers, or a server peer's name
      * @param containers the containers scraped from that machine
      */
-    public record MachineContainers(String machine, List<DockerService> containers) {}
+    /**
+     * One machine's containers for the sweep.
+     *
+     * @param machineId the machine's identity — what each verdict is scoped to, so a rename between sweeps
+     *                  does not read as every image on that machine having just gone stale
+     */
+    public record MachineContainers(String machineId, List<DockerService> containers) {}
 
     /**
      * Judge every container's image, keyed by the {@link ScopedImage} it is — image <b>and</b> the machine it
@@ -89,7 +95,7 @@ public final class ImageUpdateSweep {
                     continue;
                 }
                 String image = container.image();
-                ScopedImage scoped = new ScopedImage(machine.machine(), image);
+                ScopedImage scoped = new ScopedImage(machine.machineId(), image);
                 var reference = ImageReference.parse(image);
                 if (reference.isEmpty() || container.imageDigest() == null) {
                     verdicts.put(scoped, UpdateAvailability.UNKNOWN);

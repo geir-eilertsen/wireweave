@@ -51,6 +51,7 @@ import net.vaier.domain.port.ForResolvingDns;
 import net.vaier.domain.port.ForResolvingPeerNames;
 import net.vaier.domain.port.ForResolvingServerLanCidr;
 import net.vaier.domain.port.ForResolvingServiceGroup;
+import net.vaier.domain.port.ForResolvingVaierServerIdentity;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -95,6 +96,9 @@ public class PublishingService implements
     private final ForProbingServiceVersion forProbingServiceVersion;
     private final ForCheckingLanReachability forCheckingLanReachability;
     private final ForResolvingServiceGroup forResolvingServiceGroup;
+    // The Vaier server's own identity — the one machine that appears in no store, so it cannot be found
+    // by searching for it. Needed to attribute a hub route to the machine it actually runs on.
+    private final ForResolvingVaierServerIdentity vaierServerIdentity;
 
     private volatile List<PublishedServiceUco> cache = null;
 
@@ -126,7 +130,8 @@ public class PublishingService implements
                              ForGettingVaierServerDockerServices forGettingVaierServerDockerServices,
                              ForProbingServiceVersion forProbingServiceVersion,
                              ForCheckingLanReachability forCheckingLanReachability,
-                             ForResolvingServiceGroup forResolvingServiceGroup) {
+                             ForResolvingServiceGroup forResolvingServiceGroup,
+                             ForResolvingVaierServerIdentity vaierServerIdentity) {
         this.forPersistingReverseProxyRoutes = forPersistingReverseProxyRoutes;
         this.forGettingServerInfo = forGettingServerInfo;
         this.forPersistingDnsRecords = forPersistingDnsRecords;
@@ -147,6 +152,7 @@ public class PublishingService implements
         this.forProbingServiceVersion = forProbingServiceVersion;
         this.forCheckingLanReachability = forCheckingLanReachability;
         this.forResolvingServiceGroup = forResolvingServiceGroup;
+        this.vaierServerIdentity = vaierServerIdentity;
     }
 
     @Override
@@ -302,6 +308,10 @@ public class PublishingService implements
         return new PublishedServiceUco(
             route.displayName(baseDomain, localServices, vpnClients, forResolvingPeerNames, peers),
             route.shortName(baseDomain, vpnClients, forResolvingPeerNames, peers),
+            // Whose machine this service is on, as an identity. The browser used to work it out from the
+            // display name, which put a service under the wrong machine card whenever two names agreed.
+            route.hostMachineId(peers, lanServers, vaierServerIdentity.identity())
+                .map(MachineId::value).orElse(null),
             route.hostDisplayName(vpnClients, forResolvingPeerNames, peers),
             route.lanServerName(lanServers).orElse(null),
             route.serviceLocation(vpnClients, forResolvingPeerNames, peers),
@@ -696,7 +706,8 @@ public class PublishingService implements
                     .filter(p -> existingRoutes.stream()
                         .noneMatch(r -> r.getAddress().equals(peer.vpnIp()) && r.getPort() == p.publicPort()))
                     .filter(p -> !pendingPublicationsService.isPending(peer.vpnIp(), p.publicPort()))
-                    .map(p -> new PublishableService(PublishableSource.PEER, peer.peerName(), peer.vpnIp(), container.containerName(), p.publicPort(), null, false))
+                    .map(p -> new PublishableService(PublishableSource.PEER, peer.machineId(), peer.peerName(),
+                        peer.vpnIp(), container.containerName(), p.publicPort(), null, false))
                 )
             )
             .forEach(publishable::add);
@@ -711,8 +722,9 @@ public class PublishingService implements
                     .filter(p -> existingRoutes.stream()
                         .noneMatch(r -> r.getAddress().equals(host.lanAddress()) && r.getPort() == p.publicPort()))
                     .filter(p -> !pendingPublicationsService.isPending(host.lanAddress(), p.publicPort()))
-                    .map(p -> new PublishableService(PublishableSource.LAN_SERVER, host.relayPeerName(),
-                        host.lanAddress(), container.containerName(), p.publicPort(), null, false))
+                    .map(p -> new PublishableService(PublishableSource.LAN_SERVER, host.machineId(),
+                        host.relayPeerName(), host.lanAddress(), container.containerName(),
+                        p.publicPort(), null, false))
                 )
             )
             .forEach(publishable::add);
@@ -723,7 +735,8 @@ public class PublishingService implements
 
         Set<String> ignoredKeys = forManagingIgnoredServices.getIgnoredServiceKeys();
         return publishable.stream().distinct()
-            .map(s -> new PublishableService(s.source(), s.peerName(), s.address(), s.containerName(), s.port(), s.rootRedirectPath(), ignoredKeys.contains(s.ignoreKey())))
+            .map(s -> new PublishableService(s.source(), s.machineId(), s.peerName(), s.address(),
+                s.containerName(), s.port(), s.rootRedirectPath(), ignoredKeys.contains(s.ignoreKey())))
             .toList();
     }
 

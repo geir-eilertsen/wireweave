@@ -38,8 +38,12 @@ public class LanServerViewAdapter implements ForGettingLanServers {
         List<PeerConfiguration> peers = forGettingPeerConfigurations.getAllPeerConfigs();
         String serverLanCidr = forResolvingServerLanCidr.resolve().orElse(null);
         return forPersistingLanServers.getAll().stream()
-            .map(s -> new LanServerView(s,
-                LanAnchor.resolve(s.lanAddress(), peers, serverLanCidr).map(LanAnchor::name).orElse(null)))
+            .map(s -> {
+                var anchor = LanAnchor.resolve(s.lanAddress(), peers, serverLanCidr);
+                return new LanServerView(s,
+                    anchor.map(LanAnchor::name).orElse(null),
+                    anchor.flatMap(LanAnchor::relayMachineId).orElse(null));
+            })
             .toList();
     }
 }

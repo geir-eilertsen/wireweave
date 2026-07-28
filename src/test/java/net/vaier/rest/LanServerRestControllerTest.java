@@ -405,7 +405,8 @@ class LanServerRestControllerTest {
         ));
         when(reachabilityUseCase.getReachability("192.168.3.50")).thenReturn(Reachability.OK);
         when(getLanServerScrapeUseCase.getLanServerContainers()).thenReturn(List.of(
-            new LanServerContainers("nas", "192.168.3.50", 2375, "apalveien5", "UNREACHABLE", List.of())));
+            new LanServerContainers(NAS.value(), "nas", "192.168.3.50", 2375, "apalveien5",
+                "UNREACHABLE", List.of())));
 
         var response = controller.list();
 
@@ -419,7 +420,7 @@ class LanServerRestControllerTest {
         ));
         when(reachabilityUseCase.getReachability("192.168.3.50")).thenReturn(Reachability.OK);
         when(getLanServerScrapeUseCase.getLanServerContainers()).thenReturn(List.of(
-            new LanServerContainers("nas", "192.168.3.50", 2375, "apalveien5", "OK", List.of())));
+            new LanServerContainers(NAS.value(), "nas", "192.168.3.50", 2375, "apalveien5", "OK", List.of())));
 
         var response = controller.list();
 

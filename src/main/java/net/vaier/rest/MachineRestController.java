@@ -1,6 +1,7 @@
 package net.vaier.rest;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import net.vaier.application.ClearHostKeyUseCase;
 import net.vaier.application.GetBackupJobsUseCase;
 import net.vaier.application.GetBackupServersUseCase;
@@ -32,11 +33,11 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/machines")
 @RequiredArgsConstructor
+@Slf4j
 public class MachineRestController {
 
     private final GetMachinesUseCase getMachinesUseCase;
@@ -60,9 +61,30 @@ public class MachineRestController {
      */
     @GetMapping
     public List<MachineResponse> list() {
+        // Which machine Vaier is running on, as an identity. The browser used to work this out by
+        // comparing a display name to the literal "Vaier server", which is a name doing an identity's
+        // job: rename the host and Vaier stops recognising itself; let another machine take the name
+        // and it mistakes that one for itself.
+        //
+        // Guarded, because identity-keying turns what used to be a string comparison into a lookup, and
+        // a lookup can fail — resolving the Vaier server reads config and shells into the WireGuard
+        // container. This flag decorates the list; the list itself is the fleet. Losing the whole fleet
+        // view because one machine could not be labelled is much the worse failure of the two.
+        MachineId vaierServer = resolveVaierServerId();
         return getMachinesUseCase.getAllMachines().stream()
-            .map(m -> MachineResponse.from(m, hasStoredCredential(m.id())))
+            .map(m -> MachineResponse.from(m, hasStoredCredential(m.id()), m.id().equals(vaierServer)))
             .toList();
+    }
+
+    /** The Vaier server's identity, or null when it cannot be resolved right now. Never throws. */
+    private MachineId resolveVaierServerId() {
+        try {
+            Machine server = getVaierServerUseCase.getVaierServerMachine();
+            return server == null ? null : server.id();
+        } catch (RuntimeException e) {
+            log.warn("Could not resolve the Vaier server's identity for the machine list: {}", e.getMessage());
+            return null;
+        }
     }
 
     /** Whether a host SSH credential with a secret is stored for this machine. */
@@ -108,14 +130,13 @@ public class MachineRestController {
             .findFirst()
             .orElseThrow(() -> new NotFoundException("Machine not found: " + machineId));
 
-        String vaierServerName = getVaierServerUseCase.getVaierServerMachine().name();
-        Map<String, String> lanServerNameByAddress = machines.stream()
-            .filter(m -> m.lanAddress() != null)
-            .collect(Collectors.toMap(Machine::lanAddress, Machine::name, (a, b) -> a));
-
+        // Which discovered services sit on THIS machine. It used to be resolved by name — the owner's
+        // name matched against the machine's — which needed a Vaier-server name and an
+        // address-to-name map just to do the matching, and answered "a machine called that" where the
+        // question was "this machine". The feed carries the owner's identity now, so the domain answers
+        // it directly and the two-map scaffolding is gone with the last Machine.hasSameName call.
         int publishableCount = (int) getPublishableServicesUseCase.getPublishableServices().stream()
-            .filter(s -> s.ownerMachineName(vaierServerName, lanServerNameByAddress)
-                .map(owner -> Machine.hasSameName(owner, target.name())).orElse(false))
+            .filter(s -> s.belongsTo(target.id()))
             .count();
         boolean hasCredential = hasStoredCredential(target.id());
         boolean alreadyProtected = getBackupJobsUseCase.getBackupJobs().stream()
@@ -241,9 +262,14 @@ public class MachineRestController {
         Integer dockerPort,
         String deviceCategory,
         boolean sshAccess,
-        boolean hasCredential
+        boolean hasCredential,
+        boolean vaierServer
     ) {
         static MachineResponse from(Machine m, boolean hasCredential) {
+            return from(m, hasCredential, false);
+        }
+
+        static MachineResponse from(Machine m, boolean hasCredential, boolean vaierServer) {
             return new MachineResponse(
                 m.id().value(),
                 m.name(),
@@ -261,7 +287,8 @@ public class MachineRestController {
                 m.dockerPort(),
                 m.deviceCategory().name(),
                 m.effectiveSshAccess(),
-                hasCredential
+                hasCredential,
+                vaierServer
             );
         }
     }

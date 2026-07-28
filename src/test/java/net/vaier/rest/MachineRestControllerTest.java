@@ -1,5 +1,6 @@
 package net.vaier.rest;
 
+import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.MachineId;
 import net.vaier.application.ClearHostKeyUseCase;
 import net.vaier.application.GetBackupJobsUseCase;
@@ -104,6 +105,45 @@ class MachineRestControllerTest {
         assertThat(response.get(1).dockerPort()).isEqualTo(2375);
         assertThat(response.get(0).deviceCategory()).isEqualTo("SERVER");
         assertThat(response.get(1).deviceCategory()).isEqualTo("NAS");
+    }
+
+    @Test
+    void list_marksWhichMachineIsTheVaierServer() {
+        // The browser identified the Vaier server by comparing its display name to the literal string
+        // "Vaier server" — in six places. That is a name used as an identity, and it breaks in both
+        // directions: rename the host and Vaier stops recognising itself, or let another machine take
+        // that name and Vaier mistakes it for itself. The backend already knows which machine it is.
+        Machine server = new Machine(mid("vaier"), "Vaier server", MachineType.UBUNTU_SERVER,
+            null, null, null, null, null, null, null,
+            "172.31.0.0/16", "172.31.5.20", true, null, net.vaier.domain.DeviceCategory.SERVER, null);
+        Machine other = new Machine(mid("nas"), "nas", MachineType.LAN_SERVER,
+            null, null, null, null, null, null, null,
+            "192.168.3.0/24", "192.168.3.50", true, 2375, net.vaier.domain.DeviceCategory.NAS, null);
+        when(getMachinesUseCase.getAllMachines()).thenReturn(List.of(server, other));
+        when(getVaierServerUseCase.getVaierServerMachine()).thenReturn(server);
+
+        var response = controller.list();
+
+        assertThat(response.get(0).vaierServer()).isTrue();
+        assertThat(response.get(1).vaierServer()).isFalse();
+    }
+
+    @Test
+    void list_stillReturnsTheFleetWhenTheVaierServerCannotBeResolved() {
+        // Identity-keying turned a string comparison into a lookup, and this one reads config and shells
+        // into the WireGuard container. The flag decorates the list; the list is the fleet. Blanking the
+        // whole fleet view because one machine could not be labelled is much the worse of the two.
+        Machine other = new Machine(mid("nas"), "nas", MachineType.LAN_SERVER,
+            null, null, null, null, null, null, null,
+            "192.168.3.0/24", "192.168.3.50", true, 2375, net.vaier.domain.DeviceCategory.NAS, null);
+        when(getMachinesUseCase.getAllMachines()).thenReturn(List.of(other));
+        when(getVaierServerUseCase.getVaierServerMachine())
+            .thenThrow(new RuntimeException("wireguard container is restarting"));
+
+        var response = controller.list();
+
+        assertThat(response).hasSize(1);
+        assertThat(response.get(0).vaierServer()).isFalse();
     }
 
     @Test
@@ -219,9 +259,9 @@ class MachineRestControllerTest {
         Machine alice = new Machine(mid("alice"), "alice", MachineType.UBUNTU_SERVER, "pk", "10.13.13.2/32",
             "1.2.3.4", "51820", freshHandshake, "1", "1", null, null, true, null, DeviceCategory.SERVER, null);
         when(getMachinesUseCase.getAllMachines()).thenReturn(List.of(alice));
-        when(getVaierServerUseCase.getVaierServerMachine()).thenReturn(Machine.vaierServer(MachineId.generate(), null));
         when(getPublishableServicesUseCase.getPublishableServices()).thenReturn(List.of(
-            new PublishableService(PublishableSource.PEER, "alice", "10.13.13.2", "grafana", 3000, null, false)));
+            new PublishableService(PublishableSource.PEER, mid("alice").value(), "alice",
+                "10.13.13.2", "grafana", 3000, null, false)));
         when(getHostCredentialUseCase.getHostCredential(mid("alice"))).thenReturn(
             Optional.of(new HostCredentialView(mid("alice"), "root", AuthMethod.PASSWORD, true)));
         when(getBackupJobsUseCase.getBackupJobs()).thenReturn(List.of());

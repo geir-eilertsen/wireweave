@@ -1,5 +1,6 @@
 package net.vaier.integration.controller;
 
+import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.port.ForDiscoveringPeerContainers.PeerContainers;
 import net.vaier.domain.DockerService;
 import net.vaier.domain.DockerService.PortMapping;
@@ -126,7 +127,7 @@ class DockerServiceRestControllerIT extends VaierWebMvcIntegrationBase {
     @Test
     void discoverPeerContainers_returnsPeerContainerList() throws Exception {
         when(discoverPeerContainersUseCase.discoverAll()).thenReturn(List.of(
-                new PeerContainers("peer1", "10.13.13.2", "OK", List.of(
+                new PeerContainers(TestMachineIds.of("peer1").value(), "peer1", "10.13.13.2", "OK", List.of(
                         new DockerService("c1", "svc", "img:1.0", "1.0",
                                 List.of(), List.of(), "running")
                 ), false, "lscr.io/linuxserver/wireguard:1.0.20250521-r1-ls110")
@@ -153,7 +154,8 @@ class DockerServiceRestControllerIT extends VaierWebMvcIntegrationBase {
     @Test
     void discoverPeerContainers_returnsUnreachablePeerEntry() throws Exception {
         when(discoverPeerContainersUseCase.discoverAll()).thenReturn(List.of(
-                new PeerContainers("peer2", "10.13.13.3", "UNREACHABLE", List.of(), false, "lscr.io/linuxserver/wireguard:1.0.20250521-r1-ls110")
+                new PeerContainers(TestMachineIds.of("peer2").value(), "peer2", "10.13.13.3", "UNREACHABLE",
+                        List.of(), false, "lscr.io/linuxserver/wireguard:1.0.20250521-r1-ls110")
         ));
 
         mockMvc.perform(get("/docker-services/peers"))

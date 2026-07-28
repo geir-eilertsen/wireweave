@@ -20,6 +20,7 @@ public interface ForDiscoveringLanServerContainers {
     LanServerContainers discoverLanServerContainersForHost(String name);
 
     record LanServerContainers(
+        String machineId,
         String name,
         String lanAddress,
         Integer dockerPort,

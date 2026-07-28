@@ -372,13 +372,15 @@ class ExplorerShellTest {
         // The third case. The Vaier server is the machine rendering this tree: if the operator can see the
         // rail at all, it is up. Probing it would be asking a question we are standing inside the answer to.
         String js = read("explorer-shell.js");
-        assertThat(js).contains("const VAIER_SERVER = 'Vaier server'");   // LanAnchor.VAIER_SERVER_NAME
 
         int from = js.indexOf("function livenessOf(");
         assertThat(from).isPositive();
         String body = js.substring(from, js.indexOf("\n    }", from));
-        // it is answered from the constant, not from a probe or a cache of one
-        assertThat(body).contains("VAIER_SERVER").contains("is-up");
+        // It is answered by recognising the machine, not by probing it — and recognised by IDENTITY, which
+        // /machines marks. It used to be a comparison against the literal name "Vaier server": a name doing
+        // an identity's job, so renaming the host made Vaier stop recognising itself.
+        assertThat(body).contains("isVaierServerMachine(machineId)").contains("is-up");
+        assertThat(js).contains("(S.machines.find((m) => m.vaierServer) || {}).id");
     }
 
     @Test
@@ -567,21 +569,22 @@ class ExplorerShellTest {
     }
 
     @Test
-    void aPublishedService_isFiledUnderTheMachineItRunsOn_byTheRuleTheInfrastructurePageAlreadyUses()
-            throws IOException {
+    void aPublishedService_isFiledUnderTheMachineItRunsOn_byTheBackendsOwnRule() throws IOException {
         // A published service is one thing with three homes: a container on a machine, a Traefik route and a
-        // DNS record. Which machine it belongs to is decided exactly as the Infrastructure page decided it — a LAN
-        // service by its LAN server (falling back to the relay peer when no registered LAN server matches),
-        // and everything else by its host name, with the hub's own routes on the Vaier server. A second rule
-        // here would put the same service under two different machines in two different pages.
+        // DNS record. Which machine it belongs to is a domain decision — ReverseProxyRoute.hostMachineId —
+        // and the feed carries the answer, so the browser matches identities and never re-derives the rule.
+        // It used to re-derive it from display names (LAN server name, else host name, else the literal
+        // "Vaier server"), which is how the same service could end up under two different machines on two
+        // different pages, and under the wrong machine entirely once two machines shared a name.
         String js = read("explorer-shell.js");
-        int from = js.indexOf("function machineOfService(");
+        int from = js.indexOf("const machineOfService =");
         assertThat(from).isPositive();
-        String body = js.substring(from, js.indexOf("\n    }", from));
+        String body = js.substring(from, js.indexOf(";", from));
 
-        assertThat(body).contains("isLanService");
-        assertThat(body).contains("lanServerName").contains("hostName");
-        assertThat(body).contains("VAIER_SERVER");
+        assertThat(body).as("read off the feed, not re-derived").contains("s.machineId");
+        assertThat(body).doesNotContain("lanServerName").doesNotContain("hostName");
+        assertThat(js).as("and matched as an identity")
+            .contains("S.services.filter((s) => machineOfService(s) === machineId)");
     }
 
     @Test
@@ -700,24 +703,22 @@ class ExplorerShellTest {
     }
 
     @Test
-    void aPeersContainers_areFiledUnderItsMachineName_notItsWireGuardDirectoryName() throws IOException {
-        // The three-way identity split, which slice A already met on the stats stream: /docker-services/peers
-        // keys containers by the peer's *id* — the WireGuard directory name ("apalveien5") — while the tree,
-        // /machines and every SSH lookup use the canonical machine name ("Apalveien 5"). Filing containers
-        // under the id would put them under a machine that does not exist in the tree, and every peer would
-        // show an empty `containers` entry while Vaier could see its containers perfectly well.
-        //
-        // The shell holds the peers indexed by WireGuard id (S.peersById, built in loadFleet), and
-        // peerDisplayName is the one crossing from that id to what a person calls the machine.
-        // loadContainers must go through it. (It used to read a separate id -> name map; that map went when
-        // the fleet join moved onto machine identities, but this crossing is still required and still here.)
+    void aPeersContainers_areFiledUnderTheMachinesIdentity() throws IOException {
+        // The three-way identity split that used to bite here: /docker-services/peers keyed its containers
+        // by the peer's *id* — the WireGuard directory name ("apalveien5") — while the tree and /machines
+        // used the canonical machine name ("Apalveien 5"), so filing containers under either meant a
+        // crossing, and one character of disagreement showed a machine with no containers while Vaier could
+        // see them perfectly well. The scrape carries the machine's identity now, so there is no crossing
+        // left to get wrong: the cache is keyed by the same thing the tree stands on.
         String js = read("explorer-shell.js");
         int from = js.indexOf("async function loadContainers(");
         assertThat(from).isPositive();
         String body = js.substring(from, js.indexOf("\n    }", from));
 
-        assertThat(body).as("peer containers must be keyed by machine name, via the peer-id crossing")
-            .contains("peerDisplayName");
+        assertThat(body).as("peer containers are filed by identity").contains("next.set(p.machineId,");
+        assertThat(body).as("LAN-server containers likewise").contains("next.set(l.machineId,");
+        assertThat(body).as("no crossing from a peer id to a display name is needed any more")
+            .doesNotContain("peerDisplayName");
     }
 
     @Test

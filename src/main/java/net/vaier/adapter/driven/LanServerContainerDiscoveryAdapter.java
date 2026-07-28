@@ -58,7 +58,7 @@ public class LanServerContainerDiscoveryAdapter implements ForDiscoveringLanServ
         if (view.relayPeerName() == null) {
             log.debug("Skipping LAN server {} ({}) — not inside any relay peer's lanCidr nor the server LAN CIDR",
                 server.name(), server.lanAddress());
-            return new LanServerContainers(server.name(), server.lanAddress(), server.dockerPort(),
+            return new LanServerContainers(server.machineId().value(), server.name(), server.lanAddress(), server.dockerPort(),
                 null, "UNREACHABLE", List.of());
         }
         // relayPeerName is either a relay peer (scrape hops through its tunnel + LAN forwarding)
@@ -69,12 +69,12 @@ public class LanServerContainerDiscoveryAdapter implements ForDiscoveringLanServ
             List<DockerService> containers = forGettingServerInfo.getServicesWithExposedPorts(target);
             log.info("Discovered {} containers on LAN server {} ({}) via {}",
                 containers.size(), server.name(), server.lanAddress(), view.relayPeerName());
-            return new LanServerContainers(server.name(), server.lanAddress(), server.dockerPort(),
+            return new LanServerContainers(server.machineId().value(), server.name(), server.lanAddress(), server.dockerPort(),
                 view.relayPeerName(), "OK", containers);
         } catch (Exception e) {
             log.warn("Failed to query Docker on LAN server {} ({}): {}",
                 server.name(), server.lanAddress(), e.getMessage());
-            return new LanServerContainers(server.name(), server.lanAddress(), server.dockerPort(),
+            return new LanServerContainers(server.machineId().value(), server.name(), server.lanAddress(), server.dockerPort(),
                 view.relayPeerName(), "UNREACHABLE", List.of());
         }
     }

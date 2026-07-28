@@ -154,11 +154,9 @@ public class LanServerService implements
                 "nor inside the Vaier server's own LAN CIDR. Set lanCidr on a relay peer first " +
                 "(or, on EC2, the server LAN CIDR is auto-detected from instance metadata).");
         }
-        // #284: machine names are unique across Vaier. save() upserts by name, so without this
-        // guard registering a duplicate name would silently overwrite the existing machine.
-        if (Machine.nameIsTaken(trimmedName, otherMachineNames(peers, forPersistingLanServers.getAll(), null))) {
-            throw new ConflictException("A machine named \"" + trimmedName + "\" already exists");
-        }
+        // No name-collision guard (§6.22). It existed because save() upserted by NAME, so a duplicate
+        // would silently overwrite a real machine — the store is keyed by MachineId now, so it does not,
+        // and a name is free to be whatever an operator finds useful. Two sites may each have a "NAS".
         log.info("Registering LAN server: {} at {} (runsDocker={}, dockerPort={})",
             trimmedName, trimmedAddress, runsDocker, dockerPort);
         LanServer server =
@@ -301,15 +299,8 @@ public class LanServerService implements
             log.info("Rename no-op: LAN server {} already has that name", forLog(existing.name()));
             return;
         }
-        // #284: the new name must be free across every machine — other LAN servers and VPN peers.
-        // Reuse the already-loaded `all` list rather than re-reading the LAN-server file.
-        List<String> otherNames = otherMachineNames(
-            forGettingPeerConfigurations.getAllPeerConfigs(), all, existing.machineId());
-        if (Machine.nameIsTaken(renamed.name(), otherNames)) {
-            throw new ConflictException("A machine named \"" + renamed.name() + "\" already exists");
-        }
-
-        // save() upserts by identity, so the renamed copy simply replaces the entry it came from.
+        // save() upserts by identity, so the renamed copy simply replaces the entry it came from — and
+        // the new name need not be free of anything, because nothing is keyed to it.
         forPersistingLanServers.save(renamed);
         // The published-services view caches each LAN route's resolved lanServerName; the rename
         // changed it, so drop the cache or the renamed machine card serves stale (old-name) data
@@ -344,24 +335,6 @@ public class LanServerService implements
     }
 
 
-    /**
-     * Names of every machine Vaier knows about — VPN peers and LAN servers — except the LAN
-     * server with identity {@code excludeLanServer} (pass null to exclude nothing). The caller passes
-     * the already-read peer configs and LAN servers so each source is read at most once per
-     * operation. Orchestration only: the domain ({@link Machine#nameIsTaken}) decides whether a
-     * candidate name is free across all of Vaier.
-     */
-    private List<String> otherMachineNames(List<PeerConfiguration> peers, List<LanServer> lanServers,
-                                           MachineId excludeLanServer) {
-        Stream<String> peerNames = peers.stream().map(PeerConfiguration::name);
-        Stream<String> lanServerNames = lanServers.stream()
-            .filter(s -> excludeLanServer == null || !s.machineId().equals(excludeLanServer))
-            .map(LanServer::name);
-        // The Vaier server host is a machine too (#311); its canonical name is reserved so an
-        // operator can never register a peer or LAN server that shadows it.
-        return Stream.concat(Stream.concat(peerNames, lanServerNames),
-            Stream.of(LanAnchor.VAIER_SERVER_NAME)).toList();
-    }
 
     /**
      * Renders an operator-supplied name safe for a single log line. The lookup that precedes these

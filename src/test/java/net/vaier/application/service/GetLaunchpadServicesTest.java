@@ -1,6 +1,8 @@
 package net.vaier.application.service;
 
+import net.vaier.domain.TestMachineIds;
 import net.vaier.config.ServiceNames;
+import net.vaier.domain.port.ForResolvingVaierServerIdentity;
 import net.vaier.domain.port.ForDiscoveringPeerContainers;
 import net.vaier.domain.port.ForDiscoveringVaierServerContainers;
 import net.vaier.domain.port.ForGettingLanServerScrape;
@@ -86,6 +88,9 @@ class GetLaunchpadServicesTest {
     @Mock
     ForResolvingServiceGroup forResolvingServiceGroup;
 
+    @Mock
+    ForResolvingVaierServerIdentity vaierServerIdentity;
+
     @InjectMocks
     PublishingService service;
 
@@ -111,6 +116,7 @@ class GetLaunchpadServicesTest {
     @BeforeEach
     void setUp() {
         lenient().when(configResolver.getDomain()).thenReturn("example.com");
+        lenient().when(vaierServerIdentity.identity()).thenReturn(TestMachineIds.of("Vaier server"));
         lenient().when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of());
         lenient().when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.empty());
         lenient().when(forResolvingPeerNames.resolvePeerNameByIp(org.mockito.ArgumentMatchers.anyString()))
@@ -695,7 +701,8 @@ class GetLaunchpadServicesTest {
         setupEmptyVpnClients();
         setupEmptyLocalServices();
         when(discoverPeerContainers.discoverAll()).thenReturn(List.of(
-            new net.vaier.domain.port.ForDiscoveringPeerContainers.PeerContainers("apalveien5", "10.13.13.6", "OK",
+            new ForDiscoveringPeerContainers.PeerContainers(TestMachineIds.of("apalveien5").value(),
+                "apalveien5", "10.13.13.6", "OK",
                 List.of(new DockerService("id", "bookstack", "linuxserver/bookstack:24.05", "24.05",
                     List.of(new DockerService.PortMapping(80, 6875, "tcp", "0.0.0.0")), List.of(), "running")),
                 false, "")));

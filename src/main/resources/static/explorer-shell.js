@@ -109,6 +109,11 @@
     // The Vaier server is a machine in the fleet like any other (#311) — but it is *this* machine, the one
     // serving the page. Mirrors LanAnchor.VAIER_SERVER_NAME.
     const VAIER_SERVER = 'Vaier server';
+    // Which machine Vaier is running on, as an identity. /machines marks it, because comparing a display
+    // name to the literal "Vaier server" is a name doing an identity's job — it stops recognising the
+    // machine the moment someone renames it, and mistakes any other machine that takes the name for it.
+    const vaierServerId = () => (S.machines.find((m) => m.vaierServer) || {}).id || null;
+    const isVaierServerMachine = (machineId) => machineId != null && machineId === vaierServerId();
 
     // --- state ----------------------------------------------------------------------------------------
 
@@ -213,7 +218,7 @@
     // server first, then the servers, then the clients, each group alphabetical. Server-ness is the machine's
     // type (the domain's isServerType — Ubuntu/Windows/LAN server), the same split the fleet grid draws.
     const SERVER_TYPES = new Set(['UBUNTU_SERVER', 'WINDOWS_SERVER', 'LAN_SERVER']);
-    const machineRank = (m) => (m.name === VAIER_SERVER ? 0 : (SERVER_TYPES.has(m.type) ? 1 : 2));
+    const machineRank = (m) => (m.vaierServer ? 0 : (SERVER_TYPES.has(m.type) ? 1 : 2));
     const sortedMachines = () => S.machines.slice()
         .sort((a, b) => machineRank(a) - machineRank(b) || a.name.localeCompare(b.name));
 
@@ -244,38 +249,22 @@
     // already uses — a LAN service by its LAN server (falling back to the relay peer when no registered LAN
     // server matches its address), the hub's own routes on the Vaier server, everything else by its host. A
     // second rule here would put the same service under two different machines in two different pages.
-    function machineOfService(s) {
-        if (s.isLanService) return s.lanServerName || s.hostName;
-        if (!s.hostName || !String(s.hostName).trim() || s.hostName === VAIER_SERVER) return VAIER_SERVER;
-        return s.hostName;
-    }
+    // The feed says which machine a route's backend runs on, by identity — the domain decides it
+    // (ReverseProxyRoute.hostMachineId) so the Explorer and every other surface can never disagree about
+    // whose service a service is. It used to be worked out here from display names, which put a service
+    // under the wrong machine's card the moment two machines agreed on a name.
+    const machineOfService = (s) => s.machineId || null;
 
     // A route is addressed by its DNS name, and a path-prefixed route shares that name with its siblings —
     // so the entry is named by both, exactly as the unpublish call is.
     const serviceName = (s) => (s.shortName || s.name) + (s.pathPrefix || '');
 
-    // A LAN server stores the relay it sits behind as a NAME — a reference in the data itself, not in the
-    // tree — so that one crossing survives: resolve it through the machine registry, never by matching the
-    // peer's own name against it.
-    function peerNamed(name) {
-        const machine = S.machines.find((x) => x.name === name);
-        return machine ? S.peers.get(machine.id) : undefined;
-    }
-
-    // Container scrapes and publishable candidates name their machine by WireGuard peer id, which is not a
-    // machine identity and not a display name. Falls through unchanged for LAN and Vaier servers, whose
-    // peerName already is the name.
-    function peerDisplayName(peerId) {
-        const peer = S.peersById.get(peerId);
-        return peer ? peer.name : peerId;
-    }
-
-    // These three read feeds that are keyed by machine NAME upstream (docker-services, published-services),
-    // so each takes an identity and crosses to the name once, here, rather than at every call site.
-    const servicesOn = (machineId) => S.services.filter((s) => machineOfService(s) === nameOf(machineId));
-    const containersOn = (machineId) => S.containers.get(nameOf(machineId)) || [];
-    const candidateMachine = (c) => peerDisplayName(c.peerName);
-    const candidatesOn = (machineId) => S.publishable.filter((c) => candidateMachine(c) === nameOf(machineId));
+    // All three feeds carry the machine's identity now, so these are plain matches — no crossing to a
+    // display name, and nothing that two machines sharing a name could confuse.
+    const servicesOn = (machineId) => S.services.filter((s) => machineOfService(s) === machineId);
+    const containersOn = (machineId) => S.containers.get(machineId) || [];
+    const candidateMachine = (c) => c.machineId || null;
+    const candidatesOn = (machineId) => S.publishable.filter((c) => candidateMachine(c) === machineId);
     // The repositories that live on a backup server, filtered by the server they name. One server, so this is
     // every repository Vaier knows — but the filter keeps it honest if a stale repo names a server that is gone.
     const reposOn = (server) => (server ? S.backupRepos.filter((r) => r.serverName === server.name) : []);
@@ -324,7 +313,7 @@
             // published, or is a server (so a non-container service on it — a printer's page, a LAN app — can
             // still be published by hand). Clients, which host nothing, stay quiet.
             if (servicesOn(m.id).length || candidatesOn(m.id).length
-                || SERVER_TYPES.has(m.type) || m.name === VAIER_SERVER) {
+                || SERVER_TYPES.has(m.type) || m.vaierServer) {
                 kids.push({ name: 'services', kind: 'services' });
             }
             if (m.hasCredential) kids.push({ name: 'disk', kind: 'disk' });
@@ -465,11 +454,13 @@
                 fetch('/docker-services/vaier-server').then((r) => (r.ok ? r.json() : null)),
                 fetch('/docker-services/lan-servers').then((r) => (r.ok ? r.json() : [])),
             ]);
+            // Filed by machine identity. A peer with no stored config carries none — it is in no machine
+            // registry, so there is no machine to file its containers under, and it simply does not join.
             (peers || []).forEach((p) => {
-                next.set(peerDisplayName(p.peerName), p.containers || []);
+                if (p.machineId) next.set(p.machineId, p.containers || []);
             });
-            (lan || []).forEach((l) => next.set(l.name, l.containers || []));
-            if (server) next.set(VAIER_SERVER, server.containers || []);
+            (lan || []).forEach((l) => next.set(l.machineId, l.containers || []));
+            if (server) next.set(vaierServerId(), server.containers || []);
             S.containers = next;
             S.containersRead = true;
         } catch (e) {
@@ -655,7 +646,7 @@
 
     function livenessOf(machineId) {
         // We are standing inside the answer.
-        if (nameOf(machineId) === VAIER_SERVER) return 'is-up';
+        if (isVaierServerMachine(machineId)) return 'is-up';
 
         const peer = S.peers.get(machineId);
         if (peer) {
@@ -1107,9 +1098,10 @@
             if (s.relayPeerName === VAIER_SERVER) {
                 if (!hasLoc) return; lat = loc.latitude; lon = loc.longitude;
             } else {
-                // A LAN server stores its relay as a NAME, so that reference is resolved through the
-                // registry rather than by matching peer names against each other.
-                const relay = peerNamed(s.relayPeerName);
+                // The feed says which machine relays this LAN, by identity. It used to say only the
+                // relay's name, which had to be resolved through the machine registry — and would have
+                // drawn this server at the wrong relay's coordinates once two machines shared a name.
+                const relay = S.peers.get(s.relayMachineId);
                 if (!relay || relay.latitude == null || relay.longitude == null) return;
                 lat = relay.latitude; lon = relay.longitude;
             }
@@ -1157,7 +1149,7 @@
         // it does have: where it lives on the LAN, and when Vaier last reached it. A WireGuard peer gets the mesh
         // facts. `latestHandshake` (peer) and `lastSeen` (LAN server) are both Unix epoch seconds, rendered human.
         const isLan = m.type === 'LAN_SERVER';
-        const isVaierServer = m.name === VAIER_SERVER;
+        const isVaierServer = !!m.vaierServer;
         const rows = [];
         if (isVaierServer) {
             // The hub is not a peer of itself: it has no tunnel address, endpoint, handshake or transfer — those
@@ -1249,7 +1241,7 @@
         // sit in the open; the rest — reissuing or regenerating a peer's config, showing a LAN host's setup
         // script, and removing the machine — is rare or destructive, so it folds away behind Advanced and does
         // not crowd the pane. The Vaier server is this machine: it is never edited or removed here.
-        if (m.name !== VAIER_SERVER) {
+        if (!m.vaierServer) {
             body.appendChild(section('This machine'));
             const edit = el('div', 'ex-lactions is-static');
             edit.appendChild(selVerb('gear', 'Edit details', 'ex-btn', () => editMachine(m)));
@@ -1828,8 +1820,8 @@
             if (via) det.appendChild(drow('Reached via', via));
             const dockerPort = (d.openPorts || []).find((p) => p === 2375 || p === 2376);
             if (dockerPort) det.appendChild(drow('Docker API', ':' + dockerPort + ' open', true));
-            const relayMachine = via ? S.machines.find((x) => x.name === via) : null;
-            if (relayMachine && relayMachine.lanCidr) det.appendChild(drow('Cross-site route', relayMachine.lanCidr));
+            const relay = relayMachine(d.relayAnchor);
+            if (relay && relay.lanCidr) det.appendChild(drow('Cross-site route', relay.lanCidr));
             content.appendChild(det);
 
             // Optional SSH access — the same login the web terminal, disk watch and backups ride on. Offered
@@ -6416,10 +6408,17 @@
 
     // Resolve a scan's relay anchor (a WireGuard identity like "apalveien5") back to the machine's display
     // name ("Apalveien 5") when we know it, so the readout reads the way the tree does.
+    // A scanned host is tagged with the anchor it was reached through: a relay peer's WireGuard id, or the
+    // literal server-LAN name. The peer id is stable across a rename, so it resolves to the machine directly
+    // — this used to fuzzy-match the anchor against every machine's NAME, which found the wrong machine the
+    // moment two of them normalised to the same string.
+    const relayMachine = (anchor) => {
+        const peer = anchor ? S.peersById.get(anchor) : null;
+        return peer ? machineById(peer.machineId) : null;
+    };
     function relayName(anchor) {
         if (!anchor) return null;
-        const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
-        const m = S.machines.find((x) => norm(x.name) === norm(anchor));
+        const m = relayMachine(anchor);
         return m ? m.name : anchor;
     }
 

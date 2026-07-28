@@ -37,6 +37,8 @@ public interface GetPublishedServicesUseCase {
     record PublishedServiceUco(
         String name,
         String shortName,
+        /** The identity of the machine the backend runs on; null when nothing bears its address. */
+        String machineId,
         String hostName,
         String lanServerName,
         ServiceLocation serviceLocation,
@@ -70,7 +72,7 @@ public interface GetPublishedServicesUseCase {
         public PublishedServiceUco(String name, String dnsAddress, DnsState dnsState, String hostAddress,
                                    int hostPort, State state, boolean authenticated,
                                    String rootRedirectPath, boolean directUrlDisabled) {
-            this(name, name, "", null, ServiceLocation.VAIER_SERVER, dnsState == DnsState.OK && state == State.OK,
+            this(name, name, null, "", null, ServiceLocation.VAIER_SERVER, dnsState == DnsState.OK && state == State.OK,
                 dnsAddress, dnsState, hostAddress, hostPort, state, authenticated,
                 rootRedirectPath, directUrlDisabled, false, null, false, null, null, null, null, null,
                 legacyAuthMode(authenticated));
@@ -78,7 +80,7 @@ public interface GetPublishedServicesUseCase {
         public PublishedServiceUco(String name, String dnsAddress, DnsState dnsState, String hostAddress,
                                    int hostPort, State state, boolean authenticated,
                                    String rootRedirectPath, boolean directUrlDisabled, boolean isLanService) {
-            this(name, name, "", null,
+            this(name, name, null, "", null,
                 isLanService ? ServiceLocation.LAN_SERVICE : ServiceLocation.VAIER_SERVER,
                 dnsState == DnsState.OK && state == State.OK,
                 dnsAddress, dnsState, hostAddress, hostPort, state, authenticated,
@@ -89,7 +91,7 @@ public interface GetPublishedServicesUseCase {
                                    int hostPort, State state, boolean authenticated,
                                    String rootRedirectPath, boolean directUrlDisabled, boolean isLanService,
                                    String pathPrefix) {
-            this(name, name, "", null,
+            this(name, name, null, "", null,
                 isLanService ? ServiceLocation.LAN_SERVICE : ServiceLocation.VAIER_SERVER,
                 dnsState == DnsState.OK && state == State.OK,
                 dnsAddress, dnsState, hostAddress, hostPort, state, authenticated,
@@ -100,7 +102,7 @@ public interface GetPublishedServicesUseCase {
                                    int hostPort, State state, boolean authenticated,
                                    String rootRedirectPath, boolean directUrlDisabled, boolean isLanService,
                                    String pathPrefix, boolean hiddenFromLaunchpad) {
-            this(name, name, "", null,
+            this(name, name, null, "", null,
                 isLanService ? ServiceLocation.LAN_SERVICE : ServiceLocation.VAIER_SERVER,
                 dnsState == DnsState.OK && state == State.OK,
                 dnsAddress, dnsState, hostAddress, hostPort, state, authenticated,
@@ -111,7 +113,7 @@ public interface GetPublishedServicesUseCase {
                                    int hostPort, State state, boolean authenticated,
                                    String rootRedirectPath, boolean directUrlDisabled, boolean isLanService,
                                    String pathPrefix, boolean hiddenFromLaunchpad, String launchpadAlias) {
-            this(name, name, "", null,
+            this(name, name, null, "", null,
                 isLanService ? ServiceLocation.LAN_SERVICE : ServiceLocation.VAIER_SERVER,
                 dnsState == DnsState.OK && state == State.OK,
                 dnsAddress, dnsState, hostAddress, hostPort, state, authenticated,

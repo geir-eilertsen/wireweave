@@ -1,6 +1,7 @@
 package net.vaier.domain.port;
 
 import net.vaier.domain.LanServer;
+import net.vaier.domain.MachineId;
 
 import java.util.List;
 
@@ -14,11 +15,23 @@ public interface ForGettingLanServers {
     List<LanServerView> getAll();
 
     /**
-     * A registered LAN server together with the name of whatever routes to it: a relay peer
-     * whose {@code lanCidr} contains the server's {@code lanAddress}, or {@code "Vaier server"}
-     * ({@link net.vaier.domain.LanAnchor#VAIER_SERVER_NAME}) when the address falls inside the
-     * Vaier server's own LAN CIDR. {@code relayPeerName} is null when neither covers it —
-     * typically because the relay was deleted or its lanCidr changed.
+     * A registered LAN server together with whatever routes to it: a relay peer whose {@code lanCidr}
+     * contains the server's {@code lanAddress}, or the Vaier server itself when the address falls inside
+     * the Vaier server's own LAN CIDR. Both are null when neither covers it — typically because the relay
+     * was deleted or its lanCidr changed.
+     *
+     * @param relayPeerName what to call the relay ({@code "Vaier server"},
+     *                      {@link net.vaier.domain.LanAnchor#VAIER_SERVER_NAME}, for the server LAN)
+     * @param relayMachineId the relay peer's identity — what a consumer joins on. Null for the server
+     *                       LAN, which is not a peer. Present beside the name because the two answer
+     *                       different questions, and joining on the name drew a LAN server at the wrong
+     *                       relay's coordinates as soon as two machines shared one.
      */
-    record LanServerView(LanServer server, String relayPeerName) {}
+    record LanServerView(LanServer server, String relayPeerName, MachineId relayMachineId) {
+
+        /** A view with no resolved relay identity — the shape every caller used before it carried one. */
+        public LanServerView(LanServer server, String relayPeerName) {
+            this(server, relayPeerName, null);
+        }
+    }
 }

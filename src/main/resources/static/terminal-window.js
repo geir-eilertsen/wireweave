@@ -398,12 +398,20 @@
         fetch('/machines')
             .then((res) => (res.ok ? res.json() : []))
             .then((fleet) => {
-                const found = (fleet || []).find((m) => m.name === machine);
-                if (!found) {
+                // A bookmark from before shells travelled by identity. Resolving a name is the only thing
+                // left to try — but it must never GUESS: opening a shell on the wrong host is the one
+                // outcome worse than not opening one, and machine names are no longer unique.
+                const matches = (fleet || []).filter((m) => m.name === machine);
+                if (matches.length === 0) {
                     setStatus('There is no machine called "' + machine + '" in this fleet any more.', true);
                     return;
                 }
-                machineId = found.id;
+                if (matches.length > 1) {
+                    setStatus('More than one machine is called "' + machine + '". Open its shell from the '
+                        + 'Explorer so Vaier knows which one you mean.', true);
+                    return;
+                }
+                machineId = matches[0].id;
                 // Written back into this window's own URL, so a reload does not resolve it a second time.
                 const url = new URL(window.location.href);
                 url.searchParams.set('id', machineId);

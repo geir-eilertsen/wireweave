@@ -141,39 +141,6 @@ public record Machine(
             transferRx, transferTx).isConnected();
     }
 
-    /**
-     * True when {@code candidate} collides with an existing machine name. Machine names are
-     * unique across all of Vaier (#284) — every machine, whether a VPN peer or a LAN server,
-     * has a distinct name, so an operator is never shown two machines wearing the same label
-     * and Vaier never confuses one for the other. Comparison is case-insensitive and ignores
-     * surrounding whitespace ("nas", "NAS" and " nas " are the same name). A null or blank
-     * candidate never collides, and null/blank entries in {@code existingNames} are skipped.
-     */
-    public static boolean nameIsTaken(String candidate, Collection<String> existingNames) {
-        return existingNames.stream().anyMatch(n -> hasSameName(candidate, n));
-    }
-
-    /**
-     * Whether two machine names refer to the same machine: comparison ignores surrounding whitespace
-     * and case, so "nas", "NAS" and " nas " are one name. A null or blank name matches nothing — it
-     * names no machine.
-     *
-     * <p><b>Temporary.</b> A machine is identified by its {@link MachineId}; its name is a label and
-     * may be anything. Nothing here is a rule about machines — comparing names matters only because
-     * REST paths still carry them, so a typed name has to be resolved to an id, and that resolution
-     * needs names to be unambiguous. Once the driving edge addresses machines by id, this and
-     * {@link #nameIsTaken} both go, and duplicate names stop being a problem to have an opinion about.
-     *
-     * <p>Until then it lives in one place so the guard and the lookup cannot drift apart: a machine
-     * refused at creation for colliding with a name that then could not find it would be the worst of
-     * both.
-     */
-    public static boolean hasSameName(String a, String b) {
-        if (a == null || a.isBlank() || b == null || b.isBlank()) {
-            return false;
-        }
-        return a.trim().equalsIgnoreCase(b.trim());
-    }
 
     /**
      * What to call the machine {@code machineId} in something a person reads — an admin email, the

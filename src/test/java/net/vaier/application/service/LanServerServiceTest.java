@@ -321,44 +321,64 @@ class LanServerServiceTest {
     }
 
     @Test
-    void register_rejectsNameAlreadyUsedByAnotherLanServer() {
-        // #284: machine names are unique across Vaier. save() upserts by name, so without this
-        // guard a second register silently overwrites the first — data loss.
+    void register_allowsANameAnotherMachineAlreadyWears() {
+        // The payoff of §6.22. Machine names had to be unique because save() upserted by name and a
+        // duplicate silently overwrote a real machine; the store is keyed by MachineId now, so it does
+        // not. Two houses may each have a "NAS", which is what an operator would naturally call them.
         when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
             relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
         ));
-        when(forPersistingLanServers.getAll()).thenReturn(List.of(
-            new LanServer("nas", "192.168.3.50", true, 2375)
-        ));
 
-        assertThatThrownBy(() -> service.register("nas", "192.168.3.51", true, 2375))
-            .isInstanceOf(ConflictException.class);
-        verify(forPersistingLanServers, never()).save(any());
+        service.register("nas", "192.168.3.51", true, 2375);
+
+        ArgumentCaptor<LanServer> saved = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(saved.capture());
+        assertThat(saved.getValue().name()).isEqualTo("nas");
+        assertThat(saved.getValue().lanAddress()).isEqualTo("192.168.3.51");
     }
 
     @Test
-    void register_rejectsNameAlreadyUsedByAVpnPeer() {
-        // #284: a LAN server may not reuse a VPN peer's name either.
+    void register_givesTheDuplicateItsOwnIdentity() {
+        // Sharing a name must not mean sharing anything else. The second machine gets an identity of its
+        // own, which is what keeps its credential, its backups and its disk watches separate.
         when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
             relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
         ));
+        LanServer first = new LanServer("nas", "192.168.3.50", true, 2375);
 
-        assertThatThrownBy(() -> service.register("apalveien5", "192.168.3.50", true, 2375))
-            .isInstanceOf(ConflictException.class);
-        verify(forPersistingLanServers, never()).save(any());
+        service.register("nas", "192.168.3.51", true, 2375);
+
+        ArgumentCaptor<LanServer> saved = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(saved.capture());
+        assertThat(saved.getValue().machineId()).isNotEqualTo(first.machineId());
     }
 
     @Test
-    void register_rejectsReservedVaierServerName() {
-        // #311: "Vaier server" is the reserved name of the Vaier-server singleton machine.
+    void register_allowsAVpnPeersName() {
         when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
             relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
         ));
 
-        assertThatThrownBy(() -> service.register(
-                net.vaier.domain.LanAnchor.VAIER_SERVER_NAME, "192.168.3.50", true, 2375))
-            .isInstanceOf(ConflictException.class);
-        verify(forPersistingLanServers, never()).save(any());
+        service.register("apalveien5", "192.168.3.50", true, 2375);
+
+        ArgumentCaptor<LanServer> saved = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(saved.capture());
+        assertThat(saved.getValue().name()).isEqualTo("apalveien5");
+    }
+
+    @Test
+    void register_allowsTheVaierServersOwnName() {
+        // "Vaier server" was reserved because the Vaier server was recognised BY that name. It is
+        // recognised by its identity now, so the string is just a string an operator may reuse.
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
+        ));
+
+        service.register(net.vaier.domain.LanAnchor.VAIER_SERVER_NAME, "192.168.3.50", true, 2375);
+
+        ArgumentCaptor<LanServer> saved = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(saved.capture());
+        assertThat(saved.getValue().name()).isEqualTo(net.vaier.domain.LanAnchor.VAIER_SERVER_NAME);
     }
 
     @Test
@@ -665,32 +685,20 @@ class LanServerServiceTest {
     }
 
     @Test
-    void rename_rejectsNameAlreadyUsedByAnotherLanServer() {
+    void rename_allowsANameAnotherMachineAlreadyWears() {
         LanServer nas = new LanServer("nas", "192.168.1.50", false, null);
         when(forPersistingLanServers.getAll()).thenReturn(List.of(
             nas,
             new LanServer("printer", "192.168.1.60", false, null)
         ));
 
-        assertThatThrownBy(() -> service.rename(nas.machineId(), "printer"))
-            .isInstanceOf(ConflictException.class);
-        verify(forPersistingLanServers, never()).save(any());
-        verify(forPersistingLanServers, never()).deleteById(any());
-    }
+        service.rename(nas.machineId(), "printer");
 
-    @Test
-    void rename_rejectsNameAlreadyUsedByAVpnPeer() {
-        // #284: renaming a LAN server onto a VPN peer's name collides across machines too.
-        LanServer nas = new LanServer("nas", "192.168.1.50", false, null);
-        when(forPersistingLanServers.getAll()).thenReturn(List.of(nas));
-        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
-            relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
-        ));
-
-        assertThatThrownBy(() -> service.rename(nas.machineId(), "apalveien5"))
-            .isInstanceOf(ConflictException.class);
-        verify(forPersistingLanServers, never()).save(any());
-        verify(forPersistingLanServers, never()).deleteById(any());
+        ArgumentCaptor<LanServer> saved = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(saved.capture());
+        assertThat(saved.getValue().name()).isEqualTo("printer");
+        // And it is still its own machine — the rename moved a label, not an identity.
+        assertThat(saved.getValue().machineId()).isEqualTo(nas.machineId());
     }
 
     @Test

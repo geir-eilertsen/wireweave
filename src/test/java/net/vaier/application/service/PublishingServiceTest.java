@@ -1,5 +1,7 @@
 package net.vaier.application.service;
 
+import net.vaier.domain.TestMachineIds;
+import net.vaier.domain.port.ForResolvingVaierServerIdentity;
 import net.vaier.domain.port.ForDiscoveringLanServerContainers;
 import net.vaier.domain.port.ForDiscoveringPeerContainers;
 import net.vaier.domain.port.ForDiscoveringVaierServerContainers;
@@ -116,12 +118,18 @@ class PublishingServiceTest {
     @Mock
     net.vaier.domain.port.ForResolvingServiceGroup forResolvingServiceGroup;
 
+    @Mock
+    ForResolvingVaierServerIdentity vaierServerIdentity;
+
     @InjectMocks
     PublishingService service;
 
     @BeforeEach
     void setUp() {
         lenient().when(configResolver.getDomain()).thenReturn("example.com");
+        // The Vaier server's identity: every published-service view attributes its route to a machine,
+        // and a hub route belongs to the machine Vaier runs on.
+        lenient().when(vaierServerIdentity.identity()).thenReturn(TestMachineIds.of("Vaier server"));
         // getPublishedServices() always resolves the server LAN CIDR; default it to "absent" so the
         // relay-only tests behave as before. (Mockito would return Optional.empty() anyway — this is
         // just explicit.) Tests that exercise the server-LAN-CIDR path override it.
@@ -1590,7 +1598,8 @@ class PublishingServiceTest {
     @Test
     void ignoreKey_forPeerService_combinesPeerNameContainerAndPort() {
         PublishableService s = new PublishableService(
-            PublishableSource.PEER, "alpha", "10.0.0.1", "myapp", 8080, null, false);
+            PublishableSource.PEER, TestMachineIds.of("alpha").value(), "alpha", "10.0.0.1",
+            "myapp", 8080, null, false);
 
         assertThat(s.ignoreKey()).isEqualTo("alpha/myapp:8080");
     }
@@ -1598,7 +1607,8 @@ class PublishingServiceTest {
     @Test
     void ignoreKey_forLanServer_combinesAddressContainerAndPort() {
         PublishableService s = new PublishableService(
-            PublishableSource.LAN_SERVER, "alpha", "192.168.1.50", "myapp", 8080, null, false);
+            PublishableSource.LAN_SERVER, TestMachineIds.of("alpha").value(), "alpha", "192.168.1.50",
+            "myapp", 8080, null, false);
 
         assertThat(s.ignoreKey()).isEqualTo("192.168.1.50/myapp:8080");
     }
@@ -1606,7 +1616,8 @@ class PublishingServiceTest {
     @Test
     void ignoreKey_forVaierServer_combinesContainerAndPort() {
         PublishableService s = new PublishableService(
-            PublishableSource.VAIER_SERVER, null, "127.0.0.1", "myapp", 8080, null, false);
+            PublishableSource.VAIER_SERVER, TestMachineIds.of("Vaier server").value(), null,
+            "127.0.0.1", "myapp", 8080, null, false);
 
         assertThat(s.ignoreKey()).isEqualTo("myapp:8080");
     }
@@ -1666,18 +1677,18 @@ class PublishingServiceTest {
     // --- getPublishableServices helpers ---
 
     private PeerContainers unreachablePeer(String name, String ip) {
-        return new PeerContainers(name, ip, "UNREACHABLE", List.of(), false, "");
+        return new PeerContainers(TestMachineIds.of(name).value(), name, ip, "UNREACHABLE", List.of(), false, "");
     }
 
     private PeerContainers okPeer(String name, String ip, List<DockerService> containers) {
-        return new PeerContainers(name, ip, "OK", containers, false, "");
+        return new PeerContainers(TestMachineIds.of(name).value(), name, ip, "OK", containers, false, "");
     }
 
     private ForDiscoveringLanServerContainers.LanServerContainers okLanHost(
             String hostName, String hostIp, int port, String relayPeerName,
             List<DockerService> containers) {
         return new ForDiscoveringLanServerContainers.LanServerContainers(
-            hostName, hostIp, port, relayPeerName, "OK", containers);
+            TestMachineIds.of(hostName).value(), hostName, hostIp, port, relayPeerName, "OK", containers);
     }
 
     private DockerService peerContainer(String name, int port, String type) {
@@ -1691,7 +1702,8 @@ class PublishingServiceTest {
     }
 
     private PublishableService vaierServerService(String name, int port) {
-        return new PublishableService(PublishableSource.VAIER_SERVER, null, name, name, port, null, false);
+        return new PublishableService(PublishableSource.VAIER_SERVER,
+            TestMachineIds.of("Vaier server").value(), null, name, name, port, null, false);
     }
 
     private ReverseProxyRoute routeForPublishable(String address, int port) {

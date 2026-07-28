@@ -1,5 +1,6 @@
 package net.vaier.application.service;
 
+import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.port.ForDiscoveringLanServerContainers;
 import net.vaier.domain.port.ForDiscoveringLanServerContainers.LanServerContainers;
 import net.vaier.domain.port.ForPublishingEvents;
@@ -133,9 +134,10 @@ class LanServerScrapeServiceTest {
         // Status stays OK but container list grows — the cached entry should reflect the
         // latest scrape so the next /docker-services/lan-servers fetch sees the new container.
         LanServerContainers initial = new LanServerContainers(
-            "nas", "192.168.3.50", 2375, "relay", "OK", List.of());
+            TestMachineIds.of("nas").value(), "nas", "192.168.3.50", 2375, "relay", "OK", List.of());
         LanServerContainers updated = new LanServerContainers(
-            "nas", "192.168.3.50", 2375, "relay", "OK", List.of(/* one extra container */));
+            TestMachineIds.of("nas").value(), "nas", "192.168.3.50", 2375, "relay", "OK",
+            List.of(/* one extra container */));
 
         when(discoverer.discoverAllLanServerContainers()).thenReturn(List.of(initial));
         service.refreshAll();
@@ -177,10 +179,12 @@ class LanServerScrapeServiceTest {
     }
 
     private static LanServerContainers ok(String name) {
-        return new LanServerContainers(name, "192.168.3.50", 2375, "relay", "OK", List.of());
+        return new LanServerContainers(TestMachineIds.of(name).value(), name, "192.168.3.50", 2375,
+            "relay", "OK", List.of());
     }
 
     private static LanServerContainers unreachable(String name) {
-        return new LanServerContainers(name, "192.168.3.50", 2375, "relay", "UNREACHABLE", List.of());
+        return new LanServerContainers(TestMachineIds.of(name).value(), name, "192.168.3.50", 2375,
+            "relay", "UNREACHABLE", List.of());
     }
 }

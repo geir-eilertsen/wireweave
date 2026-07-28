@@ -91,6 +91,19 @@ public final class LanAnchor {
         return relayPeer == null ? VAIER_SERVER_NAME : relayPeer.id();
     }
 
+    /**
+     * The identity of the machine that routes to this LAN — the relay peer's {@link MachineId}, or empty
+     * when the LAN is the Vaier server's own (it is not a peer, and the caller already knows which machine
+     * it is standing on).
+     *
+     * <p>Beside {@link #name()} because a consumer needs one or the other and never both: the name is what
+     * a person reads, and this is what a consumer joins on. Joining on the name is what let a LAN server be
+     * drawn at the wrong relay's coordinates the moment two machines shared one.
+     */
+    public Optional<MachineId> relayMachineId() {
+        return Optional.ofNullable(relayPeer).map(PeerConfiguration::machineId);
+    }
+
     /** The CIDR — a relay peer's {@code lanCidr} or the server LAN CIDR — that covers the address. */
     public String cidr() {
         return cidr;

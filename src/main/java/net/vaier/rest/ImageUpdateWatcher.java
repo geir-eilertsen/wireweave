@@ -2,7 +2,9 @@ package net.vaier.rest;
 
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.application.NotifyAdminsOfUpdateAvailableUseCase;
+import net.vaier.application.GetMachinesUseCase;
 import net.vaier.application.SweepImageUpdatesUseCase;
+import net.vaier.domain.Machine;
 import net.vaier.domain.ImageUpdateRollup;
 import net.vaier.domain.ImageUpdateTracker;
 import net.vaier.domain.ScopedImage;
@@ -12,6 +14,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Asks the registries once a day whether anything in the fleet has an <b>update available</b>, and mails admins
@@ -53,11 +56,19 @@ public class ImageUpdateWatcher {
      */
     private final ImageUpdateTracker tracker;
 
+    /**
+     * What to call each machine in the alert, looked up when the alert is written. The verdicts are keyed by
+     * identity — a display name in that key would make a rename read as every image on the machine going
+     * stale at once — so the name is fetched here, at the one moment a person is going to read it.
+     */
+    private final GetMachinesUseCase machines;
+
     public ImageUpdateWatcher(SweepImageUpdatesUseCase sweep, NotifyAdminsOfUpdateAvailableUseCase notifier,
-                              ImageUpdateTracker tracker) {
+                              ImageUpdateTracker tracker, GetMachinesUseCase machines) {
         this.sweep = sweep;
         this.notifier = notifier;
         this.tracker = tracker;
+        this.machines = machines;
     }
 
     @Scheduled(fixedDelay = ONE_DAY_MS, initialDelay = INITIAL_DELAY_MS)
@@ -66,13 +77,28 @@ public class ImageUpdateWatcher {
             Map<ScopedImage, UpdateAvailability> verdicts = sweep.sweepImageUpdates();
             List<ScopedImage> newlyOutOfDate = tracker.update(verdicts);
 
-            ImageUpdateRollup rollup = new ImageUpdateRollup(newlyOutOfDate);
+            ImageUpdateRollup rollup = new ImageUpdateRollup(newlyOutOfDate, machineNames());
             if (rollup.worthSending()) {
                 notifier.notifyAdminsOfUpdateAvailable(rollup);
             }
         } catch (Exception e) {
             // A dead Docker host, a dead registry, a dead SMTP server: none of them may kill the schedule.
             log.debug("Update-available sweep failed: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Machine identity to display name. Guarded: reading the fleet is a lookup that can fail, and it only
+     * decorates the alert — an alert naming machines by their identities still tells the operator an image
+     * went stale, where no alert at all tells them nothing.
+     */
+    private Map<String, String> machineNames() {
+        try {
+            return machines.getAllMachines().stream()
+                .collect(Collectors.toMap(m -> m.id().value(), Machine::name, (a, b) -> a));
+        } catch (RuntimeException e) {
+            log.debug("Could not read machine names for the update-available alert: {}", e.getMessage());
+            return Map.of();
         }
     }
 }

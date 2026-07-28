@@ -2,17 +2,19 @@ package net.vaier.domain;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-import java.util.Map;
-import java.util.Optional;
-
 /**
  * A discovered service eligible for publishing. Its {@code source} indicates where it was
  * discovered (Vaier server, server peer, or Docker-enabled LAN server). Owns the publishing
  * identity rules ({@link #ignoreKey()}, {@link #suggestedSubdomain()}) so the frontend and the
  * ignored-services persistence layer never recompute them and drift apart.
+ *
+ * @param machineId the identity of the machine this service was discovered on. Null only when the machine
+ *                  is in no registry — a live peer with no stored config — in which case there is nothing
+ *                  to attribute it to and inventing an id would attribute it to nothing.
  */
 public record PublishableService(
     PublishableSource source,
+    String machineId,
     String peerName,
     String address,
     String containerName,
@@ -34,20 +36,16 @@ public record PublishableService(
     }
 
     /**
-     * The name of the machine this discovered service sits on, so the "publish me" nudge can be
-     * attributed per machine. A {@link PublishableSource#PEER peer}'s services belong to the peer
-     * (its name is the machine name); the {@link PublishableSource#VAIER_SERVER Vaier server}'s belong
-     * to {@code vaierServerName}; a {@link PublishableSource#LAN_SERVER LAN server}'s belong to whatever
-     * machine bears its address in {@code lanServerNameByAddress}. Empty when the owner cannot be named
-     * (e.g. a LAN address that maps to no known machine).
+     * Whether this discovered service sits on the machine with {@code candidate}'s identity, so the
+     * "publish me" nudge can be attributed per machine.
+     *
+     * <p>By identity, and not — as it was — by matching the owner's <em>name</em> against the machine's.
+     * A name match answers "a machine called that", where the caller asked "this machine", and the two
+     * differ the moment two machines share a name. A service whose machine is in no registry belongs to
+     * nobody and matches nothing.
      */
-    public Optional<String> ownerMachineName(String vaierServerName,
-                                             Map<String, String> lanServerNameByAddress) {
-        return switch (source) {
-            case PEER         -> Optional.ofNullable(peerName);
-            case VAIER_SERVER -> Optional.ofNullable(vaierServerName);
-            case LAN_SERVER   -> Optional.ofNullable(lanServerNameByAddress.get(address));
-        };
+    public boolean belongsTo(MachineId candidate) {
+        return machineId != null && candidate != null && machineId.equals(candidate.value());
     }
 
     /**

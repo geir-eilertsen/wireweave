@@ -1,5 +1,8 @@
 package net.vaier.rest;
 
+import java.util.List;
+import net.vaier.domain.TestMachineIds;
+import net.vaier.application.GetMachinesUseCase;
 import net.vaier.application.NotifyAdminsOfUpdateAvailableUseCase;
 import net.vaier.application.SweepImageUpdatesUseCase;
 import net.vaier.domain.ImageUpdateRollup;
@@ -15,6 +18,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -26,6 +30,7 @@ class ImageUpdateWatcherTest {
     SweepImageUpdatesUseCase sweep;
     NotifyAdminsOfUpdateAvailableUseCase notifier;
     ImageUpdateWatcher watcher;
+    GetMachinesUseCase machines;
 
     @BeforeEach
     void setUp() {
@@ -33,10 +38,12 @@ class ImageUpdateWatcherTest {
         notifier = mock(NotifyAdminsOfUpdateAvailableUseCase.class);
         // The tracker is injected since #57 slice 3 — the operator's own update check shares this memory, so
         // that a confirmed pull clears the alert state the watcher would otherwise keep believing.
-        watcher = new ImageUpdateWatcher(sweep, notifier, new ImageUpdateTracker());
+        machines = mock(GetMachinesUseCase.class);
+        lenient().when(machines.getAllMachines()).thenReturn(List.of());
+        watcher = new ImageUpdateWatcher(sweep, notifier, new ImageUpdateTracker(), machines);
     }
 
-    private static final String HOST = "Vaier server";
+    private static final String HOST = TestMachineIds.of("Vaier server").value();
 
     private static ScopedImage si(String image) {
         return new ScopedImage(HOST, image);

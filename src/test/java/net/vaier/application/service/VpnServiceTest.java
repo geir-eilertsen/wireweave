@@ -991,49 +991,49 @@ class VpnServiceTest {
             forUpdatingPeerConfigurations, forGettingVpnClients);
     }
 
-    // --- createPeer / renamePeer: machine names are unique across Vaier (#284) ---
+    // --- createPeer / renamePeer: a machine name is a label, not a key (§6.22) ---
 
     @Test
-    void createPeer_rejectsNameAlreadyUsedByAnotherPeer() {
+    void createPeer_allowsANameAnotherPeerAlreadyWears() {
+        // The payoff. Names had to be unique because records hung off them; everything hangs off a
+        // MachineId now. The peer ID still deduplicates — it is a directory on disk — but that is a
+        // filesystem constraint, not an opinion about what an operator may call their machines.
         when(peerConfigProvider.getAllPeerConfigs()).thenReturn(List.of(
             new PeerConfiguration("nas", "10.13.13.2", "config")
         ));
 
-        assertThatThrownBy(() -> service.createPeer("nas"))
-            .isInstanceOf(ConflictException.class);
-        verify(forExecutingInContainer, never()).execute(any(), any(), any());
+        // It no longer stops at the name — it reaches key generation. (It fails after that for want of a
+        // real WireGuard container, which is this unit test's harness, not a rule about names.)
+        assertThatThrownBy(() -> service.createPeer("nas")).isNotInstanceOf(ConflictException.class);
+        verify(forExecutingInContainer).execute(any(), eq("wg"), eq("genkey"));
     }
 
     @Test
-    void createPeer_rejectsNameAlreadyUsedByLanServer() {
-        when(forPersistingLanServers.getAll()).thenReturn(List.of(
-            new LanServer("nas", "192.168.1.50", false, null)
-        ));
-
-        assertThatThrownBy(() -> service.createPeer("nas"))
-            .isInstanceOf(ConflictException.class);
-        verify(forExecutingInContainer, never()).execute(any(), any(), any());
+    void createPeer_allowsALanServersName() {
+        // The LAN-server list is not even read any more: there is no name to be free of. That the stub
+        // would be unnecessary here is itself the point.
+        assertThatThrownBy(() -> service.createPeer("nas")).isNotInstanceOf(ConflictException.class);
+        verify(forExecutingInContainer).execute(any(), eq("wg"), eq("genkey"));
     }
 
     @Test
-    void createPeer_rejectsReservedVaierServerName() {
-        // #311: the Vaier-server singleton's name is reserved across all of Vaier.
+    void createPeer_allowsTheVaierServersOwnName() {
+        // "Vaier server" was reserved because the Vaier server was recognised BY that name. It is
+        // recognised by its identity now, so the string is just a string.
         assertThatThrownBy(() -> service.createPeer(net.vaier.domain.LanAnchor.VAIER_SERVER_NAME))
-            .isInstanceOf(ConflictException.class);
-        verify(forExecutingInContainer, never()).execute(any(), any(), any());
+            .isNotInstanceOf(ConflictException.class);
+        verify(forExecutingInContainer).execute(any(), eq("wg"), eq("genkey"));
     }
 
     @Test
-    void renamePeer_rejectsNameAlreadyUsedByAnotherMachine() {
+    void renamePeer_allowsANameAnotherMachineAlreadyWears() {
         when(peerConfigProvider.getPeerConfigByName("laptp"))
             .thenReturn(Optional.of(new PeerConfiguration("laptp", "10.13.13.2", "config")));
-        when(forPersistingLanServers.getAll()).thenReturn(List.of(
-            new LanServer("nas", "192.168.1.50", false, null)
-        ));
 
-        assertThatThrownBy(() -> service.renamePeer("laptp", "nas"))
-            .isInstanceOf(ConflictException.class);
-        verify(forUpdatingPeerConfigurations, never()).updateName(any(), any());
+        // Another machine is already called "nas". Nothing is keyed to a name, so nothing objects.
+        service.renamePeer("laptp", "nas");
+
+        verify(forUpdatingPeerConfigurations).updateName("laptp", "nas");
     }
 
     // --- renamePeer migrates name-keyed SSH state (#312) ---
@@ -1065,21 +1065,6 @@ class VpnServiceTest {
 
         verify(forPersistingHostCredentials, never()).deleteByMachine(any());
         verify(forTrackingHostKeys, never()).clear(any());
-    }
-
-    @Test
-    void renamePeer_clearingName_rejectedWhenHumanisedIdFallbackTakenByAnotherMachine() {
-        // #284 review: clearing reverts the peer to its PeerId.display(id) label ("media server"),
-        // which must still be unique — here a LAN server already wears that label.
-        when(peerConfigProvider.getPeerConfigByName("media-server"))
-            .thenReturn(Optional.of(new PeerConfiguration("media-server", "10.13.13.2", "config")));
-        when(forPersistingLanServers.getAll()).thenReturn(List.of(
-            new LanServer("media server", "192.168.1.50", false, null)
-        ));
-
-        assertThatThrownBy(() -> service.renamePeer("media-server", ""))
-            .isInstanceOf(ConflictException.class);
-        verify(forUpdatingPeerConfigurations, never()).updateName(any(), any());
     }
 
     @Test

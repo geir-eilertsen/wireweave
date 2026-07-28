@@ -9,6 +9,7 @@ import net.vaier.domain.ScopedImage;
 import net.vaier.domain.UpdateAvailability;
 import net.vaier.domain.VaierServerCatalogue;
 import net.vaier.domain.port.ForDiscoveringPeerContainers;
+import net.vaier.domain.port.ForResolvingVaierServerIdentity;
 import net.vaier.domain.port.ForDiscoveringVaierServerContainers;
 import net.vaier.domain.port.ForGettingVaierServerDockerServices;
 import net.vaier.domain.port.ForStoringContainerSnapshots;
@@ -42,16 +43,19 @@ public class InMemoryContainerSnapshotStore implements
 
     private final String vaierNetworkName;
     private final String dockerGatewayIp;
+    private final ForResolvingVaierServerIdentity vaierServerIdentity;
 
     @Autowired
-    public InMemoryContainerSnapshotStore() {
+    public InMemoryContainerSnapshotStore(ForResolvingVaierServerIdentity vaierServerIdentity) {
         this(System.getenv().getOrDefault("VAIER_NETWORK_NAME", "vaier-network"),
-            System.getenv().getOrDefault("VAIER_DOCKER_GATEWAY", "172.20.0.1"));
+            System.getenv().getOrDefault("VAIER_DOCKER_GATEWAY", "172.20.0.1"), vaierServerIdentity);
     }
 
-    public InMemoryContainerSnapshotStore(String vaierNetworkName, String dockerGatewayIp) {
+    public InMemoryContainerSnapshotStore(String vaierNetworkName, String dockerGatewayIp,
+                                          ForResolvingVaierServerIdentity vaierServerIdentity) {
         this.vaierNetworkName = vaierNetworkName;
         this.dockerGatewayIp = dockerGatewayIp;
+        this.vaierServerIdentity = vaierServerIdentity;
     }
 
     // --- read side (driven query ports) ---
@@ -59,15 +63,15 @@ public class InMemoryContainerSnapshotStore implements
     /** Cached Vaier-server scrape, carrying the last sweep's update-available verdicts. */
     @Override
     public List<DockerService> discover() {
-        return withUpdateVerdicts(LanAnchor.VAIER_SERVER_NAME, vaierServerContainersSnapshot);
+        return withUpdateVerdicts(vaierServerIdentity.identity().value(), vaierServerContainersSnapshot);
     }
 
     /** Cached server-peer scrape, each container carrying the last sweep's verdicts. */
     @Override
     public List<PeerContainers> discoverAll() {
         return peerContainersSnapshot.stream()
-            .map(peer -> new PeerContainers(peer.peerName(), peer.vpnIp(), peer.status(),
-                withUpdateVerdicts(peer.peerName(), peer.containers()),
+            .map(peer -> new PeerContainers(peer.machineId(), peer.peerName(), peer.vpnIp(), peer.status(),
+                withUpdateVerdicts(peer.machineId(), peer.containers()),
                 peer.wireguardOutdated(), peer.wireguardExpectedImage()))
             .toList();
     }
@@ -86,6 +90,9 @@ public class InMemoryContainerSnapshotStore implements
                     .filter(ep -> !ReverseProxyRoute.hasRouteFor(existingRoutes, ep.address(), ep.port()))
                     .ifPresent(ep -> result.add(new PublishableService(
                         PublishableSource.VAIER_SERVER,
+                        // The Vaier server is the one machine that cannot be found by searching a store,
+                        // so its identity comes from the port that owns read-and-assign-once.
+                        vaierServerIdentity.identity().value(),
                         null,
                         ep.address(),
                         container.containerName(),
@@ -103,13 +110,13 @@ public class InMemoryContainerSnapshotStore implements
      * the image. An unswept image reads {@link UpdateAvailability#UNKNOWN} — that rule is
      * {@code DockerService}'s, stated once, so the two can never disagree.
      */
-    private List<DockerService> withUpdateVerdicts(String machine, List<DockerService> containers) {
+    private List<DockerService> withUpdateVerdicts(String machineId, List<DockerService> containers) {
         Map<ScopedImage, UpdateAvailability> verdicts = imageUpdateVerdicts;
         if (verdicts.isEmpty()) {
             return containers;
         }
         return containers.stream()
-            .map(c -> c.withUpdateAvailability(verdicts.get(new ScopedImage(machine, c.image()))))
+            .map(c -> c.withUpdateAvailability(verdicts.get(new ScopedImage(machineId, c.image()))))
             .toList();
     }
 

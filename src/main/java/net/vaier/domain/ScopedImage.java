@@ -12,14 +12,18 @@ package net.vaier.domain;
  * in the <em>verdict</em>: each container's own local <b>image digest</b> is compared against that one shared
  * <b>registry digest</b>, so the same tag can read out of date on one machine and up to date on another.
  *
- * @param machine the machine the image runs on — {@code LanAnchor.VAIER_SERVER_NAME} for the Vaier server's
- *                own containers, or a server peer's name
- * @param image   the image string as the host reports it
+ * <p><b>Keyed by identity, and the name is not held.</b> This is a map key, and consecutive sweeps are diffed
+ * to find what has newly gone stale. A display name in the key would make a rename read as "every image on
+ * that machine just went out of date" and mail the operator about it — so the machine is its
+ * {@link MachineId} here, and what to call it is supplied when the alert is written.
+ *
+ * @param machineId the identity of the machine the image runs on
+ * @param image     the image string as the host reports it
  */
-public record ScopedImage(String machine, String image) {
+public record ScopedImage(String machineId, String image) {
 
     /** How this reads to an operator, e.g. {@code "vaultwarden/server:latest on Apalveien 5"}. */
-    public String label() {
-        return image + " on " + machine;
+    public String label(String machineName) {
+        return image + " on " + (machineName == null || machineName.isBlank() ? machineId : machineName);
     }
 }
