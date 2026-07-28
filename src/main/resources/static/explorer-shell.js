@@ -194,7 +194,20 @@
         return 'fleet';
     }
 
-    const machineOf = (path) => S.machines.find((m) => m.name === path[1]) || null;
+    // A tree path names its machine by IDENTITY. Every crossing back to a name goes through nameOf, and it
+    // is a crossing to something a person reads — never to something Vaier finds a machine by.
+    const machineOf = (path) => S.machines.find((m) => m.id === path[1]) || null;
+
+    const machineById = (machineId) => S.machines.find((m) => m.id === machineId) || null;
+
+    /**
+     * What to call a machine. Falls back to the identity itself, which is ugly on purpose: a machine that has
+     * left the fleet mid-render should look wrong rather than borrow a name that is not its own.
+     */
+    function nameOf(machineId) {
+        const m = machineById(machineId);
+        return m ? m.name : machineId;
+    }
 
     // Machines are ordered the way the Infrastructure page orders them, so the two never disagree: the Vaier
     // server first, then the servers, then the clients, each group alphabetical. Server-ness is the machine's
@@ -241,10 +254,9 @@
     // so the entry is named by both, exactly as the unpublish call is.
     const serviceName = (s) => (s.shortName || s.name) + (s.pathPrefix || '');
 
-    // The tree addresses its entries by name — it will carry identities of its own in a later slice — so a
-    // name is resolved through the machine registry first and the peer is found by that machine's IDENTITY.
-    // Deliberately not by matching the peer's own name: that join is the one this removed, because /machines
-    // and /vpn/peers disagreeing by a character silently turned a peer into a LAN server.
+    // A LAN server stores the relay it sits behind as a NAME — a reference in the data itself, not in the
+    // tree — so that one crossing survives: resolve it through the machine registry, never by matching the
+    // peer's own name against it.
     function peerNamed(name) {
         const machine = S.machines.find((x) => x.name === name);
         return machine ? S.peers.get(machine.id) : undefined;
@@ -258,10 +270,12 @@
         return peer ? peer.name : peerId;
     }
 
-    const servicesOn = (machine) => S.services.filter((s) => machineOfService(s) === machine);
-    const containersOn = (machine) => S.containers.get(machine) || [];
+    // These three read feeds that are keyed by machine NAME upstream (docker-services, published-services),
+    // so each takes an identity and crosses to the name once, here, rather than at every call site.
+    const servicesOn = (machineId) => S.services.filter((s) => machineOfService(s) === nameOf(machineId));
+    const containersOn = (machineId) => S.containers.get(nameOf(machineId)) || [];
     const candidateMachine = (c) => peerDisplayName(c.peerName);
-    const candidatesOn = (machine) => S.publishable.filter((c) => candidateMachine(c) === machine);
+    const candidatesOn = (machineId) => S.publishable.filter((c) => candidateMachine(c) === nameOf(machineId));
     // The repositories that live on a backup server, filtered by the server they name. One server, so this is
     // every repository Vaier knows — but the filter keeps it honest if a stale repo names a server that is gone.
     const reposOn = (server) => (server ? S.backupRepos.filter((r) => r.serverName === server.name) : []);
@@ -278,9 +292,9 @@
         const job = S.backupJobs.find((j) => j.repositoryName === repoName);
         return job ? job.machineName : repoName;
     }
-    // The backup jobs that back a machine up. A job names the machine it protects, so this is how a machine
-    // learns it is backed up — and grows a `backup` entry even when it is not the server.
-    const jobsOn = (machine) => S.backupJobs.filter((j) => j.machineName === machine);
+    // The backup jobs that back a machine up. A job carries the identity of the machine it protects, so this
+    // is how a machine learns it is backed up — and grows a `backup` entry even when it is not the server.
+    const jobsOn = (machineId) => S.backupJobs.filter((j) => j.machineId === machineId);
 
     // Whether an entry is inside its machine's backup is NOT decided here — the containment rule (a source path
     // covers itself and its descendants) lives in the domain, and the backend stamps each listed entry with
@@ -290,7 +304,9 @@
         const kind = kindOf(path);
         if (kind === 'fleet') {
             return [{ name: 'map', kind: 'map', label: 'Map' }]
-                .concat(sortedMachines().map((m) => ({ name: m.name, kind: 'machine' })));
+                // The segment is the identity and the label is the name: the tree addresses a machine by
+                // what cannot change and shows what a person recognises.
+                .concat(sortedMachines().map((m) => ({ name: m.id, kind: 'machine', label: m.name })));
         }
         if (kind === 'machine') {
             const m = machineOf(path);
@@ -307,15 +323,15 @@
             // A machine grows a `services` entry when it publishes something, has a container port that could be
             // published, or is a server (so a non-container service on it — a printer's page, a LAN app — can
             // still be published by hand). Clients, which host nothing, stay quiet.
-            if (servicesOn(m.name).length || candidatesOn(m.name).length
+            if (servicesOn(m.id).length || candidatesOn(m.id).length
                 || SERVER_TYPES.has(m.type) || m.name === VAIER_SERVER) {
                 kids.push({ name: 'services', kind: 'services' });
             }
             if (m.hasCredential) kids.push({ name: 'disk', kind: 'disk' });
             // A machine grows a `backup` entry when it plays any part in fleet backup: it is the one backup
-            // server (name-equality — the backend refuses a second), or a job backs it up. The entry reads both
-            // ways; here we only decide whether it exists.
-            if ((S.backupServer && S.backupServer.machineName === m.name) || jobsOn(m.name).length) {
+            // server (the backend refuses a second), or a job backs it up. The entry reads both ways; here we
+            // only decide whether it exists.
+            if ((S.backupServer && S.backupServer.machineId === m.id) || jobsOn(m.id).length) {
                 kids.push({ name: 'backup', kind: 'backup' });
             }
             return kids;
@@ -323,7 +339,7 @@
         if (kind === 'backup') {
             // Only the server's `backup` entry has children — its repositories. A client machine's `backup`
             // entry shows its job inline and has none, so it must not inherit the server's repos as its own.
-            const isServer = S.backupServer && S.backupServer.machineName === path[1];
+            const isServer = S.backupServer && S.backupServer.machineId === path[1];
             // The path segment stays the store's own id — it is the address — while the row reads as the
             // machine whose backups are in it.
             return isServer
@@ -490,25 +506,25 @@
     // One machine's filesystems, read when they are looked at (#323 slice C, every filesystem since #325).
     // Vaier has computed this on a schedule since the disk alerts shipped and only ever emailed about it;
     // this is the same reading, looked at.
-    async function loadDisk(machine) {
-        const held = S.disks.get(machine);
+    async function loadDisk(machineId) {
+        const held = S.disks.get(machineId);
         if (held && held.state === 'loading') return;
-        S.disks.set(machine, { state: 'loading', filesystems: null, error: null });
+        S.disks.set(machineId, { state: 'loading', filesystems: null, error: null });
         try {
-            const res = await fetch('/machines/' + encodeURIComponent(midOf(machine)) + '/disk');
+            const res = await fetch('/machines/' + encodeURIComponent(machineId) + '/disk');
             const body = await res.json();
             if (res.ok) {
-                S.disks.set(machine, { state: 'ready', filesystems: body, error: null });
+                S.disks.set(machineId, { state: 'ready', filesystems: body, error: null });
             } else {
                 // The server's own sentence, verbatim — "Vaier could not read the disk on X. The machine may
                 // be asleep..." says everything a status code cannot. A disk Vaier failed to read is never
                 // painted as a disk with room on it.
-                S.disks.set(machine, { state: 'error', filesystems: null,
-                    error: body.message || 'Vaier could not read the disks on ' + machine + '.' });
+                S.disks.set(machineId, { state: 'error', filesystems: null,
+                    error: body.message || 'Vaier could not read the disks on ' + nameOf(machineId) + '.' });
             }
         } catch (e) {
-            S.disks.set(machine, { state: 'error', filesystems: null,
-                error: 'Vaier could not read the disks on ' + machine + '.' });
+            S.disks.set(machineId, { state: 'error', filesystems: null,
+                error: 'Vaier could not read the disks on ' + nameOf(machineId) + '.' });
         }
         render();
     }
@@ -517,15 +533,15 @@
     // looked at, never polled: a new nightly backup lands on a reload, not under the operator's cursor. A
     // machine with no backup job answers with an empty list and simply grows no rail — the file browser is
     // exactly what it was. A failure is the same quiet outcome: no rail, and the present still browses.
-    async function loadArchives(machine) {
-        const held = S.archives.get(machine);
+    async function loadArchives(machineId) {
+        const held = S.archives.get(machineId);
         if (held && (held.state === 'loading' || held.state === 'ready')) return;   // once per machine
-        S.archives.set(machine, { state: 'loading', list: [], error: null });
+        S.archives.set(machineId, { state: 'loading', list: [], error: null });
         try {
-            const res = await fetch('/machines/' + encodeURIComponent(midOf(machine)) + '/archives');
-            S.archives.set(machine, { state: 'ready', list: res.ok ? await res.json() : [], error: null });
+            const res = await fetch('/machines/' + encodeURIComponent(machineId) + '/archives');
+            S.archives.set(machineId, { state: 'ready', list: res.ok ? await res.json() : [], error: null });
         } catch (e) {
-            S.archives.set(machine, { state: 'ready', list: [], error: null });
+            S.archives.set(machineId, { state: 'ready', list: [], error: null });
         }
         render();
     }
@@ -536,15 +552,15 @@
     // The domain decides which apply (GET /machines/{name}/nudges); the shell only renders them and routes the
     // action, so "should this fire?" is never re-derived in JS. A failure is a quiet empty list: no nudges,
     // the pane is exactly what it was.
-    async function loadNudges(machine) {
-        const held = S.nudges.get(machine);
+    async function loadNudges(machineId) {
+        const held = S.nudges.get(machineId);
         if (held && (held.state === 'loading' || held.state === 'ready')) return;   // once per machine
-        S.nudges.set(machine, { state: 'loading', list: [] });
+        S.nudges.set(machineId, { state: 'loading', list: [] });
         try {
-            const res = await fetch('/machines/' + encodeURIComponent(midOf(machine)) + '/nudges', { cache: 'no-store' });
-            S.nudges.set(machine, { state: 'ready', list: res.ok ? await res.json() : [] });
+            const res = await fetch('/machines/' + encodeURIComponent(machineId) + '/nudges', { cache: 'no-store' });
+            S.nudges.set(machineId, { state: 'ready', list: res.ok ? await res.json() : [] });
         } catch (e) {
-            S.nudges.set(machine, { state: 'ready', list: [] });
+            S.nudges.set(machineId, { state: 'ready', list: [] });
         }
         render();
     }
@@ -592,15 +608,16 @@
     // A machine wears its device's shape — server, NAS, printer — the same icon its Infrastructure card uses,
     // read off its device category. A category with no icon (or a machine not yet loaded) falls back to the
     // generic machine glyph, never to a blank.
-    function machineIcon(name) {
-        const m = S.machines.find((x) => x.name === name);
+    function machineIcon(machineId) {
+        const m = machineById(machineId);
         const cat = m && m.deviceCategory ? String(m.deviceCategory).toLowerCase() : '';
         return ICON[cat] ? cat : 'machine';
     }
 
-    const iconFor = (kind, name) => {
-        if (kind === 'settings' || kind === 'gbridge') return (GLOBALS.find((g) => g.name === name) || {}).icon || 'file';
-        if (kind === 'machine') return machineIcon(name);
+    // {@code segment} is the path segment the row stands on — a machine's identity, a global's name.
+    const iconFor = (kind, segment) => {
+        if (kind === 'settings' || kind === 'gbridge') return (GLOBALS.find((g) => g.name === segment) || {}).icon || 'file';
+        if (kind === 'machine') return machineIcon(segment);
         return ICON_FOR[kind] || 'file';
     };
 
@@ -636,21 +653,21 @@
         'UNKNOWN':  'is-idle',
     };
 
-    function livenessOf(name) {
+    function livenessOf(machineId) {
         // We are standing inside the answer.
-        if (name === VAIER_SERVER) return 'is-up';
+        if (nameOf(machineId) === VAIER_SERVER) return 'is-up';
 
-        const peer = peerNamed(name);
+        const peer = S.peers.get(machineId);
         if (peer) {
             if (peer.connected) return 'is-up';
             // A pure client (phone / Mac / Linux / Windows PC) being offline is routine, not an error —
             // it's grey, not red. Only a server-type peer down is notable, the same SERVER_TYPES split the
             // up/down alert policy uses (a laptop that's asleep should never look like a server that fell over).
-            const m = S.machines.find((x) => x.name === name);
+            const m = machineById(machineId);
             return m && !SERVER_TYPES.has(m.type) ? 'is-idle' : 'is-down';
         }
 
-        const server = S.lan.get(name);
+        const server = S.lan.get(nameOf(machineId));
         if (server) return STATUS_DOT[server.status] || 'is-idle';
 
         return 'is-idle';   // a machine with no liveness source at all — honest, not a bug
@@ -662,10 +679,10 @@
         });
     }
 
-    function dot(name) {
+    function dot(machineId) {
         const el = document.createElement('span');
-        el.className = 'ex-dot ' + livenessOf(name);
-        el.setAttribute('data-ex-dot', name);
+        el.className = 'ex-dot ' + livenessOf(machineId);
+        el.setAttribute('data-ex-dot', machineId);
         return el;
     }
 
@@ -675,14 +692,14 @@
     // archives) reads off the one designated server. They run in that order because it is a progression from
     // how a machine is reached, through what it runs, to what it keeps. A machine with none gets an empty
     // strip, so names still line up. Icon-only; the capability rides along as the glyph's hover title.
-    function machineCaps(name) {
-        const m = S.machines.find((x) => x.name === name);
-        const peer = m ? S.peers.get(m.id) : undefined;
+    function machineCaps(machineId) {
+        const m = machineById(machineId);
+        const peer = S.peers.get(machineId);
         const caps = document.createElement('span');
         caps.className = 'ex-caps';
         if (peer && peer.isRelay) caps.appendChild(capIcon('relay', 'Relay — routes a LAN behind it'));
         if (m && m.runsDocker) caps.appendChild(capIcon('docker', 'Runs Docker'));
-        if (S.backupServer && S.backupServer.machineName === name) {
+        if (S.backupServer && S.backupServer.machineId === machineId) {
             caps.appendChild(capIcon('backupserver', 'Backup server — the fleet’s archives are kept here'));
         }
         return caps;
@@ -704,8 +721,8 @@
     // same RUN_DOT map the job pane uses, so the tree and the pane can never disagree about a run. A machine
     // with no job (the backup server's own entry — it is the store, not a thing that is stored) grows no dot,
     // and a job that has never run gets the idle one: "not yet" is neither trouble nor success.
-    function backupDot(machine) {
-        const job = jobsOn(machine)[0];
+    function backupDot(machineId) {
+        const job = jobsOn(machineId)[0];
         if (!job) return null;
         const d = el('span', 'ex-dot ' + (RUN_DOT[job.lastRunStatus] || 'is-idle'));
         d.title = RUN_WORD[job.lastRunStatus] || 'No backup has run yet';
@@ -839,9 +856,16 @@
                 sep.textContent = '/';
                 bar.appendChild(sep);
             }
-            // A top-level global reads by its label ("Settings"), not its lowercase address.
-            const text = (i === 0 && seg !== 'fleet')
-                ? ((GLOBALS.find((g) => g.name === seg) || {}).label || seg) : seg;
+            // Segments are addresses; crumbs are for reading. A top-level global reads by its label
+            // ("Settings"), not its lowercase address — and the machine segment is an identity, so it reads
+            // by the machine's name. The bar says where you are, and nobody is anywhere called
+            // "7a6d0e35-25d9-420c-b7bc-1815ce7e0dc1".
+            let text = seg;
+            if (i === 0 && seg !== 'fleet') {
+                text = (GLOBALS.find((g) => g.name === seg) || {}).label || seg;
+            } else if (i === 1 && S.path[0] === 'fleet' && seg !== 'map') {
+                text = nameOf(seg);
+            }
             if (i === S.path.length - 1) {
                 const here = document.createElement('span');
                 here.className = 'ex-crumb-here';
@@ -899,7 +923,7 @@
         return el;
     }
 
-    function card(icon, name, nameIsId, noteText, onClick, dotName) {
+    function card(icon, name, nameIsId, noteText, onClick, dotMachineId) {
         const btn = document.createElement('button');
         btn.className = 'ex-card';
 
@@ -910,7 +934,7 @@
         nm.className = 'ex-card-name' + (nameIsId ? '' : ' is-word');
         nm.textContent = name;
         top.appendChild(nm);
-        if (dotName) top.appendChild(dot(dotName));
+        if (dotMachineId) top.appendChild(dot(dotMachineId));
         btn.appendChild(top);
 
         const n = document.createElement('div');
@@ -957,8 +981,22 @@
         return renderDirectory(pane);
     }
 
+    /**
+     * The identity of a machine Vaier has just created, found once by the name it was created under.
+     *
+     * <p>The last name→identity crossing in the shell, and confined to that one moment: a create response
+     * says what it made but not which machine it became, so the fleet is re-read and the new machine is
+     * matched by the name the operator just typed. Every other coordinate in this file is an identity
+     * already. It goes when the create endpoints answer with the machine's id, which is what has to happen
+     * before two machines may share a name.
+     */
+    function justCreated(machineName) {
+        const m = S.machines.find((x) => x.name === machineName);
+        return m ? m.id : machineName;
+    }
+
     function renderFleet(pane) {
-        const online = S.machines.filter((m) => livenessOf(m.name) === 'is-up').length;
+        const online = S.machines.filter((m) => livenessOf(m.id) === 'is-up').length;
         pane.appendChild(paneHead('Fleet', false,
             S.machines.length + (S.machines.length === 1 ? ' machine · ' : ' machines · ') + online
             + ' online'));
@@ -975,9 +1013,9 @@
             grid.className = 'ex-grid';
             sortedMachines().forEach((m) => {
                 const address = tunnelAddress(m);
-                grid.appendChild(card(machineIcon(m.name), m.name, true,
+                grid.appendChild(card(machineIcon(m.id), m.name, true,
                     MACHINE_TYPE[m.type] + (address ? ' · ' + address : ''),
-                    () => { S.open.add(key(['fleet', m.name])); go(['fleet', m.name]); }, m.name));
+                    () => { S.open.add(key(['fleet', m.id])); go(['fleet', m.id]); }, m.id));
             });
             body.appendChild(grid);
         }
@@ -1122,7 +1160,7 @@
 
         const peer = S.peers.get(m.id);
         const head = paneHead(m.name, true, MACHINE_TYPE[m.type]);
-        head.querySelector('.ex-pane-title').appendChild(dot(m.name));
+        head.querySelector('.ex-pane-title').appendChild(dot(m.id));
         pane.appendChild(head);
 
         const body = document.createElement('div');
@@ -1167,14 +1205,14 @@
             grid.className = 'ex-grid';
             const NOTE = {
                 files:      'Browse over SFTP',
-                containers: containersOn(m.name).length + ' seen by Vaier',
-                services:   servicesOn(m.name).length + ' published from here',
+                containers: containersOn(m.id).length + ' seen by Vaier',
+                services:   servicesOn(m.id).length + ' published from here',
                 disk:       'Its filesystems, and how full they are',
                 backup:     'The fleet backs up here',
             };
             inside.forEach((kid) => {
                 grid.appendChild(card(iconFor(kid.kind, kid.name), kid.name, true,
-                    NOTE[kid.name], () => go(['fleet', m.name, kid.name])));
+                    NOTE[kid.name], () => go(['fleet', m.id, kid.name])));
             });
             body.appendChild(grid);
         }
@@ -1185,8 +1223,8 @@
         // (GET /machines/{name}/nudges) — so the shell no longer hand-rolls "offer a backup server when none
         // exists yet" here; it renders whatever the domain returns and only routes the action. Read once per
         // machine, repainted, never polled.
-        const nudges = S.nudges.get(m.name);
-        if (!nudges) loadNudges(m.name);
+        const nudges = S.nudges.get(m.id);
+        if (!nudges) loadNudges(m.id);
         if (nudges && nudges.state === 'ready' && nudges.list.length) {
             body.appendChild(section('Suggested next steps'));
             nudges.list.forEach((n) => body.appendChild(nudgeCard(m, n)));
@@ -1201,7 +1239,7 @@
             body.appendChild(section('SSH access'));
             const access = el('label', 'ex-check-row');
             const box = el('input'); box.type = 'checkbox'; box.checked = !!m.sshAccess;
-            box.onchange = () => toggleSshAccess(m.name, box.checked, box);
+            box.onchange = () => toggleSshAccess(m.id, box.checked, box);
             const atxt = el('span'); atxt.textContent = 'Let Vaier open an SSH session to this machine';
             access.append(box, atxt);
             body.appendChild(access);
@@ -1209,8 +1247,8 @@
                 const cred = el('div', 'ex-lactions is-static');
                 // The shell lives here now, beside the credential it uses — opening a terminal is the most direct
                 // thing SSH access is for, so it sits with it rather than as a separate entry in the tree.
-                cred.appendChild(selVerb('shell', 'Open shell', 'ex-btn is-accent', () => openShellWindow(m.name)));
-                cred.appendChild(selVerb('gear', 'SSH credential', 'ex-btn', () => credentialDialog(m.name)));
+                cred.appendChild(selVerb('shell', 'Open shell', 'ex-btn is-accent', () => openShellWindow(m.id)));
+                cred.appendChild(selVerb('gear', 'SSH credential', 'ex-btn', () => credentialDialog(m.id)));
                 body.appendChild(cred);
                 body.appendChild(note('The shell opens in its own window and runs on ' + m.name + ' itself, so it '
                     + 'survives closing the window — and even a Vaier restart. Reopening reattaches you right where '
@@ -1257,8 +1295,8 @@
     // where folders are ticked and protected; DESIGNATE → the make-the-backup-server form. Keyed by the
     // domain's nudge kind; an unknown kind falls back to a no-op label so a new kind can never throw here.
     const NUDGE_ACTION = {
-        PUBLISH:                 (m) => ({ icon: 'route',   label: 'Publish',          run: () => go(['fleet', m.name, 'services']) }),
-        BACK_UP:                 (m) => ({ icon: 'archive', label: 'Choose folders',   run: () => go(['fleet', m.name, 'files']) }),
+        PUBLISH:                 (m) => ({ icon: 'route',   label: 'Publish',          run: () => go(['fleet', m.id, 'services']) }),
+        BACK_UP:                 (m) => ({ icon: 'archive', label: 'Choose folders',   run: () => go(['fleet', m.id, 'files']) }),
         DESIGNATE_BACKUP_SERVER: (m) => ({ icon: 'nas',     label: 'Set it up',        run: () => designateBackupServer(m) }),
     };
 
@@ -1327,8 +1365,10 @@
         await loadFleet();
         await loadServices();   // a rename shifts the host key services hang under
         if (ok) toast(m.name + ' updated.');
-        S.open.add(key(['fleet', renamedTo]));
-        go(['fleet', renamedTo]);
+        // Renaming no longer moves the machine's coordinate — its identity is what the tree stands on, so
+        // the pane simply re-labels itself where it is.
+        S.open.add(key(['fleet', m.id]));
+        go(['fleet', m.id]);
     }
 
     // The edit form: a machine's human details, resolved as a body or null. A server peer also gets its LAN
@@ -1392,14 +1432,14 @@
     // Whether Vaier may open an SSH session to a machine at all — the switch above the credential. Distinct from
     // the credential itself: this is the capability, that is the login. Optimistic, with the checkbox reverted if
     // the server refuses; on success the fleet reloads so the files/shell/disk entries appear or vanish with it.
-    async function toggleSshAccess(machine, enabled, checkbox) {
+    async function toggleSshAccess(machineId, enabled, checkbox) {
         checkbox.disabled = true;
-        const ok = await patchJson('/machines/' + encodeURIComponent(midOf(machine)) + '/ssh-access', { enabled },
+        const ok = await patchJson('/machines/' + encodeURIComponent(machineId) + '/ssh-access', { enabled },
             'Could not update SSH access.');
         if (!ok) { checkbox.checked = !enabled; checkbox.disabled = false; return; }
         await loadFleet();
-        toast(enabled ? 'Vaier can now open SSH sessions to ' + machine + '.'
-                      : 'SSH sessions to ' + machine + ' turned off.');
+        toast(enabled ? 'Vaier can now open SSH sessions to ' + nameOf(machineId) + '.'
+                      : 'SSH sessions to ' + nameOf(machineId) + ' turned off.');
         render();
     }
 
@@ -1941,7 +1981,11 @@
 
             const actions = actionsRow();
             const done = el('button', 'ex-btn is-accent'); done.textContent = 'Done';
-            done.onclick = () => { close(); S.open.add(key(['fleet', a.name])); go(['fleet', a.name]); };
+            done.onclick = () => {
+                close();
+                const id = justCreated(a.name);
+                S.open.add(key(['fleet', id])); go(['fleet', id]);
+            };
             actions.appendChild(done);
             content.appendChild(actions);
         }
@@ -2262,7 +2306,11 @@
 
             const actions = actionsRow();
             const done = el('button', 'ex-btn is-accent'); done.textContent = 'Done';
-            done.onclick = () => { close(); S.open.add(key(['fleet', p.name])); go(['fleet', p.name]); };
+            done.onclick = () => {
+                close();
+                const id = justCreated(p.name);
+                S.open.add(key(['fleet', id])); go(['fleet', id]);
+            };
             actions.appendChild(done);
             content.appendChild(actions);
         }
@@ -2448,8 +2496,9 @@
                 ? ' Its SSH login couldn’t be saved — set one from the machine.' : '';
             await loadFleet();
             toast(body.name + ' added.' + credNote);
-            S.open.add(key(['fleet', body.name]));
-            go(['fleet', body.name]);
+            const added = justCreated(body.name);
+            S.open.add(key(['fleet', added]));
+            go(['fleet', added]);
             return true;
         } catch (e) {
             toast('Vaier could not add that machine.');
@@ -2562,10 +2611,11 @@
     // The SSH credential Vaier holds for a machine, ported from the Infrastructure page's modal. Loads the
     // stored username/method on open (the secret is never returned), saves a new one, or forgets it. This is
     // what turns a machine's files/shell/disk/backups on — without it they are dark.
-    function credentialDialog(machine) {
+    function credentialDialog(machineId) {
+        const machineName = nameOf(machineId);
         const scrim = el('div', 'ex-scrim is-on');
         const dialog = el('div', 'ex-dialog');
-        const h = el('div', 'ex-dialog-title'); h.textContent = 'SSH credential — ' + machine;
+        const h = el('div', 'ex-dialog-title'); h.textContent = 'SSH credential — ' + machineName;
         const status = el('div', 'ex-dialog-body'); status.textContent = 'Checking…';
         const form = el('div', 'ex-form');
         const field = (label, hint, control) => {
@@ -2610,7 +2660,7 @@
         document.addEventListener('keydown', onKey);
         username.focus();
 
-        fetch('/machines/' + encodeURIComponent(midOf(machine)) + '/ssh-credential').then(async (r) => {
+        fetch('/machines/' + encodeURIComponent(machineId) + '/ssh-credential').then(async (r) => {
             if (r.status === 404) { status.textContent = 'No credential stored yet.'; return; }
             if (!r.ok) { status.textContent = 'Could not read the credential status.'; return; }
             const v = await r.json();
@@ -2627,24 +2677,24 @@
             if (!secret.trim()) { toast('Enter the ' + (method.value === 'PRIVATE_KEY' ? 'private key' : 'password') + '.'); return; }
             ok.disabled = true;
             try {
-                const r = await fetch('/machines/' + encodeURIComponent(midOf(machine)) + '/ssh-credential', {
+                const r = await fetch('/machines/' + encodeURIComponent(machineId) + '/ssh-credential', {
                     method: 'PUT', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username: username.value.trim(), authMethod: method.value,
                         secret: secret, passphrase: passphrase.value || null }),
                 });
                 if (!r.ok) { const e = await r.json().catch(() => ({})); toast(e.message || 'Could not save the credential.'); ok.disabled = false; return; }
-                toast('SSH credential saved for ' + machine + '.');
+                toast('SSH credential saved for ' + machineName + '.');
                 close(); await loadFleet(); render();
             } catch (e) { toast('Could not save the credential.'); ok.disabled = false; }
         };
 
         del.onclick = async () => {
-            const sure = await confirmModal('Delete the SSH credential for ' + machine + '?',
-                'Vaier forgets the login it holds for ' + machine + '. Its files, shell, disk and backups go dark '
+            const sure = await confirmModal('Delete the SSH credential for ' + machineName + '?',
+                'Vaier forgets the login it holds for ' + machineName + '. Its files, shell, disk and backups go dark '
                 + 'until you set one again.', 'Delete');
             if (!sure) return;
             try {
-                const r = await fetch('/machines/' + encodeURIComponent(midOf(machine)) + '/ssh-credential', { method: 'DELETE' });
+                const r = await fetch('/machines/' + encodeURIComponent(machineId) + '/ssh-credential', { method: 'DELETE' });
                 if (!r.ok && r.status !== 204) { toast('Could not delete the credential.'); return; }
                 toast('SSH credential deleted.');
                 close(); await loadFleet(); render();
@@ -2661,8 +2711,9 @@
     // the place where an operator must be able to trust what the screen says.
 
     function renderContainers(pane) {
-        const machine = S.path[1];
-        const found = containersOn(machine);
+        const machineId = S.path[1];
+        const machineName = nameOf(machineId);
+        const found = containersOn(machineId);
         pane.appendChild(paneHead('Containers', false,
             found.length + (found.length === 1 ? ' container' : ' containers')));
 
@@ -2707,7 +2758,7 @@
         rows.appendChild(listHead(['Name', 'Image', 'State']));
         found.forEach((c) => {
             rows.appendChild(listRow(
-                'box', c.containerName, () => go(['fleet', machine, 'containers', c.containerName]),
+                'box', c.containerName, () => go(['fleet', machineId, 'containers', c.containerName]),
                 [c.image || '—', c.state || 'unknown'],
                 c.state === 'running' ? 'OK' : 'DOWN', updateMark(c)));
         });
@@ -2716,15 +2767,16 @@
     }
 
     function renderContainer(pane) {
-        const machine = S.path[1];
+        const machineId = S.path[1];
+        const machineName = nameOf(machineId);
         const name = S.path[3];
-        const c = containersOn(machine).find((x) => x.containerName === name);
+        const c = containersOn(machineId).find((x) => x.containerName === name);
         if (!c) {
-            return pane.appendChild(note('Vaier no longer sees a container by that name on ' + machine + '.',
+            return pane.appendChild(note('Vaier no longer sees a container by that name on ' + machineName + '.',
                 true));
         }
 
-        pane.appendChild(paneHead(name, true, machine));
+        pane.appendChild(paneHead(name, true, machineName));
         const body = document.createElement('div');
         body.className = 'ex-pane-body';
 
@@ -2754,10 +2806,11 @@
     // --- services: a route, a machine and a DNS record are one thing ------------------------------------
 
     function renderServices(pane) {
-        const machine = S.path[1];
-        const found = servicesOn(machine);
-        const open = candidatesOn(machine).filter((c) => !c.ignored);
-        const hidden = candidatesOn(machine).filter((c) => c.ignored);
+        const machineId = S.path[1];
+        const machineName = nameOf(machineId);
+        const found = servicesOn(machineId);
+        const open = candidatesOn(machineId).filter((c) => !c.ignored);
+        const hidden = candidatesOn(machineId).filter((c) => c.ignored);
         pane.appendChild(paneHead('Services', false,
             found.length + (found.length === 1 ? ' published service' : ' published services')));
 
@@ -2771,7 +2824,7 @@
             const rows = el('div', 'ex-listing is-wide');
             rows.appendChild(listHead(['Published at', 'Backend', 'State']));
             found.forEach((s) => rows.appendChild(listRow('route', s.dnsAddress || serviceName(s),
-                () => go(['fleet', machine, 'services', serviceName(s)]),
+                () => go(['fleet', machineId, 'services', serviceName(s)]),
                 [(s.hostAddress || '') + (s.hostPort ? ':' + s.hostPort : ''), s.state || 'UNKNOWN'], s.state)));
             body.appendChild(rows);
         }
@@ -2779,9 +2832,9 @@
         // Container ports Vaier could put on the internet — publish one, or ignore it so it stops being offered.
         if (open.length) {
             body.appendChild(section('Ready to publish'));
-            open.forEach((c) => body.appendChild(candidateRow(machine, c, [
-                selVerb('route', 'Publish', 'ex-btn is-accent', () => publishCandidate(machine, c)),
-                selVerb('cross', 'Ignore', 'ex-btn', () => ignoreCandidate(machine, c)),
+            open.forEach((c) => body.appendChild(candidateRow(machineName, c, [
+                selVerb('route', 'Publish', 'ex-btn is-accent', () => publishCandidate(machineId, c)),
+                selVerb('cross', 'Ignore', 'ex-btn', () => ignoreCandidate(machineId, c)),
             ])));
         }
         // The dismissed ports, folded away behind a toggle — the same reflex as the LAN scan's ignored finds.
@@ -2796,8 +2849,8 @@
                 () => { _showIgnoredServices = !_showIgnoredServices; render(); }));
             body.appendChild(toggle);
             if (_showIgnoredServices) {
-                hidden.forEach((c) => body.appendChild(candidateRow(machine, c, [
-                    selVerb('check', 'Unignore', 'ex-btn', () => unignoreCandidate(machine, c)),
+                hidden.forEach((c) => body.appendChild(candidateRow(machineName, c, [
+                    selVerb('check', 'Unignore', 'ex-btn', () => unignoreCandidate(machineId, c)),
                 ])));
             }
         }
@@ -2805,7 +2858,7 @@
         // by hand: name a port on this machine and Vaier makes the route and the DNS record just the same.
         body.appendChild(section('Publish a service by hand'));
         const manual = el('div', 'ex-lactions is-static');
-        manual.appendChild(selVerb('route', 'Publish a service', 'ex-btn', () => lanPublish(machine)));
+        manual.appendChild(selVerb('route', 'Publish a service', 'ex-btn', () => lanPublish(machineId)));
         body.appendChild(manual);
         pane.appendChild(body);
     }
@@ -2823,22 +2876,22 @@
         return row;
     }
 
-    async function reloadServices(machine) {
+    async function reloadServices(machineId) {
         await loadServices();
-        go(['fleet', machine, 'services']);   // stay on the entry; it repaints from the fresh data
+        go(['fleet', machineId, 'services']);   // stay on the entry; it repaints from the fresh data
     }
 
     // Publish a container port: the only choices that are the operator's are the subdomain (defaulted from the
     // container name by the domain) and whether it sits behind login. Everything else — the DNS record, the
     // Traefik route — Vaier does. So the form is two fields.
-    function publishCandidate(machine, c) {
+    function publishCandidate(machineId, c) {
         publishForm(c).then((body) => {
             if (!body) return;
             saveJson('/published-services/publish', 'POST', {
                 address: c.address, port: c.port, subdomain: body.subdomain, requiresAuth: body.requiresAuth,
                 rootRedirectPath: body.rootRedirectPath, directUrlDisabled: body.directUrlDisabled,
                 pathPrefix: body.pathPrefix,
-            }, 'Publishing ' + body.subdomain + '…', () => reloadServices(machine),
+            }, 'Publishing ' + body.subdomain + '…', () => reloadServices(machineId),
                'Could not publish that.');
         });
     }
@@ -2863,14 +2916,14 @@
         return { pathPrefix, redirect, direct };
     }
 
-    function ignoreCandidate(machine, c) {
+    function ignoreCandidate(machineId, c) {
         saveJson('/published-services/publishable/ignore', 'POST', { key: c.ignoreKey },
-            'Ignored ' + c.containerName + '.', () => reloadServices(machine), 'Could not ignore that.');
+            'Ignored ' + c.containerName + '.', () => reloadServices(machineId), 'Could not ignore that.');
     }
 
-    function unignoreCandidate(machine, c) {
+    function unignoreCandidate(machineId, c) {
         saveJson('/published-services/publishable/unignore', 'POST', { key: c.ignoreKey },
-            c.containerName + ' can be published again.', () => reloadServices(machine), 'Could not unignore that.');
+            c.containerName + ' can be published again.', () => reloadServices(machineId), 'Could not unignore that.');
     }
 
     // A small POST/PUT helper for the fire-and-refresh actions: send, toast a first message, and on success run
@@ -2938,14 +2991,18 @@
     // Publish a service by hand — a port on the machine that Vaier did not find as a container. The machine is
     // the context; the operator names the subdomain, the port, whether it speaks http or https, and whether it
     // needs a login. Vaier makes the DNS record and the route.
-    function lanPublish(machine) {
-        lanPublishForm(machine).then((body) => {
+    function lanPublish(machineId) {
+        // The one place both forms of address are needed at once: the endpoint still takes a machine NAME in
+        // its body, while the coordinate we return to is an identity. Crossing once, here, keeps that seam
+        // out of the caller.
+        const machineName = nameOf(machineId);
+        lanPublishForm(machineName).then((body) => {
             if (!body) return;
             saveJson('/published-services/lan', 'POST', {
-                subdomain: body.subdomain, machineName: machine, port: body.port, protocol: body.protocol,
+                subdomain: body.subdomain, machineName: machineName, port: body.port, protocol: body.protocol,
                 requireAuth: body.requireAuth, directUrlDisabled: body.directUrlDisabled,
                 rootRedirectPath: body.rootRedirectPath, pathPrefix: body.pathPrefix,
-            }, 'Publishing ' + body.subdomain + '…', () => reloadServices(machine), 'Could not publish that.');
+            }, 'Publishing ' + body.subdomain + '…', () => reloadServices(machineId), 'Could not publish that.');
         });
     }
 
@@ -3118,12 +3175,13 @@
     }
 
     function renderService(pane) {
-        const machine = S.path[1];
-        const s = servicesOn(machine).find((x) => serviceName(x) === S.path[3]);
-        if (!s) return pane.appendChild(note('That service is no longer published from ' + machine + '.',
+        const machineId = S.path[1];
+        const machineName = nameOf(machineId);
+        const s = servicesOn(machineId).find((x) => serviceName(x) === S.path[3]);
+        if (!s) return pane.appendChild(note('That service is no longer published from ' + machineName + '.',
             true));
 
-        pane.appendChild(paneHead(s.dnsAddress || serviceName(s), true, machine));
+        pane.appendChild(paneHead(s.dnsAddress || serviceName(s), true, machineName));
 
         const body = el('div', 'ex-pane-body');
 
@@ -3192,7 +3250,7 @@
         // The point of the single namespace, said plainly. These three are not three things that happen to
         // share a name — they are one service, and when one of them is wrong the service is down.
         body.appendChild(note('A published service is one thing with three homes: a container on '
-            + machine + ', a route through Traefik, and a DNS record at ' + (s.dnsAddress || 'its name')
+            + machineName + ', a route through Traefik, and a DNS record at ' + (s.dnsAddress || 'its name')
             + '. Unpublishing removes the route and the DNS record. The container keeps running — the '
             + 'machine that hosts it does not notice.', false));
 
@@ -3202,7 +3260,7 @@
         // explanation, and you have to arrive at it deliberately.
         const danger = el('div', 'ex-lactions is-static');
         const del = el('button', 'ex-btn is-danger'); del.textContent = 'Unpublish';
-        del.onclick = () => unpublish(s, machine);
+        del.onclick = () => unpublish(s, machineId);
         danger.appendChild(del);
         body.appendChild(danger);
         pane.appendChild(body);
@@ -3220,22 +3278,23 @@
     // recomputing locally.
 
     function renderDisk(pane) {
-        const machine = S.path[1];
+        const machineId = S.path[1];
+        const machineName = nameOf(machineId);
         pane.appendChild(paneHead('Disk', false, 'Filesystems'));
 
         const body = document.createElement('div');
         body.className = 'ex-pane-body';
         pane.appendChild(body);
 
-        if (!S.disks.has(machine)) loadDisk(machine);      // it re-renders when it lands
+        if (!S.disks.has(machineId)) loadDisk(machineId);      // it re-renders when it lands
 
-        const held = S.disks.get(machine);
+        const held = S.disks.get(machineId);
         if (!held || held.state === 'loading') {
-            return body.appendChild(note('Reading the disks on ' + machine + '…', false));
+            return body.appendChild(note('Reading the disks on ' + machineName + '…', false));
         }
         if (held.state === 'error') return body.appendChild(note(held.error, true));
 
-        held.filesystems.forEach(fs => body.appendChild(filesystemBlock(fs, machine)));
+        held.filesystems.forEach(fs => body.appendChild(filesystemBlock(fs, machineId)));
 
         body.appendChild(note('Vaier reads these with df over SSH, on a schedule, and emails the admins when '
             + 'a watched filesystem crosses its threshold. A filesystem with no threshold of its own is '
@@ -3246,7 +3305,7 @@
 
     // One filesystem: what it is, how full, what it is judged against, and whether Vaier is watching at all.
     // Mount point and device are coordinates, so they are mono — the shell's one type rule.
-    function filesystemBlock(fs, machine) {
+    function filesystemBlock(fs, machineId) {
         const block = document.createElement('div');
         block.className = 'ex-fs' + (fs.aboveThreshold ? ' is-over' : '') + (fs.watched ? '' : ' is-muted');
 
@@ -3270,14 +3329,14 @@
         block.appendChild(top);
 
         block.appendChild(meter(fs.usedPercent, fs.thresholdPercent, fs.aboveThreshold, fs.watched));
-        block.appendChild(watchControl(fs, machine));
+        block.appendChild(watchControl(fs, machineId));
         return block;
     }
 
     // The mute switch and the threshold. Both write to PUT /machines/{machine}/disk/watch — the mount point
     // travels in the body, because a mount point is full of slashes and a path variable carrying them is an
     // encoding bug waiting to happen.
-    function watchControl(fs, machine) {
+    function watchControl(fs, machineId) {
         const ctl = document.createElement('div');
         ctl.className = 'ex-fs-ctl';
 
@@ -3286,7 +3345,7 @@
         watch.type = 'checkbox';
         watch.checked = fs.watched;
         watch.addEventListener('change',
-            () => saveWatch(machine, fs.mountPoint, watch.checked, fs.thresholdPercent));
+            () => saveWatch(machineId, fs.mountPoint, watch.checked, fs.thresholdPercent));
         const watchText = document.createElement('span');
         watchText.textContent = 'Watch';
         watchLabel.append(watch, watchText);
@@ -3303,7 +3362,7 @@
         thresh.value = fs.thresholdPercent;
         thresh.disabled = !fs.watched;
         thresh.addEventListener('change',
-            () => saveWatch(machine, fs.mountPoint, fs.watched, Number(thresh.value)));
+            () => saveWatch(machineId, fs.mountPoint, fs.watched, Number(thresh.value)));
         const pct = document.createElement('span');
         pct.textContent = '%';
         threshLabel.append(threshText, thresh, pct);
@@ -3314,9 +3373,9 @@
     // Write the watch, then re-read the machine's disks. The re-read is the point: the breach verdict is the
     // domain's, so a new threshold has to come back FROM the server rather than being recomputed here. The
     // email and this pane can never disagree, because only one of them ever decides.
-    async function saveWatch(machine, mountPoint, watched, thresholdPercent) {
+    async function saveWatch(machineId, mountPoint, watched, thresholdPercent) {
         try {
-            const res = await fetch('/machines/' + encodeURIComponent(midOf(machine)) + '/disk/watch', {
+            const res = await fetch('/machines/' + encodeURIComponent(machineId) + '/disk/watch', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mountPoint, watched, thresholdPercent })
@@ -3329,8 +3388,8 @@
             alert('Vaier could not save the watch on ' + mountPoint + '.');
             return;
         }
-        S.disks.delete(machine);
-        loadDisk(machine);
+        S.disks.delete(machineId);
+        loadDisk(machineId);
     }
 
     // The shell's one figure, once per filesystem. The bar is how full it is; the tick is what that is being
@@ -3366,10 +3425,10 @@
 
     // Unpublish is the one verb slice C ships, because it is the one verb the backend actually has:
     // DELETE /published-services/{dnsName}. It tears down a Traefik route and a DNS record, so it asks first.
-    async function unpublish(s, machine) {
+    async function unpublish(s, machineId) {
         const label = s.dnsAddress || serviceName(s);
         if (!confirm('Unpublish ' + label + '?\n\nThis removes its Traefik route and its DNS record. '
-            + 'The container on ' + machine + ' keeps running.')) return;
+            + 'The container on ' + nameOf(machineId) + ' keeps running.')) return;
 
         const query = s.pathPrefix ? '?pathPrefix=' + encodeURIComponent(s.pathPrefix) : '';
         try {
@@ -3386,7 +3445,7 @@
         }
         // Stand where the service used to be: its parent. The route is gone, so the entry is gone with it.
         await loadServices();
-        go(['fleet', machine, 'services']);
+        go(['fleet', machineId, 'services']);
     }
 
     // Two shapes the Inspector lists things in, built once: a container list and a service list are the same
@@ -3574,10 +3633,11 @@
     // and how to run it now. A machine that is neither has no `backup` entry at all (childrenOf never grows one).
     // The rare machine that is both stacks the two sections.
     function renderBackup(pane) {
-        const machine = S.path[1];
+        const machineId = S.path[1];
+        const machineName = nameOf(machineId);
         const s = S.backupServer;
-        const isServer = s && s.machineName === machine;
-        const jobs = jobsOn(machine);
+        const isServer = s && s.machineName === machineName;
+        const jobs = jobsOn(machineId);
         if (!isServer && !jobs.length) {
             return pane.appendChild(note('This machine has no part in fleet backup — it is not the backup '
                 + 'server, and no job backs it up.', true));
@@ -3585,14 +3645,14 @@
         pane.appendChild(paneHead('Backup', false,
             isServer ? 'The fleet’s backup server' : 'How this machine is backed up'));
         const body = el('div', 'ex-pane-body');
-        if (isServer) renderServerBackup(body, machine, s);
-        if (jobs.length) renderJobsBackup(body, machine, jobs);
+        if (isServer) renderServerBackup(body, machineId, s);
+        if (jobs.length) renderJobsBackup(body, machineId, jobs);
         pane.appendChild(body);
     }
 
     // The machine that hosts the fleet's borg: its coordinates, the repositories on it (each an entry of its
     // own), and the identity actions. The operations that poll for an outcome stay on the Backups bridge.
-    function renderServerBackup(body, machine, s) {
+    function renderServerBackup(body, machineId, s) {
         // The operator pointed at this machine and said "keep the fleet's backups here". Everything that
         // followed — the borg user, the paths under it, the port Vaier reaches it on — Vaier chose, and none
         // of it is a decision to revisit. So the entry opens on what the machine is actually doing (what it
@@ -3612,7 +3672,7 @@
                 const row = el('div', 'ex-brepo');
                 const nm = el('button', 'ex-brepo-name is-link');
                 nm.textContent = repoLabel(r.name);
-                nm.onclick = () => go(['fleet', machine, 'backup', r.name]);
+                nm.onclick = () => go(['fleet', machineId, 'backup', r.name]);
                 const held = el('span', 'ex-brepo-path');
                 // The one fact worth carrying in a list of machines: whether anything still backs up to it.
                 held.textContent = S.backupJobs.some((j) => j.repositoryName === r.name)
@@ -3822,7 +3882,7 @@
                         baseRepoPath: 'home/borg/backups', serverDataPath: '', managed: false },
             confirmLabel: 'Designate',
         }).then((body) => {
-            if (body) putBackupServer(serverNameFor(m.name), m.name, body, 'designated');
+            if (body) putBackupServer(serverNameFor(m.name), m.id, body, 'designated');
         });
     }
 
@@ -3835,16 +3895,16 @@
             existing: s,
             confirmLabel: 'Save',
         }).then((body) => {
-            if (body) putBackupServer(s.name, s.machineName, body, 'saved');
+            if (body) putBackupServer(s.name, s.machineId, body, 'saved');
         });
     }
 
-    async function putBackupServer(name, machineName, body, verbedPast) {
+    async function putBackupServer(name, machineId, body, verbedPast) {
         try {
             const res = await fetch('/backup-servers/' + encodeURIComponent(name), {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ machineId: midOf(machineName), host: body.host, sshPort: body.sshPort,
+                body: JSON.stringify({ machineId: machineId, host: body.host, sshPort: body.sshPort,
                     borgUser: body.borgUser, baseRepoPath: body.baseRepoPath,
                     serverDataPath: body.serverDataPath, managed: body.managed }),
             });
@@ -3855,7 +3915,7 @@
             }
             await loadBackup();
             toast('Backup server ' + verbedPast + '.');
-            go(['fleet', machineName, 'backup']);   // the role now has a coordinate — stand on it
+            go(['fleet', machineId, 'backup']);   // the role now has a coordinate — stand on it
         } catch (e) {
             toast('Vaier could not save the backup server.');
         }
@@ -3880,10 +3940,10 @@
             toast('Vaier could not remove the backup server.');
             return;
         }
-        const machine = s.machineName;
+        const machineId = s.machineId;
         await loadBackup();
         toast('Backup server removed.');
-        go(['fleet', machine]);   // the `backup` entry is gone; fall back to the machine
+        go(['fleet', machineId]);   // the `backup` entry is gone; fall back to the machine
     }
 
     // The coordinates form, built on demand over the shell's overlay layer. Resolves the entered body on confirm
@@ -3987,7 +4047,8 @@
     // never polled — a nightly archive lands on a reload, not under the cursor.
 
     function renderRepo(pane) {
-        const machine = S.path[1];
+        const machineId = S.path[1];
+        const machineName = nameOf(machineId);
         const name = S.path[3];
         const s = S.backupServer;
         const r = reposOn(s).find((x) => x.name === name);
@@ -4134,11 +4195,11 @@
             toast('Vaier could not delete the repository.');
             return;
         }
-        const machine = S.path[1];
+        const machineId = S.path[1];
         S.repoArchives.delete(r.name);
         await loadBackup();
         toast('Repository deleted.');
-        go(['fleet', machine, 'backup']);   // back up to the server
+        go(['fleet', machineId, 'backup']);   // back up to the server
     }
 
     // The repository form, in the same dialog shell as the others. On create, the name is asked and a strong
@@ -4270,16 +4331,20 @@
     // protected is chosen in the file browser (tick and Back up); the schedule is fleet-wide; retention and
     // whether to read as root are Vaier's to decide, not knobs to turn. So the whole entry is a readout with a
     // single intent — run it now — and one way out — stop backing this machine up.
-    function renderJobsBackup(body, machine, jobs) {
-        if (S.preparing.has(machine)) {
+    function renderJobsBackup(body, machineId, jobs) {
+        // S.preparing is keyed by NAME because the settle event that clears it carries one; the crossing is
+        // made here rather than by keying this pane on something it does not stand on.
+        const machineName = nameOf(machineId);
+        if (S.preparing.has(machineName)) {
             const prep = el('div', 'ex-runline');
             prep.textContent = 'Getting this machine ready to back up — installing borg and trusting its key…';
             body.appendChild(prep);
         }
-        jobs.forEach((job) => renderOneJob(body, machine, job, jobs.length > 1));
+        jobs.forEach((job) => renderOneJob(body, machineId, job, jobs.length > 1));
     }
 
-    function renderOneJob(body, machine, job, named) {
+    function renderOneJob(body, machineId, job, named) {
+        const machineName = nameOf(machineId);
         if (named) {
             const h = el('div', 'ex-sub');
             h.textContent = job.name;
@@ -4299,7 +4364,7 @@
                 const row = el('div', 'ex-brepo');
                 const nm = el('button', 'ex-brepo-name is-link');
                 nm.textContent = sp;
-                nm.onclick = () => openTo(['fleet', machine, 'files'].concat(sp.split('/').filter(Boolean)));
+                nm.onclick = () => openTo(['fleet', machineId, 'files'].concat(sp.split('/').filter(Boolean)));
                 row.appendChild(nm);
                 list.appendChild(row);
             });
@@ -4317,7 +4382,7 @@
                 const row = el('div', 'ex-brepo');
                 const nm = el('button', 'ex-brepo-name is-link');
                 nm.textContent = ex;
-                nm.onclick = () => openTo(['fleet', machine, 'files'].concat(ex.split('/').filter(Boolean)));
+                nm.onclick = () => openTo(['fleet', machineId, 'files'].concat(ex.split('/').filter(Boolean)));
                 row.appendChild(nm);
                 holes.appendChild(row);
             });
@@ -4399,13 +4464,13 @@
         // the error text to work it out — and the fix is offered on the spot rather than named and left to
         // be hunted for. The command below appears only where Vaier could not gain root itself.
         const needsReady = held && held.state === 'ready' && held.run.needsClientReadying;
-        const staged = S.readying.get(machine);
-        if (needsReady && !S.preparing.has(machine)) {
+        const staged = S.readying.get(machineName);
+        if (needsReady && !S.preparing.has(machineName)) {
             body.appendChild(note('This machine has no borg client yet — nothing else is wrong. Vaier can '
                 + 'install it, and tonight’s backup will run.', true));
         }
         if (staged) {
-            body.appendChild(note('Vaier cannot become root on ' + machine + ', so it has left the installer '
+            body.appendChild(note('Vaier cannot become root on ' + machineName + ', so it has left the installer '
                 + 'there. Open this machine’s shell and run this once:', true));
             const cmd = el('div', 'ex-cmd');
             cmd.textContent = staged;
@@ -4415,9 +4480,9 @@
         const running = held && held.state === 'ready' && held.run.status === 'RUNNING';
         const acts = el('div', 'ex-lactions is-static');
         if (needsReady) {
-            const ready = selVerb('shield', S.preparing.has(machine) ? 'Getting ready…' : 'Get this machine ready',
+            const ready = selVerb('shield', S.preparing.has(machineName) ? 'Getting ready…' : 'Get this machine ready',
                 'ex-btn is-accent', () => readyClient(job));
-            if (S.preparing.has(machine)) ready.disabled = true;
+            if (S.preparing.has(machineName)) ready.disabled = true;
             acts.appendChild(ready);
         }
         const run = selVerb('refresh', running ? 'Backing up…' : 'Back up now',
@@ -4533,11 +4598,11 @@
             const res = await fetch('/backup-jobs/' + encodeURIComponent(job.name), { method: 'DELETE' });
             if (!res.ok && res.status !== 404) { toast('Vaier could not stop the backup.'); return; }
         } catch (e) { toast('Vaier could not stop the backup.'); return; }
-        const machine = job.machineName;
+        const machineId = job.machineId;
         S.jobRuns.delete(job.name);
         await loadBackup();
-        toast('Stopped backing up ' + machine + '.');
-        go(['fleet', machine]);   // the `backup` entry is gone now; the machine always stands
+        toast('Stopped backing up ' + job.machineName + '.');
+        go(['fleet', machineId]);   // the `backup` entry is gone now; the machine always stands
     }
 
     // The backups stream — the fourth and last the shell holds. It carries a run's outcome: when a launched
@@ -4597,17 +4662,17 @@
     // freely, and you can have several across a wide screen, none of which the bottom dock could give. One
     // window per machine: re-opening focuses the one already there rather than spawning a second. `popup` drops
     // the browser's tab strip and address bar — chrome a terminal has no use for.
-    function openShellWindow(machine, fresh) {
+    function openShellWindow(machineId, fresh) {
         // The socket is opened against the machine's identity, never its name — a name in that path is closed
-        // as "Machine not found". It travels in the URL so the window needs no lookup of its own.
-        const machineId = midOf(machine);
+        // as "Machine not found". Both travel in the URL: the identity to connect with, the name to show.
+        const machineName = nameOf(machineId);
         const features = 'popup,width=1024,height=680';
         // Duplicate: another, separate shell on the same machine. A brand-new session id, and a window named by
         // that id (never the machine), so it opens beside the machine's window instead of focusing it — that is
         // what lets you have several shells open on one machine at once.
         if (fresh) {
             const pane = (window.VaierPanes && VaierPanes.newId) ? VaierPanes.newId() : ('p-' + Date.now());
-            const w = window.open('terminal.html?machine=' + encodeURIComponent(machine)
+            const w = window.open('terminal.html?machine=' + encodeURIComponent(machineName)
                 + '&id=' + encodeURIComponent(machineId)
                 + '&pane=' + encodeURIComponent(pane), 'vaier-shell-' + encodeURIComponent(pane), features);
             if (!w) { toast('Your browser blocked the shell window. Allow pop-ups for Vaier and try again.'); return; }
@@ -4615,7 +4680,7 @@
             return;
         }
         // The machine's primary shell window — one per machine, so re-opening focuses the one already there.
-        const w = window.open('', 'vaier-shell-' + machine, features);
+        const w = window.open('', 'vaier-shell-' + machineName, features);
         if (!w) { toast('Your browser blocked the shell window. Allow pop-ups for Vaier and try again.'); return; }
         // A fresh window lands on about:blank — point it at the terminal, carrying the machine's *stable* primary
         // pane id so it reattaches to the same session every time (never a random orphan, and never a surprise
@@ -4623,8 +4688,8 @@
         let href = '';
         try { href = w.location.href; } catch (e) { href = ''; }
         if (!href || href === 'about:blank') {
-            const pane = (window.VaierPanes && VaierPanes.primary) ? VaierPanes.primary(machine) : '';
-            w.location.href = 'terminal.html?machine=' + encodeURIComponent(machine)
+            const pane = (window.VaierPanes && VaierPanes.primary) ? VaierPanes.primary(machineName) : '';
+            w.location.href = 'terminal.html?machine=' + encodeURIComponent(machineName)
                 + '&id=' + encodeURIComponent(machineId)
                 + (pane ? '&pane=' + encodeURIComponent(pane) : '');
         }
@@ -5080,8 +5145,8 @@
     // and Now through toPresent, so the light and the reads move together and nowhere else. A machine with no
     // archives grows no rail (an empty fragment appends nothing), so the file browser is untouched where
     // there is no past to show.
-    function renderRail(machine) {
-        const held = S.archives.get(machine);
+    function renderRail(machineId) {
+        const held = S.archives.get(machineId);
         const ready = !!held && held.state === 'ready';
         // The rail takes its room from the first paint, before the archive list has landed. It has to: that
         // list is fetched while the directory is already on screen, so a rail that appears when it arrives
@@ -5089,7 +5154,7 @@
         // "Is a rail coming?" is answered by a cheaper question Vaier can settle immediately — does a job
         // back this machine up? The job list is loaded at boot, before the first tree paint, so the answer
         // costs nothing and is in hand in time. The stops then fill into a track that is already there.
-        if (ready ? !held.list.length : !jobsOn(machine).length) return document.createDocumentFragment();
+        if (ready ? !held.list.length : !jobsOn(machineId).length) return document.createDocumentFragment();
         const archives = ready ? held.list : [];
 
         const rail = el('div', 'ex-rail' + (ready ? '' : ' is-waiting'));
@@ -5106,7 +5171,7 @@
             const stop = el('button', 'ex-rail-stop' + (a.id === S.at ? ' is-on' : ''));
             stop.title = archiveLabel(a);
             stop.setAttribute('aria-label', 'Backup from ' + archiveLabel(a));
-            stop.onclick = () => toArchive(machine, a.id);
+            stop.onclick = () => toArchive(machineId, a.id);
             stops.appendChild(stop);
         });
         track.appendChild(stops);
@@ -5132,43 +5197,47 @@
     // paint into the wrong place, because the pane always renders the slot belonging to the path it is
     // standing on, whatever landed while it was waiting.
     function renderDirectory(pane) {
-        const machine = S.path[1];
-        loadArchives(machine);                    // fills the rail; not awaited — it re-renders when it lands
+        const machineId = S.path[1];
+        // Named `machineName` and never `machine`, because everything on this pane except two sentences of
+        // prose is addressed by identity — and a variable called `machine` holding a name is exactly how the
+        // selection came to be keyed by one, which sent every bulk verb to /machines/<display name>.
+        const machineName = nameOf(machineId);
+        loadArchives(machineId);                    // fills the rail; not awaited — it re-renders when it lands
         const path = remotePath(S.path);          // null until the machine has said where its tree begins
 
         // The path lives in the address bar and nowhere else — the head names the machine and how much is
         // here, not the location again. A refresh re-reads this one directory over SFTP: the fleet changes
         // under Vaier (a Transfer just landed, a shell just wrote a file), and the cache is otherwise sticky.
-        const loaded = S.dirs.get(dirKey(machine, path, S.at));
+        const loaded = S.dirs.get(dirKey(machineId, path, S.at));
         const count = loaded && loaded.state === 'ready' ? loaded.entries.length : null;
         const sub = count == null ? null : count + (count === 1 ? ' item' : ' items');
-        const head = paneHead(machine, true, sub);
+        const head = paneHead(machineName, true, sub);
         const actions = document.createElement('div');
         actions.className = 'ex-pane-actions';
         const refresh = el('button', 'ex-iconbtn');
         refresh.innerHTML = svg('refresh', 'ex-ico');
         refresh.title = 'Refresh';
         refresh.setAttribute('aria-label', 'Refresh this folder');
-        refresh.onclick = () => refreshDir(machine, path);
+        refresh.onclick = () => refreshDir(machineId, path);
         actions.appendChild(refresh);
         head.appendChild(actions);
         pane.appendChild(head);
 
         const body = document.createElement('div');
         body.className = 'ex-pane-body';
-        body.appendChild(renderRail(machine));    // above the listing; nothing when the machine has no archives
-        body.appendChild(renderPasteBar(machine, path));   // "Paste here", only in the present with a full Clipboard
+        body.appendChild(renderRail(machineId));  // above the listing; nothing when the machine has no archives
+        body.appendChild(renderPasteBar(machineId, path)); // "Paste here", only in the present, Clipboard full
         const rows = document.createElement('div');
         rows.className = 'ex-listing';
         body.appendChild(rows);
         pane.appendChild(body);
 
-        if (dirStateOf(S.path) === 'unread') readDir(machine, path, S.at);   // it re-renders when it lands
+        if (dirStateOf(S.path) === 'unread') readDir(machineId, path, S.at);   // it re-renders when it lands
 
-        const entry = S.dirs.get(dirKey(machine, path, S.at));
+        const entry = S.dirs.get(dirKey(machineId, path, S.at));
         if (!entry || entry.state === 'loading') {
             return rows.appendChild(note('Listing ' + (path == null ? 'the file root' : path)
-                + ' on ' + machine + '…', false));
+                + ' on ' + machineName + '…', false));
         }
         // The server's own sentence, verbatim — "Not allowed to read /root as geir." says more than any
         // status code could.
@@ -5185,12 +5254,12 @@
         lhead.className = 'ex-lhead';
         // Select-all is about *this* listing: on when every row here is ticked, dashed when only some are. It
         // adds or removes only these rows, leaving the rest of the fleet-wide selection untouched.
-        const allOn = result.entries.length > 0 && result.entries.every((e) => isSelected(machine, e.path, S.at));
-        const someOn = result.entries.some((e) => isSelected(machine, e.path, S.at));
+        const allOn = result.entries.length > 0 && result.entries.every((e) => isSelected(machineId, e.path, S.at));
+        const someOn = result.entries.some((e) => isSelected(machineId, e.path, S.at));
         lhead.appendChild(checkbox(allOn, someOn && !allOn, () => {
             const shouldSelect = !allOn;
             result.entries.forEach((e) => {
-                if (isSelected(machine, e.path, S.at) !== shouldSelect) toggleSel(machine, e);
+                if (isSelected(machineId, e.path, S.at) !== shouldSelect) toggleSel(machineId, e);
             });
             render();
         }, 'Select all'));
@@ -5204,12 +5273,12 @@
         if (!result.entries.length) return rows.appendChild(note('This folder is empty.', false));
 
         result.entries.forEach((entry) => {
-            const ticked = isSelected(machine, entry.path, S.at);
+            const ticked = isSelected(machineId, entry.path, S.at);
             const row = document.createElement('div');
             row.className = 'ex-lrow' + (ticked ? ' is-ticked' : '');
 
             const check = checkbox(ticked, false, () => {
-                toggleSel(machine, entry);
+                toggleSel(machineId, entry);
                 render();
             }, (ticked ? 'Deselect ' : 'Select ') + entry.name);
 
@@ -5257,7 +5326,7 @@
             sub.textContent = [size.textContent, time.textContent]
                 .filter((v) => v && v !== '—').join(' · ');
 
-            row.append(check, name, size, time, sub, rowActions(machine, entry));
+            row.append(check, name, size, time, sub, rowActions(machineId, entry));
             rows.appendChild(row);
         });
     }
@@ -5265,15 +5334,15 @@
     // Per-entry actions, revealed on hover (and always present to the keyboard): put a file or directory on the
     // Clipboard, or download a file straight to the browser. Copy carries the entry's whole coordinate —
     // machine, path, and the archive being viewed — so a thing copied from the past is pasted as a restore.
-    function rowActions(machine, entry) {
+    function rowActions(machineId, entry) {
         const box = el('div', 'ex-lactions');
 
         const copy = el('button', 'ex-iconbtn');
         copy.innerHTML = svg('copy', 'ex-ico');
-        copy.title = onClipboard(machine, entry.path) ? 'On the Clipboard' : 'Copy to the Clipboard';
+        copy.title = onClipboard(machineId, entry.path) ? 'On the Clipboard' : 'Copy to the Clipboard';
         copy.setAttribute('aria-label', copy.title);
-        if (onClipboard(machine, entry.path)) copy.classList.add('is-on');
-        copy.onclick = () => clipCopy(machine, entry);
+        if (onClipboard(machineId, entry.path)) copy.classList.add('is-on');
+        copy.onclick = () => clipCopy(machineId, entry);
         box.appendChild(copy);
 
         // A file downloads as itself; a folder downloads as a zip of its whole tree. Downloading the past is
@@ -5282,7 +5351,7 @@
         dl.innerHTML = svg('download', 'ex-ico');
         dl.title = entry.directory ? 'Download as zip' : 'Download';
         dl.setAttribute('aria-label', dl.title + ' ' + entry.name);
-        dl.onclick = () => download(machine, entry);
+        dl.onclick = () => download(machineId, entry);
         box.appendChild(dl);
 
         // Delete is present-only and destructive, so it never appears while time-travelling (you cannot edit
@@ -5292,7 +5361,7 @@
             rm.innerHTML = svg('trash', 'ex-ico');
             rm.title = 'Delete';
             rm.setAttribute('aria-label', 'Delete ' + entry.name);
-            rm.onclick = () => deleteEntry(machine, entry);
+            rm.onclick = () => deleteEntry(machineId, entry);
             box.appendChild(rm);
         }
         return box;
@@ -5304,26 +5373,28 @@
     // destination: another machine is a copy, the same machine at a past coordinate is a restore, the browser
     // is a download. This is the copy/paste half; a Transfer (below) is the byte-moving half the backend runs.
 
-    const clipId = (machine, path, at) => machine + DIR_SEP + path + DIR_SEP + (at || '');
-    const onClipboard = (machine, path) =>
-        S.clipboard.some((c) => c.machine === machine && c.path === path && (c.at || '') === (S.at || ''));
+    // A coordinate is (machine identity, path, point in time). The identity, not the name: a coordinate has
+    // to keep meaning the same file after its machine is renamed, and two machines may yet share a name.
+    const clipId = (machineId, path, at) => machineId + DIR_SEP + path + DIR_SEP + (at || '');
+    const onClipboard = (machineId, path) =>
+        S.clipboard.some((c) => c.machine === machineId && c.path === path && (c.at || '') === (S.at || ''));
 
     // --- the selection: the same coordinate identity the Clipboard uses, but fleet-wide and persistent -------
     // A ticked item is a whole coordinate (machine, path, archive), keyed exactly like a Clipboard item, so the
     // selection can hold files from many folders and machines at once and survive every navigation. `toggleSel`
     // captures the row's own display facts at tick time, so the bar can name and act on items whose listing is
     // no longer on screen.
-    const isSelected = (machine, path, at) =>
-        S.sel.some((s) => clipId(s.machine, s.path, s.at) === clipId(machine, path, at));
-    function toggleSel(machine, entry) {
-        const id = clipId(machine, entry.path, S.at);
+    const isSelected = (machineId, path, at) =>
+        S.sel.some((s) => clipId(s.machine, s.path, s.at) === clipId(machineId, path, at));
+    function toggleSel(machineId, entry) {
+        const id = clipId(machineId, entry.path, S.at);
         const had = S.sel.some((s) => clipId(s.machine, s.path, s.at) === id);
         S.sel = had
             ? S.sel.filter((s) => clipId(s.machine, s.path, s.at) !== id)
             // Both shields travel with the selection: the full one says the entry is whole, the half one says
             // it holds backed-up content without being whole. "Stop backing up" needs either (see anyBackedUp),
             // so carrying only the full shield would take the verb away from a folder with a hole in it.
-            : S.sel.concat([{ machine: machine, path: entry.path, at: S.at, name: entry.name,
+            : S.sel.concat([{ machine: machineId, path: entry.path, at: S.at, name: entry.name,
                               directory: entry.directory, size: entry.size, backedUp: !!entry.backedUp,
                               containsBackedUp: !!entry.containsBackedUp }]);
     }
@@ -5337,7 +5408,7 @@
     // the paths in, installs borg on the host and trusts its key on the server). The single thing it cannot
     // decide for them is which machine holds the fleet's data, and that decision has a nudge of its own. So
     // until it is made, the verb simply is not there.
-    const backupEligible = (machine) => !!S.backupServer && machine !== S.backupServer.machineName;
+    const backupEligible = (machineId) => !!S.backupServer && machineId !== S.backupServer.machineId;
     // Whether there is anything in the archives at or under a selected item — the precondition for "Stop
     // backing up" to have work to do. Either shield qualifies: a folder that is whole, and a folder that is
     // protected but holed (or that merely holds a protected path deeper down) both have data to stop. Gating
@@ -5352,13 +5423,13 @@
 
     // Copy toggles: a second click on an entry already held takes it back off, so the same button both puts a
     // thing on the Clipboard and reconsiders it, and its lit state always tells the truth.
-    function clipCopy(machine, entry) {
-        const id = clipId(machine, entry.path, S.at);
+    function clipCopy(machineId, entry) {
+        const id = clipId(machineId, entry.path, S.at);
         const at = S.at;
         const has = S.clipboard.some((c) => clipId(c.machine, c.path, c.at) === id);
         S.clipboard = has
             ? S.clipboard.filter((c) => clipId(c.machine, c.path, c.at) !== id)
-            : S.clipboard.concat([{ machine: machine, path: entry.path, at: at,
+            : S.clipboard.concat([{ machine: machineId, path: entry.path, at: at,
                                     name: entry.name, directory: entry.directory, size: entry.size }]);
         render();
     }
@@ -5371,15 +5442,15 @@
     // its past self. A hidden anchor click is how a browser is handed a stream to save. `at` defaults to the
     // archive currently being viewed (a per-row download), but a selected item passes its own — the archive it
     // was ticked in — so a one-item download from the selection reads the right past even after navigating away.
-    function download(machine, entry, at) {
+    function download(machineId, entry, at) {
         at = arguments.length >= 3 ? at : S.at;
         const params = new URLSearchParams({ path: entry.path });
         if (at) params.set('at', at);
         // What to call the machine in the filename when the download is a whole root, which has no
         // basename of its own. The path names it by identity; this is only for the person saving it.
-        params.set('name', machine);
+        params.set('name', nameOf(machineId));
         const a = document.createElement('a');
-        a.href = '/machines/' + encodeURIComponent(midOf(machine)) + '/files/download?' + params.toString();
+        a.href = '/machines/' + encodeURIComponent(machineId) + '/files/download?' + params.toString();
         // A folder arrives as a zip; the server sets the real filename, this is just the browser's hint.
         a.download = entry.directory ? entry.name + '.zip' : entry.name;
         document.body.appendChild(a);
@@ -5394,22 +5465,23 @@
     // treatment #321 asks for: name what is affected, and make the operator type the machine's name before the
     // button will fire. A folder says that everything inside goes with it. On success the listing is re-read,
     // so the thing that is gone stops being shown.
-    async function deleteEntry(machine, entry) {
+    async function deleteEntry(machineId, entry) {
+        const machineName = nameOf(machineId);
         const what = entry.directory ? 'folder' : 'file';
-        const body = entry.path + ' on ' + machine
+        const body = entry.path + ' on ' + machineName
             + (entry.directory ? '\n\nEverything inside this folder is deleted too.' : '')
             + '\n\nThis cannot be undone. Type the machine name to confirm.';
-        const ok = await confirmTyped('Delete this ' + what + '?', body, machine, 'Delete');
+        const ok = await confirmTyped('Delete this ' + what + '?', body, machineName, 'Delete');
         if (!ok) return;
         try {
-            const res = await fetch('/machines/' + encodeURIComponent(midOf(machine))
+            const res = await fetch('/machines/' + encodeURIComponent(machineId)
                 + '/files?path=' + encodeURIComponent(entry.path), { method: 'DELETE' });
             if (!res.ok) {
                 const err = await res.json().catch(() => null);
                 return toast((err && err.message) || ('Could not delete ' + entry.name + '.'));
             }
             toast('Deleted ' + entry.name + '.');
-            refreshDir(machine, remotePath(S.path));   // the listing no longer holds it
+            refreshDir(machineId, remotePath(S.path));   // the listing no longer holds it
         } catch (e) {
             toast('Could not reach Vaier to delete ' + entry.name + '.');
         }
@@ -5568,7 +5640,7 @@
         input.type = 'hidden';
         input.name = 'selection';
         input.value = JSON.stringify(sel.map((s) => ({
-            machineId: midOf(s.machine), machine: s.machine, path: s.path, at: s.at || null })));
+            machineId: s.machine, machine: nameOf(s.machine), path: s.path, at: s.at || null })));
         form.appendChild(input);
         document.body.appendChild(form);
         form.submit();
@@ -5592,21 +5664,21 @@
         if (!groups.size) return;
         let done = 0;
         const failed = [];
-        for (const [machine, items] of groups) {
+        for (const [machineId, items] of groups) {
             const paths = items.map((i) => i.path);
             try {
-                const res = await fetch('/machines/' + encodeURIComponent(midOf(machine)) + '/backup/paths', {
+                const res = await fetch('/machines/' + encodeURIComponent(machineId) + '/backup/paths', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ paths: paths }),
                 });
-                if (!res.ok) { failed.push(machine); continue; }
+                if (!res.ok) { failed.push(nameOf(machineId)); continue; }
                 const body = await res.json().catch(() => ({}));
                 done += paths.length;
                 // First back-up on a machine: the backend rings the host to be readied (borg installed, key
                 // trusted) and tells us here. The install runs detached; we watch prepare-client-settled.
-                if (body && body.provisioning) startReadying(machine, body.provisioning);
-            } catch (e) { failed.push(machine); }
+                if (body && body.provisioning) startReadying(nameOf(machineId), body.provisioning);
+            } catch (e) { failed.push(nameOf(machineId)); }
         }
         await loadBackup();   // the jobs changed — reload so the backup entries are current
         if (done) toast(done + (done === 1 ? ' item is' : ' items are') + ' backed up now, and nightly'
@@ -5641,19 +5713,19 @@
     // What Vaier does behind the first back-up: ready the host (install borg, trust its key). It's silent by
     // design — a quiet "Getting X ready…" and nothing more — unless it hits the one wall it can't pass on its
     // own, a host where it lacks the root to install borg, in which case it names the single command to run.
-    function startReadying(machine, p) {
+    function startReadying(machineName, p) {
         if (p.scriptOnly && p.stagedScriptPath) {
             // A command someone has to retype into another machine cannot live in a toast — it is gone
             // before it has been read, let alone copied. It is kept against the machine and rendered on its
             // Backup entry, where the failure that needs it is already reported, until the readying lands.
-            S.readying.set(machine, 'sudo bash ' + p.stagedScriptPath);
-            toast('One command left to run on ' + machine + ' — it is on its Backup entry.');
+            S.readying.set(machineName, 'sudo bash ' + p.stagedScriptPath);
+            toast('One command left to run on ' + machineName + ' — it is on its Backup entry.');
             render();
             return;
         }
         if (p.started) {
-            S.preparing.add(machine);
-            toast('Getting ' + machine + ' ready to back up…');
+            S.preparing.add(machineName);
+            toast('Getting ' + machineName + ' ready to back up…');
             render();
         } else if (p.message) {
             toast(p.message);
@@ -5674,15 +5746,15 @@
         if (!groups.size) return;
         let done = 0;
         const failed = [];
-        for (const [machine, items] of groups) {
+        for (const [machineId, items] of groups) {
             const paths = items.map((i) => i.path);
             try {
-                const res = await fetch('/machines/' + encodeURIComponent(midOf(machine)) + '/backup/paths', {
+                const res = await fetch('/machines/' + encodeURIComponent(machineId) + '/backup/paths', {
                     method: 'DELETE',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ paths: paths }),
                 });
-                if (!res.ok && res.status !== 204) { failed.push(machine); continue; }
+                if (!res.ok && res.status !== 204) { failed.push(nameOf(machineId)); continue; }
                 if (res.status === 204) {
                     // The job itself is gone: nothing is backed up on that machine any more, so everything
                     // asked for really did stop. This is the one branch where our own count is the true one.
@@ -5691,7 +5763,7 @@
                 }
                 const body = await res.json().catch(() => null);
                 done += body && body.stopped ? body.stopped.length : 0;
-            } catch (e) { failed.push(machine); }
+            } catch (e) { failed.push(nameOf(machineId)); }
         }
         await loadBackup();
         if (done) toast('Stopped backing up ' + done + (done === 1 ? ' item.' : ' items.'));
@@ -5709,9 +5781,9 @@
         const items = S.sel.filter((s) => !s.at);
         if (!items.length) return;
         const groups = groupByMachine(items);
-        const machineNames = [...groups.keys()];
+        const machineNames = [...groups.keys()].map(nameOf);
         const single = machineNames.length === 1;
-        const preview = items.slice(0, 6).map((s) => (single ? '' : s.machine + ':') + s.path).join('\n')
+        const preview = items.slice(0, 6).map((s) => (single ? '' : nameOf(s.machine) + ':') + s.path).join('\n')
             + (items.length > 6 ? '\n…and ' + (items.length - 6) + ' more' : '');
         const ok = await confirmTyped(
             'Delete ' + items.length + (items.length === 1 ? ' item?' : ' items?'),
@@ -5721,10 +5793,10 @@
             single ? machineNames[0] : 'delete', 'Delete');
         if (!ok) return;
         let failed = 0;
-        for (const [machine, its] of groups) {
+        for (const [machineId, its] of groups) {
             for (const s of its) {
                 try {
-                    const res = await fetch('/machines/' + encodeURIComponent(midOf(machine))
+                    const res = await fetch('/machines/' + encodeURIComponent(machineId)
                         + '/files?path=' + encodeURIComponent(s.path), { method: 'DELETE' });
                     if (!res.ok) failed++;
                 } catch (e) { failed++; }
@@ -5742,7 +5814,7 @@
     // paste into the present, so time-travelling hides it rather than offering a write that would be refused.
     // It also needs a real destination path (the machine has said where its tree begins) and a non-empty
     // Clipboard. Absent any of those, nothing is drawn.
-    function renderPasteBar(machine, destPath) {
+    function renderPasteBar(machineId, destPath) {
         if (S.at || !S.clipboard.length || destPath == null) return document.createDocumentFragment();
 
         const bar = el('div', 'ex-pastebar');
@@ -5756,7 +5828,7 @@
         const verb = el('span');
         verb.textContent = 'Paste here';
         paste.appendChild(verb);
-        paste.onclick = () => pasteHere(machine, destPath);
+        paste.onclick = () => pasteHere(machineId, destPath);
         bar.appendChild(paste);
         return bar;
     }
@@ -5800,9 +5872,9 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    sourceMachineId: midOf(item.machine), sourceMachine: item.machine,
+                    sourceMachineId: item.machine, sourceMachine: nameOf(item.machine),
                     sourcePath: item.path, at: item.at || null,
-                    destMachineId: midOf(destMachine), destMachine: destMachine, destPath: destPath }),
+                    destMachineId: destMachine, destMachine: nameOf(destMachine), destPath: destPath }),
             });
             if (!res.ok) {
                 const err = await res.json().catch(() => null);
@@ -6188,21 +6260,10 @@
 
     // --- the fleet, and the stream that keeps it honest ---------------------------------------------------
 
-    /**
-     * The identity of the machine the tree calls `name`. Every backend path is keyed by identity now, so
-     * this is the browser's single name -> id crossing, mirroring the one the backend deleted.
-     *
-     * It is a lookup by name, so it inherits the ambiguity names have: once names stop needing to be unique
-     * it picks whichever machine is listed first. That is why it is one function and not twenty call sites —
-     * when the tree carries ids of its own, this is the only thing that has to go.
-     */
-    function midOf(name) {
-        const m = (S.machines || []).find((x) => x.name === name);
-        return m ? m.id : name;
-    }
-    // The listing reader and the terminal dock are separate classic scripts, so the one crossing is
-    // shared the way everything else is here — through the global scope those scripts already use.
-    window.vaierMachineIdOf = midOf;
+    // The tree carries identities, so the listing reader and the terminal dock are handed one directly and
+    // have no name to convert on the way. What they need from this scope is the other direction: what to
+    // CALL a machine they are already addressing correctly.
+    window.vaierMachineName = nameOf;
 
     async function loadFleet() {
         try {

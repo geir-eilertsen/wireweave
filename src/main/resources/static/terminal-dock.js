@@ -101,6 +101,21 @@
 
     function panes() { return document.getElementById('terminalPanes'); }
 
+    // The machine identities this dock has resolved, by name. The dock lives on a page that does not load the
+    // Explorer's shell, so it cannot borrow the fleet from it — it asks /machines once and remembers. Every
+    // /machines path is keyed by identity, and a name in one of them is closed as "Machine not found".
+    const _machineIds = new Map();
+
+    async function machineIdOf(machineName) {
+        if (_machineIds.has(machineName)) return _machineIds.get(machineName);
+        try {
+            const res = await fetch('/machines');
+            const fleet = res.ok ? await res.json() : [];
+            fleet.forEach((m) => _machineIds.set(m.name, m.id));
+        } catch (e) { /* offline: fall through to the name, which fails loudly rather than silently */ }
+        return _machineIds.has(machineName) ? _machineIds.get(machineName) : machineName;
+    }
+
     function open(machineName) {
         const id = ++_seq;
         const pane = buildPane(id, machineName);
@@ -146,11 +161,12 @@
 
     // (Re)open the WebSocket for a session. On an unexpected drop this is called again after a backoff, so
     // a server restart or a flaky tunnel heals itself; a clean exit or a permanent error is left alone.
-    function connect(state) {
+    async function connect(state) {
         const { id, machine } = state;
         const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         // The pane id names the machine's tmux session, so this pane's reconnects reattach to the same shell.
-        const url = `${proto}//${window.location.host}/machines/${encodeURIComponent(window.vaierMachineIdOf(machine))}`
+        const machineId = await machineIdOf(machine);
+        const url = `${proto}//${window.location.host}/machines/${encodeURIComponent(machineId)}`
             + `/terminal?pane=${encodeURIComponent(state.paneId)}`;
         const ws = new WebSocket(url);
         ws.binaryType = 'arraybuffer';
@@ -447,11 +463,11 @@
     // wherever they like, and have several of at once. The window reattaches to this exact tmux session (its id
     // travels in the URL), so nothing is lost. Opened from the tab-menu click, which is the user gesture a
     // browser needs to let window.open through; if it is blocked anyway, the pane stays put and says so.
-    function popOut(id) {
+    async function popOut(id) {
         const s = _terminals.get(id);
         if (!s) return;
         const url = 'terminal.html?machine=' + encodeURIComponent(s.machine)
-            + '&id=' + encodeURIComponent(window.vaierMachineIdOf(s.machine))
+            + '&id=' + encodeURIComponent(await machineIdOf(s.machine))
             + '&pane=' + encodeURIComponent(s.paneId);
         // `popup` drops the browser's tab strip and address bar; the pane's own id names the window so a
         // second pop-out of the same shell focuses its window rather than opening another.
@@ -883,7 +899,7 @@
             el.appendChild(statusButton('Reconnect', () => { setStatus(id, null); retry(); }));
         } else if (code === 4403 && machineName) {
             el.appendChild(statusButton('Clear pinned key & retry', async () => {
-                await fetch(`/machines/${encodeURIComponent(window.vaierMachineIdOf(machineName))}/host-key`,
+                await fetch(`/machines/${encodeURIComponent(await machineIdOf(machineName))}/host-key`,
                     { method: 'DELETE' });
                 closeShell(id);
                 open(machineName);

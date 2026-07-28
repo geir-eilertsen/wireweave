@@ -1,5 +1,8 @@
 // Reading a directory on a machine — the one copy of it (#323 slice A).
 //
+// A machine is addressed by its identity here, because that is what the tree stands on and what every
+// /machines path is keyed by. Its name appears only in what a person reads, and is asked for at that moment.
+//
 // Two Explorers now read the fleet's filesystems: the file browser shipped in #321 (explorer-files.html) and
 // the tree shell that is replacing it (explorer.html). A second copy of this would be a second place the size
 // humanising, the clock format, the newest-listing-wins guard and the server's own error message could quietly
@@ -49,7 +52,13 @@
         // `at` names an archive to read the same path *inside*, rather than live (#323 slice D) — the machine's
         // past. Absent, the present, unchanged. The two coordinates travel as query params; a null of either is
         // simply not sent, so the present-day root question is byte-for-byte the request it always was.
-        async function list(machine, path, at) {
+        // What to call a machine, asked of whichever page hosts this reader. The Explorer knows the fleet;
+        // a page that does not simply shows the identity, which is honest rather than wrong.
+        function machineName(machineId) {
+            return window.vaierMachineName ? window.vaierMachineName(machineId) : machineId;
+        }
+
+        async function list(machineId, path, at) {
             const ticket = ++inFlight;
             const where = path == null ? 'the file root' : path;
             const params = new URLSearchParams();
@@ -57,7 +66,7 @@
             if (at) params.set('at', at);
             const query = params.toString();
             try {
-                const res = await fetch('/machines/' + encodeURIComponent(window.vaierMachineIdOf(machine)) + '/files'
+                const res = await fetch('/machines/' + encodeURIComponent(machineId) + '/files'
                     + (query ? '?' + query : ''));
                 if (ticket !== inFlight) return { stale: true };
 
@@ -70,7 +79,7 @@
                     const err = await res.json().catch(() => null);
                     if (ticket !== inFlight) return { stale: true };
                     return { error: (err && err.message)
-                        || 'Could not list ' + where + ' on ' + machine + '.' };
+                        || 'Could not list ' + where + ' on ' + machineName(machineId) + '.' };
                 }
 
                 const body = await res.json();
@@ -81,7 +90,7 @@
                 return { root: body.root, path: body.path, at: body.at, entries: body.entries };
             } catch (e) {
                 if (ticket !== inFlight) return { stale: true };
-                return { error: 'Could not reach ' + machine + '.' };
+                return { error: 'Could not reach ' + machineName(machineId) + '.' };
             }
         }
 

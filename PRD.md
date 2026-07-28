@@ -1902,11 +1902,32 @@ What is left is one step — the payoff step:
    leniency so a name rejected at creation for colliding could still be found — an identity has no case or
    whitespace to be lenient about.
 
-   2c. **The tree carries identities.** `explorer-shell.js` routes entries by name in the URL hash, which
-   is why `midOf(name)` exists (exposed as `window.vaierMachineIdOf` for the listing reader and the
-   terminal dock). It is a lookup by name and goes when the tree stops needing it. Also here:
-   `MachineRestController`'s publishable-service owner count, which matches an owner name from a feed that
-   is name-keyed upstream in the publishing domain — so that feed has to carry identities first.
+   2c. **The tree carries identities ✅ (2026-07-28).** A tree entry's path segment is the machine's
+   `MachineId` and its row label is the name, so every coordinate in the shell — the URL hash, the
+   directory cache, the Clipboard, the fleet-wide selection — is an identity, and `midOf(name)` is gone
+   with `window.vaierMachineIdOf`. One name→id lookup survives, named for the moment it serves:
+   `justCreated(name)`, because a create response says what it made but not which machine it became. It
+   goes when the create endpoints answer with the id.
+
+   **Three feeds still publish only names**, so the shell crosses id→name at exactly three helpers
+   (`servicesOn`, `containersOn`, `candidatesOn`) rather than at every call site: `/lan-servers`,
+   `/docker-services/*` and `/published-services/discover`. `/backup-jobs` already carried `machineId` and
+   `jobsOn` now matches on it. Still here from the original entry: `MachineRestController`'s
+   publishable-service owner count, the last `Machine.hasSameName` consumer, which needs the publishing
+   feed to carry identities first.
+
+   **A partial conversion is worse than none, and this slice proved it twice.** Renaming function bodies to
+   `machineId` while their parameters were still `machine` left nine `ReferenceError`s that aborted a
+   render silently — the file pane painted nothing while the tree, reading the same cache, was fine. Worse,
+   the file pane kept a local called `machine` holding a *name* beside `machineId`, and keyed the selection
+   by it: every bulk verb then addressed `/machines/<display name>`, which the controller cannot parse as
+   an identity, so it 404'd **before its own log line** — no request logged, no error shown, "Stop backing
+   up" simply doing nothing. Three more references resolved to `window.name`: a downed server peer looked
+   like a sleeping laptop, every LAN server's dot was grey, and the backup-server glyph had never appeared.
+   Eyeballing found none of these. What found them was **parsing the file**: a scope analyser reporting
+   every identifier that resolves to no binding, and a checker reporting every call that hands a name to a
+   parameter called `machineId`. Both now run clean, and no variable in the shell called `machine` holds a
+   name — that ambiguity was the whole bug, so the convention is the guard.
 
    2d. **Then the guard, and the payoff.** `Machine.nameIsTaken`, `Machine.hasSameName` and the four
    uniqueness checks in `VpnService`/`LanServerService` go, and **machine names stop needing to be

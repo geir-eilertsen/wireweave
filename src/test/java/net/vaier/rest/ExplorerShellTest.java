@@ -183,6 +183,55 @@ class ExplorerShellTest {
         assertThat(found).isPositive();
     }
 
+    /**
+     * The tree stands on machine IDENTITIES, not names (§6.22 step 2c). This is the guard that keeps it that
+     * way, because the failure is silent in both directions: a name where an id belongs 404s (it did, for
+     * folder selection, for weeks), and an id where a name belongs renders a UUID at a person.
+     *
+     * <p>What is checked is the crossing, not every call site: there is exactly one function that turns an
+     * identity into something to read, and no function at all that turns a name into an identity — except at
+     * the moment a machine is created, where the name is all the create response gives back.
+     */
+    @Test
+    void theTree_addressesMachinesByIdentity_andCrossesToANameOnlyToShowOne() throws IOException {
+        String js = read("explorer-shell.js");
+
+        // The lookup this refactor exists to delete. Its one surviving form is named for the moment it
+        // serves, so a reader can tell a leftover from a deliberate crossing.
+        assertThat(js).as("no name -> id lookup outside machine creation").doesNotContain("function midOf(");
+        assertThat(js).doesNotContain("window.vaierMachineIdOf");
+        assertThat(js).contains("function justCreated(");
+
+        // The tree's own entries: the segment is the identity, the label is the name.
+        assertThat(js).contains("{ name: m.id, kind: 'machine', label: m.name }");
+        assertThat(js).as("machines are never navigated to by name")
+            .doesNotContain("go(['fleet', m.name");
+
+        // And the one crossing back, which every displayed name goes through.
+        assertThat(js).contains("function nameOf(machineId)");
+        assertThat(js).contains("window.vaierMachineName = nameOf");
+    }
+
+    @Test
+    void aTickedFile_isRememberedByItsMachinesIdentity_notItsName() throws IOException {
+        // A ticked row is a coordinate the bulk verbs act on, and every one of them addresses its machine as
+        // /machines/{id}. When the file pane keyed the selection by the display name instead — which it did,
+        // because the pane's local for the name was called `machine` and read like an identity — the verbs
+        // all sent /machines/Colina%2027, the controller could not parse that as an identity, and every one
+        // came back 404. It looked like "Stop backing up does nothing": no request logged, nothing changed.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function renderDirectory(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+
+        assertThat(body).as("ticking a row records the identity").contains("toggleSel(machineId, entry)");
+        assertThat(body).as("a row knows it is ticked by identity")
+            .contains("isSelected(machineId, entry.path, S.at)");
+        assertThat(body).as("the per-row verbs are handed the identity").contains("rowActions(machineId, entry)");
+        assertThat(body).as("no local called `machine` — that ambiguity is what caused this")
+            .doesNotContain("const machine =");
+    }
+
     // --- 6. the ubiquitous language ---------------------------------------------------------------------
 
     @Test
@@ -616,7 +665,7 @@ class ExplorerShellTest {
         assertThat(body).contains("'PUT'");
         assertThat(body).contains("/disk/watch");
         assertThat(body).contains("mountPoint");             // in the body, never in the path
-        assertThat(body).contains("loadDisk(machine)");      // the server re-decides
+        assertThat(body).contains("loadDisk(machineId)");    // the server re-decides, for that machine
         assertThat(body).as("the verdict is never recomputed here").doesNotContain(" > ");
     }
 
@@ -1147,7 +1196,7 @@ class ExplorerShellTest {
         String body = js.substring(from, js.indexOf("\n    }", from));
 
         assertThat(body).as("a backed-up machine's rail is drawn before its archives land")
-            .contains("jobsOn(machine)");
+            .contains("jobsOn(machineId)");
         assertThat(body).as("the rail says it is still waiting rather than claiming an empty past")
             .contains("is-waiting");
     }
@@ -1456,7 +1505,7 @@ class ExplorerShellTest {
         assertThat(rule).as("a designated server is required, not merely respected")
             .contains("!!S.backupServer");
         assertThat(rule).as("and the server itself is still never a client of itself")
-            .contains("machine !== S.backupServer.machineName");
+            .contains("machineId !== S.backupServer.machineId");
     }
 
     // --- a failure that names its own fix ----------------------------------------------------------------
