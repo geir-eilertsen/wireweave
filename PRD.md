@@ -1911,11 +1911,40 @@ the wrong host.
    working out which store is which is how they come to disagree, and being wrong means restoring the wrong
    machine's data.
 
-   **Migration (done on the live instance, by hand).** The four existing repositories were renamed to their
-   machines' identities with `repoPath` pinned to the directory they already occupy, so **nothing moved on
-   the NAS** and borg still talks to the same archives — verified by listing them back through the renamed
-   repository. Moving the directories to match is available as a separate, deliberate step; it touches the
-   only copy of the data, so it is not folded into a code change.
+   **Migration (done on the live instance, by hand).** Three of the four repository directories were moved
+   on the NAS to their machines' identities and verified by listing their archives back through borg
+   (Apalveien 5: 10, Vaier server: 10, Colina 27: 7). Moving one turns out to be **three** steps, not one:
+
+   1. `mv` the directory. borg then refuses the next *non-interactive* access to it — it records where a
+      repository was last seen and asks before touching it somewhere new, and with no terminal it aborts.
+      Verified against the real binary. Every borg command Vaier issues now exports
+      `BORG_RELOCATED_REPO_ACCESS_IS_OK=yes`: Vaier is the thing that moves repositories, so the prompt is
+      asking the wrong party. It is needed only on the first access after a move, but it is set always,
+      because the alternative is a backup that fails on a night nobody is watching.
+   2. Point Vaier at it (drop the `repoPath` pin, so the path derives from the identity-name again).
+   3. **Re-authorise the client on the backup server.** Its `authorized_keys` entry confines the key with
+      `--restrict-to-path` per repository, so a moved repository is `Repository path not allowed` until the
+      client is re-authorised — after the config change, since the allowed paths are derived from it.
+
+   **Roon server's repository could not be moved, and that uncovered a live fault.** It opens with neither
+   the passphrase Vaier holds nor the leftover `Roon-server.pass` still on the host — so its archives are
+   unreadable, and were before this work (verified at its original path, which is where it has been left).
+   It had been invisible because the archive listing answered `200 []` for a repository it had failed to
+   read; "holds no archives" and "could not be read" looked identical on the one screen an operator opens
+   to get a file back. That is fixed (below), and the fault is now stated rather than implied. The
+   repository is 108 KB — an init with nothing in it — which fits `Roon server has never backed up`.
+
+   **Three orphan directories are on the NAS**, untouched: `NUC-02` (118 MB), `NUC02` (88 KB) — the two
+   dead jobs that started this whole refactor, still occupying space — and `colina27` (45 MB), superseded
+   by `Colina-27`. They belong to no machine and no job; what to do with them is the operator's call.
+
+   2l. **An unreadable repository says so ✅ (2026-07-28).** `listArchives` returned an empty list when borg
+   failed, and logged the reason at `debug`. "This repository holds no archives" and "I could not read this
+   repository" are different facts, and the second is the only sign an operator gets that a machine's
+   backups have become unreachable. It throws `ArchivesUnreadableException` now — `502`, because the
+   failure is upstream and Vaier is relaying borg's own words ("Repository path not allowed",
+   "passphrase … is incorrect"), which are worth more than any status Vaier could invent. Found by being
+   misled by it: the first migration attempt reported success against a repository borg had refused.
 
    2k. **The terminal dock is deleted ✅ (2026-07-28).** `terminal-dock.js` (1,334 lines), admin.html's
    terminal panel and tab, and ~360 lines of its CSS are gone. It tiled shells inside admin.html and was

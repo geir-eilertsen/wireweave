@@ -1,5 +1,6 @@
 package net.vaier.rest;
 
+import net.vaier.domain.ArchivesUnreadableException;
 import net.vaier.application.BackupWorkDirResolver;
 import net.vaier.application.GetBackupJobsUseCase;
 import net.vaier.application.GetBackupRepositoriesUseCase;
@@ -37,6 +38,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
@@ -431,13 +433,26 @@ class BackupRunnerTest {
         verify(runner, never()).run(any(), any());
 
         // A job exists and the host is reachable, but borg list exits non-zero -> empty, never an exception.
+    }
+
+    @Test
+    void aRepositoryThatCannotBeRead_saysSoRatherThanLookingEmpty() {
+        // "This repository holds no archives" and "I could not read this repository" are different facts,
+        // and the second one matters far more — it is the only sign that a machine's backups have become
+        // unreadable. Returned as an empty list, it reads as the first, in the UI and to anyone checking.
+        //
+        // Not hypothetical: migrating a repository to its identity-named directory left borg unable to
+        // open it, and this endpoint answered 200 with [] — the failure was a debug line nobody would see.
+        when(repositories.getBackupRepositories()).thenReturn(List.of(repo()));
         when(jobs.getBackupJobs()).thenReturn(List.of(job()));
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
         hasCredential("Colina 27");
         when(runner.run(eq(mid("Colina 27")), org.mockito.ArgumentMatchers.contains("borg list --json")))
-            .thenReturn(new CommandResult(2, "", "Connection refused", false, null));
+            .thenReturn(new CommandResult(2, "", "Repository access aborted", false, null));
 
-        assertThat(backupRunner.listArchives("nas-borg")).isEmpty();
+        assertThatThrownBy(() -> backupRunner.listArchives("nas-borg"))
+            .isInstanceOf(ArchivesUnreadableException.class)
+            .hasMessageContaining("Repository access aborted");
     }
 
     @Test

@@ -6,6 +6,7 @@ import net.vaier.domain.ConflictException;
 import net.vaier.domain.DiskUnreadableException;
 import net.vaier.domain.LastAdminException;
 import net.vaier.domain.NoHostCredentialException;
+import net.vaier.domain.ArchivesUnreadableException;
 import net.vaier.domain.NotFoundException;
 import net.vaier.domain.PathOutsideSftpRootException;
 import net.vaier.domain.PermissionDeniedException;
@@ -67,6 +68,18 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(NotFoundException.class)
     public ResponseEntity<ApiError> handleNotFound(NotFoundException e) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiError.of("NOT_FOUND", e.getMessage()));
+    }
+
+    /**
+     * Vaier could not read a repository's archives. {@code 502}, not {@code 500}: the failure is upstream —
+     * borg, on the machine, talking to the backup server — and Vaier is relaying its words rather than
+     * having gone wrong itself. Emphatically not an empty {@code 200}, which is what it used to be, and
+     * which reads as "this repository holds nothing" on the screen an operator opens to get a file back.
+     */
+    @ExceptionHandler(ArchivesUnreadableException.class)
+    public ResponseEntity<ApiError> handleArchivesUnreadable(ArchivesUnreadableException e) {
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+            .body(ApiError.of("ARCHIVES_UNREADABLE", e.getMessage()));
     }
 
     /**

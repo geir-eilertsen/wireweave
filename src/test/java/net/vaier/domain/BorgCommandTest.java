@@ -42,9 +42,15 @@ class BorgCommandTest {
             7, 4, 6, "zstd,6", true, true);
     }
 
-    /** The passcommand a run/list/init uses to fetch the passphrase from the provisioned 0600 file. */
+    /**
+     * The environment prefix a run/list/init shares: the passcommand that fetches the passphrase from the
+     * provisioned 0600 file, and the acknowledgement that a repository may have moved (it is named after
+     * its machine's identity, so migrating an older one relocates it once — and borg aborts a
+     * non-interactive access to a repository it last saw somewhere else).
+     */
     private String expectedPasscommand() {
-        return "export BORG_PASSCOMMAND='cat /var/lib/vaier-backup/nas-borg.pass'";
+        return "export BORG_PASSCOMMAND='cat /var/lib/vaier-backup/nas-borg.pass'; "
+            + "export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes";
     }
 
     // --- Back up as root: borg under sudo, so root-owned files are read rather than silently skipped ---
@@ -52,7 +58,9 @@ class BorgCommandTest {
     /**
      * The regression pin. A job WITHOUT "Back up as root" must render byte-for-byte the command it rendered
      * before the feature existed — every existing job on every host keeps running exactly as it did, and no
-     * job is ever escalated to root by the mere presence of the toggle.
+     * job is ever escalated to root by the mere presence of the toggle. (The environment prefix grew the
+     * relocation acknowledgement when repositories became identity-named; the borg invocation itself is
+     * untouched, which is what this pins.)
      */
     @Test
     void detachedRun_withoutBackupAsRoot_isByteForByteUnchanged() {
@@ -62,6 +70,7 @@ class BorgCommandTest {
         assertThat(exec).isEqualTo(
             "W=/var/lib/vaier-backup; mkdir -p \"$W\"; nohup sh -c \""
                 + "export BORG_PASSCOMMAND='cat /var/lib/vaier-backup/nas-borg.pass'; "
+                + "export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes; "
                 + "borg info " + url + " > /dev/null 2>&1 || "
                 + "borg init --encryption=repokey-blake2 --make-parent-dirs " + url
                 + " && borg create --json --stats --compression zstd,6 --exclude-caches"
@@ -1040,5 +1049,29 @@ class BorgCommandTest {
         assertThat(BorgCommand.parseMounted("NOT_MOUNTED")).isFalse();
         assertThat(BorgCommand.parseMounted("")).isFalse();
         assertThat(BorgCommand.parseMounted(null)).isFalse();
+    }
+
+    // --- a repository that has moved (§6.22: repositories are named by machine identity) --------------
+
+    @Test
+    void everyBorgCommandAcceptsARepositoryThatHasMoved() {
+        // Repositories are named after the machine's identity now, so an existing one changes directory
+        // exactly once, when it is migrated. borg notices: it records where a repository was last seen and
+        // asks before touching it somewhere new — and with no terminal to ask at, it ABORTS. Verified
+        // against the real binary: "Do you want to continue? [yN] Aborting. Repository access aborted."
+        //
+        // So every command Vaier issues acknowledges a relocation. Vaier is the thing that moves
+        // repositories, so the prompt is asking the wrong party; the answer is one it already knows. It is
+        // needed only on the first access after a move — borg's cache learns the new home — but it is set
+        // everywhere rather than for one migration, because the alternative is a backup that fails on a
+        // night nobody is watching.
+        assertThat(BorgCommand.create(server(), job(), repo(), WORK_DIR).exec())
+            .contains("BORG_RELOCATED_REPO_ACCESS_IS_OK=yes");
+        assertThat(BorgCommand.listArchives(server(), repo(), WORK_DIR).exec())
+            .contains("BORG_RELOCATED_REPO_ACCESS_IS_OK=yes");
+        assertThat(BorgCommand.init(server(), repo(), WORK_DIR).exec())
+            .contains("BORG_RELOCATED_REPO_ACCESS_IS_OK=yes");
+        assertThat(BorgCommand.detachedRun(server(), job(), repo(), "run-1", WORK_DIR, "/home/geir").exec())
+            .contains("BORG_RELOCATED_REPO_ACCESS_IS_OK=yes");
     }
 }

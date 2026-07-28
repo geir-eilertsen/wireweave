@@ -792,12 +792,24 @@ public final class BorgCommand {
     }
 
     /**
-     * The {@code export BORG_PASSCOMMAND='cat <workDir>/<repo>.pass'; } prefix a run/list/init uses so borg
-     * reads the passphrase from the provisioned 0600 file rather than from argv or the environment. Single
-     * quoting keeps a repository name with shell metacharacters from breaking out.
+     * The environment prefix a run/list/init/mount shares.
+     *
+     * <p>{@code BORG_PASSCOMMAND} points borg at the provisioned 0600 pass file, so the passphrase is never
+     * on argv or in the environment. Single quoting keeps a repository name with shell metacharacters from
+     * breaking out.
+     *
+     * <p>{@code BORG_RELOCATED_REPO_ACCESS_IS_OK} answers a question borg asks the wrong party. borg
+     * records where a repository was last seen and, finding it somewhere new, asks before touching it —
+     * and with no terminal to ask at, it <em>aborts</em>: "Repository access aborted". A repository does
+     * move: it is named after its machine's identity (§6.22), so migrating an older one changes its
+     * directory exactly once. Vaier is the thing that moved it, so it already knows the answer. Needed only
+     * on the first access after a move — borg's cache learns the new home — but set on every command
+     * rather than for one migration, because the alternative is a backup that fails on a night nobody is
+     * watching.
      */
     private static String exportPasscommand(BackupRepository repo, String workDir) {
-        return "export BORG_PASSCOMMAND=" + singleQuote("cat " + passFilePath(repo, workDir)) + "; ";
+        return "export BORG_PASSCOMMAND=" + singleQuote("cat " + passFilePath(repo, workDir)) + "; "
+            + "export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes; ";
     }
 
     /**

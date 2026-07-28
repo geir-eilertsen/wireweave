@@ -14,6 +14,7 @@ import net.vaier.application.RunBackupJobUseCase;
 import net.vaier.application.RunRemoteCommandUseCase;
 import net.vaier.config.ConfigResolver;
 import net.vaier.domain.Archive;
+import net.vaier.domain.ArchivesUnreadableException;
 import net.vaier.domain.BackupFailureTracker;
 import net.vaier.domain.BackupJob;
 import net.vaier.domain.BackupRepository;
@@ -314,16 +315,23 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
         try {
             CommandResult result = remoteCommand.run(machine.get().id(), command.exec());
             if (result.timedOut() || result.exitCode() != 0) {
-                log.debug("borg list for repository {} on {} failed (exit={}, timedOut={})",
+                // Not an empty list. A repository Vaier could not open is the one thing an operator needs
+                // told, and emptiness is indistinguishable from a repository that simply holds nothing —
+                // on the screen they open when they want a file back. borg's own words go with it.
+                String reason = result.timedOut() ? "the host did not answer in time"
+                    : firstLine(result.stderr());
+                log.warn("borg list for repository {} on {} failed (exit={}, timedOut={}): {}",
                     LogSafe.forLog(repositoryName), LogSafe.forLog(machine.get().name()),
-                    result.exitCode(), result.timedOut());
-                return List.of();
+                    result.exitCode(), result.timedOut(), LogSafe.forLog(reason));
+                throw new ArchivesUnreadableException(repositoryName, reason);
             }
             return Archive.parseList(result.stdout());
+        } catch (ArchivesUnreadableException e) {
+            throw e;
         } catch (Exception e) {
-            log.debug("Listing archives for repository {} failed transiently: {}",
+            log.warn("Listing archives for repository {} failed: {}",
                 LogSafe.forLog(repositoryName), e.getMessage());
-            return List.of();
+            throw new ArchivesUnreadableException(repositoryName, e.getMessage());
         }
     }
 
@@ -534,6 +542,12 @@ public class BackupRunner implements RunBackupJobUseCase, ListArchivesUseCase, L
      * exception. Only the {@link BorgCommand.BuiltCommand#redacted() redacted} form is logged so the
      * plaintext never reaches the log.
      */
+    /** borg's first line of complaint — the useful one; the rest is a stack of context an operator skips. */
+    private static String firstLine(String stderr) {
+        if (stderr == null || stderr.isBlank()) return null;
+        return stderr.strip().lines().findFirst().orElse(null);
+    }
+
     private void ensurePassFile(Machine machine, BackupRepository repo, String workDir) {
         try {
             BorgCommand.BuiltCommand ensure = BorgCommand.ensurePassFile(repo, workDir);
