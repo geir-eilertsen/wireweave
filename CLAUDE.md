@@ -131,5 +131,18 @@ skill (it carries the exact build tag and the gotchas). Then ask the user to ver
 
 If the user confirms the fix is good:
 1. Commit the changes to git.
-2. If the change was triggered by a GitHub issue, include `Closes #<issue-number>` in the commit message — GitHub will close the issue automatically when pushed to main.
-3. **Do NOT push** — only commit locally. The user will push when ready.
+2. If the change was triggered by a GitHub issue, include `Closes #<issue-number>` in the commit message — GitHub closes the issue automatically once the commit reaches main.
+3. **Push to main.** Pushing is normal now; it no longer needs asking for each time.
+
+Two things that do NOT change because pushing became routine:
+
+- **The user still verifies before the commit.** Deploy, ask, and wait. Pushing earlier means a
+  mistake is public rather than local, so the confirmation step matters more than it did, not less.
+- **Push only what was verified.** Don't sweep unrelated working-tree changes into the commit to get
+  a clean tree — commit the change under discussion and leave the rest.
+
+`main` carries branch protection ("Changes must be made through a pull request") that an admin push
+bypasses, so a direct push succeeds and still prints that remote message. Take a plain
+`<old>..<new>  main -> main` line as success; a genuine rejection is prefixed with `!`. Open a PR
+instead when the change wants review — a risky migration, anything touching auth or the backup
+chain, or work the user has said they want to look at first.
