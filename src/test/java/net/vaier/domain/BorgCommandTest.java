@@ -73,8 +73,12 @@ class BorgCommandTest {
             "W=/var/lib/vaier-backup; mkdir -p \"$W\"; nohup sh -c \""
                 + "export BORG_PASSCOMMAND='cat /var/lib/vaier-backup/nas-borg.pass'; "
                 + "export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes; "
-                + "borg info " + url + " > /dev/null || "
+                + "if ! out=\\$(borg info " + url + " 2>&1); then "
+                + "printf '%s\\\\n' \\\"\\$out\\\" >&2; "
+                + "if printf '%s' \\\"\\$out\\\" | grep -qF 'does not exist'; then "
                 + "borg init --encryption=repokey-blake2 --make-parent-dirs " + url
+                + " || borg info " + url + " > /dev/null; "
+                + "else false; fi; fi"
                 + " && borg create --json --stats --compression zstd,6 --exclude-caches"
                 + " --exclude '/var/lib/vaier-backup' --exclude '*/.config/borg'"
                 + " --exclude '*.tmp' --exclude '/var/cache' "
@@ -96,12 +100,14 @@ class BorgCommandTest {
     void detachedRun_whenBackupAsRoot_runsEveryBorgInvocationInTheChainUnderSudo() {
         String exec = BorgCommand.detachedRun(server(), rootJob(), repo(), "run-1", WORK_DIR, SSH_HOME).exec();
 
-        // All five borg invocations are sudo-prefixed...
+        // All six borg invocations are sudo-prefixed...
         assertThat(exec).contains("sudo -n ").contains("borg info").contains("borg init")
             .contains("borg create").contains("borg prune").contains("borg compact");
-        assertThat(countOf(exec, "sudo -n ")).isEqualTo(5);
-        // ...and no borg call is left bare: every "borg " occurrence is immediately preceded by a sudo line.
-        assertThat(countOf(exec, "borg info")).isEqualTo(1);
+        assertThat(countOf(exec, "sudo -n ")).isEqualTo(6);
+        // ...and no borg call is left bare. There are two `borg info`s since #340 — the probe, and the
+        // re-probe that decides whether an init reporting "already exists" may continue — so pin that EVERY
+        // one of them is sudoed rather than pinning how many there are.
+        assertThat(countOf(exec, "borg info")).isEqualTo(countOf(exec, sudoPrefix() + "borg info"));
         for (String verb : List.of("borg info", "borg init", "borg create", "borg prune", "borg compact")) {
             assertThat(exec).contains(sudoPrefix() + verb);
         }
@@ -141,8 +147,8 @@ class BorgCommandTest {
 
         assertThat(exec).contains("BORG_RSH='ssh -i /home/ubuntu/.ssh/id_ed25519"
             + " -o UserKnownHostsFile=/home/ubuntu/.ssh/known_hosts'");
-        // Every one of the five sudoed borg invocations carries it — not just the create.
-        assertThat(countOf(exec, "BORG_RSH=")).isEqualTo(5);
+        // Every one of the six sudoed borg invocations carries it — not just the create.
+        assertThat(countOf(exec, "BORG_RSH=")).isEqualTo(6);
         // Root's ssh must never be left to fall back on /root/.ssh, where there is no key and no pin.
         assertThat(exec).doesNotContain("/root/.ssh");
     }
@@ -196,9 +202,9 @@ class BorgCommandTest {
         String exec = BorgCommand.detachedRun(server(), rootJob(), repo(), "run-1", WORK_DIR, SSH_HOME).exec();
 
         assertThat(exec).contains("BORG_PASSCOMMAND='cat /var/lib/vaier-backup/nas-borg.pass'");
-        // Each of the five sudo lines carries it — not just the create. Pinned via the whole prefix, so a
+        // Each of the six sudo lines carries it — not just the create. Pinned via the whole prefix, so a
         // variable dropped from the sudo line (the 2026-07-29 relocation bug) fails here too.
-        assertThat(countOf(exec, sudoPrefix() + "borg ")).isEqualTo(5);
+        assertThat(countOf(exec, sudoPrefix() + "borg ")).isEqualTo(6);
         // Still no plaintext passphrase anywhere.
         assertThat(exec).doesNotContain("s3cr3t").doesNotContain("BORG_PASSPHRASE");
     }
@@ -213,7 +219,7 @@ class BorgCommandTest {
         String exec = BorgCommand.detachedRun(server(), rootJob(), repo(), "run-1", WORK_DIR, SSH_HOME).exec();
 
         assertThat(exec).contains("BORG_BASE_DIR='/var/lib/vaier-backup/root'");
-        assertThat(countOf(exec, "BORG_BASE_DIR='/var/lib/vaier-backup/root'")).isEqualTo(5);
+        assertThat(countOf(exec, "BORG_BASE_DIR='/var/lib/vaier-backup/root'")).isEqualTo(6);
     }
 
     /**
@@ -240,7 +246,7 @@ class BorgCommandTest {
             String rest = m.group(1).replaceAll("^(?:[A-Z_]+='[^']*' )+", "");
             assertThat(rest).startsWith("borg ");
         }
-        assertThat(seen).isEqualTo(5);
+        assertThat(seen).isEqualTo(6);
     }
 
     /**
@@ -386,9 +392,9 @@ class BorgCommandTest {
 
         // info-or-init guard, chained with && to the create so a genuine init failure aborts the run
         // (rather than being swallowed and then failing create with the same cryptic error).
-        // Only stdout is silenced: borg's stderr is the sole record of WHY the probe failed, and the probe
-        // cannot tell "absent" from "there but unopenable" on its own.
-        assertThat(exec).contains("borg info " + url + " > /dev/null || "
+        // The probe's output is captured and read: init is reached only through borg's own statement of
+        // absence, never through a bare non-zero exit (#340).
+        assertThat(exec).contains("grep -qF 'does not exist'; then "
             + "borg init --encryption=repokey-blake2 --make-parent-dirs " + url);
         // The guard runs BEFORE create.
         assertThat(exec.indexOf("borg info " + url)).isLessThan(exec.indexOf("borg create --json"));
@@ -1104,7 +1110,7 @@ class BorgCommandTest {
                 .as("sudo prefix #%d must carry the relocation acknowledgement", found)
                 .contains("BORG_RELOCATED_REPO_ACCESS_IS_OK='yes'");
         }
-        assertThat(found).as("every borg in the chain runs under sudo").isEqualTo(5);
+        assertThat(found).as("every borg in the chain runs under sudo").isEqualTo(6);
     }
 
     /**
@@ -1121,7 +1127,52 @@ class BorgCommandTest {
     void theEnsureInitialisedProbeKeepsBorgsReasonForFailing() {
         String exec = BorgCommand.detachedRun(server(), job(), repo(), "run-1", WORK_DIR, SSH_HOME).exec();
 
-        assertThat(exec).contains("borg info 'ssh://borg@192.168.3.3:8022/./colina' > /dev/null ||");
-        assertThat(exec).doesNotContain("borg info 'ssh://borg@192.168.3.3:8022/./colina' > /dev/null 2>&1");
+        assertThat(exec).contains("printf '%s\\\\n' \\\"\\$out\\\" >&2");
+    }
+
+    // --- #340: init only on positive evidence of absence -------------------------------------------------
+
+    /**
+     * The probe must not infer "this repository is absent" from a non-zero exit. {@code borg info} also exits
+     * non-zero when the repository is plainly THERE and merely cannot be opened — relocated, locked, or
+     * unreadable with the passphrase on hand — and Vaier's answer used to be {@code borg init} over live
+     * data. Harmless only because borg refuses, which is luck rather than design.
+     *
+     * <p>So init is now reached only through borg's own statement of absence. Verified against borg 1.2.8
+     * over the real SSH transport: an absent repository on an allowed path says "Repository … does not
+     * exist.", while a wrong passphrase says "passphrase … is incorrect", a moved one "Repository access
+     * aborted", and an unauthorised path "Repository path not allowed" — none of which match.
+     */
+    @Test
+    void aRepositoryThatCannotBeOpenedIsNeverInitedOver() {
+        String exec = BorgCommand.detachedRun(server(), job(), repo(), "run-1", WORK_DIR, SSH_HOME).exec();
+
+        // The probe's output is captured and tested, not thrown away and guessed from.
+        assertThat(exec).contains("if ! out=\\$(borg info 'ssh://borg@192.168.3.3:8022/./colina' 2>&1); then");
+        assertThat(exec).contains("grep -qF 'does not exist'");
+        // Anything else ends the chain, so create/prune/compact never run against a repository Vaier could
+        // not read. `false` rather than `exit`: an exit would kill the inner shell before it writes the .rc
+        // file, and the run would poll as RUNNING for ever.
+        assertThat(exec).contains("else false; fi");
+        assertThat(exec).doesNotContain("exit ");
+    }
+
+    /**
+     * The converse, and the other half of #340: when init DOES report the repository already exists — the
+     * race where something created it between the probe and the init — that must not fail the run. It is
+     * proof the repository is there, so the chain re-probes and continues if it can now be opened, rather
+     * than dying on a message that names nothing actionable.
+     *
+     * <p>Re-probing rather than matching init's wording is deliberate: it decides on evidence instead of on
+     * borg's English, and it is right for the lock case too, where the lock may have been released in the
+     * meantime.
+     */
+    @Test
+    void anInitThatFindsTheRepositoryAlreadyThereReprobesInsteadOfFailingTheRun() {
+        String exec = BorgCommand.detachedRun(server(), job(), repo(), "run-1", WORK_DIR, SSH_HOME).exec();
+        String url = "'ssh://borg@192.168.3.3:8022/./colina'";
+
+        assertThat(exec).contains("borg init --encryption=repokey-blake2 --make-parent-dirs " + url
+            + " || borg info " + url + " > /dev/null");
     }
 }

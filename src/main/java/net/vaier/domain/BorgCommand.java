@@ -191,18 +191,46 @@ public final class BorgCommand {
      * with the same message. Init reads the passphrase from the same {@code BORG_PASSCOMMAND} file, so no
      * secret is added to the command.
      *
-     * <p><b>Only stdout is silenced.</b> The probe infers "the repository does not exist" from a non-zero
-     * exit, which {@code borg info} also returns when the repository is plainly <em>there</em> and merely
-     * cannot be opened — relocated, locked, or unreadable with the passphrase on hand. Vaier then inits over
-     * a live repository and the run dies on borg's "A repository already exists", which names none of that.
-     * Silencing stderr as well used to throw away the one line that explains it: on 2026-07-29 three
-     * machines failed all night and the entire run log was that one misleading sentence. borg's reason now
-     * lands in the log, whether or not the probe's verdict is right.
+     * <p><b>Init is reached only through borg's own statement of absence</b> ({@link
+     * #REPOSITORY_ABSENT_MARKER}), never through a bare non-zero exit. {@code borg info} exits non-zero for
+     * a repository that is plainly <em>there</em> and merely cannot be opened — relocated, locked, or
+     * unreadable with the passphrase on hand — and inferring absence from that ran {@code borg init} over
+     * live data, killing the run with "A repository already exists", which names none of those causes. It
+     * was harmless only because borg refuses; that is luck, not design. Anything the probe cannot positively
+     * read as absence ends the chain with borg's own words in the log instead.
+     *
+     * <p>The probe's output is captured and re-emitted on stderr rather than discarded, because it is the
+     * only account of why a night failed: on 2026-07-29 three machines failed all night and the whole run
+     * log was one misleading sentence.
+     *
+     * <p><b>An init that finds the repository already there re-probes rather than failing.</b> Something
+     * creating it between probe and init is proof it exists, so the run continues if it can now be opened.
+     * Deciding that by re-probing rather than by matching init's wording keeps the judgement on evidence
+     * instead of on borg's English, and it is right for a lock that has since been released.
+     *
+     * <p><b>{@code false}, never {@code exit}.</b> An {@code exit} would end the inner shell before {@link
+     * #assembleDetached} writes the {@code .rc} file, and the run would poll as RUNNING for ever.
      */
     private static String ensureInitializedBody(BackupServer server, BackupRepository repo, String borg) {
         String url = singleQuote(repo.borgRepoUrl(server));
-        return borg + " info " + url + " > /dev/null || " + buildInitBody(server, repo, borg);
+        return "if ! out=$(" + borg + " info " + url + " 2>&1); then "
+            + "printf '%s\\n' \"$out\" >&2; "
+            + "if printf '%s' \"$out\" | grep -qF " + singleQuote(REPOSITORY_ABSENT_MARKER) + "; then "
+            + buildInitBody(server, repo, borg) + " || " + borg + " info " + url + " > /dev/null; "
+            + "else false; fi; "
+            + "fi";
     }
+
+    /**
+     * borg's own words for a repository that genuinely is not there, and the <b>only</b> thing that lets the
+     * run chain create one. Verified against borg 1.2.8 over the real SSH transport: an absent repository on
+     * an allowed path answers "Repository &lt;url&gt; does not exist.", while every other way {@code borg
+     * info} can fail says something else entirely — "passphrase … is incorrect", "Repository access aborted"
+     * (a relocation with no terminal to answer at), "Failed to create/acquire the lock", "Repository path
+     * not allowed" (outside the key's {@code --restrict-to-path} confinement). Matching absence positively,
+     * rather than treating every failure as absence, is what keeps {@code borg init} away from live data.
+     */
+    private static final String REPOSITORY_ABSENT_MARKER = "does not exist";
 
     private static String buildInitBody(BackupServer server, BackupRepository repo, String borg) {
         return borg + " init --encryption=repokey-blake2 --make-parent-dirs "
