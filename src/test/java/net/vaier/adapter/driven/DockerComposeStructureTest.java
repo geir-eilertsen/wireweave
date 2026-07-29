@@ -201,7 +201,7 @@ class DockerComposeStructureTest {
     @Test
     @SuppressWarnings("unchecked")
     void oauth2ProxyRender_allowListsConnectorIdSoTheSelectorJumpsStraightToTheProvider() throws Exception {
-        // The two sign-in buttons pass connector_id=google|github. oauth2-proxy only forwards a
+        // The sign-in buttons pass connector_id=google|github. oauth2-proxy only forwards a
         // user-supplied login param when it matches an `allow` rule — without it, Dex would show its
         // own second chooser instead of jumping straight to the picked provider. Guard the allow-list.
         Map<String, Object> compose = (Map<String, Object>) new Yaml()
@@ -212,7 +212,6 @@ class DockerComposeStructureTest {
 
         assertThat(render).as("connector_id must be an allow-listed login param")
             .contains("name: connector_id, allow:");
-        assertThat(render).contains("value: google").contains("value: github");
     }
 
     @Test
@@ -367,6 +366,162 @@ class DockerComposeStructureTest {
             .isNotEqualTo(0);
         assertThat(result.stderr()).contains("VAIER_DEX_CLIENT_SECRET");
         assertThat(Files.exists(tempDir.resolve("config.yaml"))).isFalse();
+    }
+
+    // --- #332 follow-up: the sign-in page must offer only the providers that are configured ---
+    //
+    // The connector list became per-provider optional, but the sign-in page kept both buttons
+    // hard-coded — so on an install with only Google credentials, "Continue with GitHub" was still
+    // offered and Dex answered the click with "Bad Request: Connector ID does not match a valid
+    // Connector". oauth2-proxy-init now renders the template the same way dex-init renders the
+    // connectors, from the same four variables, so the buttons and the connectors cannot diverge.
+
+    private record InitResult(int exitCode, String stdout, String stderr) {}
+
+    @SuppressWarnings("unchecked")
+    private String oauth2ProxyInitScript() throws Exception {
+        Map<String, Object> compose = (Map<String, Object>) new Yaml()
+            .load(Files.readString(Path.of("docker-compose.yml")));
+        Map<String, Object> services = (Map<String, Object>) compose.get("services");
+        Map<String, Object> init = (Map<String, Object>) services.get("oauth2-proxy-init");
+        List<String> command = (List<String>) init.get("command");
+        // command is ["sh", "-c", "<script>"] — the script itself is the last element.
+        return command.get(command.size() - 1);
+    }
+
+    // Runs the ACTUAL rendered oauth2-proxy-init script under sh, same substitutions as runDexInit:
+    // the runtime config dir is redirected to a temp dir and chown is stubbed out. The committed
+    // template mount is redirected at the repo's own oauth2/templates, so these tests render the
+    // real sign-in page.
+    private InitResult runOauth2ProxyInit(Path tempDir, Map<String, String> providerEnv) throws Exception {
+        String script = oauth2ProxyInitScript()
+            .replace("$$", "$")
+            .replace("/oauth2/config", tempDir.toString())
+            .replace("/templates-src", Path.of("oauth2/templates").toAbsolutePath().toString());
+
+        Path stubBin = Files.createDirectories(tempDir.resolve("stub-bin"));
+        Path chownStub = stubBin.resolve("chown");
+        Files.writeString(chownStub, "#!/bin/sh\nexit 0\n");
+        chownStub.toFile().setExecutable(true);
+
+        ProcessBuilder builder = new ProcessBuilder("sh", "-c", script);
+        Map<String, String> env = builder.environment();
+        env.put("PATH", stubBin + File.pathSeparator + env.get("PATH"));
+        env.put("VAIER_DOMAIN", "example.com");
+        env.put("VAIER_DEX_CLIENT_SECRET", "dex-shared-secret");
+        env.put("VAIER_OIDC_GOOGLE_CLIENT_ID", providerEnv.getOrDefault("VAIER_OIDC_GOOGLE_CLIENT_ID", ""));
+        env.put("VAIER_OIDC_GOOGLE_CLIENT_SECRET", providerEnv.getOrDefault("VAIER_OIDC_GOOGLE_CLIENT_SECRET", ""));
+        env.put("VAIER_OIDC_GITHUB_CLIENT_ID", providerEnv.getOrDefault("VAIER_OIDC_GITHUB_CLIENT_ID", ""));
+        env.put("VAIER_OIDC_GITHUB_CLIENT_SECRET", providerEnv.getOrDefault("VAIER_OIDC_GITHUB_CLIENT_SECRET", ""));
+
+        Process process = builder.start();
+        boolean finished = process.waitFor(10, TimeUnit.SECONDS);
+        if (!finished) {
+            process.destroyForcibly();
+            throw new IllegalStateException("oauth2-proxy-init script did not finish within 10s");
+        }
+        String stdout = new String(process.getInputStream().readAllBytes());
+        String stderr = new String(process.getErrorStream().readAllBytes());
+        return new InitResult(process.exitValue(), stdout, stderr);
+    }
+
+    private static final Map<String, String> GOOGLE_ONLY = Map.of(
+        "VAIER_OIDC_GOOGLE_CLIENT_ID", "google-id",
+        "VAIER_OIDC_GOOGLE_CLIENT_SECRET", "google-secret");
+
+    private static final Map<String, String> GITHUB_ONLY = Map.of(
+        "VAIER_OIDC_GITHUB_CLIENT_ID", "github-id",
+        "VAIER_OIDC_GITHUB_CLIENT_SECRET", "github-secret");
+
+    private static final Map<String, String> BOTH_PROVIDERS = Map.of(
+        "VAIER_OIDC_GOOGLE_CLIENT_ID", "google-id",
+        "VAIER_OIDC_GOOGLE_CLIENT_SECRET", "google-secret",
+        "VAIER_OIDC_GITHUB_CLIENT_ID", "github-id",
+        "VAIER_OIDC_GITHUB_CLIENT_SECRET", "github-secret");
+
+    @Test
+    void signInPage_offersOnlyGoogle_whenOnlyGoogleCredentialsAreSet(@TempDir Path tempDir) throws Exception {
+        InitResult result = runOauth2ProxyInit(tempDir, GOOGLE_ONLY);
+
+        assertThat(result.exitCode()).as("stderr: %s", result.stderr()).isEqualTo(0);
+        String page = Files.readString(tempDir.resolve("templates/sign_in.html"));
+
+        assertThat(page).contains("value=\"google\"").contains("Continue with Google");
+        assertThat(page).as("a button for an unconfigured provider dead-ends in a Dex Bad Request")
+            .doesNotContain("value=\"github\"").doesNotContain("Continue with GitHub");
+    }
+
+    @Test
+    void signInPage_offersOnlyGithub_whenOnlyGithubCredentialsAreSet(@TempDir Path tempDir) throws Exception {
+        InitResult result = runOauth2ProxyInit(tempDir, GITHUB_ONLY);
+
+        assertThat(result.exitCode()).as("stderr: %s", result.stderr()).isEqualTo(0);
+        String page = Files.readString(tempDir.resolve("templates/sign_in.html"));
+
+        assertThat(page).contains("value=\"github\"").contains("Continue with GitHub");
+        assertThat(page).doesNotContain("value=\"google\"").doesNotContain("Continue with Google");
+        // GitHub is styled as the secondary choice next to Google. Left alone as the only way in,
+        // it must not render muted — the lone button is the primary action.
+        assertThat(page).as("the only remaining provider is the primary action")
+            .doesNotContain("class=\"btn btn-secondary\"");
+    }
+
+    @Test
+    void signInPage_offersBothProviders_whenBothAreConfigured(@TempDir Path tempDir) throws Exception {
+        InitResult result = runOauth2ProxyInit(tempDir, BOTH_PROVIDERS);
+
+        assertThat(result.exitCode()).as("stderr: %s", result.stderr()).isEqualTo(0);
+        String page = Files.readString(tempDir.resolve("templates/sign_in.html"));
+
+        assertThat(page).contains("Continue with Google").contains("Continue with GitHub");
+        assertThat(page).as("two choices keep their primary/secondary hierarchy")
+            .contains("class=\"btn btn-secondary\"");
+    }
+
+    @Test
+    void signInPage_keepsTheErrorTemplate_soBothOverridesStayInOneDir(@TempDir Path tempDir) throws Exception {
+        // oauth2-proxy takes a single --custom-templates-dir. Rendering sign_in.html into it means
+        // error.html has to travel along, or the branded error page silently reverts to the default.
+        InitResult result = runOauth2ProxyInit(tempDir, BOTH_PROVIDERS);
+
+        assertThat(result.exitCode()).as("stderr: %s", result.stderr()).isEqualTo(0);
+        assertThat(Files.readString(tempDir.resolve("templates/error.html")))
+            .isEqualTo(Files.readString(Path.of("oauth2/templates/error.html")));
+    }
+
+    @Test
+    void loginParamAllowList_matchesTheConfiguredProviders(@TempDir Path tempDir) throws Exception {
+        // A connector_id oauth2-proxy forwards for a provider Dex has no connector for is the same
+        // Bad Request by another route (a hand-crafted /oauth2/start URL), so the allow-list is
+        // rendered from the same credentials as the buttons.
+        InitResult googleOnly = runOauth2ProxyInit(tempDir, GOOGLE_ONLY);
+        assertThat(googleOnly.exitCode()).as("stderr: %s", googleOnly.stderr()).isEqualTo(0);
+        String alpha = Files.readString(tempDir.resolve("alpha.yaml"));
+
+        assertThat(alpha).contains("name: connector_id, allow: [{value: google}]");
+    }
+
+    @Test
+    void loginParamAllowList_carriesBothProviders_whenBothAreConfigured(@TempDir Path tempDir) throws Exception {
+        InitResult both = runOauth2ProxyInit(tempDir, BOTH_PROVIDERS);
+        assertThat(both.exitCode()).as("stderr: %s", both.stderr()).isEqualTo(0);
+        String alpha = Files.readString(tempDir.resolve("alpha.yaml"));
+
+        assertThat(alpha).contains("name: connector_id, allow: [{value: google}, {value: github}]");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void oauth2Proxy_readsItsTemplatesFromTheRenderedDir_notTheCommittedSource() throws Exception {
+        // The committed template still carries both buttons; only the rendered copy is trimmed to
+        // the configured providers. Pointing oauth2-proxy back at the source would restore the bug.
+        Map<String, Object> compose = (Map<String, Object>) new Yaml()
+            .load(Files.readString(Path.of("docker-compose.yml")));
+        Map<String, Object> services = (Map<String, Object>) compose.get("services");
+        Map<String, Object> proxy = (Map<String, Object>) services.get("oauth2-proxy");
+        List<String> command = (List<String>) proxy.get("command");
+
+        assertThat(command).contains("--custom-templates-dir=/oauth2/config/templates");
     }
 
     @Test

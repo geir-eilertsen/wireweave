@@ -178,7 +178,9 @@ Traefik → oauth2-proxy → Dex ─┬→ Google
 
 Each provider is independently optional — configure Google, GitHub, or both. `dex-init` only adds a connector for a provider once both its client id and its client secret are set; **at least one provider is required**, or the stack refuses to start Dex (rather than starting it with no way to sign in). With only one provider configured, Dex skips its connector-selection screen and sign-in goes straight there.
 
-Both providers hand the user back to **Dex** (not oauth2-proxy), so register their redirect URIs at Dex:
+Configure the providers you want — at least one. The sign-in page offers a button per configured provider,
+so an install with only Google credentials never shows a GitHub button. Both providers hand the user back to
+**Dex** (not oauth2-proxy), so register their redirect URIs at Dex:
 
 - **Google** — create an OAuth 2.0 Web application client in the [Google Cloud console](https://console.cloud.google.com/apis/credentials), set its authorized redirect URI to `https://dex.yourdomain.com/callback`, and put the client id and secret in `.env` as `VAIER_OIDC_GOOGLE_CLIENT_ID` / `VAIER_OIDC_GOOGLE_CLIENT_SECRET`.
 - **GitHub** — register an OAuth App in [GitHub developer settings](https://github.com/settings/developers), set its authorization callback URL to `https://dex.yourdomain.com/callback`, and put the client id and secret in `.env` as `VAIER_OIDC_GITHUB_CLIENT_ID` / `VAIER_OIDC_GITHUB_CLIENT_SECRET`. Any GitHub account may sign in — Vaier's pending → admin-approval gate decides who's actually let in.

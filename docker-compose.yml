@@ -657,6 +657,12 @@ services:
     environment:
       - VAIER_DOMAIN=${VAIER_DOMAIN:-}
       - VAIER_DEX_CLIENT_SECRET=${VAIER_DEX_CLIENT_SECRET:-}
+      # Same four provider variables dex-init reads, applied by the same rule (both id and secret
+      # non-empty) — see the sign-in render below.
+      - VAIER_OIDC_GOOGLE_CLIENT_ID=${VAIER_OIDC_GOOGLE_CLIENT_ID:-}
+      - VAIER_OIDC_GOOGLE_CLIENT_SECRET=${VAIER_OIDC_GOOGLE_CLIENT_SECRET:-}
+      - VAIER_OIDC_GITHUB_CLIENT_ID=${VAIER_OIDC_GITHUB_CLIENT_ID:-}
+      - VAIER_OIDC_GITHUB_CLIENT_SECRET=${VAIER_OIDC_GITHUB_CLIENT_SECRET:-}
     command:
       - sh
       - -c
@@ -664,8 +670,43 @@ services:
         set -e
         umask 077
         printf '%s' "$$VAIER_DEX_CLIENT_SECRET" > /oauth2/config/client-secret
-        # Unquoted heredoc: the shell substitutes only $${VAIER_DOMAIN}; the alpha body contains no
-        # other $$ so nothing else is interpolated.
+
+        # #332 follow-up: a provider is offered only when BOTH its client id and secret are set —
+        # byte-for-byte the rule dex-init uses to decide which connectors exist. A button for a
+        # provider Dex has no connector for dead-ends in "Bad Request: Connector ID does not match a
+        # valid Connector", so the buttons and the allow-list below are rendered from these flags.
+        google_ok=1
+        [ -z "$${VAIER_OIDC_GOOGLE_CLIENT_ID}" ] && google_ok=0
+        [ -z "$${VAIER_OIDC_GOOGLE_CLIENT_SECRET}" ] && google_ok=0
+
+        github_ok=1
+        [ -z "$${VAIER_OIDC_GITHUB_CLIENT_ID}" ] && github_ok=0
+        [ -z "$${VAIER_OIDC_GITHUB_CLIENT_SECRET}" ] && github_ok=0
+
+        # oauth2-proxy takes a single --custom-templates-dir, so the committed templates are copied
+        # into the runtime dir and sign_in.html is trimmed there; error.html travels along unchanged.
+        # The committed page keeps every button, each fenced by <!--provider:x--> markers, and an
+        # unconfigured provider's fence is deleted from the rendered copy.
+        mkdir -p /oauth2/config/templates
+        cp /templates-src/error.html /oauth2/config/templates/error.html
+        cp /templates-src/sign_in.html /oauth2/config/templates/sign_in.html
+        allow=""
+        if [ "$${google_ok}" = 1 ]; then
+          allow="{value: google}"
+        else
+          sed -i '/<!--provider:google-->/,/<!--\/provider:google-->/d' /oauth2/config/templates/sign_in.html
+        fi
+        if [ "$${github_ok}" = 1 ]; then
+          [ -n "$${allow}" ] && allow="$${allow}, "
+          allow="$${allow}{value: github}"
+          # GitHub is the secondary choice beside Google; as the only way in it is the primary action.
+          [ "$${google_ok}" = 0 ] && sed -i 's/class="btn btn-secondary"/class="btn"/' /oauth2/config/templates/sign_in.html
+        else
+          sed -i '/<!--provider:github-->/,/<!--\/provider:github-->/d' /oauth2/config/templates/sign_in.html
+        fi
+
+        # Unquoted heredoc: the shell substitutes only $${VAIER_DOMAIN} and $${allow}; the alpha body
+        # contains no other $$ so nothing else is interpolated.
         cat > /oauth2/config/alpha.yaml <<EOF
         injectRequestHeaders:
         - {name: X-Forwarded-Groups, values: [{claimSource: {claim: groups}}]}
@@ -704,18 +745,22 @@ services:
           additionalClaims: [name, federated_claims.connector_id, federated_claims.user_id]
           # connector_id is user-supplied by the sign-in buttons; oauth2-proxy only forwards a
           # user value when it matches an allow rule, so Dex jumps straight to the chosen provider
-          # instead of showing its own chooser. No approval_prompt=force: forcing re-consent on every
-          # login is what made users re-grant access each time — Dex's skipApprovalScreen handles it.
+          # instead of showing its own chooser. Only the configured providers are allow-listed — a
+          # forwarded connector_id Dex has no connector for is a Bad Request. No approval_prompt=force:
+          # forcing re-consent on every login is what made users re-grant access each time — Dex's
+          # skipApprovalScreen handles it.
           loginURLParameters:
-          - {name: connector_id, allow: [{value: google}, {value: github}]}
+          - {name: connector_id, allow: [$${allow}]}
         server:
           BindAddress: 0.0.0.0:4180
         upstreamConfig:
           upstreams: [{id: static://202, path: /, static: true, staticCode: 202}]
         EOF
         chown 65532:65532 /oauth2/config/client-secret /oauth2/config/alpha.yaml
+        chown -R 65532:65532 /oauth2/config/templates
     volumes:
       - ./oauth2/config:/oauth2/config
+      - ./oauth2/templates:/templates-src:ro
     restart: "no"
 
   oauth2-proxy:
@@ -734,13 +779,14 @@ services:
       - --email-domain=*
       - --reverse-proxy=true
       - --redirect-url=https://oauth2.${VAIER_DOMAIN}/oauth2/callback
-      # Brand the sign-in page in Vaier's dark theme (overrides only sign_in.html).
-      - --custom-templates-dir=/templates
+      # Brand the sign-in page in Vaier's dark theme (overrides only sign_in.html + error.html).
+      # The rendered copy, not the committed source: oauth2-proxy-init trims the sign-in page down
+      # to the providers this install actually has credentials for.
+      - --custom-templates-dir=/oauth2/config/templates
       # Provider (generic OIDC brokered by Dex), client id/secret, upstream, header injection (incl.
       # the name claim) and the bind address now come from the rendered alpha config — see oauth2-proxy-init.
       - --alpha-config=/oauth2/config/alpha.yaml
     volumes:
-      - ./oauth2/templates:/templates:ro
       - ./oauth2/config:/oauth2/config:ro
     depends_on:
       oauth2-proxy-init:

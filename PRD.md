@@ -781,15 +781,22 @@ touches published-service routers/services or other config.
   fails fast (naming exactly which variables are missing, non-zero exit) instead of writing a config with
   an empty connector, which would otherwise crash-loop Dex behind the only way into the UI. With a single
   connector configured, Dex's own connector-selection screen is skipped and sign-in goes straight to that
-  provider — confirmed by inspection of the Dex server code, no UI change needed on Vaier's side.
+  provider.
+  The **sign-in page follows the same four variables** — `oauth2-proxy-init` renders `sign_in.html` (and
+  the `connector_id` allow-list) into the runtime templates dir, keeping only the buttons whose provider
+  is configured, and promoting GitHub from secondary to primary styling when it is the only one left. The
+  first cut of #332 trimmed the connectors but left both buttons hard-coded, so a Google-only install
+  still offered **Continue with GitHub** and Dex answered the click with `Bad Request: Connector ID does
+  not match a valid Connector`.
 - oauth2-proxy's `alpha.yaml` render is repointed from `provider: google` to a generic `provider: oidc`
   brokered by Dex (`issuerURL: https://dex.<domain>`, `connector_id` login param), with the oauth2-proxy↔Dex
   shared secret in the mode-0600 `client-secret` file.
 - Secrets: `VAIER_DEX_CLIENT_SECRET` (oauth2-proxy↔Dex) is auto-generated into `.env` like
   `VAIER_OAUTH2_COOKIE_SECRET`; `VAIER_OIDC_GITHUB_CLIENT_ID` / `VAIER_OIDC_GITHUB_CLIENT_SECRET` are
   operator-provided alongside the Google pair.
-- UI: the branded oauth2-proxy sign-in page now offers two buttons — **Continue with Google** (primary) and
-  **Continue with GitHub** (quieter outlined secondary) — each submitting its `connector_id`.
+- UI: the branded oauth2-proxy sign-in page offers a button per **configured** provider — **Continue with
+  Google** (primary) and **Continue with GitHub** (quieter outlined secondary) — each submitting its
+  `connector_id`.
 
 **Backlog (not in this slice):**
 - **Cross-provider identity linking** — treat the same person signing in via Google and via GitHub as one
