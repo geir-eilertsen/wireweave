@@ -5,7 +5,6 @@ import net.vaier.domain.TestMachineIds;
 import net.vaier.application.GetPublishedServicesUseCase.PublishedServiceUco;
 import net.vaier.application.PublishPeerServiceUseCase.PublishStatus;
 import net.vaier.application.UpdatePublishedServiceUseCase.PublishedServicePatch;
-import net.vaier.domain.DnsState;
 import net.vaier.domain.Server.State;
 import net.vaier.integration.base.VaierWebMvcIntegrationBase;
 import org.junit.jupiter.api.Test;
@@ -59,7 +58,7 @@ class PublishedServiceControllerIT extends VaierWebMvcIntegrationBase {
     void discover_returnsPublishedServices() throws Exception {
         when(getPublishedServicesUseCase.getPublishedServices()).thenReturn(List.of(
                 new PublishedServiceUco(
-                        "app", "app.example.com", DnsState.OK,
+                        "app", "app.example.com",
                         "10.13.13.2", 8080, State.OK, false, null, false)
         ));
 
@@ -203,13 +202,14 @@ class PublishedServiceControllerIT extends VaierWebMvcIntegrationBase {
 
     @Test
     void getPublishStatus_returnsStatusFields() throws Exception {
+        // Publishing has exactly one phase now: Traefik picked the route up, or it did not (#331).
         when(publishPeerServiceUseCase.getPublishStatus("app"))
-                .thenReturn(new PublishStatus(true, false));
+                .thenReturn(new PublishStatus(true));
 
         mockMvc.perform(get("/published-services/app/status"))
                .andExpect(status().isOk())
-               .andExpect(jsonPath("$.dnsPropagated").value(true))
-               .andExpect(jsonPath("$.traefikActive").value(false));
+               .andExpect(jsonPath("$.traefikActive").value(true))
+               .andExpect(jsonPath("$.dnsPropagated").doesNotExist());
     }
 
     @Test

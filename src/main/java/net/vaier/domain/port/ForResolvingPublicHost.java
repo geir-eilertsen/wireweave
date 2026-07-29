@@ -1,7 +1,7 @@
 package net.vaier.domain.port;
 
 import java.util.Optional;
-import net.vaier.domain.DnsRecord.DnsRecordType;
+import net.vaier.domain.DnsRecordType;
 
 public interface ForResolvingPublicHost {
 
@@ -17,11 +17,10 @@ public interface ForResolvingPublicHost {
         return Optional.empty();
     }
 
-    record PublicHost(String value, DnsRecordType type) {
-        public PublicHost {
-            if (type != DnsRecordType.A && type != DnsRecordType.CNAME) {
-                throw new IllegalArgumentException("PublicHost type must be A or CNAME, got " + type);
-            }
-        }
-    }
+    /**
+     * How this server's public address is expressed: an IP is an {@link DnsRecordType#A}, a hostname a
+     * {@link DnsRecordType#CNAME}. The distinction survives Vaier getting out of the DNS business
+     * (#331) because a CNAME still has to be resolved before it can be geolocated.
+     */
+    record PublicHost(String value, DnsRecordType type) {}
 }

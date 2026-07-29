@@ -598,11 +598,14 @@ class DockerComposeStructureTest {
     @Test
     @SuppressWarnings("unchecked")
     void traefikEntrypoint_waitsForInfraDnsToResolvePublicly_beforeExecSoTheFirstAcmeAttemptDoesNotBurnLeQuota() throws Exception {
-        // Fresh-install race. In auto-DNS mode Vaier creates the vaier/oauth2/dex Route53 records at boot,
-        // but Traefik — started by the SAME `up` — would ask Let's Encrypt for certs before those names
-        // resolve. LE's validator then gets NXDOMAIN, and Traefik's tight retry burst trips LE's "5 failed
-        // authorizations per hostname per hour" limit: issuance locks out for an hour and the stack sits on
-        // Traefik's self-signed default cert (browsers show ERR_CERT_AUTHORITY_INVALID).
+        // Fresh-install race. Vaier no longer creates any DNS record (#331) — the operator's one
+        // *.<domain> wildcard answers for vaier/oauth2/dex from the moment it exists, so this wait is
+        // normally satisfied instantly. It stays as a fail-open net for the install where the wildcard
+        // is missing or has not propagated: Traefik, started by the same `up`, would otherwise ask Let's
+        // Encrypt for certs before those names resolve. LE's validator then gets NXDOMAIN, and Traefik's
+        // tight retry burst trips LE's "5 failed authorizations per hostname per hour" limit: issuance
+        // locks out for an hour and the stack sits on Traefik's self-signed default cert (browsers show
+        // ERR_CERT_AUTHORITY_INVALID).
         //
         // The fix lives in Traefik's OWN entrypoint: it holds until the three infra names resolve on a
         // PUBLIC resolver (the class LE queries — not the container's split-horizon/VPC view) BEFORE it
@@ -649,10 +652,11 @@ class DockerComposeStructureTest {
     @SuppressWarnings("unchecked")
     void traefikCarriesInternalAliasesForInfraHostnames_soServiceToServiceCallsSkipPublicDnsAndItsNegativeCache() throws Exception {
         // oauth2-proxy (and Vaier) run OIDC discovery against https://dex.<domain> BY ITS PUBLIC NAME — the
-        // issuer must match, so an internal http://dex:5556 shortcut is not an option. On a fresh install the
-        // Route53 records don't exist until Vaier boots, so a container that resolves dex.<domain> too early
-        // gets NXDOMAIN and poisons its resolver's NEGATIVE cache (Route53 SOA negative TTL ~15 min) — which
-        // crash-looped oauth2-proxy on "no such host" long after the record existed. Aliasing each infra
+        // issuer must match, so an internal http://dex:5556 shortcut is not an option. If the wildcard
+        // record is missing or still propagating, a container that resolves dex.<domain> too early gets
+        // NXDOMAIN and poisons its resolver's NEGATIVE cache (a zone's SOA negative TTL is commonly
+        // ~15 min) — which crash-looped oauth2-proxy on "no such host" long after the name resolved.
+        // Aliasing each infra
         // hostname onto Traefik makes Docker's embedded DNS answer them from its own registry (straight to
         // Traefik) before ever forwarding externally: no public DNS, no negative cache. Traefik then
         // terminates TLS with the real cert and routes on. This is the internal-resolution complement to the

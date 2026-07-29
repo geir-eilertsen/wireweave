@@ -8,7 +8,7 @@ import java.time.Duration;
 import java.util.Optional;
 import java.util.function.Function;
 import lombok.extern.slf4j.Slf4j;
-import net.vaier.domain.DnsRecord.DnsRecordType;
+import net.vaier.domain.DnsRecordType;
 import net.vaier.domain.port.ForResolvingPublicHost;
 import org.springframework.stereotype.Component;
 

@@ -103,9 +103,9 @@ VAIER_ADMIN_EMAIL=you@gmail.com
 # The zone Vaier reads local time in (the nightly backup hour is this zone, not UTC). Defaults to UTC.
 VAIER_TZ=UTC
 
-# Route53 DNS automation (optional). Include these and Vaier manages DNS; omit them for manual DNS.
-#VAIER_AWS_KEY=AKIA...
-#VAIER_AWS_SECRET=
+# DNS is one record, made once at your DNS host before the first 'up' — any provider will do:
+#   *.yourdomain.com   A   <this server's public IP>
+# Vaier never writes DNS; every service it publishes resolves through that one record.
 EOF
   chmod 600 .env
 fi

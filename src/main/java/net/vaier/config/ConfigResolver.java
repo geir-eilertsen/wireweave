@@ -2,7 +2,6 @@ package net.vaier.config;
 
 import java.util.function.Function;
 import lombok.extern.slf4j.Slf4j;
-import net.vaier.domain.DnsProvider;
 import net.vaier.domain.VaierConfig;
 import net.vaier.domain.port.ForPersistingAppConfiguration;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -15,8 +14,6 @@ public class ConfigResolver {
     private final ForPersistingAppConfiguration configPersistence;
     private final Function<String, String> envLookup;
     private String domain;
-    private String awsKey;
-    private String awsSecret;
     private String acmeEmail;
     private String smtpHost;
     private Integer smtpPort;
@@ -40,8 +37,6 @@ public class ConfigResolver {
     public void reload() {
         VaierConfig config = configPersistence.load().orElseGet(() -> VaierConfig.builder().build());
         this.domain = firstNonBlank(config.getDomain(), envLookup.apply("VAIER_DOMAIN"));
-        this.awsKey = firstNonBlank(config.getAwsKey(), envLookup.apply("VAIER_AWS_KEY"));
-        this.awsSecret = firstNonBlank(config.getAwsSecret(), envLookup.apply("VAIER_AWS_SECRET"));
         this.acmeEmail = firstNonBlank(config.getAcmeEmail(), envLookup.apply("ACME_EMAIL"));
         this.smtpHost = config.getSmtpHost();
         this.smtpPort = config.getSmtpPort();
@@ -51,7 +46,7 @@ public class ConfigResolver {
         this.backupScheduleHour = config.effectiveBackupScheduleHour();
         this.googleClientId = envLookup.apply("VAIER_OIDC_GOOGLE_CLIENT_ID");
         if (domain != null) {
-            log.info("Configuration resolved for domain: {} (DNS provider: {})", domain, getDnsProvider());
+            log.info("Configuration resolved for domain: {}", domain);
         }
     }
 
@@ -62,8 +57,6 @@ public class ConfigResolver {
     }
 
     public String getDomain() { return domain; }
-    public String getAwsKey() { return awsKey; }
-    public String getAwsSecret() { return awsSecret; }
     public String getAcmeEmail() { return acmeEmail; }
     public String getSmtpHost() { return smtpHost; }
     public Integer getSmtpPort() { return smtpPort; }
@@ -78,11 +71,5 @@ public class ConfigResolver {
      */
     public boolean isSocialAuthAvailable() {
         return googleClientId != null && !googleClientId.isBlank();
-    }
-
-    public DnsProvider getDnsProvider() {
-        boolean hasAwsCredentials = awsKey != null && !awsKey.isBlank()
-            && awsSecret != null && !awsSecret.isBlank();
-        return hasAwsCredentials ? DnsProvider.ROUTE53 : DnsProvider.MANUAL;
     }
 }

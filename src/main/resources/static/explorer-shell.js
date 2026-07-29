@@ -3163,7 +3163,6 @@
         // The coordinates — the read-only truth about the route, its DNS record and its backend.
         body.appendChild(kv([
             ['DNS record', s.dnsAddress],
-            ['DNS state', s.dnsState],
             ['Route', s.state],
             ['Backend', (s.hostAddress || '') + (s.hostPort ? ':' + s.hostPort : '')],
             ['Path prefix', s.pathPrefix],
@@ -4978,20 +4977,20 @@
             armWrite();
         };
 
-        // --- AWS credentials: only meaningful in Route53 DNS mode ---
-        if (c.dnsProvider === 'ROUTE53') {
-            const aws = sectionForm('AWS credentials');
-            const cur = input(c.awsKeyHint, 'Not configured'); cur.disabled = true;
-            const newKey = input('', 'AKIA…'); const newSecret = input('', 'Secret', 'password');
-            aws.append(field('Current key', null, cur), field('New key', null, newKey),
-                field('New secret', 'Both are needed to change the credentials.', newSecret));
-            saveRow(aws, 'Save credentials', (n) => {
-                if (!newKey.value.trim() || !newSecret.value.trim()) {
-                    n.className = 'ex-set-note is-err'; n.textContent = 'Both key and secret are required.'; return;
-                }
-                saveSetting('/settings/aws', 'PUT', { awsKey: newKey.value.trim(), awsSecret: newSecret.value.trim() },
-                    n, 'Credentials saved.').then(() => { newKey.value = ''; newSecret.value = ''; });
-            });
+        // --- Wildcard DNS: the one record every published service depends on (#331) ---
+        //
+        // Read-only, because there is nothing to configure here — Vaier checks the single
+        // `*.<domain>` record at boot and reports what it found. A quiet confirmation when it
+        // resolves; a plain-language warning (in Vaier's own words) when it does not. Nothing is
+        // shown before the boot check has run — "not checked yet" is not a problem.
+        // Vaier grades the verdict (OK / WARNING / ERROR); this only picks a style from the grade.
+        if (c.wildcardDnsStatus) {
+            body.appendChild(section('Wildcard DNS'));
+            const wcCls = { OK: 'is-ok', WARNING: 'is-warn', ERROR: 'is-err' }[c.wildcardDnsSeverity]
+                || 'is-warn';
+            const wcNote = el('div', 'ex-set-note ' + wcCls);
+            wcNote.textContent = c.wildcardDnsMessage || '';
+            body.appendChild(wcNote);
         }
 
         // --- Email (SMTP): the channel every alert goes out on ---
@@ -5071,7 +5070,7 @@
             ['Version', S.settings.version],
             ['Domain', c.domain],
             ['Let’s Encrypt email', c.acmeEmail],
-            ['DNS', c.dnsProvider],
+            ['Wildcard DNS', c.wildcardDnsLabel],
         ]));
 
         pane.appendChild(body);

@@ -6,7 +6,7 @@ import net.vaier.application.DeletePublishedServiceUseCase;
 import net.vaier.application.GetPeerConfigUseCase.PeerConfigResult;
 import net.vaier.application.GetServerLocationUseCase.ServerLocation;
 import net.vaier.config.ConfigResolver;
-import net.vaier.domain.DnsRecord.DnsRecordType;
+import net.vaier.domain.DnsRecordType;
 import net.vaier.domain.GeoLocation;
 import net.vaier.domain.LanServer;
 import net.vaier.domain.MachineId;

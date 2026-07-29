@@ -25,7 +25,6 @@
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
         <java.version>21</java.version>
-        <aws.sdk.version>2.23.9</aws.sdk.version>
         <docker.java.version>3.3.4</docker.java.version>
         <springdoc.version>2.7.0</springdoc.version>
         <sshd.version>2.15.0</sshd.version>
@@ -43,13 +42,6 @@
         </dependency>
 
         <!-- Database -->
-
-        <!-- AWS SDK -->
-        <dependency>
-            <groupId>software.amazon.awssdk</groupId>
-            <artifactId>route53</artifactId>
-            <version>${aws.sdk.version}</version>
-        </dependency>
 
         <!-- Docker -->
         <dependency>
@@ -124,7 +116,7 @@
             <version>3.5.3</version>
         </dependency>
 
-        <!-- DNS resolution (queries authoritative nameservers directly, bypassing JVM + recursive caches) -->
+        <!-- DNS resolution (queries public resolvers directly, bypassing JVM + container caches) -->
         <dependency>
             <groupId>dnsjava</groupId>
             <artifactId>dnsjava</artifactId>
@@ -193,14 +185,14 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
-                    <!-- Exclude live integration tests (real AWS) from mvn test -->
+                    <!-- Excludes any test needing live third-party infrastructure. Nothing carries
+                         this tag today (the last one went with Route53, #331) — the exclusion stays
+                         so a future live test is opt-in rather than a surprise `mvn test` failure. -->
                     <excludedGroups>integration-live</excludedGroups>
                     <!-- Run unit tests AND every integration test (*IT) under `mvn test`.
                          Surefire's default patterns don't match *IT, so without this the whole
                          integration/ suite — the @WebMvcTest controller ITs plus the file-based
-                         adapter/service ITs — silently never runs (#276). The only real-AWS IT is
-                         @Tag("integration-live") and is excluded above; Failsafe still runs it
-                         during `mvn verify`. -->
+                         adapter/service ITs — silently never runs (#276). -->
                     <includes>
                         <include>**/*Test.java</include>
                         <include>**/*Tests.java</include>

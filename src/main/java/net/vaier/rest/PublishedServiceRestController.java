@@ -97,7 +97,7 @@ public class PublishedServiceRestController {
     @GetMapping("/{subdomain}/status")
     public PublishStatusResponse getPublishStatus(@PathVariable String subdomain) {
         var status = publishPeerServiceUseCase.getPublishStatus(subdomain);
-        return new PublishStatusResponse(status.dnsPropagated(), status.traefikActive());
+        return new PublishStatusResponse(status.traefikActive());
     }
 
     @GetMapping("/pending")
@@ -133,6 +133,6 @@ public class PublishedServiceRestController {
                           boolean directUrlDisabled, String pathPrefix) {}
     record PublishLanRequest(String subdomain, String machineId, int port, String protocol, boolean requireAuth,
                              boolean directUrlDisabled, String rootRedirectPath, String pathPrefix) {}
-    record PublishStatusResponse(boolean dnsPropagated, boolean traefikActive) {}
+    record PublishStatusResponse(boolean traefikActive) {}
     record IgnoreRequest(String key) {}
 }

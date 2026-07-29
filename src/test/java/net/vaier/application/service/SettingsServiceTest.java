@@ -2,13 +2,14 @@ package net.vaier.application.service;
 
 import net.vaier.application.GetAppSettingsUseCase.AppSettingsResult;
 import net.vaier.config.ConfigResolver;
-import net.vaier.domain.DnsProvider;
+import net.vaier.config.WildcardDnsStatusHolder;
 import net.vaier.domain.VaierConfig;
+import net.vaier.domain.WildcardDnsReport;
+import net.vaier.domain.WildcardDnsStatus;
 import net.vaier.domain.port.ForPersistingAppConfiguration;
 import net.vaier.domain.port.ForReadingAppVersion;
 import net.vaier.domain.port.ForReadingStoredSmtpPassword;
 import net.vaier.domain.port.ForSendingTestEmail;
-import net.vaier.domain.port.ForValidatingAwsCredentials;
 import net.vaier.domain.port.ForVerifyingSmtpCredentials;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -39,11 +40,11 @@ import static org.mockito.Mockito.when;
 class SettingsServiceTest {
 
     @Mock ForPersistingAppConfiguration configPersistence;
-    @Mock ForValidatingAwsCredentials forValidatingAwsCredentials;
     @Mock ForVerifyingSmtpCredentials smtpVerifier;
     @Mock ForReadingStoredSmtpPassword storedPasswordReader;
     @Mock ForSendingTestEmail testEmailSender;
     @Mock ConfigResolver configResolver;
+    @Mock WildcardDnsStatusHolder wildcardDnsStatusHolder;
     @Mock ForReadingAppVersion appVersionReader;
 
     /** A zone that is not the CI JVM's default (UTC), so a hardcoded-UTC answer can't pass by accident. */
@@ -54,8 +55,6 @@ class SettingsServiceTest {
     private VaierConfig existingConfig() {
         return VaierConfig.builder()
             .domain("example.com")
-            .awsKey("AKID")
-            .awsSecret("secret")
             .acmeEmail("admin@example.com")
             .build();
     }
@@ -75,8 +74,6 @@ class SettingsServiceTest {
     void getSettings_returnsConfigFields() {
         VaierConfig config = VaierConfig.builder()
             .domain("example.com")
-            .awsKey("AKIAIOSFODNN7EXAMPLE")
-            .awsSecret("secret")
             .acmeEmail("admin@example.com")
             .smtpHost("smtp.example.com")
             .smtpPort(587)
@@ -96,29 +93,85 @@ class SettingsServiceTest {
     }
 
     @Test
-    void getSettings_masksAwsKey() {
-        VaierConfig config = VaierConfig.builder()
-            .domain("example.com")
-            .awsKey("AKIAIOSFODNN7EXAMPLE")
-            .awsSecret("secret")
-            .acmeEmail("admin@example.com")
-            .build();
-        when(configPersistence.load()).thenReturn(Optional.of(config));
-
-        AppSettingsResult result = service.getSettings();
-
-        assertThat(result.awsKeyHint()).doesNotContain("AKIAIOSFODNN7EXAMPLE");
-        assertThat(result.awsKeyHint()).contains("MPLE");
-    }
-
-    @Test
     void getSettings_returnsNullsWhenNoConfig() {
         when(configPersistence.load()).thenReturn(Optional.empty());
 
         AppSettingsResult result = service.getSettings();
 
         assertThat(result.domain()).isNull();
-        assertThat(result.awsKeyHint()).isNull();
+    }
+
+    // --- the boot-time wildcard verdict (#331) ---
+
+    /**
+     * The verdict is stated where the operator can act on it, not only in a boot log line that has long
+     * scrolled away — so the settings payload carries both the status and the sentence.
+     */
+    @Test
+    void getSettings_carriesTheWildcardVerdictFromTheBootCheck() {
+        when(configPersistence.load()).thenReturn(Optional.of(existingConfig()));
+        when(wildcardDnsStatusHolder.report()).thenReturn(Optional.of(new WildcardDnsReport(
+            WildcardDnsStatus.NOT_RESOLVING, "9f3c1a.b21d70.example.com", "52.29.74.114", List.of())));
+
+        AppSettingsResult result = service.getSettings();
+
+        assertThat(result.wildcardDnsStatus()).isEqualTo("NOT_RESOLVING");
+        assertThat(result.wildcardDnsMessage())
+            .isEqualTo("Wildcard DNS is not set up. Create one record — *.example.com A 52.29.74.114 — "
+                + "and every service Vaier publishes will resolve.");
+    }
+
+    /**
+     * The label and the severity are the domain's judgments, passed through verbatim. The browser used
+     * to derive both from the status name, which meant a new status rendered as nothing at all.
+     */
+    @Test
+    void getSettings_carriesTheDomainsOwnLabelAndSeverity_soTheBrowserDecidesNothing() {
+        when(configPersistence.load()).thenReturn(Optional.of(existingConfig()));
+        when(wildcardDnsStatusHolder.report()).thenReturn(Optional.of(new WildcardDnsReport(
+            WildcardDnsStatus.RESOLVES_ELSEWHERE, "9f3c1a.b21d70.example.com", "52.29.74.114",
+            List.of("1.2.3.4"))));
+
+        AppSettingsResult result = service.getSettings();
+
+        assertThat(result.wildcardDnsLabel()).isEqualTo("Resolves elsewhere");
+        assertThat(result.wildcardDnsSeverity()).isEqualTo("ERROR");
+    }
+
+    @Test
+    void getSettings_leavesTheLabelAndSeverityNullBeforeTheBootCheckHasRun() {
+        when(configPersistence.load()).thenReturn(Optional.of(existingConfig()));
+        when(wildcardDnsStatusHolder.report()).thenReturn(Optional.empty());
+
+        AppSettingsResult result = service.getSettings();
+
+        assertThat(result.wildcardDnsLabel()).isNull();
+        assertThat(result.wildcardDnsSeverity()).isNull();
+    }
+
+    /** "Not checked yet" is not a problem to warn about, so it reads as absent rather than as a failure. */
+    @Test
+    void getSettings_leavesTheWildcardVerdictNullBeforeTheBootCheckHasRun() {
+        when(configPersistence.load()).thenReturn(Optional.of(existingConfig()));
+        when(wildcardDnsStatusHolder.report()).thenReturn(Optional.empty());
+
+        AppSettingsResult result = service.getSettings();
+
+        assertThat(result.wildcardDnsStatus()).isNull();
+        assertThat(result.wildcardDnsMessage()).isNull();
+    }
+
+    @Test
+    void getSettings_carriesTheWildcardVerdictEvenWithNoConfigOnDisk() {
+        when(configPersistence.load()).thenReturn(Optional.empty());
+        when(wildcardDnsStatusHolder.report()).thenReturn(Optional.of(new WildcardDnsReport(
+            WildcardDnsStatus.COVERED, "9f3c1a.b21d70.example.com", "52.29.74.114",
+            List.of("52.29.74.114"))));
+
+        AppSettingsResult result = service.getSettings();
+
+        assertThat(result.wildcardDnsStatus()).isEqualTo("COVERED");
+        assertThat(result.wildcardDnsMessage()).contains("*.example.com");
     }
 
     /**
@@ -144,40 +197,8 @@ class SettingsServiceTest {
         assertThat(result.backupScheduleZone()).isEqualTo("Europe/Oslo");
     }
 
-    @Test
-    void getSettings_includesDnsProviderFromConfigResolver() {
-        when(configPersistence.load()).thenReturn(Optional.of(existingConfig()));
-        when(configResolver.getDnsProvider()).thenReturn(DnsProvider.MANUAL);
 
-        AppSettingsResult result = service.getSettings();
 
-        assertThat(result.dnsProvider()).isEqualTo("MANUAL");
-    }
-
-    @Test
-    void getSettings_dnsProviderDefaultsToRoute53WhenNoConfig() {
-        when(configPersistence.load()).thenReturn(Optional.empty());
-        when(configResolver.getDnsProvider()).thenReturn(DnsProvider.ROUTE53);
-
-        AppSettingsResult result = service.getSettings();
-
-        assertThat(result.dnsProvider()).isEqualTo("ROUTE53");
-    }
-
-    @Test
-    void getSettings_handlesShortAwsKey() {
-        VaierConfig config = VaierConfig.builder()
-            .domain("example.com")
-            .awsKey("ABC")
-            .awsSecret("s")
-            .acmeEmail("a@b.com")
-            .build();
-        when(configPersistence.load()).thenReturn(Optional.of(config));
-
-        AppSettingsResult result = service.getSettings();
-
-        assertThat(result.awsKeyHint()).isNotNull();
-    }
 
     @Test
     void getSettings_includesDiskMonitorThreshold() {
@@ -224,7 +245,6 @@ class SettingsServiceTest {
         ArgumentCaptor<VaierConfig> captor = ArgumentCaptor.forClass(VaierConfig.class);
         verify(configPersistence).save(captor.capture());
         assertThat(captor.getValue().getDomain()).isEqualTo("example.com");
-        assertThat(captor.getValue().getAwsKey()).isEqualTo("AKID");
     }
 
     @Test
@@ -248,7 +268,6 @@ class SettingsServiceTest {
         assertThat(captor.getValue().getBackupScheduleHour()).isEqualTo(5);
         // Existing fields carry over on the read-modify-write.
         assertThat(captor.getValue().getDomain()).isEqualTo("example.com");
-        assertThat(captor.getValue().getAwsKey()).isEqualTo("AKID");
         verify(configResolver).reload();
     }
 
@@ -272,7 +291,6 @@ class SettingsServiceTest {
         verify(configPersistence).save(captor.capture());
         assertThat(captor.getValue().getSurvivalKitPassphrase()).isEqualTo("correct horse battery staple");
         assertThat(captor.getValue().getDomain()).isEqualTo("example.com");
-        assertThat(captor.getValue().getAwsSecret()).isEqualTo("secret");
     }
 
     /** Refused by the entity, and nothing is written — a blank passphrase must not reach the store. */
@@ -284,60 +302,6 @@ class SettingsServiceTest {
         verify(configPersistence, never()).save(any());
     }
 
-    // --- updateAwsCredentials ---
-
-    @Test
-    void updateAwsCredentials_validatesCredentialsBeforeSaving() {
-        when(forValidatingAwsCredentials.listHostedZones("NEW_KEY", "NEW_SECRET"))
-            .thenReturn(List.of("example.com"));
-        when(configPersistence.load()).thenReturn(Optional.of(existingConfig()));
-
-        service.updateAwsCredentials("NEW_KEY", "NEW_SECRET");
-
-        verify(forValidatingAwsCredentials).listHostedZones("NEW_KEY", "NEW_SECRET");
-    }
-
-    @Test
-    void updateAwsCredentials_savesNewCredentialsWhenValid() {
-        when(forValidatingAwsCredentials.listHostedZones("NEW_KEY", "NEW_SECRET"))
-            .thenReturn(List.of("example.com"));
-        when(configPersistence.load()).thenReturn(Optional.of(existingConfig()));
-
-        service.updateAwsCredentials("NEW_KEY", "NEW_SECRET");
-
-        ArgumentCaptor<VaierConfig> captor = ArgumentCaptor.forClass(VaierConfig.class);
-        verify(configPersistence).save(captor.capture());
-        VaierConfig saved = captor.getValue();
-        assertThat(saved.getAwsKey()).isEqualTo("NEW_KEY");
-        assertThat(saved.getAwsSecret()).isEqualTo("NEW_SECRET");
-    }
-
-    @Test
-    void updateAwsCredentials_preservesOtherConfigFieldsWhenSaving() {
-        when(forValidatingAwsCredentials.listHostedZones("NEW_KEY", "NEW_SECRET"))
-            .thenReturn(List.of("example.com"));
-        when(configPersistence.load()).thenReturn(Optional.of(existingConfig()));
-
-        service.updateAwsCredentials("NEW_KEY", "NEW_SECRET");
-
-        ArgumentCaptor<VaierConfig> captor = ArgumentCaptor.forClass(VaierConfig.class);
-        verify(configPersistence).save(captor.capture());
-        VaierConfig saved = captor.getValue();
-        assertThat(saved.getDomain()).isEqualTo("example.com");
-        assertThat(saved.getAcmeEmail()).isEqualTo("admin@example.com");
-    }
-
-    @Test
-    void updateAwsCredentials_throwsAndDoesNotSaveWhenValidationFails() {
-        when(forValidatingAwsCredentials.listHostedZones("BAD_KEY", "BAD_SECRET"))
-            .thenThrow(new RuntimeException("Invalid AWS credentials"));
-
-        assertThatThrownBy(() -> service.updateAwsCredentials("BAD_KEY", "BAD_SECRET"))
-            .isInstanceOf(RuntimeException.class)
-            .hasMessageContaining("Invalid AWS credentials");
-
-        verify(configPersistence, never()).save(any());
-    }
 
     // --- updateSmtpSettings ---
 
@@ -368,7 +332,6 @@ class SettingsServiceTest {
         verify(configPersistence).save(captor.capture());
         VaierConfig saved = captor.getValue();
         assertThat(saved.getDomain()).isEqualTo("example.com");
-        assertThat(saved.getAwsKey()).isEqualTo("AKID");
         assertThat(saved.getSmtpPassword()).isEqualTo("secretpass");
     }
 
@@ -382,8 +345,6 @@ class SettingsServiceTest {
         verify(configPersistence).save(captor.capture());
         VaierConfig saved = captor.getValue();
         assertThat(saved.getDomain()).isEqualTo("example.com");
-        assertThat(saved.getAwsKey()).isEqualTo("AKID");
-        assertThat(saved.getAwsSecret()).isEqualTo("secret");
         assertThat(saved.getAcmeEmail()).isEqualTo("admin@example.com");
     }
 

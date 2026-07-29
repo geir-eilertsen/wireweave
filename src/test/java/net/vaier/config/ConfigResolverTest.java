@@ -1,6 +1,5 @@
 package net.vaier.config;
 
-import net.vaier.domain.DnsProvider;
 import net.vaier.domain.VaierConfig;
 import net.vaier.domain.port.ForPersistingAppConfiguration;
 import org.junit.jupiter.api.Test;
@@ -23,8 +22,6 @@ class ConfigResolverTest {
     void resolvesFromFileWhenPresent() {
         VaierConfig config = VaierConfig.builder()
             .domain("file.com")
-            .awsKey("fileKey")
-            .awsSecret("fileSecret")
             .acmeEmail("file@example.com")
             .build();
         when(configPersistence.load()).thenReturn(Optional.of(config));
@@ -32,8 +29,6 @@ class ConfigResolverTest {
         ConfigResolver resolver = new ConfigResolver(configPersistence);
 
         assertThat(resolver.getDomain()).isEqualTo("file.com");
-        assertThat(resolver.getAwsKey()).isEqualTo("fileKey");
-        assertThat(resolver.getAwsSecret()).isEqualTo("fileSecret");
         assertThat(resolver.getAcmeEmail()).isEqualTo("file@example.com");
     }
 
@@ -56,8 +51,6 @@ class ConfigResolverTest {
 
         VaierConfig config = VaierConfig.builder()
             .domain("new.com")
-            .awsKey("k")
-            .awsSecret("s")
             .acmeEmail("e@e.com")
             .build();
         when(configPersistence.load()).thenReturn(Optional.of(config));
@@ -70,24 +63,18 @@ class ConfigResolverTest {
     void fallsBackToEnvVarPerFieldWhenPersistedValueIsNull() {
         VaierConfig config = VaierConfig.builder()
             .domain(null)
-            .awsKey(null)
-            .awsSecret(null)
             .acmeEmail(null)
             .smtpHost("smtp.example.com")
             .build();
         when(configPersistence.load()).thenReturn(Optional.of(config));
         Map<String, String> env = Map.of(
             "VAIER_DOMAIN", "env.example.com",
-            "VAIER_AWS_KEY", "envKey",
-            "VAIER_AWS_SECRET", "envSecret",
             "ACME_EMAIL", "env@example.com"
         );
 
         ConfigResolver resolver = new ConfigResolver(configPersistence, env::get);
 
         assertThat(resolver.getDomain()).isEqualTo("env.example.com");
-        assertThat(resolver.getAwsKey()).isEqualTo("envKey");
-        assertThat(resolver.getAwsSecret()).isEqualTo("envSecret");
         assertThat(resolver.getAcmeEmail()).isEqualTo("env@example.com");
         assertThat(resolver.getSmtpHost()).isEqualTo("smtp.example.com");
     }
@@ -96,8 +83,6 @@ class ConfigResolverTest {
     void fileValuesWinOverEnvVars() {
         VaierConfig config = VaierConfig.builder()
             .domain("file.com")
-            .awsKey("fileKey")
-            .awsSecret("fileSecret")
             .acmeEmail("file@example.com")
             .build();
         when(configPersistence.load()).thenReturn(Optional.of(config));
@@ -121,85 +106,11 @@ class ConfigResolverTest {
             .isSocialAuthAvailable()).isTrue();
     }
 
-    @Test
-    void infersManualDnsProviderWhenAwsKeysAbsent() {
-        when(configPersistence.load()).thenReturn(Optional.empty());
 
-        ConfigResolver resolver = new ConfigResolver(configPersistence, key -> null);
 
-        assertThat(resolver.getDnsProvider()).isEqualTo(DnsProvider.MANUAL);
-    }
 
-    @Test
-    void infersRoute53DnsProviderWhenAwsKeysPresent() {
-        VaierConfig config = VaierConfig.builder()
-            .domain("example.com")
-            .awsKey("k")
-            .awsSecret("s")
-            .build();
-        when(configPersistence.load()).thenReturn(Optional.of(config));
 
-        ConfigResolver resolver = new ConfigResolver(configPersistence, key -> null);
 
-        assertThat(resolver.getDnsProvider()).isEqualTo(DnsProvider.ROUTE53);
-    }
-
-    @Test
-    void infersRoute53DnsProviderWhenOnlyEnvAwsKeysPresent() {
-        when(configPersistence.load()).thenReturn(Optional.empty());
-        Map<String, String> env = Map.of(
-            "VAIER_AWS_KEY", "envKey",
-            "VAIER_AWS_SECRET", "envSecret"
-        );
-
-        ConfigResolver resolver = new ConfigResolver(configPersistence, env::get);
-
-        assertThat(resolver.getDnsProvider()).isEqualTo(DnsProvider.ROUTE53);
-    }
-
-    @Test
-    void infersManualDnsProviderWhenOnlyAwsKeyPresentWithoutSecret() {
-        VaierConfig config = VaierConfig.builder()
-            .domain("example.com")
-            .awsKey("k")
-            .build();
-        when(configPersistence.load()).thenReturn(Optional.of(config));
-
-        ConfigResolver resolver = new ConfigResolver(configPersistence, key -> null);
-
-        assertThat(resolver.getDnsProvider()).isEqualTo(DnsProvider.MANUAL);
-    }
-
-    @Test
-    void infersManualDnsProviderWhenAwsKeysBlank() {
-        VaierConfig config = VaierConfig.builder()
-            .domain("example.com")
-            .awsKey("   ")
-            .awsSecret("   ")
-            .build();
-        when(configPersistence.load()).thenReturn(Optional.of(config));
-
-        ConfigResolver resolver = new ConfigResolver(configPersistence, key -> null);
-
-        assertThat(resolver.getDnsProvider()).isEqualTo(DnsProvider.MANUAL);
-    }
-
-    @Test
-    void dnsProviderUpdatesAfterReloadPicksUpNewAwsKeys() {
-        when(configPersistence.load()).thenReturn(Optional.empty());
-        ConfigResolver resolver = new ConfigResolver(configPersistence, key -> null);
-        assertThat(resolver.getDnsProvider()).isEqualTo(DnsProvider.MANUAL);
-
-        VaierConfig config = VaierConfig.builder()
-            .domain("example.com")
-            .awsKey("k")
-            .awsSecret("s")
-            .build();
-        when(configPersistence.load()).thenReturn(Optional.of(config));
-        resolver.reload();
-
-        assertThat(resolver.getDnsProvider()).isEqualTo(DnsProvider.ROUTE53);
-    }
 
     @Test
     void diskMonitorThreshold_defaultsTo85WhenUnset() {

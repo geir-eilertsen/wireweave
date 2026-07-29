@@ -5,6 +5,8 @@ import net.vaier.integration.base.VaierWebMvcIntegrationBase;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 
+import static org.hamcrest.Matchers.containsString;
+
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.doThrow;
@@ -18,19 +20,25 @@ class SettingsControllerIT extends VaierWebMvcIntegrationBase {
     @Test
     void getConfig_returnsAppSettings() throws Exception {
         AppSettingsResult settings = new AppSettingsResult(
-                "example.com", "****MPLE", "admin@example.com",
-                "smtp.example.com", 587, "user@example.com", "noreply@example.com", "ROUTE53", 85, false, 2,
-                "Europe/Oslo", false);
+                "example.com", "admin@example.com",
+                "smtp.example.com", 587, "user@example.com", "noreply@example.com",
+                "NOT_RESOLVING", "Not resolving", "ERROR",
+                "Wildcard DNS is not set up. Create one record — *.example.com A 52.29.74.114 — "
+                        + "and every service Vaier publishes will resolve.",
+                85, false, 2, "Europe/Oslo", false);
         when(getAppSettingsUseCase.getSettings()).thenReturn(settings);
 
         mockMvc.perform(get("/settings/config"))
                .andExpect(status().isOk())
                .andExpect(jsonPath("$.domain").value("example.com"))
-               .andExpect(jsonPath("$.awsKeyHint").value("****MPLE"))
                .andExpect(jsonPath("$.acmeEmail").value("admin@example.com"))
                .andExpect(jsonPath("$.smtpHost").value("smtp.example.com"))
                .andExpect(jsonPath("$.smtpPort").value(587))
-               .andExpect(jsonPath("$.dnsProvider").value("ROUTE53"))
+               .andExpect(jsonPath("$.wildcardDnsStatus").value("NOT_RESOLVING"))
+               .andExpect(jsonPath("$.wildcardDnsLabel").value("Not resolving"))
+               .andExpect(jsonPath("$.wildcardDnsSeverity").value("ERROR"))
+               .andExpect(jsonPath("$.wildcardDnsMessage").value(
+                       containsString("*.example.com")))
                .andExpect(jsonPath("$.diskMonitorThresholdPercent").value(85))
                .andExpect(jsonPath("$.backupScheduleHour").value(2));
     }
@@ -60,34 +68,6 @@ class SettingsControllerIT extends VaierWebMvcIntegrationBase {
                .andExpect(status().isBadRequest());
     }
 
-    @Test
-    void updateAws_returns200WhenValid() throws Exception {
-        mockMvc.perform(put("/settings/aws")
-                       .contentType(MediaType.APPLICATION_JSON)
-                       .content("""
-                           {"awsKey":"NEW_KEY","awsSecret":"NEW_SECRET"}
-                           """))
-               .andExpect(status().isOk());
-
-        verify(updateAwsCredentialsUseCase).updateAwsCredentials("NEW_KEY", "NEW_SECRET");
-    }
-
-    @Test
-    void updateAws_returns400WhenValidationFails() throws Exception {
-        doThrow(new RuntimeException("Invalid credentials"))
-                .when(updateAwsCredentialsUseCase).updateAwsCredentials("BAD", "BAD");
-
-        mockMvc.perform(put("/settings/aws")
-                       .contentType(MediaType.APPLICATION_JSON)
-                       .content("""
-                           {"awsKey":"BAD","awsSecret":"BAD"}
-                           """))
-               .andExpect(status().isBadRequest())
-               // Settings keeps its deliberate Exception->400 mapping (bad creds/SMTP are
-               // client errors), but now emits the same ApiError envelope as everything else.
-               .andExpect(jsonPath("$.code").value("BAD_REQUEST"))
-               .andExpect(jsonPath("$.message").value("Invalid credentials"));
-    }
 
     @Test
     void updateSmtp_returns200OnSuccess() throws Exception {
@@ -124,6 +104,10 @@ class SettingsControllerIT extends VaierWebMvcIntegrationBase {
                              "smtpSender":"noreply@example.com"
                            }
                            """))
-               .andExpect(status().isBadRequest());
+               .andExpect(status().isBadRequest())
+               // Settings keeps its deliberate Exception->400 mapping (bad SMTP credentials are a
+               // client error), but still emits the same ApiError envelope as everything else.
+               .andExpect(jsonPath("$.code").value("BAD_REQUEST"))
+               .andExpect(jsonPath("$.message").value("SMTP AUTH failed"));
     }
 }

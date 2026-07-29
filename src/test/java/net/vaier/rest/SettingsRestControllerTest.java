@@ -5,7 +5,6 @@ import net.vaier.application.GetAppSettingsUseCase.AppSettingsResult;
 import net.vaier.application.GetAppVersionUseCase;
 import net.vaier.application.SetSurvivalKitPassphraseUseCase;
 import net.vaier.application.TestSmtpCredentialsUseCase;
-import net.vaier.application.UpdateAwsCredentialsUseCase;
 import net.vaier.application.UpdateBackupSettingsUseCase;
 import net.vaier.application.UpdateDiskMonitorSettingsUseCase;
 import net.vaier.application.UpdateSmtpSettingsUseCase;
@@ -26,7 +25,6 @@ class SettingsRestControllerTest {
 
     @Mock GetAppSettingsUseCase getAppSettingsUseCase;
     @Mock GetAppVersionUseCase getAppVersionUseCase;
-    @Mock UpdateAwsCredentialsUseCase updateAwsCredentialsUseCase;
     @Mock UpdateSmtpSettingsUseCase updateSmtpSettingsUseCase;
     @Mock TestSmtpCredentialsUseCase testSmtpCredentialsUseCase;
     @Mock UpdateDiskMonitorSettingsUseCase updateDiskMonitorSettingsUseCase;
@@ -48,9 +46,11 @@ class SettingsRestControllerTest {
 
     @Test
     void getConfig_returnsCurrentSettings() {
-        AppSettingsResult settings = new AppSettingsResult("example.com", "****MPLE", "admin@example.com",
-                "smtp.example.com", 587, "user@example.com", "noreply@example.com", "ROUTE53", 85, false, 2,
-                "Europe/Oslo", true);
+        AppSettingsResult settings = new AppSettingsResult("example.com", "admin@example.com",
+                "smtp.example.com", 587, "user@example.com", "noreply@example.com",
+                "COVERED", "Covered", "OK",
+                "Wildcard DNS is working — *.example.com resolves to 52.29.74.114.",
+                85, false, 2, "Europe/Oslo", true);
         when(getAppSettingsUseCase.getSettings()).thenReturn(settings);
 
         ResponseEntity<AppSettingsResult> response = controller.getConfig();
@@ -85,25 +85,6 @@ class SettingsRestControllerTest {
         assertThat(response.getStatusCode().value()).isEqualTo(400);
     }
 
-    @Test
-    void updateAws_returns200WhenValid() {
-        ResponseEntity<?> response = controller.updateAws(
-                new SettingsRestController.UpdateAwsRequest("NEW_KEY", "NEW_SECRET"));
-
-        assertThat(response.getStatusCode().value()).isEqualTo(200);
-        verify(updateAwsCredentialsUseCase).updateAwsCredentials("NEW_KEY", "NEW_SECRET");
-    }
-
-    @Test
-    void updateAws_returns400WhenValidationFails() {
-        doThrow(new RuntimeException("Invalid credentials"))
-                .when(updateAwsCredentialsUseCase).updateAwsCredentials("BAD", "BAD");
-
-        ResponseEntity<?> response = controller.updateAws(
-                new SettingsRestController.UpdateAwsRequest("BAD", "BAD"));
-
-        assertThat(response.getStatusCode().value()).isEqualTo(400);
-    }
 
     @Test
     void updateSmtp_returns200OnSuccess() {

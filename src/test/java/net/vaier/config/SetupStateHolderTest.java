@@ -36,7 +36,7 @@ class SetupStateHolderTest {
     }
 
     @Test
-    void isConfiguredWhenDomainIsSet_evenWithoutAwsKeys() {
+    void isConfiguredWhenDomainIsSet() {
         when(configPersistence.exists()).thenReturn(false);
         Map<String, String> env = Map.of("VAIER_DOMAIN", "example.com");
 
@@ -45,31 +45,21 @@ class SetupStateHolderTest {
         assertThat(holder.isConfigured()).isTrue();
     }
 
+    /**
+     * The domain is the whole question. Nothing else in the environment can stand in for it — and
+     * nothing else is needed alongside it, now that DNS is one record the operator makes by hand (#331).
+     */
     @Test
-    void isNotConfiguredWhenDomainMissing_evenWithAwsKeys() {
+    void isNotConfiguredWhenDomainMissing_whateverElseIsSet() {
         when(configPersistence.exists()).thenReturn(false);
         Map<String, String> env = Map.of(
-            "VAIER_AWS_KEY", "k",
-            "VAIER_AWS_SECRET", "s"
+            "ACME_EMAIL", "admin@example.com",
+            "VAIER_PUBLIC_IP", "52.29.74.114"
         );
 
         SetupStateHolder holder = new SetupStateHolder(configPersistence, env::get);
 
         assertThat(holder.isConfigured()).isFalse();
-    }
-
-    @Test
-    void isConfiguredWhenDomainAndAwsKeysAreBothSet() {
-        when(configPersistence.exists()).thenReturn(false);
-        Map<String, String> env = Map.of(
-            "VAIER_DOMAIN", "example.com",
-            "VAIER_AWS_KEY", "k",
-            "VAIER_AWS_SECRET", "s"
-        );
-
-        SetupStateHolder holder = new SetupStateHolder(configPersistence, env::get);
-
-        assertThat(holder.isConfigured()).isTrue();
     }
 
     @Test

@@ -1,6 +1,6 @@
 package net.vaier.domain;
 
-import net.vaier.domain.DnsRecord.DnsRecordType;
+import net.vaier.domain.DnsRecordType;
 import net.vaier.domain.ServerLocationResolver.ResolvedHost;
 import net.vaier.domain.port.ForResolvingPublicHost;
 import net.vaier.domain.port.ForResolvingPublicHost.PublicHost;

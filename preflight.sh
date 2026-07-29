@@ -46,19 +46,13 @@ else
 fi
 
 section ".env"
-AWS_MODE=0
 if [[ -f .env ]]; then
   pass ".env present"
   # shellcheck disable=SC1091
   set -a; . ./.env; set +a
   [[ -n "${VAIER_DOMAIN:-}" ]] && pass "VAIER_DOMAIN=$VAIER_DOMAIN" || fail "VAIER_DOMAIN is not set"
   [[ -n "${ACME_EMAIL:-}"  ]] && pass "ACME_EMAIL=$ACME_EMAIL"   || fail "ACME_EMAIL is not set"
-  if [[ -n "${VAIER_AWS_KEY:-}" && -n "${VAIER_AWS_SECRET:-}" ]]; then
-    info "AWS creds present → Route53 mode (Vaier auto-creates vaier.\$VAIER_DOMAIN and login.\$VAIER_DOMAIN)"
-    AWS_MODE=1
-  else
-    info "AWS creds absent → manual DNS mode (you must create vaier.\$VAIER_DOMAIN and login.\$VAIER_DOMAIN yourself BEFORE first boot)"
-  fi
+  info "DNS: Vaier never writes records. Create one — *.\$VAIER_DOMAIN A <this server's public IP> — before first boot"
   PERM=$(stat -c '%a' .env 2>/dev/null || stat -f '%A' .env 2>/dev/null || echo "?")
   [[ "$PERM" == "600" ]] && pass ".env perms 600" || warn ".env perms $PERM (README suggests 600)"
 else
@@ -121,23 +115,22 @@ elif [[ -n "${VAIER_DOMAIN:-}" ]]; then
   NS=$(dig +short NS "${VAIER_DOMAIN}" @1.1.1.1 2>/dev/null | tr -d '\r')
   if [[ -z "$NS" ]]; then
     fail "${VAIER_DOMAIN} has no public NS records — registrar delegation not in place"
-  elif (( AWS_MODE == 1 )) && echo "$NS" | grep -qi 'awsdns'; then
-    pass "${VAIER_DOMAIN} delegated to Route53 (NS: $(echo "$NS" | tr '\n' ' '))"
-  elif (( AWS_MODE == 1 )); then
-    fail "${VAIER_DOMAIN} NS not awsdns.* — Route53 hosted zone may exist but registrar isn't delegated. HTTP-01 will fail. NS: $(echo "$NS" | tr '\n' ' ')"
   else
     pass "${VAIER_DOMAIN} has NS records: $(echo "$NS" | tr '\n' ' ')"
   fi
-  for sub in vaier login; do
-    REC=$(dig +short "$sub.${VAIER_DOMAIN}" @1.1.1.1 2>/dev/null | tr -d '\r')
-    if [[ -n "$REC" ]]; then
-      pass "$sub.${VAIER_DOMAIN} resolves → $(echo "$REC" | tr '\n' ' ')"
-    elif (( AWS_MODE == 1 )); then
-      info "$sub.${VAIER_DOMAIN} not yet resolving (Vaier will create it on first boot if the hosted zone exists)"
-    else
-      fail "$sub.${VAIER_DOMAIN} doesn't resolve — manual DNS mode requires you to create this BEFORE 'docker compose up'"
-    fi
-  done
+  # Probe the wildcard TWO labels deep, the same way Vaier does at boot. Vaier publishes
+  # machine-qualified names (<service>.<machine>.<domain>) and a wildcard matches by closest
+  # encloser (RFC 4592): a one-label probe is answered even on a zone where every
+  # machine-qualified service is dead. Both labels are random so no resolver can have them cached.
+  PROBE="vaierchk$RANDOM.vaierchk$RANDOM.${VAIER_DOMAIN}"
+  WILD=$(dig +short A "$PROBE" @1.1.1.1 2>/dev/null | tr -d '\r')
+  if [[ -z "$WILD" ]]; then
+    fail "*.${VAIER_DOMAIN} does not resolve — create one record, *.${VAIER_DOMAIN} A ${PUB_IP:-<the public IP of this server>}, BEFORE 'docker compose up'"
+  elif [[ -n "$PUB_IP" ]] && ! echo "$WILD" | grep -qx "$PUB_IP"; then
+    fail "*.${VAIER_DOMAIN} resolves to $(echo "$WILD" | tr '\n' ' ') but this server is $PUB_IP — point the record here"
+  else
+    pass "*.${VAIER_DOMAIN} resolves → $(echo "$WILD" | tr '\n' ' ')"
+  fi
 fi
 
 section "Public ingress sanity (best effort)"

@@ -5,17 +5,17 @@ import net.vaier.application.GetAppSettingsUseCase;
 import net.vaier.application.GetAppVersionUseCase;
 import net.vaier.application.SetSurvivalKitPassphraseUseCase;
 import net.vaier.application.TestSmtpCredentialsUseCase;
-import net.vaier.application.UpdateAwsCredentialsUseCase;
 import net.vaier.application.UpdateBackupSettingsUseCase;
 import net.vaier.application.UpdateDiskMonitorSettingsUseCase;
 import net.vaier.application.UpdateSmtpSettingsUseCase;
 import net.vaier.config.ConfigResolver;
+import net.vaier.config.WildcardDnsStatusHolder;
 import net.vaier.domain.VaierConfig;
+import net.vaier.domain.WildcardDnsReport;
 import net.vaier.domain.port.ForPersistingAppConfiguration;
 import net.vaier.domain.port.ForReadingAppVersion;
 import net.vaier.domain.port.ForReadingStoredSmtpPassword;
 import net.vaier.domain.port.ForSendingTestEmail;
-import net.vaier.domain.port.ForValidatingAwsCredentials;
 import net.vaier.domain.port.ForVerifyingSmtpCredentials;
 import org.springframework.stereotype.Service;
 
@@ -26,7 +26,6 @@ import java.time.Clock;
 public class SettingsService implements
     GetAppSettingsUseCase,
     GetAppVersionUseCase,
-    UpdateAwsCredentialsUseCase,
     UpdateSmtpSettingsUseCase,
     UpdateDiskMonitorSettingsUseCase,
     UpdateBackupSettingsUseCase,
@@ -34,28 +33,28 @@ public class SettingsService implements
     TestSmtpCredentialsUseCase {
 
     private final ForPersistingAppConfiguration configPersistence;
-    private final ForValidatingAwsCredentials forValidatingAwsCredentials;
     private final ForVerifyingSmtpCredentials smtpVerifier;
     private final ForReadingStoredSmtpPassword storedPasswordReader;
     private final ForSendingTestEmail testEmailSender;
     private final ConfigResolver configResolver;
+    private final WildcardDnsStatusHolder wildcardDnsStatusHolder;
     private final ForReadingAppVersion appVersionReader;
     private final Clock clock;
 
     public SettingsService(ForPersistingAppConfiguration configPersistence,
-                           ForValidatingAwsCredentials forValidatingAwsCredentials,
                            ForVerifyingSmtpCredentials smtpVerifier,
                            ForReadingStoredSmtpPassword storedPasswordReader,
                            ForSendingTestEmail testEmailSender,
                            ConfigResolver configResolver,
+                           WildcardDnsStatusHolder wildcardDnsStatusHolder,
                            ForReadingAppVersion appVersionReader,
                            Clock clock) {
         this.configPersistence = configPersistence;
-        this.forValidatingAwsCredentials = forValidatingAwsCredentials;
         this.smtpVerifier = smtpVerifier;
         this.storedPasswordReader = storedPasswordReader;
         this.testEmailSender = testEmailSender;
         this.configResolver = configResolver;
+        this.wildcardDnsStatusHolder = wildcardDnsStatusHolder;
         this.appVersionReader = appVersionReader;
         this.clock = clock;
     }
@@ -69,7 +68,8 @@ public class SettingsService implements
     public AppSettingsResult getSettings() {
         return configPersistence.load()
             .map(this::toResult)
-            .orElse(new AppSettingsResult(null, null, null, null, null, null, null, dnsProviderName(),
+            .orElse(new AppSettingsResult(null, null, null, null, null, null,
+                wildcardDnsStatus(), wildcardDnsLabel(), wildcardDnsSeverity(), wildcardDnsMessage(),
                 VaierConfig.DEFAULT_DISK_MONITOR_THRESHOLD_PERCENT, configResolver.isSocialAuthAvailable(),
                 VaierConfig.DEFAULT_BACKUP_SCHEDULE_HOUR, backupScheduleZone(), false));
     }
@@ -98,17 +98,38 @@ public class SettingsService implements
         log.info("Survival kit passphrase set");
     }
 
-    private String dnsProviderName() {
-        return configResolver.getDnsProvider() == null ? null : configResolver.getDnsProvider().name();
+    /**
+     * What the boot-time wildcard check found, as the status name — null before it has run. The verdict
+     * is stated where the operator can act on it rather than only in a log line that has scrolled away.
+     */
+    private String wildcardDnsStatus() {
+        return wildcardDnsStatusHolder.report()
+            .map(r -> r.status().name())
+            .orElse(null);
     }
 
-    @Override
-    public void updateAwsCredentials(String awsKey, String awsSecret) {
-        forValidatingAwsCredentials.listHostedZones(awsKey, awsSecret);
+    /** The verdict in the operator's words, worded by the domain — null before the check has run. */
+    private String wildcardDnsLabel() {
+        return wildcardDnsStatusHolder.report()
+            .map(r -> r.status().getLabel())
+            .orElse(null);
+    }
 
-        VaierConfig current = configPersistence.load().orElse(VaierConfig.builder().build());
-        configPersistence.save(current.withAwsCredentials(awsKey, awsSecret));
-        log.info("AWS credentials updated");
+    /**
+     * How much attention the verdict deserves, as the severity name — null before the check has run.
+     * The domain grades it; this only passes the grade on.
+     */
+    private String wildcardDnsSeverity() {
+        return wildcardDnsStatusHolder.report()
+            .map(r -> r.status().getSeverity().name())
+            .orElse(null);
+    }
+
+    /** The same verdict as a sentence, worded by the domain — null before the check has run. */
+    private String wildcardDnsMessage() {
+        return wildcardDnsStatusHolder.report()
+            .map(WildcardDnsReport::message)
+            .orElse(null);
     }
 
     @Override
@@ -134,13 +155,15 @@ public class SettingsService implements
     private AppSettingsResult toResult(VaierConfig config) {
         return new AppSettingsResult(
             config.getDomain(),
-            config.maskedAwsKey(),
             config.getAcmeEmail(),
             config.getSmtpHost(),
             config.getSmtpPort(),
             config.getSmtpUsername(),
             config.getSmtpSender(),
-            dnsProviderName(),
+            wildcardDnsStatus(),
+            wildcardDnsLabel(),
+            wildcardDnsSeverity(),
+            wildcardDnsMessage(),
             config.effectiveDiskMonitorThresholdPercent(),
             configResolver.isSocialAuthAvailable(),
             config.effectiveBackupScheduleHour(),

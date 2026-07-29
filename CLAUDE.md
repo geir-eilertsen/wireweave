@@ -8,8 +8,7 @@ I am basically tired of maintaining a VPN server with reverse proxy pointing to 
 - **Maintain a VPN server** with WireGuard and Traefik
 - **Create and maintain VPN clients** by providing docker compose files and other client config that can be used to connect to the VPN server
 - **Create a reverse proxy** with Let's Encrypt and Traefik
-- **Create DNS records** with AWS Route53
-- **Manage DNS records** with AWS Route53
+- **Stay out of DNS entirely** — one `*.<domain>` A record, made once by the operator, covers every service Vaier will ever publish
 - **Manage containers remotely** with Docker
 - **Manage users** with Google social login (oauth2-proxy) and Vaier's own access store
 - **Web interface for managing everything** with Vaier
@@ -21,7 +20,7 @@ I am basically tired of maintaining a VPN server with reverse proxy pointing to 
 
 - **Domain** (`domain/`) — Business logic, entities, and port interfaces. No Spring dependencies.
 - **Application** (`application/`) — Use case interfaces and service implementations that orchestrate domain logic.
-- **Infrastructure** (`adapter/driven/`) — Adapter implementations for external systems (AWS Route53, Docker API, WireGuard, Traefik, oauth2-proxy).
+- **Infrastructure** (`adapter/driven/`) — Adapter implementations for external systems (Docker API, WireGuard, Traefik, oauth2-proxy).
 - **Web** (`rest/`) — REST controllers. DTOs are defined as inner Java `record` classes within controllers.
 
 ### Naming Conventions
@@ -31,7 +30,7 @@ I am basically tired of maintaining a VPN server with reverse proxy pointing to 
 | Port interfaces | `For*` (e.g., `ForGettingVpnClients`, `ForPersistingDnsRecords`) |
 | Use case interfaces | `*UseCase` — one per use case, narrow (e.g., `CreatePeerUseCase`, `DeletePeerUseCase`) |
 | Service implementations | `*Service` — **one per domain concept**, implements many `*UseCase` interfaces (e.g., `VpnService`, `UserService`, `PublishingService`) |
-| Adapters | `*Adapter` (e.g., `Route53DnsAdapter`, `WireGuardVpnAdapter`) |
+| Adapters | `*Adapter` (e.g., `TraefikReverseProxyAdapter`, `WireGuardVpnAdapter`) |
 
 ### One service per domain, not per use case
 
@@ -49,7 +48,7 @@ This is stricter than the write-orchestration exception above (which is about *i
 
 ### No Database
 
-All state is file-based (WireGuard/Traefik YAML configs, the `access.yml` social-login store), cloud-based (Route53), or ephemeral (oauth2-proxy's own signed cookie session). No SQL database or ORM.
+All state is file-based (WireGuard/Traefik YAML configs, the `access.yml` social-login store) or ephemeral (oauth2-proxy's own signed cookie session). No SQL database or ORM.
 
 ### Strict layer isolation
 
@@ -90,8 +89,6 @@ All upstream images in `docker-compose.yml` are pinned to specific versions — 
 
 | Variable | Description |
 |----------|-------------|
-| `VAIER_AWS_KEY` | AWS access key for Route53 |
-| `VAIER_AWS_SECRET` | AWS secret key for Route53 |
 | `VAIER_DOMAIN` | Base domain name |
 | `ACME_EMAIL` | Let's Encrypt email |
 

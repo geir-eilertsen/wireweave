@@ -6,7 +6,6 @@ import net.vaier.application.GetAppSettingsUseCase.AppSettingsResult;
 import net.vaier.application.GetAppVersionUseCase;
 import net.vaier.application.SetSurvivalKitPassphraseUseCase;
 import net.vaier.application.TestSmtpCredentialsUseCase;
-import net.vaier.application.UpdateAwsCredentialsUseCase;
 import net.vaier.application.UpdateBackupSettingsUseCase;
 import net.vaier.application.UpdateDiskMonitorSettingsUseCase;
 import net.vaier.application.UpdateSmtpSettingsUseCase;
@@ -26,7 +25,6 @@ public class SettingsRestController {
 
     private final GetAppSettingsUseCase getAppSettingsUseCase;
     private final GetAppVersionUseCase getAppVersionUseCase;
-    private final UpdateAwsCredentialsUseCase updateAwsCredentialsUseCase;
     private final UpdateSmtpSettingsUseCase updateSmtpSettingsUseCase;
     private final TestSmtpCredentialsUseCase testSmtpCredentialsUseCase;
     private final UpdateDiskMonitorSettingsUseCase updateDiskMonitorSettingsUseCase;
@@ -37,7 +35,6 @@ public class SettingsRestController {
 
     public SettingsRestController(GetAppSettingsUseCase getAppSettingsUseCase,
                                   GetAppVersionUseCase getAppVersionUseCase,
-                                  UpdateAwsCredentialsUseCase updateAwsCredentialsUseCase,
                                   UpdateSmtpSettingsUseCase updateSmtpSettingsUseCase,
                                   TestSmtpCredentialsUseCase testSmtpCredentialsUseCase,
                                   UpdateDiskMonitorSettingsUseCase updateDiskMonitorSettingsUseCase,
@@ -47,7 +44,6 @@ public class SettingsRestController {
                                   UpgradeVaierUseCase upgradeVaierUseCase) {
         this.getAppSettingsUseCase = getAppSettingsUseCase;
         this.getAppVersionUseCase = getAppVersionUseCase;
-        this.updateAwsCredentialsUseCase = updateAwsCredentialsUseCase;
         this.updateSmtpSettingsUseCase = updateSmtpSettingsUseCase;
         this.testSmtpCredentialsUseCase = testSmtpCredentialsUseCase;
         this.updateDiskMonitorSettingsUseCase = updateDiskMonitorSettingsUseCase;
@@ -104,16 +100,6 @@ public class SettingsRestController {
         static UpgradeResponse from(boolean available, SelfUpgradeStatus status) {
             return new UpgradeResponse(available, status.outcome().name(), status.at(), status.detail(),
                 status.runId());
-        }
-    }
-
-    @PutMapping("/aws")
-    public ResponseEntity<?> updateAws(@RequestBody UpdateAwsRequest request) {
-        try {
-            updateAwsCredentialsUseCase.updateAwsCredentials(request.awsKey(), request.awsSecret());
-            return ResponseEntity.ok().build();
-        } catch (Exception e) {
-            return ResponseEntity.badRequest().body(ApiError.of("BAD_REQUEST", e.getMessage()));
         }
     }
 
@@ -181,7 +167,6 @@ public class SettingsRestController {
     }
 
     public record VersionResponse(String version) {}
-    public record UpdateAwsRequest(String awsKey, String awsSecret) {}
     public record UpdateSmtpRequest(String smtpHost, int smtpPort, String smtpUsername,
                                     String smtpPassword, String smtpSender) {}
     public record TestSmtpRequest(String smtpHost, int smtpPort, String smtpUsername,

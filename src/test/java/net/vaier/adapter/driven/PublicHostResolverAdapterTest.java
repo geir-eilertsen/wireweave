@@ -6,7 +6,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.Map;
 import java.util.Optional;
-import net.vaier.domain.DnsRecord.DnsRecordType;
+import net.vaier.domain.DnsRecordType;
 import net.vaier.domain.port.ForResolvingPublicHost.PublicHost;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentMatcher;

@@ -256,36 +256,6 @@
 </head>
 <body>
     <div class="container">
-        <!-- AWS Credentials -->
-        <div class="settings-section" id="awsCredentialsSection">
-            <div class="settings-section-title">AWS Credentials</div>
-            <div class="settings-form-card">
-                <div class="settings-form-card-title">Access key</div>
-                <div class="settings-form-card-desc">
-                    Update the AWS key used for Route 53 DNS management.
-                    The new credentials will be validated before saving.
-                </div>
-                <div class="settings-form-row">
-                    <div class="settings-form-field">
-                        <label>Current key</label>
-                        <input type="text" id="awsCurrentKey" class="hint-field" readonly placeholder="Not configured">
-                    </div>
-                    <div class="settings-form-field">
-                        <label>New access key</label>
-                        <input type="text" id="awsNewKey" placeholder="AKIA…" autocomplete="off">
-                    </div>
-                    <div class="settings-form-field">
-                        <label>New secret key</label>
-                        <input type="password" id="awsNewSecret" placeholder="Secret" autocomplete="new-password">
-                    </div>
-                </div>
-                <div class="settings-form-actions">
-                    <button class="btn btn-primary" onclick="saveAws()">Save &amp; validate</button>
-                    <span class="settings-form-note" id="awsNote"></span>
-                </div>
-            </div>
-        </div>
-
         <!-- SMTP Settings -->
         <div class="settings-section">
             <div class="settings-section-title">SMTP Notifier</div>
@@ -380,11 +350,6 @@
                 const r = await fetch('/settings/config');
                 if (!r.ok) return;
                 const s = await r.json();
-                // Hide AWS credentials when running in manual DNS mode — they have no effect there.
-                if (s.dnsProvider && s.dnsProvider !== 'ROUTE53') {
-                    document.getElementById('awsCredentialsSection').style.display = 'none';
-                }
-                if (s.awsKeyHint) document.getElementById('awsCurrentKey').value = s.awsKeyHint;
                 if (s.smtpHost) document.getElementById('smtpHost').value = s.smtpHost;
                 if (s.smtpPort) document.getElementById('smtpPort').value = s.smtpPort;
                 if (s.smtpUsername) document.getElementById('smtpUsername').value = s.smtpUsername;
@@ -414,34 +379,6 @@
                 }
             } catch (e) {
                 setNote('diskNote', e.message, 'error');
-            }
-        }
-
-        async function saveAws() {
-            const awsKey = document.getElementById('awsNewKey').value.trim();
-            const awsSecret = document.getElementById('awsNewSecret').value.trim();
-            if (!awsKey || !awsSecret) {
-                setNote('awsNote', 'Both key and secret are required.', 'error');
-                return;
-            }
-            setNote('awsNote', 'Validating…', '');
-            try {
-                const r = await fetch('/settings/aws', {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ awsKey, awsSecret })
-                });
-                if (r.ok) {
-                    setNote('awsNote', 'Saved.', 'ok');
-                    document.getElementById('awsCurrentKey').value = '****' + awsKey.slice(-4);
-                    document.getElementById('awsNewKey').value = '';
-                    document.getElementById('awsNewSecret').value = '';
-                } else {
-                    const err = await r.json().catch(() => ({ message: r.statusText }));
-                    setNote('awsNote', err.message || 'Validation failed.', 'error');
-                }
-            } catch (e) {
-                setNote('awsNote', e.message, 'error');
             }
         }
 

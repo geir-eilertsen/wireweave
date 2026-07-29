@@ -31,8 +31,6 @@ class VaierConfigFileAdapterTest {
     void exists_returnsTrueAfterSave() {
         VaierConfig config = VaierConfig.builder()
             .domain("example.com")
-            .awsKey("AKID")
-            .awsSecret("secret")
             .acmeEmail("admin@example.com")
             .build();
 
@@ -45,8 +43,6 @@ class VaierConfigFileAdapterTest {
     void save_writesYamlFile() {
         VaierConfig config = VaierConfig.builder()
             .domain("example.com")
-            .awsKey("AKID")
-            .awsSecret("secret")
             .acmeEmail("admin@example.com")
             .build();
 
@@ -65,8 +61,6 @@ class VaierConfigFileAdapterTest {
     void load_roundTripsConfig() {
         VaierConfig config = VaierConfig.builder()
             .domain("example.com")
-            .awsKey("AKID123")
-            .awsSecret("secret456")
             .acmeEmail("admin@example.com")
             .build();
 
@@ -77,8 +71,6 @@ class VaierConfigFileAdapterTest {
 
         assertThat(loaded).isPresent();
         assertThat(loaded.get().getDomain()).isEqualTo("example.com");
-        assertThat(loaded.get().getAwsKey()).isEqualTo("AKID123");
-        assertThat(loaded.get().getAwsSecret()).isEqualTo("secret456");
         assertThat(loaded.get().getAcmeEmail()).isEqualTo("admin@example.com");
     }
 
@@ -89,8 +81,6 @@ class VaierConfigFileAdapterTest {
 
         VaierConfig config = VaierConfig.builder()
             .domain("example.com")
-            .awsKey("key")
-            .awsSecret("secret")
             .acmeEmail("a@b.com")
             .build();
 
@@ -113,8 +103,6 @@ class VaierConfigFileAdapterTest {
     void load_roundTripsSmtpFields() {
         VaierConfig config = VaierConfig.builder()
             .domain("example.com")
-            .awsKey("AKID123")
-            .awsSecret("secret456")
             .acmeEmail("admin@example.com")
             .smtpHost("smtp.example.com")
             .smtpPort(587)
@@ -192,8 +180,6 @@ class VaierConfigFileAdapterTest {
     void save_writesConfigFileWithOwnerOnlyPermissions() throws IOException {
         VaierConfig config = VaierConfig.builder()
             .domain("example.com")
-            .awsKey("AKID")
-            .awsSecret("secret")
             .acmeEmail("admin@example.com")
             .build();
 
@@ -277,11 +263,9 @@ class VaierConfigFileAdapterTest {
     // --- at-rest secret encryption (#307) ---
 
     @Test
-    void save_encryptsAwsSecretAndSmtpPasswordAtRest() throws IOException {
+    void save_encryptsSmtpPasswordAtRest() throws IOException {
         VaierConfig config = VaierConfig.builder()
             .domain("example.com")
-            .awsKey("AKID")
-            .awsSecret("the-aws-secret")
             .acmeEmail("admin@example.com")
             .smtpHost("smtp.example.com")
             .smtpUsername("user@example.com")
@@ -292,11 +276,9 @@ class VaierConfigFileAdapterTest {
 
         String contents = Files.readString(tempDir.resolve("vaier-config.yml"));
         assertThat(contents)
-            .doesNotContain("the-aws-secret")
             .doesNotContain("the-smtp-password")
             .contains("enc:v1:")
             // non-secret fields stay in the clear.
-            .contains("AKID")
             .contains("example.com");
     }
 
@@ -304,8 +286,6 @@ class VaierConfigFileAdapterTest {
     void save_thenLoad_roundTripsEncryptedSecrets() {
         VaierConfig config = VaierConfig.builder()
             .domain("example.com")
-            .awsKey("AKID")
-            .awsSecret("the-aws-secret")
             .acmeEmail("admin@example.com")
             .smtpPassword("the-smtp-password")
             .build();
@@ -314,17 +294,14 @@ class VaierConfigFileAdapterTest {
 
         Optional<VaierConfig> loaded = adapter().load();
         assertThat(loaded).isPresent();
-        assertThat(loaded.get().getAwsSecret()).isEqualTo("the-aws-secret");
         assertThat(loaded.get().getSmtpPassword()).isEqualTo("the-smtp-password");
     }
 
     @Test
     void load_legacyPlaintextSecrets_loadUnchanged() throws IOException {
-        // A pre-#307 config file has awsSecret/smtpPassword in the clear — they must still load.
+        // A pre-#307 config file has smtpPassword in the clear — it must still load.
         Files.writeString(tempDir.resolve("vaier-config.yml"), """
             domain: example.com
-            awsKey: AKID
-            awsSecret: legacy-plain-aws
             acmeEmail: admin@example.com
             smtpPassword: legacy-plain-smtp
             """);
@@ -332,7 +309,6 @@ class VaierConfigFileAdapterTest {
         Optional<VaierConfig> loaded = adapter().load();
 
         assertThat(loaded).isPresent();
-        assertThat(loaded.get().getAwsSecret()).isEqualTo("legacy-plain-aws");
         assertThat(loaded.get().getSmtpPassword()).isEqualTo("legacy-plain-smtp");
     }
 
@@ -340,9 +316,8 @@ class VaierConfigFileAdapterTest {
     void legacyPlaintext_isEncryptedOnNextSave() throws IOException {
         Files.writeString(tempDir.resolve("vaier-config.yml"), """
             domain: example.com
-            awsKey: AKID
-            awsSecret: legacy-plain-aws
             acmeEmail: admin@example.com
+            smtpPassword: legacy-plain-smtp
             """);
 
         VaierConfigFileAdapter adapterInstance = adapter();
@@ -350,8 +325,36 @@ class VaierConfigFileAdapterTest {
         adapterInstance.save(loaded);
 
         String contents = Files.readString(tempDir.resolve("vaier-config.yml"));
-        assertThat(contents).doesNotContain("legacy-plain-aws").contains("enc:v1:");
-        assertThat(adapter().load().orElseThrow().getAwsSecret()).isEqualTo("legacy-plain-aws");
+        assertThat(contents).doesNotContain("legacy-plain-smtp").contains("enc:v1:");
+        assertThat(adapter().load().orElseThrow().getSmtpPassword()).isEqualTo("legacy-plain-smtp");
+    }
+
+    // --- stale key tolerance (#331 — DNS/AWS keys removed from VaierConfig) ---
+
+    /**
+     * The live install's on-disk vaier-config.yml still has awsKey/awsSecret from before #331 removed
+     * Route53 support entirely. VaierConfigFileAdapter.load() only ever names the keys it wants out of
+     * the parsed Map — it never binds the whole document — so a stale key (or any other unrecognised
+     * key) must be silently ignored rather than blowing up the boot. A boot that fails on a stale key
+     * takes the live install down.
+     */
+    @Test
+    void load_toleratesStaleAwsKeysAndUnknownKeysAlongsideRealFields() throws IOException {
+        Files.writeString(tempDir.resolve("vaier-config.yml"), """
+            domain: example.com
+            awsKey: AKIASTALEKEY12345
+            awsSecret: some-stale-aws-secret
+            acmeEmail: admin@example.com
+            someFutureUnknownKey: whatever-a-newer-vaier-version-once-wrote
+            smtpHost: smtp.example.com
+            """);
+
+        Optional<VaierConfig> loaded = adapter().load();
+
+        assertThat(loaded).isPresent();
+        assertThat(loaded.get().getDomain()).isEqualTo("example.com");
+        assertThat(loaded.get().getAcmeEmail()).isEqualTo("admin@example.com");
+        assertThat(loaded.get().getSmtpHost()).isEqualTo("smtp.example.com");
     }
 
     // --- Vaier-server machine identity ---
@@ -403,8 +406,6 @@ class VaierConfigFileAdapterTest {
     void load_smtpFieldsAreNullWhenNotPresent() {
         VaierConfig config = VaierConfig.builder()
             .domain("example.com")
-            .awsKey("AKID123")
-            .awsSecret("secret456")
             .acmeEmail("admin@example.com")
             .build();
 

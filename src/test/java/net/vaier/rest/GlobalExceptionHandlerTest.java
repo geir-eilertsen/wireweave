@@ -4,11 +4,9 @@ import net.vaier.domain.NotFoundException;
 import net.vaier.domain.ConflictException;
 import net.vaier.domain.NoHostCredentialException;
 import net.vaier.domain.SshAuthException;
-import net.vaier.application.AddDnsRecordUseCase;
-import net.vaier.application.AddDnsZoneUseCase;
-import net.vaier.application.DeleteDnsRecordUseCase;
-import net.vaier.application.DeleteDnsZoneUseCase;
-import net.vaier.application.GetDnsInfoUseCase;
+import net.vaier.application.AddReverseProxyRouteUseCase;
+import net.vaier.application.DeleteReverseProxyRouteUseCase;
+import net.vaier.application.GetReverseProxyRoutesUseCase;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -33,7 +31,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * Cross-cutting tests for {@link GlobalExceptionHandler}. The MockMvc cases wire the
- * advice onto a real, uncaught endpoint via standalone MockMvc — {@code POST /dns/zones}
+ * advice onto a real, uncaught endpoint via standalone MockMvc — {@code POST /reverse-proxy/routes}
  * is a void method that catches nothing, so it proves the advice maps exceptions to a
  * uniform envelope. The framework-exception branch is exercised directly because a 5xx
  * MVC exception is awkward to provoke through dispatch.
@@ -42,17 +40,16 @@ class GlobalExceptionHandlerTest {
 
     static final String GENERIC_MESSAGE = "An unexpected error occurred. Please try again.";
 
-    AddDnsZoneUseCase addDnsZoneUseCase = Mockito.mock(AddDnsZoneUseCase.class);
+    AddReverseProxyRouteUseCase addReverseProxyRouteUseCase =
+            Mockito.mock(AddReverseProxyRouteUseCase.class);
     MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
-        DnsRestController controller = new DnsRestController(
-                Mockito.mock(GetDnsInfoUseCase.class),
-                Mockito.mock(AddDnsRecordUseCase.class),
-                addDnsZoneUseCase,
-                Mockito.mock(DeleteDnsRecordUseCase.class),
-                Mockito.mock(DeleteDnsZoneUseCase.class));
+        ReverseProxyRestController controller = new ReverseProxyRestController(
+                addReverseProxyRouteUseCase,
+                Mockito.mock(DeleteReverseProxyRouteUseCase.class),
+                Mockito.mock(GetReverseProxyRoutesUseCase.class));
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
@@ -60,17 +57,17 @@ class GlobalExceptionHandlerTest {
 
     @Test
     void illegalArgument_isMappedTo400WithUniformEnvelope() throws Exception {
-        doThrow(new IllegalArgumentException("Zone name must be a valid domain"))
-                .when(addDnsZoneUseCase).addDnsZone(any());
+        doThrow(new IllegalArgumentException("dnsName must be a valid domain"))
+                .when(addReverseProxyRouteUseCase).addReverseProxyRoute(any());
 
-        mockMvc.perform(post("/dns/zones")
+        mockMvc.perform(post("/reverse-proxy/routes")
                        .contentType(MediaType.APPLICATION_JSON)
                        .content("""
-                           {"name":"not a domain"}
+                           {"dnsName":"not a domain","address":"10.0.0.5","port":8080,"requiresAuth":false}
                            """))
                .andExpect(status().isBadRequest())
                .andExpect(jsonPath("$.code").value("BAD_REQUEST"))
-               .andExpect(jsonPath("$.message").value("Zone name must be a valid domain"));
+               .andExpect(jsonPath("$.message").value("dnsName must be a valid domain"));
     }
 
     @Test
@@ -78,7 +75,7 @@ class GlobalExceptionHandlerTest {
         // Spring maps an unreadable body to 400. The generic fallback must NOT swallow
         // Spring's own MVC exceptions and turn a client error into a 500 — and the
         // response must still be rendered in the ApiError envelope.
-        mockMvc.perform(post("/dns/zones")
+        mockMvc.perform(post("/reverse-proxy/routes")
                        .contentType(MediaType.APPLICATION_JSON)
                        .content("{ this is not json"))
                .andExpect(status().isBadRequest())
@@ -88,13 +85,13 @@ class GlobalExceptionHandlerTest {
 
     @Test
     void unexpectedException_isMappedTo500WithSafeGenericMessage() throws Exception {
-        doThrow(new RuntimeException("Route53 timeout at 10.0.0.5 using secret AKIAEXAMPLE"))
-                .when(addDnsZoneUseCase).addDnsZone(any());
+        doThrow(new RuntimeException("Traefik write timeout at 10.0.0.5 using secret AKIAEXAMPLE"))
+                .when(addReverseProxyRouteUseCase).addReverseProxyRoute(any());
 
-        mockMvc.perform(post("/dns/zones")
+        mockMvc.perform(post("/reverse-proxy/routes")
                        .contentType(MediaType.APPLICATION_JSON)
                        .content("""
-                           {"name":"newzone.com"}
+                           {"dnsName":"app.example.com","address":"10.0.0.5","port":8080,"requiresAuth":false}
                            """))
                .andExpect(status().isInternalServerError())
                .andExpect(jsonPath("$.code").value("INTERNAL_ERROR"))

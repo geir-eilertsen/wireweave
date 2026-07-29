@@ -90,12 +90,12 @@ public final class OperatorGlossary {
                     "Ignore the noise — system containers you'll never expose stay out of your way."))),
 
             new ConceptGroup("DNS & access", List.of(
-                Concept.of("DNS provider",
-                    "The service that hosts your domain's DNS records (e.g. AWS Route53).",
-                    "It's where Vaier creates the records that point names at your server."),
-                Concept.of("Manual DNS mode",
-                    "A mode where Vaier doesn't touch DNS and you manage records yourself.",
-                    "Pick it when your DNS lives somewhere Vaier can't automate."),
+                Concept.of("Wildcard DNS",
+                    "One *.yourdomain record, made once, that answers for every name under your domain.",
+                    "Make it and DNS is done — Vaier never has to touch it again."),
+                Concept.of("Wildcard DNS report",
+                    "What Vaier found when it checked that wildcard record at startup.",
+                    "It tells you in plain words whether DNS is right, and what to fix if it isn't."),
                 Concept.of("Forward-auth",
                     "Routing requests through a login check before they reach a service.",
                     "It's how a service gets put behind Vaier's single sign-on."),

@@ -4,8 +4,10 @@ public interface DeletePublishedServiceUseCase {
 
     /**
      * Delete a published service. {@code pathPrefix} is optional; null means the host-only route
-     * (the legacy one-service-per-host case). Sibling routes on the same FQDN keep the CNAME alive
-     * — DNS is only deleted when the last route on a host is removed.
+     * (the legacy one-service-per-host case). Removing a route takes down the Traefik route and
+     * nothing else — the name goes on resolving under the operator's one {@code *.<domain>} record,
+     * which is theirs and not Vaier's, so sibling routes on the same FQDN are fully independent
+     * (#331).
      */
     void deleteService(String fqdn, String pathPrefix);
 

@@ -67,22 +67,6 @@ public abstract class VaierWebMvcIntegrationBase {
     @MockBean
     protected GetServiceAccessRulesUseCase getServiceAccessRulesUseCase;
 
-    // --- DNS use cases ---
-    @MockBean
-    protected GetDnsInfoUseCase getDnsInfoUseCase;
-
-    @MockBean
-    protected AddDnsRecordUseCase addDnsRecordUseCase;
-
-    @MockBean
-    protected AddDnsZoneUseCase addDnsZoneUseCase;
-
-    @MockBean
-    protected DeleteDnsRecordUseCase deleteDnsRecordUseCase;
-
-    @MockBean
-    protected DeleteDnsZoneUseCase deleteDnsZoneUseCase;
-
     // --- Reverse proxy use cases ---
     @MockBean
     protected AddReverseProxyRouteUseCase addReverseProxyRouteUseCase;
@@ -170,9 +154,6 @@ public abstract class VaierWebMvcIntegrationBase {
     // --- Settings use cases ---
     @MockBean
     protected GetAppSettingsUseCase getAppSettingsUseCase;
-
-    @MockBean
-    protected UpdateAwsCredentialsUseCase updateAwsCredentialsUseCase;
 
     @MockBean
     protected UpdateSmtpSettingsUseCase updateSmtpSettingsUseCase;

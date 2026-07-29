@@ -536,8 +536,6 @@ services:
       # hour against this zone, so "02:00" means 02:00 here — not 02:00 UTC. Defaults to UTC; set
       # VAIER_TZ in .env (e.g. Europe/Oslo) to schedule in your own local time.
       TZ: ${VAIER_TZ:-UTC}
-      VAIER_AWS_KEY: ${VAIER_AWS_KEY:-}
-      VAIER_AWS_SECRET: ${VAIER_AWS_SECRET:-}
       VAIER_DOMAIN: ${VAIER_DOMAIN:-}
       VAIER_PUBLIC_HOST: ${VAIER_PUBLIC_HOST:-}
       VAIER_PUBLIC_IP: ${VAIER_PUBLIC_IP:-}

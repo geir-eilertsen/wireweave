@@ -9,14 +9,12 @@ import net.vaier.domain.port.ForGettingLanServerScrape;
 import net.vaier.application.GetLaunchpadServicesUseCase.LaunchpadServiceUco;
 import net.vaier.config.ConfigResolver;
 import net.vaier.domain.*;
-import net.vaier.domain.DnsRecord.DnsRecordType;
 import net.vaier.domain.LaunchpadVisibility;
 import net.vaier.domain.port.ForCheckingLanReachability;
 import net.vaier.domain.port.ForGettingPeerConfigurations;
 import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
 import net.vaier.domain.port.ForGettingServerInfo;
 import net.vaier.domain.port.ForGettingVpnClients;
-import net.vaier.domain.port.ForPersistingDnsRecords;
 import net.vaier.domain.port.ForPersistingLanServers;
 import net.vaier.domain.port.ForPersistingReverseProxyRoutes;
 import net.vaier.domain.port.ForProbingServiceVersion;
@@ -31,11 +29,14 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -48,9 +49,6 @@ class GetLaunchpadServicesTest {
 
     @Mock
     ForGettingServerInfo forGettingServerInfo;
-
-    @Mock
-    ForPersistingDnsRecords forPersistingDnsRecords;
 
     @Mock
     ForGettingVpnClients forGettingVpnClients;
@@ -119,18 +117,17 @@ class GetLaunchpadServicesTest {
         lenient().when(vaierServerIdentity.identity()).thenReturn(TestMachineIds.of("Vaier server"));
         lenient().when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of());
         lenient().when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.empty());
-        lenient().when(forResolvingPeerIds.resolvePeerIdByIp(org.mockito.ArgumentMatchers.anyString()))
+        lenient().when(forResolvingPeerIds.resolvePeerIdByIp(anyString()))
             .thenAnswer(inv -> inv.getArgument(0));
         lenient().when(discoverPeerContainers.discoverAll()).thenReturn(List.of());
         lenient().when(getLanServerScrape.getLanServerContainers()).thenReturn(List.of());
-        lenient().when(forCheckingLanReachability.snapshot()).thenReturn(java.util.Map.of());
+        lenient().when(forCheckingLanReachability.snapshot()).thenReturn(Map.of());
         lenient().when(forPersistingLanServers.getAll()).thenReturn(List.of());
     }
 
     @Test
     void getLaunchpadServices_returnsOnlyDnsAddressAndHostAddress() {
         setupOneRoute("app.example.com", "10.0.0.1", 8080);
-        setupDnsRecord("app.example.com", DnsRecordType.CNAME);
         setupEmptyVpnClients();
         setupEmptyLocalServices();
 
@@ -144,7 +141,6 @@ class GetLaunchpadServicesTest {
     @Test
     void getLaunchpadServices_unreachableHost_visibilityIsVisibleInactive() {
         setupOneRoute("app.example.com", "10.0.0.1", 8080);
-        setupDnsRecord("app.example.com", DnsRecordType.CNAME);
         setupEmptyVpnClients();
         setupEmptyLocalServices();
 
@@ -156,7 +152,6 @@ class GetLaunchpadServicesTest {
     @Test
     void getLaunchpadServices_runningLocalService_visibilityIsVisibleActive() {
         setupOneRoute("app.example.com", "my-container", 8080);
-        setupDnsRecord("app.example.com", DnsRecordType.CNAME);
         setupEmptyVpnClients();
         when(forGettingServerInfo.getServicesWithExposedPorts(any(Server.class))).thenReturn(
             List.of(new DockerService("id", "my-container", "image", "latest",
@@ -173,7 +168,6 @@ class GetLaunchpadServicesTest {
     @Test
     void getLaunchpadServices_runningLocalService_livenessIsLive() {
         setupOneRoute("app.example.com", "my-container", 8080);
-        setupDnsRecord("app.example.com", DnsRecordType.CNAME);
         setupEmptyVpnClients();
         when(forGettingServerInfo.getServicesWithExposedPorts(any(Server.class))).thenReturn(
             List.of(new DockerService("id", "my-container", "image", "latest",
@@ -189,7 +183,6 @@ class GetLaunchpadServicesTest {
     @Test
     void getLaunchpadServices_unreachableHost_livenessIsOffline() {
         setupOneRoute("app.example.com", "10.0.0.1", 8080);
-        setupDnsRecord("app.example.com", DnsRecordType.CNAME);
         setupEmptyVpnClients();
         setupEmptyLocalServices();
 
@@ -206,7 +199,6 @@ class GetLaunchpadServicesTest {
         ReverseProxyRoute lan = ReverseProxyRoute.lanRoute(
             "route", "nas.example.com", "192.168.3.50", 5000, "http", "svc");
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(lan));
-        setupDnsRecord("nas.example.com", DnsRecordType.CNAME);
         String recentHandshake = String.valueOf(System.currentTimeMillis() / 1000 - 60);
         when(forGettingVpnClients.getClients()).thenReturn(List.of(
             new VpnClient("pk", "10.13.13.5/32", "1.2.3.4", "51820", recentHandshake, "0", "0")));
@@ -222,18 +214,6 @@ class GetLaunchpadServicesTest {
     }
 
     @Test
-    void getLaunchpadServices_excludesServicesWithNonExistingDns() {
-        setupOneRoute("app.example.com", "10.0.0.1", 8080);
-        when(forPersistingDnsRecords.getDnsZones()).thenReturn(List.of());
-        setupEmptyVpnClients();
-        setupEmptyLocalServices();
-
-        List<LaunchpadServiceUco> result = service.getLaunchpadServices(null);
-
-        assertThat(result).isEmpty();
-    }
-
-    @Test
     void getLaunchpadServices_emptyRoutes_returnsEmpty() {
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of());
 
@@ -246,13 +226,6 @@ class GetLaunchpadServicesTest {
             route("vaier.example.com", "vaier", 8080),
             route("login.example.com", "authelia", 9091),
             route("app.example.com", "10.0.0.1", 8080)
-        ));
-        DnsZone zone = new DnsZone("example.com");
-        when(forPersistingDnsRecords.getDnsZones()).thenReturn(List.of(zone));
-        when(forPersistingDnsRecords.getDnsRecords(zone)).thenReturn(List.of(
-            new DnsRecord("vaier.example.com", DnsRecordType.CNAME, 300L, List.of()),
-            new DnsRecord("login.example.com", DnsRecordType.CNAME, 300L, List.of()),
-            new DnsRecord("app.example.com", DnsRecordType.CNAME, 300L, List.of())
         ));
         setupEmptyVpnClients();
         setupEmptyLocalServices();
@@ -272,13 +245,6 @@ class GetLaunchpadServicesTest {
             route("dex.example.com", "dex", 5556),
             route("app.example.com", "10.0.0.1", 8080)
         ));
-        DnsZone zone = new DnsZone("example.com");
-        when(forPersistingDnsRecords.getDnsZones()).thenReturn(List.of(zone));
-        when(forPersistingDnsRecords.getDnsRecords(zone)).thenReturn(List.of(
-            new DnsRecord("oauth2.example.com", DnsRecordType.CNAME, 300L, List.of()),
-            new DnsRecord("dex.example.com", DnsRecordType.CNAME, 300L, List.of()),
-            new DnsRecord("app.example.com", DnsRecordType.CNAME, 300L, List.of())
-        ));
         setupEmptyVpnClients();
         setupEmptyLocalServices();
 
@@ -291,28 +257,26 @@ class GetLaunchpadServicesTest {
     }
 
     @Test
-    void getLaunchpadServices_multipleRoutes_returnsOnlyDnsOk() {
+    void getLaunchpadServices_multipleRoutes_everyPublishedRouteGetsATile() {
+        // #331: DNS can no longer hide a tile. A route used to be withheld until its own record
+        // had propagated; under the operator's single *.<domain> record every published name
+        // resolves the moment the route exists, so writing the route is the whole condition.
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(
             route("published.example.com", "10.0.0.1", 8080),
-            route("pending.example.com", "10.0.0.2", 9090)
+            route("brand-new.example.com", "10.0.0.2", 9090)
         ));
-        DnsZone zone = new DnsZone("example.com");
-        when(forPersistingDnsRecords.getDnsZones()).thenReturn(List.of(zone));
-        when(forPersistingDnsRecords.getDnsRecords(zone))
-            .thenReturn(List.of(new DnsRecord("published.example.com", DnsRecordType.CNAME, 300L, List.of())));
         setupEmptyVpnClients();
         setupEmptyLocalServices();
 
         List<LaunchpadServiceUco> result = service.getLaunchpadServices(null);
 
-        assertThat(result).hasSize(1);
-        assertThat(result.get(0).dnsAddress()).isEqualTo("published.example.com");
+        assertThat(result).extracting(LaunchpadServiceUco::dnsAddress)
+            .containsExactlyInAnyOrder("published.example.com", "brand-new.example.com");
     }
 
     @Test
     void getLaunchpadServices_callerIpMatchesPeerEndpoint_setsUrlToLanAddress() {
         setupOneRoute("app.example.com", "10.13.13.6", 6875);
-        setupDnsRecord("app.example.com", DnsRecordType.CNAME);
         when(forGettingVpnClients.getClients()).thenReturn(List.of(
             vpnClient("10.13.13.6/32", "51.175.8.217")
         ));
@@ -329,7 +293,6 @@ class GetLaunchpadServicesTest {
     @Test
     void getLaunchpadServices_callerIpDoesNotMatchAnyPeerEndpoint_noDirectUrl() {
         setupOneRoute("app.example.com", "10.13.13.6", 6875);
-        setupDnsRecord("app.example.com", DnsRecordType.CNAME);
         when(forGettingVpnClients.getClients()).thenReturn(List.of(
             vpnClient("10.13.13.6/32", "51.175.8.217")
         ));
@@ -346,7 +309,6 @@ class GetLaunchpadServicesTest {
     @Test
     void getLaunchpadServices_peerHasNoLanAddress_noDirectUrl() {
         setupOneRoute("app.example.com", "10.13.13.6", 6875);
-        setupDnsRecord("app.example.com", DnsRecordType.CNAME);
         when(forGettingVpnClients.getClients()).thenReturn(List.of(
             vpnClient("10.13.13.6/32", "51.175.8.217")
         ));
@@ -363,7 +325,6 @@ class GetLaunchpadServicesTest {
     @Test
     void getLaunchpadServices_callerIpNull_noDirectUrl() {
         setupOneRoute("app.example.com", "10.13.13.6", 6875);
-        setupDnsRecord("app.example.com", DnsRecordType.CNAME);
         when(forGettingVpnClients.getClients()).thenReturn(List.of(
             vpnClient("10.13.13.6/32", "51.175.8.217")
         ));
@@ -380,7 +341,6 @@ class GetLaunchpadServicesTest {
     @Test
     void getLaunchpadServices_routeAddressHasNoMatchingPeer_noDirectUrl() {
         setupOneRoute("app.example.com", "my-local-container", 8080);
-        setupDnsRecord("app.example.com", DnsRecordType.CNAME);
         when(forGettingVpnClients.getClients()).thenReturn(List.of(
             vpnClient("10.13.13.6/32", "51.175.8.217")
         ));
@@ -401,7 +361,6 @@ class GetLaunchpadServicesTest {
             null, null, null, null, null, true
         );
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(route));
-        setupDnsRecord("app.example.com", DnsRecordType.CNAME);
         when(forGettingVpnClients.getClients()).thenReturn(List.of(
             vpnClient("10.13.13.6/32", "51.175.8.217")
         ));
@@ -424,7 +383,6 @@ class GetLaunchpadServicesTest {
                 ServiceNames.VAIER_AUTHZ_MIDDLEWARE), null, false
         );
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(route));
-        setupDnsRecord("app.example.com", DnsRecordType.CNAME);
         setupEmptyVpnClients();
         setupEmptyLocalServices();
 
@@ -437,7 +395,6 @@ class GetLaunchpadServicesTest {
     @Test
     void getLaunchpadServices_publicRoute_urlIsDirectHttps() {
         setupOneRoute("app.example.com", "10.0.0.1", 8080);
-        setupDnsRecord("app.example.com", DnsRecordType.CNAME);
         setupEmptyVpnClients();
         setupEmptyLocalServices();
 
@@ -453,7 +410,6 @@ class GetLaunchpadServicesTest {
             new ReverseProxyRoute.AuthInfo("forwardAuth", null, null), null, null, null, null, false
         );
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(route));
-        setupDnsRecord("app.example.com", DnsRecordType.CNAME);
         when(forGettingVpnClients.getClients()).thenReturn(List.of(
             vpnClient("10.13.13.6/32", "51.175.8.217")
         ));
@@ -474,7 +430,6 @@ class GetLaunchpadServicesTest {
             null, null, null, null, null, false, false, null, "/grafana"
         );
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(pathBased));
-        setupDnsRecord("svc.example.com", DnsRecordType.CNAME);
         setupEmptyVpnClients();
         setupEmptyLocalServices();
 
@@ -491,7 +446,6 @@ class GetLaunchpadServicesTest {
             null, null, null, null, null, false, false, null, "/grafana"
         );
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(pathBased));
-        setupDnsRecord("svc.example.com", DnsRecordType.CNAME);
         setupEmptyVpnClients();
         setupEmptyLocalServices();
 
@@ -510,7 +464,6 @@ class GetLaunchpadServicesTest {
             null, null, null, null, null, false, false, null, "/grafana"
         );
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(pathBased));
-        setupDnsRecord("svc.example.com", DnsRecordType.CNAME);
         setupEmptyVpnClients();
         setupEmptyLocalServices();
 
@@ -528,7 +481,6 @@ class GetLaunchpadServicesTest {
                 ServiceNames.VAIER_AUTHZ_MIDDLEWARE), null, false, false, null, "/grafana"
         );
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(pathBased));
-        setupDnsRecord("svc.example.com", DnsRecordType.CNAME);
         setupEmptyVpnClients();
         setupEmptyLocalServices();
 
@@ -545,7 +497,6 @@ class GetLaunchpadServicesTest {
             null, null, null, null, null, false, false, null, "/grafana", false, "Grafana Prod"
         );
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(aliased));
-        setupDnsRecord("svc.example.com", DnsRecordType.CNAME);
         setupEmptyVpnClients();
         setupEmptyLocalServices();
 
@@ -561,11 +512,6 @@ class GetLaunchpadServicesTest {
         ReverseProxyRoute publicRoute = route("public.example.com", "10.0.0.1", 8080);
         ReverseProxyRoute social = socialRoute("internal.example.com", "10.0.0.2", 8080);
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(publicRoute, social));
-        DnsZone zone = new DnsZone("example.com");
-        when(forPersistingDnsRecords.getDnsZones()).thenReturn(List.of(zone));
-        when(forPersistingDnsRecords.getDnsRecords(zone)).thenReturn(List.of(
-            new DnsRecord("public.example.com", DnsRecordType.CNAME, 300L, List.of()),
-            new DnsRecord("internal.example.com", DnsRecordType.CNAME, 300L, List.of())));
         setupEmptyVpnClients();
         setupEmptyLocalServices();
 
@@ -578,13 +524,12 @@ class GetLaunchpadServicesTest {
     @Test
     void getLaunchpadServices_anonymousViewer_neverReadsTheAccessStore() {
         setupOneRoute("public.example.com", "10.0.0.1", 8080);
-        setupDnsRecord("public.example.com", DnsRecordType.CNAME);
         setupEmptyVpnClients();
         setupEmptyLocalServices();
 
         service.getLaunchpadServices(null, (AccessEntry) null);
 
-        verify(forResolvingServiceGroup, org.mockito.Mockito.never()).allowedGroupsForHost(any());
+        verify(forResolvingServiceGroup, never()).allowedGroupsForHost(any());
     }
 
     @Test
@@ -592,11 +537,6 @@ class GetLaunchpadServicesTest {
         ReverseProxyRoute publicRoute = route("public.example.com", "10.0.0.1", 8080);
         ReverseProxyRoute social = socialRoute("internal.example.com", "10.0.0.2", 8080);
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(publicRoute, social));
-        DnsZone zone = new DnsZone("example.com");
-        when(forPersistingDnsRecords.getDnsZones()).thenReturn(List.of(zone));
-        when(forPersistingDnsRecords.getDnsRecords(zone)).thenReturn(List.of(
-            new DnsRecord("public.example.com", DnsRecordType.CNAME, 300L, List.of()),
-            new DnsRecord("internal.example.com", DnsRecordType.CNAME, 300L, List.of())));
         setupEmptyVpnClients();
         setupEmptyLocalServices();
         lenient().when(forResolvingServiceGroup.allowedGroupsForHost("internal.example.com"))
@@ -615,12 +555,6 @@ class GetLaunchpadServicesTest {
         ReverseProxyRoute forbidden = socialRoute("plex.example.com", "10.0.0.3", 8080);
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
             .thenReturn(List.of(publicRoute, reachable, forbidden));
-        DnsZone zone = new DnsZone("example.com");
-        when(forPersistingDnsRecords.getDnsZones()).thenReturn(List.of(zone));
-        when(forPersistingDnsRecords.getDnsRecords(zone)).thenReturn(List.of(
-            new DnsRecord("public.example.com", DnsRecordType.CNAME, 300L, List.of()),
-            new DnsRecord("git.example.com", DnsRecordType.CNAME, 300L, List.of()),
-            new DnsRecord("plex.example.com", DnsRecordType.CNAME, 300L, List.of())));
         setupEmptyVpnClients();
         setupEmptyLocalServices();
         when(forResolvingServiceGroup.allowedGroupsForHost("git.example.com")).thenReturn(List.of("devs"));
@@ -637,11 +571,6 @@ class GetLaunchpadServicesTest {
         ReverseProxyRoute publicRoute = route("public.example.com", "10.0.0.1", 8080);
         ReverseProxyRoute social = socialRoute("internal.example.com", "10.0.0.2", 8080);
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(publicRoute, social));
-        DnsZone zone = new DnsZone("example.com");
-        when(forPersistingDnsRecords.getDnsZones()).thenReturn(List.of(zone));
-        when(forPersistingDnsRecords.getDnsRecords(zone)).thenReturn(List.of(
-            new DnsRecord("public.example.com", DnsRecordType.CNAME, 300L, List.of()),
-            new DnsRecord("internal.example.com", DnsRecordType.CNAME, 300L, List.of())));
         setupEmptyVpnClients();
         setupEmptyLocalServices();
         lenient().when(forResolvingServiceGroup.allowedGroupsForHost(any())).thenReturn(List.of());
@@ -660,12 +589,6 @@ class GetLaunchpadServicesTest {
         );
         ReverseProxyRoute visible = route("app.example.com", "10.0.0.1", 8080);
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(hidden, visible));
-        DnsZone zone = new DnsZone("example.com");
-        when(forPersistingDnsRecords.getDnsZones()).thenReturn(List.of(zone));
-        when(forPersistingDnsRecords.getDnsRecords(zone)).thenReturn(List.of(
-            new DnsRecord("internal-api.example.com", DnsRecordType.CNAME, 300L, List.of()),
-            new DnsRecord("app.example.com", DnsRecordType.CNAME, 300L, List.of())
-        ));
         setupEmptyVpnClients();
         setupEmptyLocalServices();
 
@@ -678,7 +601,6 @@ class GetLaunchpadServicesTest {
     @Test
     void getLaunchpadServices_peerHasNoEndpoint_noDirectUrl() {
         setupOneRoute("app.example.com", "10.13.13.6", 6875);
-        setupDnsRecord("app.example.com", DnsRecordType.CNAME);
         when(forGettingVpnClients.getClients()).thenReturn(List.of(
             vpnClient("10.13.13.6/32", null)
         ));
@@ -697,7 +619,6 @@ class GetLaunchpadServicesTest {
     @Test
     void getLaunchpadServices_peerService_carriesBackingContainerImage() {
         setupOneRoute("app.example.com", "10.13.13.6", 6875);
-        setupDnsRecord("app.example.com", DnsRecordType.CNAME);
         setupEmptyVpnClients();
         setupEmptyLocalServices();
         when(discoverPeerContainers.discoverAll()).thenReturn(List.of(
@@ -716,7 +637,6 @@ class GetLaunchpadServicesTest {
     @Test
     void getLaunchpadServices_vaierServerService_carriesBackingContainerImage() {
         setupOneRoute("app.example.com", "grafana", 3000);
-        setupDnsRecord("app.example.com", DnsRecordType.CNAME);
         setupEmptyVpnClients();
         when(discoverVaierServerContainers.discover()).thenReturn(
             List.of(new DockerService("id", "grafana", "grafana/grafana:11.3.0", "11.3.0",
@@ -733,7 +653,6 @@ class GetLaunchpadServicesTest {
         ReverseProxyRoute lan = ReverseProxyRoute.lanRoute(
             "route", "nas.example.com", "192.168.3.50", 5000, "http", "svc");
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(lan));
-        setupDnsRecord("nas.example.com", DnsRecordType.CNAME);
         setupEmptyVpnClients();
         setupEmptyLocalServices();
 
@@ -752,7 +671,6 @@ class GetLaunchpadServicesTest {
             "svc", null, null, null, null, null, false, true, "http", null, false, null,
             "/sys/metrics?name[]=system_info", "display");
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(lan));
-        setupDnsRecord("app.example.com", DnsRecordType.CNAME);
         setupEmptyVpnClients();
         setupEmptyLocalServices();
         when(forProbingServiceVersion.probeVersion(
@@ -773,7 +691,6 @@ class GetLaunchpadServicesTest {
             "svc", null, null, null, null, null, false, false, null, null, false, null,
             "/status", "build");
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(route));
-        setupDnsRecord("app.example.com", DnsRecordType.CNAME);
         setupEmptyVpnClients();
         when(discoverVaierServerContainers.discover()).thenReturn(
             List.of(new DockerService("id", "grafana", "grafana/grafana:11.3.0", "11.3.0",
@@ -790,7 +707,6 @@ class GetLaunchpadServicesTest {
     @Test
     void getLaunchpadServices_readsCachedVersionsWithoutProbingOnTheReadPath() {
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(versionRoute()));
-        setupDnsRecord("app.example.com", DnsRecordType.CNAME);
         setupEmptyVpnClients();
         setupEmptyLocalServices();
         when(forProbingServiceVersion.probeVersion(any(), any())).thenReturn(Optional.of("1.0"));
@@ -828,13 +744,6 @@ class GetLaunchpadServicesTest {
     private void setupOneRoute(String domain, String address, int port) {
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
             .thenReturn(List.of(route(domain, address, port)));
-    }
-
-    private void setupDnsRecord(String name, DnsRecordType type) {
-        DnsZone zone = new DnsZone("example.com");
-        when(forPersistingDnsRecords.getDnsZones()).thenReturn(List.of(zone));
-        when(forPersistingDnsRecords.getDnsRecords(zone))
-            .thenReturn(List.of(new DnsRecord(name, type, 300L, List.of())));
     }
 
     private void setupEmptyVpnClients() {

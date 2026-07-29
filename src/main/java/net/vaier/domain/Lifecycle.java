@@ -1,95 +1,61 @@
 package net.vaier.domain;
 
-import java.util.List;
-import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
-import net.vaier.domain.port.ForPersistingDnsRecords;
+import net.vaier.domain.port.ForResolvingDns;
 import net.vaier.domain.port.ForResolvingPublicHost;
-import net.vaier.domain.port.ForResolvingPublicHost.PublicHost;
 
 /**
- * Startup bootstrap for Vaier's own infrastructure. Ensures the mandatory infra DNS records exist:
- * the {@code vaier.<domain>} console record pointing at this server, plus the {@code oauth2.<domain>}
- * and {@code dex.<domain>} auth-stack CNAMEs the sign-in stack needs to come up. Each is created only
- * when missing — existing records are never disturbed.
+ * Startup bootstrap for Vaier's own DNS, which is now a single sentence: there is nothing to create.
+ *
+ * <p>One {@code *.<domain>} A record, made once by the operator at install, already answers for the
+ * {@code vaier}, {@code oauth2} and {@code dex} infrastructure hosts and for every service Vaier will
+ * ever publish (#331). So instead of writing DNS, Vaier <em>checks</em> it — once, at boot — and states
+ * the result in words the operator can act on.
  */
 @Slf4j
 public class Lifecycle {
 
-    private final ForPersistingDnsRecords forPersistingDnsRecords;
     private final ForResolvingPublicHost publicHostResolver;
+    private final ForResolvingDns dnsResolver;
     private final String vaierDomain;
 
     public Lifecycle(
-        ForPersistingDnsRecords forPersistingDnsRecords,
         ForResolvingPublicHost publicHostResolver,
+        ForResolvingDns dnsResolver,
         String vaierDomain
     ) {
-        this.forPersistingDnsRecords = forPersistingDnsRecords;
         this.publicHostResolver = publicHostResolver;
+        this.dnsResolver = dnsResolver;
         this.vaierDomain = vaierDomain;
     }
 
-    public void start() {
-        initDns();
-    }
-
-    private void initDns() {
-        if(vaierDomain == null || vaierDomain.isBlank()) {
+    /**
+     * Looks the one record up and says what it found. A wildcard that is missing or points elsewhere is
+     * not a reason to refuse to start — Vaier comes up either way and tells the operator what to fix.
+     *
+     * @param wildcardProbeLabel       a random label to look up under the domain. The caller supplies it
+     *                                 so no resolver can be holding a cached answer for a name that was
+     *                                 never created — and so this check stays deterministic under test.
+     * @param wildcardProbeParentLabel a second random label, one level up. Vaier publishes
+     *                                 machine-qualified names two labels deep, and a wildcard matches by
+     *                                 closest encloser — see {@link WildcardDns} for why probing at one
+     *                                 label would report success over a broken zone.
+     */
+    public WildcardDnsReport start(String wildcardProbeLabel, String wildcardProbeParentLabel) {
+        if (vaierDomain == null || vaierDomain.isBlank()) {
             throw new RuntimeException("VAIER_DOMAIN is not set");
         }
-        DnsZone dnsZone = forPersistingDnsRecords.getDnsZones().stream()
-            .filter(zone -> zone.name().equals(vaierDomain))
-            .findFirst()
-            .orElseThrow(() -> new RuntimeException("DNS zone not found for " + vaierDomain));
-
-        log.info("DNS zone found: " + dnsZone.name());
-
-        VaierHostnames hostnames = new VaierHostnames(vaierDomain);
-        List<DnsRecord> records = forPersistingDnsRecords.getDnsRecords(dnsZone);
-
-        // The vaier console record targets this server's resolved public address (A or CNAME).
-        String vaierHost = hostnames.vaierServerFqdn();
-        if (recordExists(records, vaierHost)) {
-            log.info("DNS record found: " + vaierHost);
+        WildcardDnsReport report = new WildcardDns(vaierDomain)
+            .verify(wildcardProbeLabel, wildcardProbeParentLabel, dnsResolver, publicHostResolver);
+        // The domain decides whether this is a problem — the same predicate the settings pane styles
+        // its note by, so a log line and the UI can never disagree about a verdict.
+        if (!report.status().needsOperatorAction()) {
+            log.info(report.message());
         } else {
-            ensureVaierRecord(vaierHost, dnsZone);
-        }
-
-        // oauth2-proxy and Dex are CNAMEs to the vaier host — a domain-owned decision. Their target is
-        // static, so they are ensured whether or not the public address could be resolved above.
-        for (DnsRecord infraRecord : hostnames.authInfrastructureCnames()) {
-            if (recordExists(records, infraRecord.name())) {
-                log.info("DNS record found: " + infraRecord.name());
-            } else {
-                forPersistingDnsRecords.addDnsRecord(infraRecord, dnsZone);
-                log.info("Added {} {} record → {}", infraRecord.name(), infraRecord.type(), infraRecord.values());
-            }
-        }
-    }
-
-    private boolean recordExists(List<DnsRecord> records, String name) {
-        return records.stream().anyMatch(record -> record.name().equals(name));
-    }
-
-    private boolean ensureVaierRecord(String vaierHost, DnsZone dnsZone) {
-        Optional<PublicHost> resolved = publicHostResolver.resolve();
-        if (resolved.isEmpty()) {
             log.warn("==========================================================");
-            log.warn("DNS record missing for {} and this server's public address", vaierHost);
-            log.warn("could not be determined automatically.");
-            log.warn("Create the record manually in Route53, or set");
-            log.warn("VAIER_PUBLIC_HOST (CNAME target) or VAIER_PUBLIC_IP (A target)");
-            log.warn("in .env and restart the stack.");
+            log.warn(report.message());
             log.warn("==========================================================");
-            return false;
         }
-        PublicHost publicHost = resolved.get();
-        forPersistingDnsRecords.addDnsRecord(
-            new DnsRecord(vaierHost, publicHost.type(), 300L, List.of(publicHost.value())),
-            dnsZone
-        );
-        log.info("Added {} {} record → {}", vaierHost, publicHost.type(), publicHost.value());
-        return true;
+        return report;
     }
 }

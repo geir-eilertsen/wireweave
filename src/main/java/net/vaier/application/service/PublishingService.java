@@ -15,11 +15,7 @@ import net.vaier.application.UnignorePublishableServiceUseCase;
 import net.vaier.application.UpdatePublishedServiceUseCase;
 import net.vaier.config.ConfigResolver;
 import net.vaier.domain.AccessEntry;
-import net.vaier.domain.DnsRecord;
-import net.vaier.domain.DnsRecord.DnsRecordType;
-import net.vaier.domain.DnsState;
 import net.vaier.domain.VaierHostnames;
-import net.vaier.domain.DnsZone;
 import net.vaier.domain.DockerService;
 import net.vaier.domain.LanAnchor;
 import net.vaier.domain.LanServer;
@@ -42,12 +38,10 @@ import net.vaier.domain.port.ForGettingServerInfo;
 import net.vaier.domain.port.ForGettingVaierServerDockerServices;
 import net.vaier.domain.port.ForGettingVpnClients;
 import net.vaier.domain.port.ForManagingIgnoredServices;
-import net.vaier.domain.port.ForPersistingDnsRecords;
 import net.vaier.domain.port.ForPersistingLanServers;
 import net.vaier.domain.port.ForPersistingReverseProxyRoutes;
 import net.vaier.domain.port.ForProbingServiceVersion;
 import net.vaier.domain.port.ForPublishingEvents;
-import net.vaier.domain.port.ForResolvingDns;
 import net.vaier.domain.port.ForResolvingPeerIds;
 import net.vaier.domain.port.ForResolvingServerLanCidr;
 import net.vaier.domain.port.ForResolvingServiceGroup;
@@ -78,7 +72,6 @@ public class PublishingService implements
 
     private final ForPersistingReverseProxyRoutes forPersistingReverseProxyRoutes;
     private final ForGettingServerInfo forGettingServerInfo;
-    private final ForPersistingDnsRecords forPersistingDnsRecords;
     private final ForGettingVpnClients forGettingVpnClients;
     private final ForResolvingPeerIds forResolvingPeerIds;
     private final ForGettingPeerConfigurations forGettingPeerConfigurations;
@@ -86,7 +79,6 @@ public class PublishingService implements
     private final ForPersistingLanServers forPersistingLanServers;
     private final ConfigResolver configResolver;
     private final ForPublishingEvents forPublishingEvents;
-    private final ForResolvingDns forResolvingDns;
     private final ForManagingIgnoredServices forManagingIgnoredServices;
     private final PendingPublicationsService pendingPublicationsService;
     private final ForDiscoveringPeerContainers forDiscoveringPeerContainers;
@@ -102,18 +94,15 @@ public class PublishingService implements
 
     private volatile List<PublishedServiceUco> cache = null;
 
-    long dnsTimeoutMillis = 120_000;
-    long dnsRetryIntervalMillis = 3_000;
     long traefikActivationTimeoutMillis = 15_000;
     long traefikActivationRetryIntervalMillis = 500;
 
-    private record PendingState(boolean requiresAuth, boolean dnsPropagated) {}
+    private record PendingState(boolean requiresAuth) {}
 
     private final Map<String, PendingState> pendingPublishes = new ConcurrentHashMap<>();
 
     public PublishingService(ForPersistingReverseProxyRoutes forPersistingReverseProxyRoutes,
                              ForGettingServerInfo forGettingServerInfo,
-                             ForPersistingDnsRecords forPersistingDnsRecords,
                              ForGettingVpnClients forGettingVpnClients,
                              ForResolvingPeerIds forResolvingPeerIds,
                              ForGettingPeerConfigurations forGettingPeerConfigurations,
@@ -121,7 +110,6 @@ public class PublishingService implements
                              ForPersistingLanServers forPersistingLanServers,
                              ConfigResolver configResolver,
                              ForPublishingEvents forPublishingEvents,
-                             ForResolvingDns forResolvingDns,
                              ForManagingIgnoredServices forManagingIgnoredServices,
                              PendingPublicationsService pendingPublicationsService,
                              ForDiscoveringPeerContainers forDiscoveringPeerContainers,
@@ -134,7 +122,6 @@ public class PublishingService implements
                              ForResolvingVaierServerIdentity vaierServerIdentity) {
         this.forPersistingReverseProxyRoutes = forPersistingReverseProxyRoutes;
         this.forGettingServerInfo = forGettingServerInfo;
-        this.forPersistingDnsRecords = forPersistingDnsRecords;
         this.forGettingVpnClients = forGettingVpnClients;
         this.forResolvingPeerIds = forResolvingPeerIds;
         this.forGettingPeerConfigurations = forGettingPeerConfigurations;
@@ -142,7 +129,6 @@ public class PublishingService implements
         this.forPersistingLanServers = forPersistingLanServers;
         this.configResolver = configResolver;
         this.forPublishingEvents = forPublishingEvents;
-        this.forResolvingDns = forResolvingDns;
         this.forManagingIgnoredServices = forManagingIgnoredServices;
         this.pendingPublicationsService = pendingPublicationsService;
         this.forDiscoveringPeerContainers = forDiscoveringPeerContainers;
@@ -167,9 +153,6 @@ public class PublishingService implements
         List<ReverseProxyRoute> routes = forPersistingReverseProxyRoutes.getReverseProxyRoutes();
         if (routes.isEmpty()) return List.of();
 
-        List<DnsRecord> allDnsRecords = forPersistingDnsRecords.getDnsZones().stream()
-            .flatMap(zone -> forPersistingDnsRecords.getDnsRecords(zone).stream())
-            .toList();
         List<VpnClient> vpnClients = forGettingVpnClients.getClients();
         List<DockerService> localServices = forGettingServerInfo.getServicesWithExposedPorts(Server.vaierServer());
         String serverLanCidr = forResolvingServerLanCidr.resolve().orElse(null);
@@ -183,7 +166,7 @@ public class PublishingService implements
         cache = routes.stream()
             .filter(r -> !isInfrastructureRouter(r))
             .filter(r -> !r.isOauth2EndpointsRouter())
-            .map(r -> toUco(r, allDnsRecords, vpnClients, localServices, serverLanCidr, lanReachabilities,
+            .map(r -> toUco(r, vpnClients, localServices, serverLanCidr, lanReachabilities,
                 images, probedVersions))
             .toList();
         return cache;
@@ -213,7 +196,7 @@ public class PublishingService implements
             .flatMap(s -> ReverseProxyRoute
                 .findByFqdnAndPath(routes, s.dnsAddress(), s.pathPrefix())
                 .map(r -> {
-                    LaunchpadVisibility visibility = r.launchpadVisibility(s.dnsState(), s.state(), viewer, forResolvingServiceGroup);
+                    LaunchpadVisibility visibility = r.launchpadVisibility(s.state(), viewer, forResolvingServiceGroup);
                     if (visibility == LaunchpadVisibility.NOT_VISIBLE) return null;
                     DockerService backing = r.backingContainer(images.vaierServerContainers(),
                         images.peerContainersByVpnIp(), images.lanServerContainersByAddress()).orElse(null);
@@ -293,13 +276,12 @@ public class PublishingService implements
                 Map.Entry::getKey, Map.Entry::getValue, (a, b) -> a));
     }
 
-    private PublishedServiceUco toUco(ReverseProxyRoute route, List<DnsRecord> allDnsRecords,
+    private PublishedServiceUco toUco(ReverseProxyRoute route,
                                     List<VpnClient> vpnClients, List<DockerService> localServices,
                                     String serverLanCidr, Map<String, Reachability> lanReachabilities,
                                     ContainerImageSnapshot images, Map<String, String> probedVersions) {
         var peers = forGettingPeerConfigurations.getAllPeerConfigs();
         var lanServers = forPersistingLanServers.getAll();
-        DnsState dnsState = route.dnsState(allDnsRecords, configResolver.getDnsProvider());
         Server.State hostState = route.hostState(localServices, vpnClients, peers, serverLanCidr, lanReachabilities);
         String baseDomain = configResolver.getDomain();
         DockerService backing = route.backingContainer(images.vaierServerContainers(),
@@ -315,9 +297,8 @@ public class PublishingService implements
             route.hostDisplayName(vpnClients, forResolvingPeerIds, peers),
             route.lanServerName(lanServers).orElse(null),
             route.serviceLocation(vpnClients, forResolvingPeerIds, peers),
-            dnsState == DnsState.OK && hostState == Server.State.OK,
+            hostState == Server.State.OK,
             route.getDomainName(),
-            dnsState,
             route.getAddress(),
             route.getPort(),
             hostState,
@@ -355,7 +336,6 @@ public class PublishingService implements
         }
 
         String fqdn = subdomain + "." + configResolver.getDomain();
-        String serverFqdn = new VaierHostnames(configResolver.getDomain()).vaierServerFqdn();
 
         List<ReverseProxyRoute> existing = forPersistingReverseProxyRoutes.getReverseProxyRoutes();
         if (ReverseProxyRoute.conflictsWithExisting(existing, fqdn, normalisedPath)) {
@@ -367,20 +347,14 @@ public class PublishingService implements
         log.info("Publishing service: {} -> {}:{} (auth: {}, directUrlDisabled: {}, pathPrefix: {})",
             fqdn, address, port, requiresAuth, directUrlDisabled, normalisedPath);
 
-        if (ReverseProxyRoute.hasSiblingOnHost(existing, fqdn)) {
-            log.info("Skipping DNS create for {} — sibling route already on this host", fqdn);
-        } else {
-            DnsRecord cname = new DnsRecord(fqdn + ".", DnsRecordType.CNAME, 300L, List.of(serverFqdn + "."));
-            DnsZone zone = new DnsZone(configResolver.getDomain());
-            forPersistingDnsRecords.addDnsRecord(cname, zone);
-            log.info("Created DNS CNAME {} -> {}", fqdn, serverFqdn);
-        }
-
-        pendingPublishes.put(subdomain, new PendingState(requiresAuth, false));
+        pendingPublishes.put(subdomain, new PendingState(requiresAuth));
         pendingPublicationsService.track(address, port);
-        forPublishingEvents.publish("published-services", "publish-dns-created", subdomain);
 
-        CompletableFuture.runAsync(() -> waitForDnsThenActivate(subdomain, fqdn, address, port, requiresAuth, rootRedirectPath, directUrlDisabled, normalisedPath));
+        // Publishing is one step now: write the Traefik route. The name already resolves — the
+        // operator's single *.<domain> record answers for it (#331) — so there is nothing to create
+        // and nothing to wait for propagating. Still async: waiting for Traefik to pick the route up
+        // is real, and the browser gets the pending state immediately.
+        CompletableFuture.runAsync(() -> activate(subdomain, fqdn, address, port, requiresAuth, rootRedirectPath, directUrlDisabled, normalisedPath));
     }
 
     @Override
@@ -390,16 +364,15 @@ public class PublishingService implements
             .anyMatch(r -> r.getDomainName().equals(fqdn));
         if (traefikActive) {
             pendingPublishes.remove(subdomain);
-            return new PublishStatus(true, true);
+            return new PublishStatus(true);
         }
-        PendingState state = pendingPublishes.getOrDefault(subdomain, new PendingState(false, false));
-        return new PublishStatus(state.dnsPropagated(), false);
+        return new PublishStatus(false);
     }
 
     @Override
     public List<PendingPublication> getPendingPublications() {
         return pendingPublishes.entrySet().stream()
-            .map(e -> new PendingPublication(e.getKey(), e.getValue().requiresAuth(), e.getValue().dnsPropagated()))
+            .map(e -> new PendingPublication(e.getKey(), e.getValue().requiresAuth()))
             .toList();
     }
 
@@ -432,7 +405,6 @@ public class PublishingService implements
         }
 
         String fqdn = subdomain + "." + configResolver.getDomain();
-        String serverFqdn = new VaierHostnames(configResolver.getDomain()).vaierServerFqdn();
 
         List<ReverseProxyRoute> existing = forPersistingReverseProxyRoutes.getReverseProxyRoutes();
         if (ReverseProxyRoute.conflictsWithExisting(existing, fqdn, normalisedPath)) {
@@ -444,20 +416,10 @@ public class PublishingService implements
         log.info("Publishing LAN service: {} -> {}://{}:{} (auth: {}, directUrlDisabled: {}, rootRedirectPath: {}, pathPrefix: {})",
             fqdn, scheme, host, port, requiresAuth, directUrlDisabled, rootRedirectPath, normalisedPath);
 
-        if (ReverseProxyRoute.hasSiblingOnHost(existing, fqdn)) {
-            log.info("Skipping DNS create for {} — sibling route already on this host", fqdn);
-        } else {
-            DnsRecord cname = new DnsRecord(fqdn + ".", DnsRecordType.CNAME, 300L, List.of(serverFqdn + "."));
-            DnsZone zone = new DnsZone(configResolver.getDomain());
-            forPersistingDnsRecords.addDnsRecord(cname, zone);
-            log.info("Created DNS CNAME {} -> {}", fqdn, serverFqdn);
-        }
-
-        pendingPublishes.put(subdomain, new PendingState(requiresAuth, false));
-        forPublishingEvents.publish("published-services", "publish-dns-created", subdomain);
+        pendingPublishes.put(subdomain, new PendingState(requiresAuth));
 
         CompletableFuture.runAsync(() ->
-            waitForLanDnsThenActivate(subdomain, fqdn, host, port, scheme, requiresAuth, directUrlDisabled, rootRedirectPath, normalisedPath));
+            activateLan(subdomain, fqdn, host, port, scheme, requiresAuth, directUrlDisabled, rootRedirectPath, normalisedPath));
     }
 
     private boolean hostInsideAnyLanCidr(String host) {
@@ -466,41 +428,33 @@ public class PublishingService implements
             forResolvingServerLanCidr.resolve().orElse(null)).isPresent();
     }
 
-    void waitForLanDnsThenActivate(String subdomain, String fqdn, String host, int port, String protocol,
-                                   boolean requiresAuth, boolean directUrlDisabled, String rootRedirectPath,
-                                   String pathPrefix) {
-        long deadline = System.currentTimeMillis() + dnsTimeoutMillis;
-        while (System.currentTimeMillis() < deadline) {
-            if (forResolvingDns.isResolvable(fqdn)) {
-                log.info("DNS propagated for {}, activating Traefik LAN route", fqdn);
-                pendingPublishes.compute(subdomain, (k, v) -> new PendingState(v != null && v.requiresAuth(), true));
-                forPublishingEvents.publish("published-services", "publish-dns-propagated", subdomain);
-                try {
-                    forPersistingReverseProxyRoutes.addLanReverseProxyRoute(
-                        fqdn, host, port, protocol, requiresAuth, directUrlDisabled, rootRedirectPath, pathPrefix);
-                } catch (Exception e) {
-                    log.error("Failed to write Traefik LAN route for {}: {}", fqdn, e.getMessage(), e);
-                    rollbackLan(subdomain, fqdn, false, pathPrefix);
-                    return;
-                }
-                if (!waitForTraefikRoute(fqdn)) {
-                    log.warn("Traefik did not pick up LAN route for {}; rolling back", fqdn);
-                    rollbackLan(subdomain, fqdn, true, pathPrefix);
-                    return;
-                }
-                pendingPublishes.remove(subdomain);
-                invalidatePublishedServicesCache();
-                forPublishingEvents.publish("published-services", "publish-traefik-active", subdomain);
-                forPublishingEvents.publish("published-services", "service-updated", subdomain);
-                return;
-            }
-            try { Thread.sleep(dnsRetryIntervalMillis); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
+    /**
+     * Writes the Traefik LAN route and waits for Traefik to pick it up. No DNS step: the name already
+     * resolves under the operator's one wildcard record (#331).
+     */
+    void activateLan(String subdomain, String fqdn, String host, int port, String protocol,
+                     boolean requiresAuth, boolean directUrlDisabled, String rootRedirectPath,
+                     String pathPrefix) {
+        try {
+            forPersistingReverseProxyRoutes.addLanReverseProxyRoute(
+                fqdn, host, port, protocol, requiresAuth, directUrlDisabled, rootRedirectPath, pathPrefix);
+        } catch (Exception e) {
+            log.error("Failed to write Traefik LAN route for {}: {}", fqdn, e.getMessage(), e);
+            rollbackLan(subdomain, fqdn, false, pathPrefix);
+            return;
         }
-        log.warn("DNS propagation timed out for {} after {}s", fqdn, dnsTimeoutMillis / 1000);
-        forPublishingEvents.publish("published-services", "publish-dns-timeout", subdomain);
-        rollbackLan(subdomain, fqdn, false, pathPrefix);
+        if (!waitForTraefikRoute(fqdn)) {
+            log.warn("Traefik did not pick up LAN route for {}; rolling back", fqdn);
+            rollbackLan(subdomain, fqdn, true, pathPrefix);
+            return;
+        }
+        pendingPublishes.remove(subdomain);
+        invalidatePublishedServicesCache();
+        forPublishingEvents.publish("published-services", "publish-traefik-active", subdomain);
+        forPublishingEvents.publish("published-services", "service-updated", subdomain);
     }
 
+    /** Undoes a LAN publish. Only ever reached because Traefik failed — there is no DNS half left. */
     private void rollbackLan(String subdomain, String fqdn, boolean removeRoute, String pathPrefix) {
         if (removeRoute) {
             try {
@@ -513,67 +467,47 @@ public class PublishingService implements
                 log.warn("Failed to remove Traefik route during LAN rollback for {}: {}", fqdn, e.getMessage());
             }
         }
-        List<ReverseProxyRoute> remaining = forPersistingReverseProxyRoutes.getReverseProxyRoutes();
-        if (ReverseProxyRoute.hasSiblingOnHost(remaining, fqdn)) {
-            log.info("Skipping LAN CNAME rollback for {} — sibling routes remain", fqdn);
-        } else {
-            try {
-                forPersistingDnsRecords.deleteDnsRecord(fqdn + ".", DnsRecordType.CNAME,
-                    new DnsZone(configResolver.getDomain()));
-                log.info("Rolled back CNAME for {}", fqdn);
-            } catch (Exception e) {
-                log.warn("Failed to remove CNAME during LAN rollback for {}: {}", fqdn, e.getMessage());
-            }
-        }
         pendingPublishes.remove(subdomain);
         invalidatePublishedServicesCache();
         forPublishingEvents.publish("published-services", "publish-rolled-back", subdomain);
         forPublishingEvents.publish("published-services", "service-updated", subdomain);
     }
 
-    void waitForDnsThenActivate(String subdomain, String fqdn, String address, int port, boolean requiresAuth,
-                                String rootRedirectPath, boolean directUrlDisabled, String pathPrefix) {
-        long deadline = System.currentTimeMillis() + dnsTimeoutMillis;
-        while (System.currentTimeMillis() < deadline) {
-            if (forResolvingDns.isResolvable(fqdn)) {
-                log.info("DNS propagated for {}, activating Traefik route", fqdn);
-                pendingPublishes.compute(subdomain, (k, v) -> new PendingState(v != null && v.requiresAuth(), true));
-                forPublishingEvents.publish("published-services", "publish-dns-propagated", subdomain);
-                String persistedAddress = forGettingServerInfo.findContainerNameByIp(Server.vaierServer(), address).orElse(address);
-                if (!persistedAddress.equals(address)) {
-                    log.info("Normalized backend address {} -> {} for {}", address, persistedAddress, fqdn);
-                }
-                try {
-                    forPersistingReverseProxyRoutes.addReverseProxyRoute(fqdn, persistedAddress, port, requiresAuth, rootRedirectPath, pathPrefix);
-                } catch (Exception e) {
-                    log.error("Failed to write Traefik route for {}: {}", fqdn, e.getMessage(), e);
-                    rollback(subdomain, fqdn, address, port, false, pathPrefix);
-                    return;
-                }
-                if (directUrlDisabled) {
-                    forPersistingReverseProxyRoutes.setRouteDirectUrlDisabled(fqdn, pathPrefix, true);
-                }
-                log.info("Created Traefik route for {}", fqdn);
-                if (!waitForTraefikRoute(fqdn)) {
-                    log.warn("Traefik did not pick up route for {}; rolling back", fqdn);
-                    rollback(subdomain, fqdn, address, port, true, pathPrefix);
-                    return;
-                }
-                pendingPublicationsService.untrack(address, port);
-                pendingPublishes.remove(subdomain);
-                invalidatePublishedServicesCache();
-                forPublishingEvents.publish("published-services", "publish-traefik-active", subdomain);
-                forPublishingEvents.publish("published-services", "service-updated", subdomain);
-                return;
-            }
-            log.debug("DNS not yet live for {}, retrying in {}s", fqdn, dnsRetryIntervalMillis / 1000);
-            try { Thread.sleep(dnsRetryIntervalMillis); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
+    /**
+     * Writes the Traefik route and waits for Traefik to pick it up. No DNS step: the name already
+     * resolves under the operator's one wildcard record (#331), and Let's Encrypt's HTTP-01 challenge
+     * can run the moment the route exists.
+     */
+    void activate(String subdomain, String fqdn, String address, int port, boolean requiresAuth,
+                  String rootRedirectPath, boolean directUrlDisabled, String pathPrefix) {
+        String persistedAddress = forGettingServerInfo.findContainerNameByIp(Server.vaierServer(), address).orElse(address);
+        if (!persistedAddress.equals(address)) {
+            log.info("Normalized backend address {} -> {} for {}", address, persistedAddress, fqdn);
         }
-        log.warn("DNS propagation timed out for {} after {}s — Traefik route NOT written to avoid invalid certificate", fqdn, dnsTimeoutMillis / 1000);
-        forPublishingEvents.publish("published-services", "publish-dns-timeout", subdomain);
-        rollback(subdomain, fqdn, address, port, false, pathPrefix);
+        try {
+            forPersistingReverseProxyRoutes.addReverseProxyRoute(fqdn, persistedAddress, port, requiresAuth, rootRedirectPath, pathPrefix);
+        } catch (Exception e) {
+            log.error("Failed to write Traefik route for {}: {}", fqdn, e.getMessage(), e);
+            rollback(subdomain, fqdn, address, port, false, pathPrefix);
+            return;
+        }
+        if (directUrlDisabled) {
+            forPersistingReverseProxyRoutes.setRouteDirectUrlDisabled(fqdn, pathPrefix, true);
+        }
+        log.info("Created Traefik route for {}", fqdn);
+        if (!waitForTraefikRoute(fqdn)) {
+            log.warn("Traefik did not pick up route for {}; rolling back", fqdn);
+            rollback(subdomain, fqdn, address, port, true, pathPrefix);
+            return;
+        }
+        pendingPublicationsService.untrack(address, port);
+        pendingPublishes.remove(subdomain);
+        invalidatePublishedServicesCache();
+        forPublishingEvents.publish("published-services", "publish-traefik-active", subdomain);
+        forPublishingEvents.publish("published-services", "service-updated", subdomain);
     }
 
+    /** Undoes a publish. Only ever reached because Traefik failed — there is no DNS half left. */
     private void rollback(String subdomain, String fqdn, String address, int port, boolean removeRoute, String pathPrefix) {
         if (removeRoute) {
             try {
@@ -584,20 +518,6 @@ public class PublishingService implements
                         () -> forPersistingReverseProxyRoutes.deleteReverseProxyRouteByDnsName(fqdn));
             } catch (Exception e) {
                 log.warn("Failed to remove Traefik route during rollback for {}: {}", fqdn, e.getMessage());
-            }
-        }
-        // Only roll the CNAME back if no sibling routes still depend on it — the domain helper
-        // decides what "sibling" means.
-        List<ReverseProxyRoute> remaining = forPersistingReverseProxyRoutes.getReverseProxyRoutes();
-        if (ReverseProxyRoute.hasSiblingOnHost(remaining, fqdn)) {
-            log.info("Skipping CNAME rollback for {} — sibling routes remain", fqdn);
-        } else {
-            try {
-                forPersistingDnsRecords.deleteDnsRecord(fqdn + ".", DnsRecordType.CNAME,
-                    new DnsZone(configResolver.getDomain()));
-                log.info("Rolled back CNAME for {}", fqdn);
-            } catch (Exception e) {
-                log.warn("Failed to remove CNAME during rollback for {}: {}", fqdn, e.getMessage());
             }
         }
         pendingPublicationsService.untrack(address, port);
@@ -650,15 +570,8 @@ public class PublishingService implements
 
         waitForTraefikRouteDeletion(fqdn, normalisedPath);
 
-        // Only delete the CNAME when no sibling routes still use this host. The domain helper
-        // decides what "sibling" means; the service just orchestrates.
-        List<ReverseProxyRoute> remaining = forPersistingReverseProxyRoutes.getReverseProxyRoutes();
-        if (ReverseProxyRoute.hasSiblingOnHost(remaining, fqdn)) {
-            log.info("Skipping DNS delete for {} — sibling routes still on this host", fqdn);
-        } else {
-            forPersistingDnsRecords.deleteDnsRecord(fqdn, DnsRecordType.CNAME, new DnsZone(configResolver.getDomain()));
-            log.info("Deleted DNS CNAME for {}", fqdn);
-        }
+        // Nothing else to undo: unpublishing removes the Traefik route and stops there. The name goes
+        // on resolving under the operator's wildcard record, which is theirs and not Vaier's (#331).
         invalidatePublishedServicesCache();
     }
 

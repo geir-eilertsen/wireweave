@@ -1,6 +1,5 @@
 package net.vaier.application;
 
-import net.vaier.domain.DnsState;
 import net.vaier.domain.ReverseProxyRoute.ServiceLocation;
 import net.vaier.domain.Server.State;
 import java.util.List;
@@ -22,9 +21,9 @@ public interface GetPublishedServicesUseCase {
      *                         matches the address. Surfaced in the card sub-line so the operator
      *                         sees the actual host even though the section names the relay.
      * @param serviceLocation  where the backing service runs — drives icon choice and grouping.
-     * @param healthy          true when both DNS and Traefik backend health are OK; computed in
-     *                         the domain so the browser doesn't recombine {@code dnsState} and
-     *                         {@code state}.
+     * @param healthy          true when the backing host is reachable. Every published name resolves
+     *                         from the moment its route is written (#331), so host health is the
+     *                         whole question; computed here so the browser never recombines signals.
      * @param image            the Docker image reference of the container backing this route
      *                         (e.g. {@code grafana/grafana:11.3.0}), or null when no container
      *                         backs the route — e.g. a service published as a bare LAN host:port.
@@ -44,7 +43,6 @@ public interface GetPublishedServicesUseCase {
         ServiceLocation serviceLocation,
         boolean healthy,
         String dnsAddress,
-        DnsState dnsState,
         String hostAddress,
         int hostPort,
         State state,
@@ -69,54 +67,54 @@ public interface GetPublishedServicesUseCase {
         private static String legacyAuthMode(boolean authenticated) {
             return (authenticated ? net.vaier.domain.AuthMode.SOCIAL : net.vaier.domain.AuthMode.NONE).wireValue();
         }
-        public PublishedServiceUco(String name, String dnsAddress, DnsState dnsState, String hostAddress,
+        public PublishedServiceUco(String name, String dnsAddress, String hostAddress,
                                    int hostPort, State state, boolean authenticated,
                                    String rootRedirectPath, boolean directUrlDisabled) {
-            this(name, name, null, "", null, ServiceLocation.VAIER_SERVER, dnsState == DnsState.OK && state == State.OK,
-                dnsAddress, dnsState, hostAddress, hostPort, state, authenticated,
+            this(name, name, null, "", null, ServiceLocation.VAIER_SERVER, state == State.OK,
+                dnsAddress, hostAddress, hostPort, state, authenticated,
                 rootRedirectPath, directUrlDisabled, false, null, false, null, null, null, null, null,
                 legacyAuthMode(authenticated));
         }
-        public PublishedServiceUco(String name, String dnsAddress, DnsState dnsState, String hostAddress,
+        public PublishedServiceUco(String name, String dnsAddress, String hostAddress,
                                    int hostPort, State state, boolean authenticated,
                                    String rootRedirectPath, boolean directUrlDisabled, boolean isLanService) {
             this(name, name, null, "", null,
                 isLanService ? ServiceLocation.LAN_SERVICE : ServiceLocation.VAIER_SERVER,
-                dnsState == DnsState.OK && state == State.OK,
-                dnsAddress, dnsState, hostAddress, hostPort, state, authenticated,
+                state == State.OK,
+                dnsAddress, hostAddress, hostPort, state, authenticated,
                 rootRedirectPath, directUrlDisabled, isLanService, null, false, null, null, null, null, null,
                 legacyAuthMode(authenticated));
         }
-        public PublishedServiceUco(String name, String dnsAddress, DnsState dnsState, String hostAddress,
+        public PublishedServiceUco(String name, String dnsAddress, String hostAddress,
                                    int hostPort, State state, boolean authenticated,
                                    String rootRedirectPath, boolean directUrlDisabled, boolean isLanService,
                                    String pathPrefix) {
             this(name, name, null, "", null,
                 isLanService ? ServiceLocation.LAN_SERVICE : ServiceLocation.VAIER_SERVER,
-                dnsState == DnsState.OK && state == State.OK,
-                dnsAddress, dnsState, hostAddress, hostPort, state, authenticated,
+                state == State.OK,
+                dnsAddress, hostAddress, hostPort, state, authenticated,
                 rootRedirectPath, directUrlDisabled, isLanService, pathPrefix, false, null, null, null, null, null,
                 legacyAuthMode(authenticated));
         }
-        public PublishedServiceUco(String name, String dnsAddress, DnsState dnsState, String hostAddress,
+        public PublishedServiceUco(String name, String dnsAddress, String hostAddress,
                                    int hostPort, State state, boolean authenticated,
                                    String rootRedirectPath, boolean directUrlDisabled, boolean isLanService,
                                    String pathPrefix, boolean hiddenFromLaunchpad) {
             this(name, name, null, "", null,
                 isLanService ? ServiceLocation.LAN_SERVICE : ServiceLocation.VAIER_SERVER,
-                dnsState == DnsState.OK && state == State.OK,
-                dnsAddress, dnsState, hostAddress, hostPort, state, authenticated,
+                state == State.OK,
+                dnsAddress, hostAddress, hostPort, state, authenticated,
                 rootRedirectPath, directUrlDisabled, isLanService, pathPrefix, hiddenFromLaunchpad,
                 null, null, null, null, null, legacyAuthMode(authenticated));
         }
-        public PublishedServiceUco(String name, String dnsAddress, DnsState dnsState, String hostAddress,
+        public PublishedServiceUco(String name, String dnsAddress, String hostAddress,
                                    int hostPort, State state, boolean authenticated,
                                    String rootRedirectPath, boolean directUrlDisabled, boolean isLanService,
                                    String pathPrefix, boolean hiddenFromLaunchpad, String launchpadAlias) {
             this(name, name, null, "", null,
                 isLanService ? ServiceLocation.LAN_SERVICE : ServiceLocation.VAIER_SERVER,
-                dnsState == DnsState.OK && state == State.OK,
-                dnsAddress, dnsState, hostAddress, hostPort, state, authenticated,
+                state == State.OK,
+                dnsAddress, hostAddress, hostPort, state, authenticated,
                 rootRedirectPath, directUrlDisabled, isLanService, pathPrefix, hiddenFromLaunchpad,
                 launchpadAlias, null, null, null, null, legacyAuthMode(authenticated));
         }

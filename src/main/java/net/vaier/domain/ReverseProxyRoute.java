@@ -4,7 +4,6 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.ToString;
 
-import net.vaier.domain.DnsRecord.DnsRecordType;
 import net.vaier.domain.Server.State;
 import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
 import net.vaier.domain.port.ForProbingServiceVersion;
@@ -181,15 +180,6 @@ public class ReverseProxyRoute {
     // --- domain rules over a list of existing routes ---
 
     /**
-     * True iff any route in {@code existing} sits on the same FQDN — regardless of pathPrefix.
-     * The publish flow uses this to decide whether the DNS CNAME already exists and the create can
-     * be skipped; the delete flow uses it to decide whether a CNAME can be reclaimed.
-     */
-    public static boolean hasSiblingOnHost(List<ReverseProxyRoute> existing, String fqdn) {
-        return existing.stream().anyMatch(r -> fqdn.equals(r.getDomainName()));
-    }
-
-    /**
      * True iff any route in {@code existing} already targets the given backend {@code address}
      * and {@code port} — used to drop a container from the publishable-services list once it has
      * been published.
@@ -348,12 +338,15 @@ public class ReverseProxyRoute {
     }
 
     /**
-     * Health/DNS visibility, ignoring any per-viewer gating. Used where the viewer is irrelevant
+     * Health visibility, ignoring any per-viewer gating. Used where the viewer is irrelevant
      * (e.g. the published-services admin view, or the "show everything" convenience path).
+     *
+     * <p>DNS used to be able to hide a tile: a name whose per-service record had not propagated yet
+     * would not resolve. Under the operator's single {@code *.<domain>} record every name resolves
+     * from the moment the route is written (#331), so the host's reachability is the whole question.
      */
-    public LaunchpadVisibility launchpadVisibility(DnsState dnsState, Server.State hostState) {
+    public LaunchpadVisibility launchpadVisibility(Server.State hostState) {
         if (hiddenFromLaunchpad) return LaunchpadVisibility.NOT_VISIBLE;
-        if (dnsState != DnsState.OK) return LaunchpadVisibility.NOT_VISIBLE;
         // Only a confirmed-unreachable host dims the tile and suppresses its link — UNKNOWN
         // means "we don't have a signal yet"; rendering it as inactive would lie to the
         // operator (and make a healthy service unreachable while the first probe lands).
@@ -381,13 +374,13 @@ public class ReverseProxyRoute {
      * viewer-adaptive dashboard: a public route (auth mode {@link AuthMode#NONE}) is shown to
      * everyone; a social-gated route is shown only when the viewer is a known, approved identity
      * that may actually reach it. A route the viewer can't reach is {@link
-     * LaunchpadVisibility#NOT_VISIBLE} — no tile is rendered. Hidden-from-launchpad and
-     * DNS-not-propagated still win over everything.
+     * LaunchpadVisibility#NOT_VISIBLE} — no tile is rendered. Hidden-from-launchpad still wins over
+     * everything.
      */
-    public LaunchpadVisibility launchpadVisibility(DnsState dnsState, Server.State hostState,
+    public LaunchpadVisibility launchpadVisibility(Server.State hostState,
                                                    AccessEntry viewer, ForResolvingServiceGroup serviceGroups) {
         if (!isVisibleToLaunchpadViewer(viewer, serviceGroups)) return LaunchpadVisibility.NOT_VISIBLE;
-        return launchpadVisibility(dnsState, hostState);
+        return launchpadVisibility(hostState);
     }
 
     /**
@@ -408,25 +401,6 @@ public class ReverseProxyRoute {
             return false;
         }
         return viewer.mayAccessService(serviceGroups.allowedGroupsForHost(domainName));
-    }
-
-    public DnsState dnsState(List<DnsRecord> allDnsRecords) {
-        boolean found = allDnsRecords.stream()
-            .filter(r -> r.name().equals(domainName))
-            .anyMatch(r -> r.type() == DnsRecordType.CNAME || r.type() == DnsRecordType.A);
-        return found ? DnsState.OK : DnsState.NON_EXISTING;
-    }
-
-    /**
-     * As {@link #dnsState(List)}, but in {@link DnsProvider#MANUAL} mode the operator owns DNS and
-     * Vaier has no authoritative record set — so the state is assumed {@code OK} rather than
-     * rendering every published service as missing.
-     */
-    public DnsState dnsState(List<DnsRecord> allDnsRecords, DnsProvider dnsProvider) {
-        if (dnsProvider == DnsProvider.MANUAL) {
-            return DnsState.OK;
-        }
-        return dnsState(allDnsRecords);
     }
 
     public State hostState(List<DockerService> localServices, List<VpnClient> vpnClients) {

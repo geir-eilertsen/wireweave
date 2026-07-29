@@ -10,8 +10,6 @@ import java.util.Optional;
 public class VaierConfig {
 
     private String domain;
-    private String awsKey;
-    private String awsSecret;
     private String acmeEmail;
     private String smtpHost;
     private Integer smtpPort;
@@ -121,25 +119,10 @@ public class VaierConfig {
     /** The default nightly fleet-backup schedule hour when none is configured: 2am. */
     public static final int DEFAULT_BACKUP_SCHEDULE_HOUR = 2;
 
-    public static void validateForSetup(String domain, String awsKey, String awsSecret, String acmeEmail) {
-        requireNonBlank(domain, "domain");
-        requireNonBlank(awsKey, "awsKey");
-        requireNonBlank(awsSecret, "awsSecret");
-        validateAcmeEmail(acmeEmail);
-    }
-
-    /** A copy with the AWS credentials replaced; every other field carries over unchanged. */
-    public VaierConfig withAwsCredentials(String newAwsKey, String newAwsSecret) {
-        return toBuilder()
-            .awsKey(newAwsKey)
-            .awsSecret(newAwsSecret)
-            .build();
-    }
-
     /**
      * A copy with the SMTP settings replaced; every other field carries over unchanged. The password
-     * is persisted here (in this owner-only-readable config file, alongside {@code awsSecret}) — it is
-     * Vaier's own store for the notifier credentials.
+     * is persisted here, in this owner-only-readable config file — it is Vaier's own store for the
+     * notifier credentials.
      */
     public VaierConfig withSmtpSettings(String newSmtpHost, int newSmtpPort,
                                         String newSmtpUsername, String newSmtpSender,
@@ -209,14 +192,6 @@ public class VaierConfig {
             && smtpUsername != null && !smtpUsername.isBlank();
     }
 
-    /** The AWS key with all but its last four characters masked, for display. */
-    public String maskedAwsKey() {
-        if (awsKey == null || awsKey.length() <= 4) {
-            return awsKey;
-        }
-        return "****" + awsKey.substring(awsKey.length() - 4);
-    }
-
     /**
      * The effective SMTP password: the freshly provided one when non-blank, otherwise the
      * previously stored one. Throws when neither is available.
@@ -230,16 +205,4 @@ public class VaierConfig {
             .orElseThrow(() -> new IllegalArgumentException("SMTP password is required"));
     }
 
-    private static void validateAcmeEmail(String acmeEmail) {
-        requireNonBlank(acmeEmail, "acmeEmail");
-        if (!EmailFormat.isValid(acmeEmail)) {
-            throw new IllegalArgumentException("acmeEmail is not a valid email format");
-        }
-    }
-
-    private static void requireNonBlank(String value, String field) {
-        if (value == null || value.isBlank()) {
-            throw new IllegalArgumentException(field + " must not be blank");
-        }
-    }
 }

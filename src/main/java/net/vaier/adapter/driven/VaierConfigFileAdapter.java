@@ -49,16 +49,16 @@ public class VaierConfigFileAdapter implements ForPersistingAppConfiguration, Fo
                 return Optional.empty();
             }
             return Optional.of(VaierConfig.builder()
+                // Only the keys named here are read, so a stale key left over from an older Vaier —
+                // awsKey/awsSecret on any install that predates #331 — is ignored rather than fatal.
                 .domain((String) data.get("domain"))
-                .awsKey((String) data.get("awsKey"))
-                // awsSecret and smtpPassword are encrypted at rest (#307). decrypt() passes legacy
-                // plaintext through unchanged, so a pre-#307 config still loads (then re-encrypts on save).
-                .awsSecret(cipher.decrypt((String) data.get("awsSecret")))
                 .acmeEmail((String) data.get("acmeEmail"))
                 .smtpHost((String) data.get("smtpHost"))
                 .smtpPort((Integer) data.get("smtpPort"))
                 .smtpUsername((String) data.get("smtpUsername"))
                 .smtpSender((String) data.get("smtpSender"))
+                // smtpPassword and survivalKitPassphrase are encrypted at rest (#307). decrypt() passes
+                // legacy plaintext through unchanged, so a pre-#307 config still loads (and re-encrypts on save).
                 .smtpPassword(cipher.decrypt((String) data.get("smtpPassword")))
                 .survivalKitPassphrase(cipher.decrypt((String) data.get("survivalKitPassphrase")))
                 .survivalKitFingerprint((String) data.get("survivalKitFingerprint"))
@@ -87,14 +87,12 @@ public class VaierConfigFileAdapter implements ForPersistingAppConfiguration, Fo
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("domain", config.getDomain());
-        data.put("awsKey", config.getAwsKey());
-        // Encrypt the two reversible secrets at rest (#307); encrypt() returns null for a null input.
-        data.put("awsSecret", cipher.encrypt(config.getAwsSecret()));
         data.put("acmeEmail", config.getAcmeEmail());
         data.put("smtpHost", config.getSmtpHost());
         data.put("smtpPort", config.getSmtpPort());
         data.put("smtpUsername", config.getSmtpUsername());
         data.put("smtpSender", config.getSmtpSender());
+        // Encrypt the reversible secrets at rest (#307); encrypt() returns null for a null input.
         data.put("smtpPassword", cipher.encrypt(config.getSmtpPassword()));
         // The survival kit passphrase — the third reversible secret here, encrypted like the other two.
         data.put("survivalKitPassphrase", cipher.encrypt(config.getSurvivalKitPassphrase()));

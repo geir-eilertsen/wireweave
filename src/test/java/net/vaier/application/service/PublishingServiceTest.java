@@ -11,31 +11,30 @@ import net.vaier.domain.port.ForGettingVaierServerDockerServices;
 import net.vaier.application.GetPublishedServicesUseCase.PublishedServiceUco;
 import net.vaier.application.PublishPeerServiceUseCase.PendingPublication;
 import net.vaier.application.PublishPeerServiceUseCase.PublishStatus;
+import net.vaier.application.UpdatePublishedServiceUseCase.PublishedServicePatch;
 import net.vaier.domain.PublishableService;
 import net.vaier.domain.PublishableService.PublishableSource;
 import net.vaier.config.ConfigResolver;
 import net.vaier.config.ServiceNames;
 import net.vaier.domain.*;
-import net.vaier.domain.DnsRecord.DnsRecordType;
 import net.vaier.domain.DockerService.PortMapping;
 import net.vaier.domain.Server.State;
 import net.vaier.domain.port.ForCheckingLanReachability;
 import net.vaier.domain.port.ForGettingPeerConfigurations;
+import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
 import net.vaier.domain.port.ForGettingServerInfo;
 import net.vaier.domain.port.ForGettingVpnClients;
 import net.vaier.domain.port.ForManagingIgnoredServices;
-import net.vaier.domain.port.ForPersistingDnsRecords;
 import net.vaier.domain.port.ForPersistingLanServers;
 import net.vaier.domain.port.ForPersistingReverseProxyRoutes;
 import net.vaier.domain.port.ForProbingServiceVersion;
 import net.vaier.domain.port.ForPublishingEvents;
-import net.vaier.domain.port.ForResolvingDns;
 import net.vaier.domain.port.ForResolvingPeerIds;
 import net.vaier.domain.port.ForResolvingServerLanCidr;
+import net.vaier.domain.port.ForResolvingServiceGroup;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -43,6 +42,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -52,6 +52,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -63,9 +64,6 @@ class PublishingServiceTest {
 
     @Mock
     ForGettingServerInfo forGettingServerInfo;
-
-    @Mock
-    ForPersistingDnsRecords forPersistingDnsRecords;
 
     @Mock
     ForGettingVpnClients forGettingVpnClients;
@@ -84,9 +82,6 @@ class PublishingServiceTest {
 
     @Mock
     ForPublishingEvents forPublishingEvents;
-
-    @Mock
-    ForResolvingDns forResolvingDns;
 
     @Mock
     ForManagingIgnoredServices forManagingIgnoredServices;
@@ -116,7 +111,7 @@ class PublishingServiceTest {
     ForCheckingLanReachability forCheckingLanReachability;
 
     @Mock
-    net.vaier.domain.port.ForResolvingServiceGroup forResolvingServiceGroup;
+    ForResolvingServiceGroup forResolvingServiceGroup;
 
     @Mock
     ForResolvingVaierServerIdentity vaierServerIdentity;
@@ -141,7 +136,7 @@ class PublishingServiceTest {
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of());
 
         assertThat(service.getPublishedServices()).isEmpty();
-        verifyNoInteractions(forPersistingDnsRecords, forGettingVpnClients, forGettingServerInfo);
+        verifyNoInteractions(forGettingVpnClients, forGettingServerInfo);
     }
 
     @Test
@@ -150,7 +145,6 @@ class PublishingServiceTest {
             "svc", null, List.of("websecure"), null,
             List.of("oauth2-signin", "oauth2-authn", "vaier-authz", "vaier-errors"));
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(social));
-        setupNoDnsRecords();
         setupEmptyVpnClients();
         setupEmptyVaierServerServices();
 
@@ -167,7 +161,6 @@ class PublishingServiceTest {
         ReverseProxyRoute helper = new ReverseProxyRoute("app-example-com-oauth2-router", "app.example.com",
             "oauth2-proxy", 4180, "oauth2-proxy-svc", null, List.of("websecure"), null, List.of());
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(primary, helper));
-        setupNoDnsRecords();
         setupEmptyVpnClients();
         setupEmptyVaierServerServices();
 
@@ -175,70 +168,8 @@ class PublishingServiceTest {
     }
 
     @Test
-    void getPublishedServices_routeWithCnameRecord_dnsStateOk() {
-        setupOneRoute("app.example.com", "10.0.0.1", 8080);
-        setupDnsRecord("app.example.com", DnsRecordType.CNAME);
-        setupEmptyVpnClients();
-        setupEmptyVaierServerServices();
-
-        PublishedServiceUco result = service.getPublishedServices().get(0);
-
-        assertThat(result.dnsState()).isEqualTo(DnsState.OK);
-    }
-
-    @Test
-    void getPublishedServices_routeWithARecord_dnsStateOk() {
-        setupOneRoute("app.example.com", "10.0.0.1", 8080);
-        setupDnsRecord("app.example.com", DnsRecordType.A);
-        setupEmptyVpnClients();
-        setupEmptyVaierServerServices();
-
-        PublishedServiceUco result = service.getPublishedServices().get(0);
-
-        assertThat(result.dnsState()).isEqualTo(DnsState.OK);
-    }
-
-    @Test
-    void getPublishedServices_routeWithNoMatchingDnsRecord_dnsStateNonExisting() {
-        setupOneRoute("app.example.com", "10.0.0.1", 8080);
-        setupDnsRecord("other.example.com", DnsRecordType.CNAME);
-        setupEmptyVpnClients();
-        setupEmptyVaierServerServices();
-
-        PublishedServiceUco result = service.getPublishedServices().get(0);
-
-        assertThat(result.dnsState()).isEqualTo(DnsState.NON_EXISTING);
-    }
-
-    @Test
-    void getPublishedServices_routeWithNoDnsRecordsAtAll_dnsStateNonExisting() {
-        setupOneRoute("app.example.com", "10.0.0.1", 8080);
-        when(forPersistingDnsRecords.getDnsZones()).thenReturn(List.of());
-        setupEmptyVpnClients();
-        setupEmptyVaierServerServices();
-
-        PublishedServiceUco result = service.getPublishedServices().get(0);
-
-        assertThat(result.dnsState()).isEqualTo(DnsState.NON_EXISTING);
-    }
-
-    @Test
-    void getPublishedServices_manualDnsProvider_alwaysReportsDnsStateOk() {
-        when(configResolver.getDnsProvider()).thenReturn(DnsProvider.MANUAL);
-        setupOneRoute("app.example.com", "10.0.0.1", 8080);
-        when(forPersistingDnsRecords.getDnsZones()).thenReturn(List.of());
-        setupEmptyVpnClients();
-        setupEmptyVaierServerServices();
-
-        PublishedServiceUco result = service.getPublishedServices().get(0);
-
-        assertThat(result.dnsState()).isEqualTo(DnsState.OK);
-    }
-
-    @Test
     void getPublishedServices_runningLocalService_hostStateOk() {
         setupOneRoute("app.example.com", "my-container", 8080);
-        setupNoDnsRecords();
         setupEmptyVpnClients();
         when(forGettingServerInfo.getServicesWithExposedPorts(any(Server.class))).thenReturn(
             List.of(new DockerService("id", "my-container", "image", "latest",
@@ -259,7 +190,6 @@ class PublishingServiceTest {
     @Test
     void getPublishedServices_routeBackedByVaierServerContainer_surfacesImageAndVersion() {
         setupOneRoute("app.example.com", "my-container", 8080);
-        setupNoDnsRecords();
         setupEmptyVpnClients();
         setupEmptyVaierServerServices();
         when(discoverVaierServerContainers.discover()).thenReturn(List.of(
@@ -276,7 +206,6 @@ class PublishingServiceTest {
     @Test
     void getPublishedServices_routeWithNoBackingContainer_imageAndVersionNull() {
         setupOneRoute("app.example.com", "10.0.0.1", 8080);
-        setupNoDnsRecords();
         setupEmptyVpnClients();
         setupEmptyVaierServerServices();
 
@@ -292,7 +221,6 @@ class PublishingServiceTest {
             "svc", null, null, null, null, null, false, false, null, null, false, null,
             "/api/health", "version");
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(route));
-        setupNoDnsRecords();
         setupEmptyVpnClients();
         setupEmptyVaierServerServices();
         when(discoverVaierServerContainers.discover()).thenReturn(List.of(
@@ -301,7 +229,7 @@ class PublishingServiceTest {
         ));
         // launchpadVersions is populated by the periodic refresh; seed it directly.
         ReflectionTestUtils.setField(service, "launchpadVersions",
-            java.util.Map.of("route", "2.0.0-probed"));
+            Map.of("route", "2.0.0-probed"));
 
         PublishedServiceUco result = service.getPublishedServices().get(0);
 
@@ -312,7 +240,6 @@ class PublishingServiceTest {
     @Test
     void getPublishedServices_stoppedLocalService_hostStateUnreachable() {
         setupOneRoute("app.example.com", "my-container", 8080);
-        setupNoDnsRecords();
         setupEmptyVpnClients();
         when(forGettingServerInfo.getServicesWithExposedPorts(any(Server.class))).thenReturn(
             List.of(new DockerService("id", "my-container", "image", "latest",
@@ -329,12 +256,11 @@ class PublishingServiceTest {
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(
             ReverseProxyRoute.lanRoute("box-router", "box.example.com", "172.31.5.20", 8080, "http", "box-svc")
         ));
-        setupNoDnsRecords();
         setupEmptyVpnClients();
         setupEmptyVaierServerServices();
         when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.of("172.31.0.0/16"));
         when(forCheckingLanReachability.snapshot())
-            .thenReturn(java.util.Map.of("172.31.5.20", Reachability.OK));
+            .thenReturn(Map.of("172.31.5.20", Reachability.OK));
 
         PublishedServiceUco result = service.getPublishedServices().get(0);
 
@@ -350,7 +276,6 @@ class PublishingServiceTest {
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(
             ReverseProxyRoute.lanRoute("nas-router", "nas.example.com", "192.168.3.50", 5000, "http", "nas-svc")
         ));
-        setupNoDnsRecords();
         String recentHandshake = String.valueOf(System.currentTimeMillis() / 1000 - 60);
         when(forGettingVpnClients.getClients()).thenReturn(
             List.of(new VpnClient("pubkey", "10.13.13.5/32", "1.2.3.4", "51820", recentHandshake, "0", "0"))
@@ -361,7 +286,7 @@ class PublishingServiceTest {
                 MachineType.UBUNTU_SERVER, "192.168.3.0/24", "192.168.3.5")
         ));
         when(forCheckingLanReachability.snapshot())
-            .thenReturn(java.util.Map.of("192.168.3.50", Reachability.DOWN));
+            .thenReturn(Map.of("192.168.3.50", Reachability.DOWN));
 
         PublishedServiceUco result = service.getPublishedServices().get(0);
 
@@ -376,7 +301,6 @@ class PublishingServiceTest {
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(
             ReverseProxyRoute.lanRoute("nas-router", "nas.example.com", "192.168.3.50", 5000, "http", "nas-svc")
         ));
-        setupNoDnsRecords();
         String recentHandshake = String.valueOf(System.currentTimeMillis() / 1000 - 60);
         when(forGettingVpnClients.getClients()).thenReturn(
             List.of(new VpnClient("pubkey", "10.13.13.5/32", "1.2.3.4", "51820", recentHandshake, "0", "0"))
@@ -387,7 +311,7 @@ class PublishingServiceTest {
                 MachineType.UBUNTU_SERVER, "192.168.3.0/24", "192.168.3.5")
         ));
         when(forCheckingLanReachability.snapshot())
-            .thenReturn(java.util.Map.of("192.168.3.50", Reachability.OK));
+            .thenReturn(Map.of("192.168.3.50", Reachability.OK));
 
         PublishedServiceUco result = service.getPublishedServices().get(0);
 
@@ -401,7 +325,6 @@ class PublishingServiceTest {
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(
             ReverseProxyRoute.lanRoute("nas-router", "nas.example.com", "192.168.3.50", 5000, "http", "nas-svc")
         ));
-        setupNoDnsRecords();
         String recentHandshake = String.valueOf(System.currentTimeMillis() / 1000 - 60);
         when(forGettingVpnClients.getClients()).thenReturn(
             List.of(new VpnClient("pubkey", "10.13.13.5/32", "1.2.3.4", "51820", recentHandshake, "0", "0"))
@@ -411,7 +334,7 @@ class PublishingServiceTest {
             new ForGettingPeerConfigurations.PeerConfiguration("apalveien5", "10.13.13.5", "",
                 MachineType.UBUNTU_SERVER, "192.168.3.0/24", "192.168.3.5")
         ));
-        when(forCheckingLanReachability.snapshot()).thenReturn(java.util.Map.of());
+        when(forCheckingLanReachability.snapshot()).thenReturn(Map.of());
 
         PublishedServiceUco result = service.getPublishedServices().get(0);
 
@@ -422,7 +345,6 @@ class PublishingServiceTest {
     void getPublishedServices_vpnPeerWithRecentHandshake_hostStateOk() {
         String recentHandshake = String.valueOf(System.currentTimeMillis() / 1000 - 60);
         setupOneRoute("app.example.com", "10.13.13.2", 8080);
-        setupNoDnsRecords();
         when(forGettingVpnClients.getClients()).thenReturn(
             List.of(new VpnClient("pubkey", "10.13.13.2/32", "1.2.3.4", "51820", recentHandshake, "0", "0"))
         );
@@ -437,7 +359,6 @@ class PublishingServiceTest {
     @Test
     void getPublishedServices_vpnPeerWithStaleHandshake_hostStateUnreachable() {
         setupOneRoute("app.example.com", "10.13.13.2", 8080);
-        setupNoDnsRecords();
         when(forGettingVpnClients.getClients()).thenReturn(
             List.of(new VpnClient("pubkey", "10.13.13.2/32", "1.2.3.4", "51820", "0", "0", "0"))
         );
@@ -452,7 +373,6 @@ class PublishingServiceTest {
     @Test
     void getPublishedServices_noLocalServiceAndNoVpnClientMatch_hostStateUnreachable() {
         setupOneRoute("app.example.com", "192.168.99.1", 8080);
-        setupNoDnsRecords();
         setupEmptyVpnClients();
         setupEmptyVaierServerServices();
 
@@ -468,7 +388,6 @@ class PublishingServiceTest {
             new ReverseProxyRoute.AuthInfo("forwardAuth", "admin", null)
         );
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(route));
-        setupNoDnsRecords();
         setupEmptyVpnClients();
         setupEmptyVaierServerServices();
 
@@ -478,7 +397,6 @@ class PublishingServiceTest {
     @Test
     void getPublishedServices_routeWithNoAuth_authenticatedIsFalse() {
         setupOneRoute("app.example.com", "10.0.0.1", 8080);
-        setupNoDnsRecords();
         setupEmptyVpnClients();
         setupEmptyVaierServerServices();
 
@@ -488,7 +406,6 @@ class PublishingServiceTest {
     @Test
     void getPublishedServices_vaierInfrastructureRouter_isExcluded() {
         setupOneRoute(ServiceNames.VAIER + ".example.com", "10.0.0.1", 8080);
-        setupNoDnsRecords();
         setupEmptyVpnClients();
         setupEmptyVaierServerServices();
 
@@ -500,7 +417,6 @@ class PublishingServiceTest {
         // Authelia is decommissioned; login.<domain> is no longer mandatory infrastructure, so a
         // leftover login route is now surfaced as an ordinary published service.
         setupOneRoute("login.example.com", "10.0.0.1", 8080);
-        setupNoDnsRecords();
         setupEmptyVpnClients();
         setupEmptyVaierServerServices();
 
@@ -515,7 +431,6 @@ class PublishingServiceTest {
             route("login.example.com", "authelia", 9091),
             route("app.example.com", "10.0.0.1", 8080)
         ));
-        setupNoDnsRecords();
         setupEmptyVpnClients();
         setupEmptyVaierServerServices();
 
@@ -530,13 +445,11 @@ class PublishingServiceTest {
             route("app.example.com", "10.0.0.1", 8080),
             route("db.example.com", "10.0.0.2", 5432)
         ));
-        when(forPersistingDnsRecords.getDnsZones()).thenReturn(List.of());
         when(forGettingVpnClients.getClients()).thenReturn(List.of());
         when(forGettingServerInfo.getServicesWithExposedPorts(any())).thenReturn(List.of());
 
         service.getPublishedServices();
 
-        verify(forPersistingDnsRecords, times(1)).getDnsZones();
         verify(forGettingVpnClients, times(1)).getClients();
         verify(forGettingServerInfo, times(1)).getServicesWithExposedPorts(any());
     }
@@ -546,7 +459,6 @@ class PublishingServiceTest {
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(
             route("app.example.com", "10.0.0.1", 8080)
         ));
-        when(forPersistingDnsRecords.getDnsZones()).thenReturn(List.of());
         when(forGettingVpnClients.getClients()).thenReturn(List.of());
         when(forGettingServerInfo.getServicesWithExposedPorts(any())).thenReturn(List.of());
 
@@ -554,7 +466,6 @@ class PublishingServiceTest {
         service.getPublishedServices();
 
         verify(forPersistingReverseProxyRoutes, times(1)).getReverseProxyRoutes();
-        verify(forPersistingDnsRecords, times(1)).getDnsZones();
         verify(forGettingVpnClients, times(1)).getClients();
         verify(forGettingServerInfo, times(1)).getServicesWithExposedPorts(any());
     }
@@ -564,7 +475,6 @@ class PublishingServiceTest {
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(
             route("app.example.com", "10.0.0.1", 8080)
         ));
-        when(forPersistingDnsRecords.getDnsZones()).thenReturn(List.of());
         when(forGettingVpnClients.getClients()).thenReturn(List.of());
         when(forGettingServerInfo.getServicesWithExposedPorts(any())).thenReturn(List.of());
 
@@ -572,7 +482,6 @@ class PublishingServiceTest {
         service.invalidatePublishedServicesCache();
         service.getPublishedServices();
 
-        verify(forPersistingDnsRecords, times(2)).getDnsZones();
         verify(forGettingVpnClients, times(2)).getClients();
         verify(forGettingServerInfo, times(2)).getServicesWithExposedPorts(any());
     }
@@ -580,7 +489,6 @@ class PublishingServiceTest {
     @Test
     void getPublishedServices_vaierServerService_nameIsSubdomainAtVaierServer() {
         setupOneRoute("pihole.example.com", "pihole", 8080);
-        setupNoDnsRecords();
         setupEmptyVpnClients();
         when(forGettingServerInfo.getServicesWithExposedPorts(any(Server.class))).thenReturn(
             List.of(new DockerService("id", "pihole", "image", "latest",
@@ -596,7 +504,6 @@ class PublishingServiceTest {
     void getPublishedServices_peerService_nameIsSubdomainAtPeerName() {
         String recentHandshake = String.valueOf(System.currentTimeMillis() / 1000 - 60);
         setupOneRoute("pihole.myserver.example.com", "10.13.13.2", 8080);
-        setupNoDnsRecords();
         when(forGettingVpnClients.getClients()).thenReturn(
             List.of(new VpnClient("pubkey", "10.13.13.2/32", "1.2.3.4", "51820", recentHandshake, "0", "0"))
         );
@@ -611,7 +518,6 @@ class PublishingServiceTest {
     @Test
     void getPublishedServices_unknownIpAddress_nameShowsVaierServer() {
         setupOneRoute("app.example.com", "10.13.13.5", 8080);
-        setupNoDnsRecords();
         setupEmptyVpnClients();
         setupEmptyVaierServerServices();
 
@@ -623,7 +529,6 @@ class PublishingServiceTest {
     @Test
     void getPublishedServices_simpleSubdomain_extractedCorrectly() {
         setupOneRoute("traefik.example.com", "traefik", 8080);
-        setupNoDnsRecords();
         setupEmptyVpnClients();
         setupEmptyVaierServerServices();
 
@@ -636,7 +541,6 @@ class PublishingServiceTest {
     void getPublishedServices_peerServiceOnSamePortAsLocal_resolvesToPeerNotLocal() {
         String recentHandshake = String.valueOf(System.currentTimeMillis() / 1000 - 60);
         setupOneRoute("openhab.myserver.example.com", "10.13.13.3", 8080);
-        setupNoDnsRecords();
         when(forGettingVpnClients.getClients()).thenReturn(
             List.of(new VpnClient("pubkey", "10.13.13.3/32", "1.2.3.4", "51820", recentHandshake, "0", "0"))
         );
@@ -653,43 +557,69 @@ class PublishingServiceTest {
     }
 
     // --- publishService / getPublishStatus / getPendingPublications ---
+    // #331: publishing is one step, and that step is Traefik.
 
+    /**
+     * The headline contract of issue #331. Vaier supports wildcard DNS only: the operator's single
+     * {@code *.<domain>} record already answers for every published name, so publishing a peer
+     * service writes the Traefik route and nothing else. There is no record to create, nothing to
+     * poll for propagation, and no {@code publish-dns-*} event — the route goes live as soon as
+     * Traefik picks it up. The absence of any DNS port on {@link PublishingService}'s constructor
+     * is the structural half of this; the observable half is asserted here.
+     */
     @Test
-    void publishService_createsCnameDnsRecord() {
+    void publishingAPeerService_yieldsALiveTraefikRouteWithNoDnsStepAndNoPropagationWait() {
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
+            .thenReturn(List.of())                                    // conflict check: nothing on the fqdn
+            .thenReturn(List.of(routeWithDomain("app.example.com")));  // Traefik has it on the first poll
+
         service.publishService("10.0.0.1", 8080, "app", false, null, false);
 
-        ArgumentCaptor<DnsRecord> recordCaptor = ArgumentCaptor.forClass(DnsRecord.class);
-        verify(forPersistingDnsRecords).addDnsRecord(recordCaptor.capture(), any());
+        verify(forPersistingReverseProxyRoutes, timeout(5_000))
+            .addReverseProxyRoute("app.example.com", "10.0.0.1", 8080, false, null, null);
+        verify(forPublishingEvents, timeout(5_000))
+            .publish("published-services", "publish-traefik-active", "app");
+        // No propagation delay: the conflict check plus a single Traefik poll is the whole flow.
+        verify(forPersistingReverseProxyRoutes, times(2)).getReverseProxyRoutes();
+        verify(forPublishingEvents, never())
+            .publish(any(), argThat(event -> event.startsWith("publish-dns")), any());
+    }
 
-        DnsRecord record = recordCaptor.getValue();
-        assertThat(record.name()).isEqualTo("app.example.com.");
-        assertThat(record.type()).isEqualTo(DnsRecordType.CNAME);
-        assertThat(record.values()).containsExactly("vaier.example.com.");
+    /** Same #331 contract for the LAN flow — a LAN publish is equally one Traefik write. */
+    @Test
+    void publishingALanService_yieldsALiveTraefikRouteWithNoDnsStepAndNoPropagationWait() {
+        LanServer nasBox = new LanServer("nas-box", "192.168.3.50", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nasBox));
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            new PeerConfiguration("apalveien5", "10.13.13.5", "",
+                MachineType.UBUNTU_SERVER, "192.168.3.0/24", "192.168.3.5")
+        ));
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
+            .thenReturn(List.of())
+            .thenReturn(List.of(routeWithDomain("nas.example.com")));
+
+        service.publishLanService("nas", nasBox.machineId(), 5000, "https", false, false, null, null);
+
+        verify(forPersistingReverseProxyRoutes, timeout(5_000)).addLanReverseProxyRoute(
+            "nas.example.com", "192.168.3.50", 5000, "https", false, false, null, null);
+        verify(forPublishingEvents, timeout(5_000))
+            .publish("published-services", "publish-traefik-active", "nas");
+        verify(forPersistingReverseProxyRoutes, times(2)).getReverseProxyRoutes();
+        verify(forPublishingEvents, never())
+            .publish(any(), argThat(event -> event.startsWith("publish-dns")), any());
     }
 
     // --- pathPrefix-aware publish (Phase B) ---
 
     @Test
     void publishService_pathPrefix_passesPathThroughToTraefik() {
-        when(forResolvingDns.isResolvable("bmp.example.com")).thenReturn(true);
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
-            .thenReturn(List.of())
             .thenReturn(List.of(routeWithDomain("bmp.example.com")));
 
-        service.waitForDnsThenActivate("bmp", "bmp.example.com", "10.13.13.6", 8081, false, null, false, "/auth");
+        service.activate("bmp", "bmp.example.com", "10.13.13.6", 8081, false, null, false, "/auth");
 
         verify(forPersistingReverseProxyRoutes).addReverseProxyRoute(
             "bmp.example.com", "10.13.13.6", 8081, false, null, "/auth");
-    }
-
-    @Test
-    void publishService_siblingRouteOnSameHost_skipsCnameCreate() {
-        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
-            .thenReturn(List.of(routeWithDomain("bmp.example.com")));
-
-        service.publishService("10.13.13.6", 8081, "bmp", false, null, false, "/auth");
-
-        verify(forPersistingDnsRecords, never()).addDnsRecord(any(), any());
     }
 
     @Test
@@ -703,71 +633,52 @@ class PublishingServiceTest {
     }
 
     @Test
-    void deleteService_lastRouteOnHost_deletesCname() {
-        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
-            .thenReturn(List.of(routeWithDomain("app.example.com")))   // before delete
-            .thenReturn(List.of())                                       // after delete (drained)
-            .thenReturn(List.of())
-            .thenReturn(List.of());
-
-        service.deleteService("app.example.com");
-
-        verify(forPersistingDnsRecords).deleteDnsRecord(eq("app.example.com"), eq(DnsRecordType.CNAME), any());
-    }
-
-    @Test
-    void deleteService_siblingRoutesRemain_doesNotDeleteCname() {
+    void deleteService_siblingRoutesRemain_removesOnlyTheTargetedRoute() {
         ReverseProxyRoute auth = new ReverseProxyRoute("auth", "bmp.example.com", "10.0.0.1", 8080, "svc",
             null, null, null, null, null, false, false, null, "/auth");
         ReverseProxyRoute corpo = new ReverseProxyRoute("corpo", "bmp.example.com", "10.0.0.1", 8080, "svc",
             null, null, null, null, null, false, false, null, "/CorpoWebserver");
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
             .thenReturn(List.of(auth, corpo))   // findByFqdnAndPath
-            .thenReturn(List.of(corpo))         // wait-for-traefik-deletion (first poll: still seems present? path-aware so absent)
-            .thenReturn(List.of(corpo))
-            .thenReturn(List.of(corpo))         // hasSiblingOnHost check after deletion
+            .thenReturn(List.of(corpo))         // wait-for-traefik-deletion, path-aware: /auth already absent
             .thenReturn(List.of(corpo));
 
         service.deleteService("bmp.example.com", "/auth");
 
         verify(forPersistingReverseProxyRoutes).deleteReverseProxyRoute("auth");
-        verify(forPersistingDnsRecords, never()).deleteDnsRecord(any(), any(), any());
+        verify(forPersistingReverseProxyRoutes, never()).deleteReverseProxyRoute("corpo");
     }
 
     @Test
-    void getPublishStatus_routeExistsInTraefik_returnsTrueTrue() {
+    void getPublishStatus_routeExistsInTraefik_isTraefikActive() {
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(
             routeWithDomain("app.example.com")
         ));
 
         PublishStatus status = service.getPublishStatus("app");
 
-        assertThat(status.dnsPropagated()).isTrue();
         assertThat(status.traefikActive()).isTrue();
     }
 
     @Test
-    void getPublishStatus_notInPendingNotInRoutes_returnsFalseFalse() {
+    void getPublishStatus_notInPendingNotInRoutes_isNotTraefikActive() {
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of());
 
         PublishStatus status = service.getPublishStatus("app");
 
-        assertThat(status.dnsPropagated()).isFalse();
         assertThat(status.traefikActive()).isFalse();
     }
 
     @Test
     void getPublishStatus_afterPublish_inPendingReturnsPendingStatus() {
-        // publishService adds to pending map; DNS polling runs async but we're testing the sync state
+        // publishService adds to the pending map synchronously; Traefik pickup runs async.
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of());
 
         service.publishService("10.0.0.1", 8080, "app", false, null, false);
 
-        // Immediately after publish, route not yet in Traefik -> not in routes, but in pending with (false, false)
-        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of());
+        // Immediately after publish the route isn't in Traefik yet -> still pending, not active.
         PublishStatus status = service.getPublishStatus("app");
 
-        assertThat(status.dnsPropagated()).isFalse();
         assertThat(status.traefikActive()).isFalse();
     }
 
@@ -786,33 +697,24 @@ class PublishingServiceTest {
     }
 
     @Test
-    void publishService_emitsDnsCreatedEvent() {
-        service.publishService("10.0.0.1", 8080, "app", false, null, false);
-
-        verify(forPublishingEvents).publish("published-services", "publish-dns-created", "app");
-    }
-
-    @Test
     void getPendingPublications_afterPublish_returnsEntry() {
         service.publishService("10.0.0.1", 8080, "app", true, null, false);
         List<PendingPublication> pending = service.getPendingPublications();
         assertThat(pending).hasSize(1);
         assertThat(pending.get(0).subdomain()).isEqualTo("app");
         assertThat(pending.get(0).requiresAuth()).isTrue();
-        assertThat(pending.get(0).dnsPropagated()).isFalse();
     }
 
-    // --- waitForDnsThenActivate ---
+    // --- activate ---
 
     @Test
-    void waitForDnsThenActivate_waitsForTraefikRouteBeforeFiringEvent() {
-        when(forResolvingDns.isResolvable("app.example.com")).thenReturn(true);
+    void activate_waitsForTraefikRouteBeforeFiringEvent() {
         // First getReverseProxyRoutes call: Traefik not yet loaded; second call: route present
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
             .thenReturn(List.of())
             .thenReturn(List.of(routeWithDomain("app.example.com")));
 
-        service.waitForDnsThenActivate("app", "app.example.com", "10.0.0.1", 8080, false, null, false, null);
+        service.activate("app", "app.example.com", "10.0.0.1", 8080, false, null, false, null);
 
         InOrder inOrder = inOrder(forPersistingReverseProxyRoutes, forPublishingEvents);
         inOrder.verify(forPersistingReverseProxyRoutes).addReverseProxyRoute("app.example.com", "10.0.0.1", 8080, false, null, null);
@@ -821,34 +723,31 @@ class PublishingServiceTest {
     }
 
     @Test
-    void waitForDnsThenActivate_invalidatesPublishedServicesCacheAfterActivation() {
+    void activate_invalidatesPublishedServicesCacheAfterActivation() {
         // PublishingService is now its own cache invalidator. Verify observable behaviour:
-        // getPublishedServices called before and after waitForDnsThenActivate re-fetches from ports.
-        when(forResolvingDns.isResolvable("app.example.com")).thenReturn(true);
+        // getPublishedServices called before and after activate re-fetches from ports.
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
             .thenReturn(List.of(routeWithDomain("app.example.com")));
-        when(forPersistingDnsRecords.getDnsZones()).thenReturn(List.of());
         when(forGettingVpnClients.getClients()).thenReturn(List.of());
         when(forGettingServerInfo.getServicesWithExposedPorts(any())).thenReturn(List.of());
 
         // Prime cache
         service.getPublishedServices();
 
-        service.waitForDnsThenActivate("app", "app.example.com", "10.0.0.1", 8080, false, null, false, null);
+        service.activate("app", "app.example.com", "10.0.0.1", 8080, false, null, false, null);
 
         // Cache should have been invalidated -> next call re-fetches
         service.getPublishedServices();
 
-        verify(forPersistingDnsRecords, times(2)).getDnsZones();
+        verify(forGettingVpnClients, times(2)).getClients();
     }
 
     @Test
-    void waitForDnsThenActivate_directUrlDisabledTrue_persistsFlagAfterRouteCreated() {
-        when(forResolvingDns.isResolvable("app.example.com")).thenReturn(true);
+    void activate_directUrlDisabledTrue_persistsFlagAfterRouteCreated() {
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
             .thenReturn(List.of(routeWithDomain("app.example.com")));
 
-        service.waitForDnsThenActivate("app", "app.example.com", "10.0.0.1", 8080, false, null, true, null);
+        service.activate("app", "app.example.com", "10.0.0.1", 8080, false, null, true, null);
 
         InOrder inOrder = inOrder(forPersistingReverseProxyRoutes);
         inOrder.verify(forPersistingReverseProxyRoutes).addReverseProxyRoute("app.example.com", "10.0.0.1", 8080, false, null, null);
@@ -856,120 +755,68 @@ class PublishingServiceTest {
     }
 
     @Test
-    void waitForDnsThenActivate_directUrlDisabledFalse_doesNotPersistFlag() {
-        when(forResolvingDns.isResolvable("app.example.com")).thenReturn(true);
+    void activate_directUrlDisabledFalse_doesNotPersistFlag() {
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
             .thenReturn(List.of(routeWithDomain("app.example.com")));
 
-        service.waitForDnsThenActivate("app", "app.example.com", "10.0.0.1", 8080, false, null, false, null);
+        service.activate("app", "app.example.com", "10.0.0.1", 8080, false, null, false, null);
 
         verify(forPersistingReverseProxyRoutes, never()).setRouteDirectUrlDisabled(anyString(), any(), anyBoolean());
     }
 
     @Test
-    void waitForDnsThenActivate_dnsNeverResolves_doesNotWriteTraefikRoute() {
-        when(forResolvingDns.isResolvable("app.example.com")).thenReturn(false);
-        ReflectionTestUtils.setField(service, "dnsTimeoutMillis", 100L);
-        ReflectionTestUtils.setField(service, "dnsRetryIntervalMillis", 10L);
-
-        service.waitForDnsThenActivate("app", "app.example.com", "10.0.0.1", 8080, false, null, false, null);
-
-        verify(forPersistingReverseProxyRoutes, never()).addReverseProxyRoute(anyString(), anyString(), anyInt(), anyBoolean(), any(), any());
-    }
-
-    @Test
-    void waitForDnsThenActivate_dnsNeverResolves_emitsTimeoutEvent() {
-        when(forResolvingDns.isResolvable("app.example.com")).thenReturn(false);
-        ReflectionTestUtils.setField(service, "dnsTimeoutMillis", 50L);
-        ReflectionTestUtils.setField(service, "dnsRetryIntervalMillis", 10L);
-
-        service.waitForDnsThenActivate("app", "app.example.com", "10.0.0.1", 8080, false, null, false, null);
-
-        verify(forPublishingEvents).publish("published-services", "publish-dns-timeout", "app");
-    }
-
-    @Test
-    void waitForDnsThenActivate_dnsNeverResolves_deletesCnameAndEmitsRollback() {
-        when(forResolvingDns.isResolvable("app.example.com")).thenReturn(false);
-        ReflectionTestUtils.setField(service, "dnsTimeoutMillis", 50L);
-        ReflectionTestUtils.setField(service, "dnsRetryIntervalMillis", 10L);
-
-        service.waitForDnsThenActivate("app", "app.example.com", "10.0.0.1", 8080, false, null, false, null);
-
-        verify(forPersistingDnsRecords).deleteDnsRecord(
-            eq("app.example.com."),
-            eq(DnsRecordType.CNAME),
-            any(DnsZone.class));
-        verify(forPublishingEvents).publish("published-services", "publish-rolled-back", "app");
-    }
-
-    @Test
-    void waitForDnsThenActivate_traefikAddThrows_deletesCnameAndEmitsRollback() {
-        when(forResolvingDns.isResolvable("app.example.com")).thenReturn(true);
+    void activate_traefikAddThrows_emitsRollback() {
         doThrow(new RuntimeException("traefik boom")).when(forPersistingReverseProxyRoutes)
             .addReverseProxyRoute(anyString(), anyString(), anyInt(), anyBoolean(), any(), any());
 
-        service.waitForDnsThenActivate("app", "app.example.com", "10.0.0.1", 8080, false, null, false, null);
+        service.activate("app", "app.example.com", "10.0.0.1", 8080, false, null, false, null);
 
-        verify(forPersistingDnsRecords).deleteDnsRecord(
-            eq("app.example.com."),
-            eq(DnsRecordType.CNAME),
-            any(DnsZone.class));
         verify(forPublishingEvents).publish("published-services", "publish-rolled-back", "app");
     }
 
     @Test
-    void waitForDnsThenActivate_traefikNeverPicksUpRoute_deletesRouteAndCnameAndEmitsRollback() {
-        when(forResolvingDns.isResolvable("app.example.com")).thenReturn(true);
+    void activate_traefikNeverPicksUpRoute_deletesRouteAndEmitsRollback() {
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of());
         ReflectionTestUtils.setField(service, "traefikActivationTimeoutMillis", 50L);
         ReflectionTestUtils.setField(service, "traefikActivationRetryIntervalMillis", 10L);
 
-        service.waitForDnsThenActivate("app", "app.example.com", "10.0.0.1", 8080, false, null, false, null);
+        service.activate("app", "app.example.com", "10.0.0.1", 8080, false, null, false, null);
 
         verify(forPersistingReverseProxyRoutes).deleteReverseProxyRouteByDnsName("app.example.com");
-        verify(forPersistingDnsRecords).deleteDnsRecord(
-            eq("app.example.com."),
-            eq(DnsRecordType.CNAME),
-            any(DnsZone.class));
         verify(forPublishingEvents).publish("published-services", "publish-rolled-back", "app");
     }
 
     @Test
-    void waitForDnsThenActivate_happyPath_doesNotEmitRollback() {
-        when(forResolvingDns.isResolvable("app.example.com")).thenReturn(true);
+    void activate_happyPath_doesNotEmitRollback() {
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
             .thenReturn(List.of(routeWithDomain("app.example.com")));
 
-        service.waitForDnsThenActivate("app", "app.example.com", "10.0.0.1", 8080, false, null, false, null);
+        service.activate("app", "app.example.com", "10.0.0.1", 8080, false, null, false, null);
 
         verify(forPublishingEvents, never()).publish(anyString(), eq("publish-rolled-back"), anyString());
-        verify(forPersistingDnsRecords, never()).deleteDnsRecord(anyString(), any(), any());
     }
 
     @Test
-    void waitForDnsThenActivate_addressMatchesLocalContainerIp_normalizesToContainerName() {
-        when(forResolvingDns.isResolvable("app.example.com")).thenReturn(true);
+    void activate_addressMatchesLocalContainerIp_normalizesToContainerName() {
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
             .thenReturn(List.of(routeWithDomain("app.example.com")));
         when(forGettingServerInfo.findContainerNameByIp(any(Server.class), eq("172.20.0.3")))
             .thenReturn(Optional.of("vaier"));
 
-        service.waitForDnsThenActivate("app", "app.example.com", "172.20.0.3", 8080, false, null, false, null);
+        service.activate("app", "app.example.com", "172.20.0.3", 8080, false, null, false, null);
 
         verify(forPersistingReverseProxyRoutes).addReverseProxyRoute(
             "app.example.com", "vaier", 8080, false, null, null);
     }
 
     @Test
-    void waitForDnsThenActivate_addressIsNotALocalContainerIp_passesAddressThroughUnchanged() {
-        when(forResolvingDns.isResolvable("app.example.com")).thenReturn(true);
+    void activate_addressIsNotALocalContainerIp_passesAddressThroughUnchanged() {
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
             .thenReturn(List.of(routeWithDomain("app.example.com")));
         when(forGettingServerInfo.findContainerNameByIp(any(Server.class), eq("10.13.13.3")))
             .thenReturn(Optional.empty());
 
-        service.waitForDnsThenActivate("app", "app.example.com", "10.13.13.3", 8080, false, null, false, null);
+        service.activate("app", "app.example.com", "10.13.13.3", 8080, false, null, false, null);
 
         verify(forPersistingReverseProxyRoutes).addReverseProxyRoute(
             "app.example.com", "10.13.13.3", 8080, false, null, null);
@@ -981,22 +828,25 @@ class PublishingServiceTest {
         // recognised and routed through the LAN flow instead — otherwise the resulting route gets
         // isLanService=false and the dashboard's directUrl() can't find the relay peer (#180).
         when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
-            new net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration(
+            new PeerConfiguration(
                 "apalveien5", "10.13.13.5", "", MachineType.UBUNTU_SERVER, "192.168.3.0/24", "192.168.3.5")
         ));
 
         service.publishService("192.168.3.50", 80, "pihole", false, null, false);
 
         // The peer flow tracks pendingPublications by (address, port); the LAN flow does not, so
-        // skipping it is the observable signal that the LAN dispatch happened.
+        // skipping it is one observable signal that the LAN dispatch happened. The other is that
+        // the route lands through the LAN writer, which marks it isLanService=true.
+        verify(forPersistingReverseProxyRoutes, timeout(5_000)).addLanReverseProxyRoute(
+            eq("pihole.example.com"), eq("192.168.3.50"), eq(80), eq("http"),
+            eq(false), eq(false), any(), any());
         verify(pendingPublicationsService, never()).track(anyString(), anyInt());
-        verify(forPublishingEvents).publish("published-services", "publish-dns-created", "pihole");
     }
 
     @Test
     void publishService_addressOutsideAllRelayLanCidrs_usesPeerFlow() {
         when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
-            new net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration(
+            new PeerConfiguration(
                 "apalveien5", "10.13.13.5", "", MachineType.UBUNTU_SERVER, "192.168.3.0/24", "192.168.3.5")
         ));
 
@@ -1014,8 +864,10 @@ class PublishingServiceTest {
 
         service.publishService("172.31.5.20", 80, "pihole", false, null, false);
 
+        verify(forPersistingReverseProxyRoutes, timeout(5_000)).addLanReverseProxyRoute(
+            eq("pihole.example.com"), eq("172.31.5.20"), eq(80), eq("http"),
+            eq(false), eq(false), any(), any());
         verify(pendingPublicationsService, never()).track(anyString(), anyInt());
-        verify(forPublishingEvents).publish("published-services", "publish-dns-created", "pihole");
     }
 
     // --- publishLanService (#175) ---
@@ -1027,7 +879,6 @@ class PublishingServiceTest {
         assertThrows(IllegalArgumentException.class, () ->
             service.publishLanService("nas", MachineId.generate(), 5000, "http", false, false, null, null)
         );
-        verify(forPersistingDnsRecords, never()).addDnsRecord(any(), any());
         verify(forPersistingReverseProxyRoutes, never()).addLanReverseProxyRoute(
             anyString(), anyString(), anyInt(), anyString(), anyBoolean(), anyBoolean(), any(), any());
     }
@@ -1037,44 +888,23 @@ class PublishingServiceTest {
         LanServer offsite = new LanServer("offsite", "10.99.99.99", false, null);
         when(forPersistingLanServers.getAll()).thenReturn(List.of(offsite));
         when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
-            new net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration(
+            new PeerConfiguration(
                 "apalveien5", "10.13.13.5", "", MachineType.UBUNTU_SERVER, "192.168.3.0/24", "192.168.3.5")
         ));
 
         assertThrows(IllegalArgumentException.class, () ->
             service.publishLanService("nas", offsite.machineId(), 5000, "http", false, false, null, null)
         );
-        verify(forPersistingDnsRecords, never()).addDnsRecord(any(), any());
         verify(forPersistingReverseProxyRoutes, never()).addLanReverseProxyRoute(
             anyString(), anyString(), anyInt(), anyString(), anyBoolean(), anyBoolean(), any(), any());
     }
 
     @Test
-    void publishLanService_targetIpInsideRelayLanCidr_createsCnameDnsRecord() {
-        LanServer nasBox = new LanServer("nas-box", "192.168.3.50", false, null);
-        when(forPersistingLanServers.getAll()).thenReturn(List.of(nasBox));
-        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
-            new net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration(
-                "apalveien5", "10.13.13.5", "", MachineType.UBUNTU_SERVER, "192.168.3.0/24", "192.168.3.5")
-        ));
-
-        service.publishLanService("nas", nasBox.machineId(), 5000, "https", false, false, null, null);
-
-        ArgumentCaptor<DnsRecord> recordCaptor = ArgumentCaptor.forClass(DnsRecord.class);
-        verify(forPersistingDnsRecords).addDnsRecord(recordCaptor.capture(), any());
-        DnsRecord record = recordCaptor.getValue();
-        assertThat(record.name()).isEqualTo("nas.example.com.");
-        assertThat(record.type()).isEqualTo(DnsRecordType.CNAME);
-        assertThat(record.values()).containsExactly("vaier.example.com.");
-    }
-
-    @Test
-    void publishLanService_targetIpInsideRelayLanCidr_writesLanTraefikRouteAfterDnsPropagates() {
-        when(forResolvingDns.isResolvable("nas.example.com")).thenReturn(true);
+    void publishLanService_targetIpInsideRelayLanCidr_writesLanTraefikRoute() {
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
             .thenReturn(List.of(routeWithDomain("nas.example.com")));
 
-        service.waitForLanDnsThenActivate(
+        service.activateLan(
             "nas", "nas.example.com", "192.168.3.50", 5000, "https", true, true, null, null);
 
         verify(forPersistingReverseProxyRoutes).addLanReverseProxyRoute(
@@ -1082,7 +912,7 @@ class PublishingServiceTest {
     }
 
     @Test
-    void publishLanService_targetIpInsideServerLanCidr_createsCnameDnsRecord() {
+    void publishLanService_targetIpInsideServerLanCidr_writesLanTraefikRoute() {
         LanServer serverBox = new LanServer("server-box", "172.31.5.20", false, null);
         when(forPersistingLanServers.getAll()).thenReturn(List.of(serverBox));
         when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of());
@@ -1090,9 +920,9 @@ class PublishingServiceTest {
 
         service.publishLanService("box", serverBox.machineId(), 8080, "http", false, false, null, null);
 
-        ArgumentCaptor<DnsRecord> recordCaptor = ArgumentCaptor.forClass(DnsRecord.class);
-        verify(forPersistingDnsRecords).addDnsRecord(recordCaptor.capture(), any());
-        assertThat(recordCaptor.getValue().name()).isEqualTo("box.example.com.");
+        verify(forPersistingReverseProxyRoutes, timeout(5_000)).addLanReverseProxyRoute(
+            eq("box.example.com"), eq("172.31.5.20"), eq(8080), eq("http"),
+            eq(false), eq(false), any(), any());
     }
 
     @Test
@@ -1104,16 +934,16 @@ class PublishingServiceTest {
 
         assertThrows(IllegalArgumentException.class, () ->
             service.publishLanService("box", offsite.machineId(), 8080, "http", false, false, null, null));
-        verify(forPersistingDnsRecords, never()).addDnsRecord(any(), any());
+        verify(forPersistingReverseProxyRoutes, never()).addLanReverseProxyRoute(
+            anyString(), anyString(), anyInt(), anyString(), anyBoolean(), anyBoolean(), any(), any());
     }
 
     @Test
     void publishLanService_writesRedirectMiddlewareWhenRootRedirectPathProvided() {
-        when(forResolvingDns.isResolvable("app.example.com")).thenReturn(true);
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
             .thenReturn(List.of(routeWithDomain("app.example.com")));
 
-        service.waitForLanDnsThenActivate(
+        service.activateLan(
             "app", "app.example.com", "192.168.3.50", 3000, "http", false, false, "/builder/ui/", null);
 
         verify(forPersistingReverseProxyRoutes).addLanReverseProxyRoute(
@@ -1130,26 +960,10 @@ class PublishingServiceTest {
     }
 
     @Test
-    void deleteService_deletesDnsCnameRecordWithCorrectZone() {
-        service.deleteService("app.example.com");
-
-        verify(forPersistingDnsRecords).deleteDnsRecord("app.example.com", DnsRecordType.CNAME, new DnsZone("example.com"));
-    }
-
-    @Test
-    void deleteService_deletesTraefikBeforeDns() {
-        service.deleteService("app.example.com");
-
-        InOrder order = inOrder(forPersistingReverseProxyRoutes, forPersistingDnsRecords);
-        order.verify(forPersistingReverseProxyRoutes).deleteReverseProxyRouteByDnsName("app.example.com");
-        order.verify(forPersistingDnsRecords).deleteDnsRecord("app.example.com", DnsRecordType.CNAME, new DnsZone("example.com"));
-    }
-
-    @Test
     void deleteService_rejectsVaierService() {
         assertThrows(IllegalArgumentException.class, () -> service.deleteService("vaier.example.com"));
 
-        verifyNoInteractions(forPersistingReverseProxyRoutes, forPersistingDnsRecords);
+        verifyNoInteractions(forPersistingReverseProxyRoutes);
     }
 
     @Test
@@ -1161,10 +975,9 @@ class PublishingServiceTest {
 
         service.deleteService("app.example.com");
 
-        InOrder order = inOrder(forPersistingReverseProxyRoutes, forPersistingDnsRecords);
+        InOrder order = inOrder(forPersistingReverseProxyRoutes);
         order.verify(forPersistingReverseProxyRoutes).deleteReverseProxyRouteByDnsName("app.example.com");
         order.verify(forPersistingReverseProxyRoutes, atLeast(3)).getReverseProxyRoutes();
-        order.verify(forPersistingDnsRecords).deleteDnsRecord(any(), any(), any());
     }
 
     @Test
@@ -1183,22 +996,12 @@ class PublishingServiceTest {
     }
 
     @Test
-    void deleteService_emptyDomain_passesDnsZoneWithEmptyString() {
-        when(configResolver.getDomain()).thenReturn("");
-
-        service.deleteService("app.example.com");
-
-        verify(forPersistingDnsRecords).deleteDnsRecord("app.example.com", DnsRecordType.CNAME, new DnsZone(""));
-    }
-
-    @Test
     void deleteService_invalidatesPublishedServicesCache() {
         // PublishingService is its own cache invalidator. Verify observable behaviour:
         // cache re-fetches from ports after deleteService completes.
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(
             route("other.example.com", "10.0.0.2", 9090)
         ));
-        when(forPersistingDnsRecords.getDnsZones()).thenReturn(List.of());
         when(forGettingVpnClients.getClients()).thenReturn(List.of());
         when(forGettingServerInfo.getServicesWithExposedPorts(any())).thenReturn(List.of());
 
@@ -1206,7 +1009,7 @@ class PublishingServiceTest {
         service.deleteService("app.example.com");
         service.getPublishedServices(); // should refetch
 
-        verify(forPersistingDnsRecords, times(2)).getDnsZones();
+        verify(forGettingVpnClients, times(2)).getClients();
     }
 
     // --- getPublishableServices ---
@@ -1524,22 +1327,22 @@ class PublishingServiceTest {
     @Test
     void updateService_authMode_delegatesToSetRouteAuthMode() {
         service.updateService("app.example.com", null,
-            new net.vaier.application.UpdatePublishedServiceUseCase.PublishedServicePatch(
+            new PublishedServicePatch(
                 null, null, null, null, null, null, null, "social"));
 
         verify(forPersistingReverseProxyRoutes).setRouteAuthMode(
-            "app.example.com", null, net.vaier.domain.AuthMode.SOCIAL);
+            "app.example.com", null, AuthMode.SOCIAL);
         verify(forPersistingReverseProxyRoutes, never()).setRouteAuthentication(anyString(), any(), anyBoolean());
     }
 
     @Test
     void updateService_authMode_none_disablesAuth() {
         service.updateService("svc.example.com", "/grafana",
-            new net.vaier.application.UpdatePublishedServiceUseCase.PublishedServicePatch(
+            new PublishedServicePatch(
                 null, null, null, null, null, null, null, "none"));
 
         verify(forPersistingReverseProxyRoutes).setRouteAuthMode(
-            "svc.example.com", "/grafana", net.vaier.domain.AuthMode.NONE);
+            "svc.example.com", "/grafana", AuthMode.NONE);
     }
 
     @Test
@@ -1564,7 +1367,6 @@ class PublishingServiceTest {
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(
             route("other.example.com", "10.0.0.2", 9090)
         ));
-        when(forPersistingDnsRecords.getDnsZones()).thenReturn(List.of());
         when(forGettingVpnClients.getClients()).thenReturn(List.of());
         when(forGettingServerInfo.getServicesWithExposedPorts(any())).thenReturn(List.of());
 
@@ -1573,13 +1375,13 @@ class PublishingServiceTest {
             patch(true, null, null, null, null, null, null));
         service.getPublishedServices(); // should refetch
 
-        verify(forPersistingDnsRecords, times(2)).getDnsZones();
+        verify(forGettingVpnClients, times(2)).getClients();
     }
 
-    private static net.vaier.application.UpdatePublishedServiceUseCase.PublishedServicePatch patch(
+    private static PublishedServicePatch patch(
         Boolean requiresAuth, Boolean directUrlDisabled, Boolean hiddenFromLaunchpad,
         String rootRedirectPath, String launchpadAlias, String versionEndpoint, String versionProperty) {
-        return new net.vaier.application.UpdatePublishedServiceUseCase.PublishedServicePatch(
+        return new PublishedServicePatch(
             requiresAuth, directUrlDisabled, hiddenFromLaunchpad,
             rootRedirectPath, launchpadAlias, versionEndpoint, versionProperty);
     }
@@ -1645,17 +1447,6 @@ class PublishingServiceTest {
     private void setupOneRoute(String domain, String address, int port) {
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
             .thenReturn(List.of(route(domain, address, port)));
-    }
-
-    private void setupDnsRecord(String name, DnsRecordType type) {
-        DnsZone zone = new DnsZone("example.com");
-        when(forPersistingDnsRecords.getDnsZones()).thenReturn(List.of(zone));
-        when(forPersistingDnsRecords.getDnsRecords(zone))
-            .thenReturn(List.of(new DnsRecord(name, type, 300L, List.of())));
-    }
-
-    private void setupNoDnsRecords() {
-        when(forPersistingDnsRecords.getDnsZones()).thenReturn(List.of());
     }
 
     private void setupEmptyVpnClients() {

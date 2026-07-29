@@ -1,7 +1,6 @@
 package net.vaier.domain;
 
 import net.vaier.config.ServiceNames;
-import net.vaier.domain.DnsRecord.DnsRecordType;
 import net.vaier.domain.DockerService.PortMapping;
 import net.vaier.domain.Server.State;
 import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
@@ -292,27 +291,19 @@ class ReverseProxyRouteTest {
     // --- launchpadVisibility (domain rule consolidating every reason a route is shown/hidden) ---
 
     @Test
-    void launchpadVisibility_dnsOkAndHostOk_visibleActive() {
+    void launchpadVisibility_hostOk_visibleActive() {
         ReverseProxyRoute route = route("app.example.com", "10.0.0.1", 8080);
 
-        assertThat(route.launchpadVisibility(DnsState.OK, State.OK))
+        assertThat(route.launchpadVisibility(State.OK))
             .isEqualTo(LaunchpadVisibility.VISIBLE_ACTIVE);
     }
 
     @Test
-    void launchpadVisibility_dnsOkAndHostUnreachable_visibleInactive() {
+    void launchpadVisibility_hostUnreachable_visibleInactive() {
         ReverseProxyRoute route = route("app.example.com", "10.0.0.1", 8080);
 
-        assertThat(route.launchpadVisibility(DnsState.OK, State.UNREACHABLE))
+        assertThat(route.launchpadVisibility(State.UNREACHABLE))
             .isEqualTo(LaunchpadVisibility.VISIBLE_INACTIVE);
-    }
-
-    @Test
-    void launchpadVisibility_dnsNotPropagated_notVisible() {
-        ReverseProxyRoute route = route("app.example.com", "10.0.0.1", 8080);
-
-        assertThat(route.launchpadVisibility(DnsState.NON_EXISTING, State.OK))
-            .isEqualTo(LaunchpadVisibility.NOT_VISIBLE);
     }
 
     @Test
@@ -320,7 +311,7 @@ class ReverseProxyRouteTest {
         ReverseProxyRoute hidden = new ReverseProxyRoute("r", "app.example.com", "10.0.0.1", 8080, "svc",
             null, null, null, null, null, false, false, null, null, true);
 
-        assertThat(hidden.launchpadVisibility(DnsState.OK, State.OK))
+        assertThat(hidden.launchpadVisibility(State.OK))
             .isEqualTo(LaunchpadVisibility.NOT_VISIBLE);
     }
 
@@ -350,7 +341,7 @@ class ReverseProxyRouteTest {
     @Test
     void launchpadVisibility_socialRouteAndAnonymousViewer_notVisible() {
         assertThat(socialRoute("internal.example.com")
-            .launchpadVisibility(DnsState.OK, State.OK, null, NO_RULES))
+            .launchpadVisibility(State.OK, null, NO_RULES))
             .isEqualTo(LaunchpadVisibility.NOT_VISIBLE);
     }
 
@@ -358,9 +349,9 @@ class ReverseProxyRouteTest {
     void launchpadVisibility_socialRouteAndAdminViewer_followsHealthRules() {
         ReverseProxyRoute route = socialRoute("internal.example.com");
 
-        assertThat(route.launchpadVisibility(DnsState.OK, State.OK, admin(), NO_RULES))
+        assertThat(route.launchpadVisibility(State.OK, admin(), NO_RULES))
             .isEqualTo(LaunchpadVisibility.VISIBLE_ACTIVE);
-        assertThat(route.launchpadVisibility(DnsState.OK, State.UNREACHABLE, admin(), NO_RULES))
+        assertThat(route.launchpadVisibility(State.UNREACHABLE, admin(), NO_RULES))
             .isEqualTo(LaunchpadVisibility.VISIBLE_INACTIVE);
     }
 
@@ -369,7 +360,7 @@ class ReverseProxyRouteTest {
         ForResolvingServiceGroup rules = host -> List.of("devs");
 
         assertThat(socialRoute("git.example.com")
-            .launchpadVisibility(DnsState.OK, State.OK, user("devs"), rules))
+            .launchpadVisibility(State.OK, user("devs"), rules))
             .isEqualTo(LaunchpadVisibility.VISIBLE_ACTIVE);
     }
 
@@ -378,14 +369,14 @@ class ReverseProxyRouteTest {
         ForResolvingServiceGroup rules = host -> List.of("devs");
 
         assertThat(socialRoute("git.example.com")
-            .launchpadVisibility(DnsState.OK, State.OK, user("family"), rules))
+            .launchpadVisibility(State.OK, user("family"), rules))
             .isEqualTo(LaunchpadVisibility.NOT_VISIBLE);
     }
 
     @Test
     void launchpadVisibility_socialRouteAndPendingViewer_notVisible() {
         assertThat(socialRoute("git.example.com")
-            .launchpadVisibility(DnsState.OK, State.OK, pending(), NO_RULES))
+            .launchpadVisibility(State.OK, pending(), NO_RULES))
             .isEqualTo(LaunchpadVisibility.NOT_VISIBLE);
     }
 
@@ -393,7 +384,7 @@ class ReverseProxyRouteTest {
     void launchpadVisibility_publicRoute_visibleToAnonymousViewer() {
         ReverseProxyRoute route = route("public.example.com", "10.0.0.1", 8080);
 
-        assertThat(route.launchpadVisibility(DnsState.OK, State.OK, null, NO_RULES))
+        assertThat(route.launchpadVisibility(State.OK, null, NO_RULES))
             .isEqualTo(LaunchpadVisibility.VISIBLE_ACTIVE);
     }
 
@@ -402,28 +393,11 @@ class ReverseProxyRouteTest {
         ReverseProxyRoute hidden = new ReverseProxyRoute("r", "app.example.com", "10.0.0.1", 8080, "svc",
             null, null, null, null, null, false, false, null, null, true);
 
-        assertThat(hidden.launchpadVisibility(DnsState.OK, State.OK, admin(), NO_RULES))
+        assertThat(hidden.launchpadVisibility(State.OK, admin(), NO_RULES))
             .isEqualTo(LaunchpadVisibility.NOT_VISIBLE);
     }
 
     // --- domain rules over existing-routes lists ---
-
-    @Test
-    void hasSiblingOnHost_emptyList_false() {
-        assertThat(ReverseProxyRoute.hasSiblingOnHost(List.of(), "bmp.example.com")).isFalse();
-    }
-
-    @Test
-    void hasSiblingOnHost_matchingDomain_true_regardlessOfPath() {
-        ReverseProxyRoute existing = pathRoute("bmp.example.com", "/auth");
-        assertThat(ReverseProxyRoute.hasSiblingOnHost(List.of(existing), "bmp.example.com")).isTrue();
-    }
-
-    @Test
-    void hasSiblingOnHost_differentDomain_false() {
-        ReverseProxyRoute existing = pathRoute("other.example.com", "/auth");
-        assertThat(ReverseProxyRoute.hasSiblingOnHost(List.of(existing), "bmp.example.com")).isFalse();
-    }
 
     @Test
     void conflictsWithExisting_sameDomainAndPath_true() {
@@ -461,63 +435,7 @@ class ReverseProxyRouteTest {
             null, null, null, null, false, false, null, path);
     }
 
-    // --- dnsState ---
-
-    @Test
-    void dnsState_cnameRecordMatchesDomainName_returnsOk() {
-        ReverseProxyRoute route = route("app.example.com", "10.0.0.1", 8080);
-        List<DnsRecord> records = List.of(
-            new DnsRecord("app.example.com", DnsRecordType.CNAME, 300L, List.of("target"))
-        );
-
-        assertThat(route.dnsState(records)).isEqualTo(DnsState.OK);
-    }
-
-    @Test
-    void dnsState_aRecordMatchesDomainName_returnsOk() {
-        ReverseProxyRoute route = route("app.example.com", "10.0.0.1", 8080);
-        List<DnsRecord> records = List.of(
-            new DnsRecord("app.example.com", DnsRecordType.A, 300L, List.of("1.2.3.4"))
-        );
-
-        assertThat(route.dnsState(records)).isEqualTo(DnsState.OK);
-    }
-
-    @Test
-    void dnsState_noMatchingRecord_returnsNonExisting() {
-        ReverseProxyRoute route = route("app.example.com", "10.0.0.1", 8080);
-        List<DnsRecord> records = List.of(
-            new DnsRecord("other.example.com", DnsRecordType.CNAME, 300L, List.of())
-        );
-
-        assertThat(route.dnsState(records)).isEqualTo(DnsState.NON_EXISTING);
-    }
-
-    @Test
-    void dnsState_onlyNonMatchingTypes_returnsNonExisting() {
-        ReverseProxyRoute route = route("app.example.com", "10.0.0.1", 8080);
-        List<DnsRecord> records = List.of(
-            new DnsRecord("app.example.com", DnsRecordType.TXT, 300L, List.of())
-        );
-
-        assertThat(route.dnsState(records)).isEqualTo(DnsState.NON_EXISTING);
-    }
-
-    // --- dnsState(provider) / launchpadUrl / protocol (#231) ---
-
-    @Test
-    void dnsState_manualProvider_isAlwaysOkRegardlessOfRecords() {
-        ReverseProxyRoute route = route("app.example.com", "10.0.0.1", 8080);
-
-        assertThat(route.dnsState(List.of(), DnsProvider.MANUAL)).isEqualTo(DnsState.OK);
-    }
-
-    @Test
-    void dnsState_route53Provider_delegatesToTheRecordLookup() {
-        ReverseProxyRoute route = route("app.example.com", "10.0.0.1", 8080);
-
-        assertThat(route.dnsState(List.of(), DnsProvider.ROUTE53)).isEqualTo(DnsState.NON_EXISTING);
-    }
+    // --- launchpadUrl / protocol (#231) ---
 
     @Test
     void launchpadUrl_publicRoute_isTheDirectHttpsUrl() {
@@ -796,16 +714,8 @@ class ReverseProxyRouteTest {
         // We don't know the host is down, so don't dim or pin a red dot on the tile.
         ReverseProxyRoute route = route("app.example.com", "10.13.13.2", 8080);
 
-        assertThat(route.launchpadVisibility(DnsState.OK, State.UNKNOWN))
+        assertThat(route.launchpadVisibility(State.UNKNOWN))
             .isEqualTo(LaunchpadVisibility.VISIBLE_ACTIVE);
-    }
-
-    @Test
-    void launchpadVisibility_hostStateUnreachable_returnsVisibleInactive() {
-        ReverseProxyRoute route = route("app.example.com", "10.13.13.2", 8080);
-
-        assertThat(route.launchpadVisibility(DnsState.OK, State.UNREACHABLE))
-            .isEqualTo(LaunchpadVisibility.VISIBLE_INACTIVE);
     }
 
     // --- launchpadLiveness (dot-presentation tri-state derived from host state, issue #208) ---
