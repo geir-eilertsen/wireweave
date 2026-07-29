@@ -66,9 +66,8 @@ import java.util.Optional;
 
 /**
  * Admin CRUD for the fleet-backup configuration: {@link BackupRepository} definitions and
- * {@link BackupJob} specs. The whole controller is Enterprise-gated with {@link RequiresEnterprise},
- * so a Community instance gets {@code 402 Payment Required} from {@link EnterpriseLicenseInterceptor}
- * and never reaches a handler (precedent: {@code LanScannerRestController}).
+ * {@link BackupJob} specs. Fleet backup is freely available: every route here is reachable on any
+ * instance, with no edition or licence standing in front of it.
  *
  * <p>The repository response never carries the passphrase: it reports only {@code hasPassphrase}
  * (mirrors {@code HostCredentialRestController}'s redacted view). On a PUT edit, a blank/omitted
@@ -83,7 +82,6 @@ import java.util.Optional;
  * {@code GET /backup-jobs/{machineId}/runs}. Archive listing and provisioning arrive in later slices.
  */
 @RestController
-@RequiresEnterprise
 @Slf4j
 public class BackupRestController {
 

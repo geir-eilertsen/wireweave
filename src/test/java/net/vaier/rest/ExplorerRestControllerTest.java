@@ -6,6 +6,8 @@ import net.vaier.application.DeleteFileUseCase;
 import net.vaier.application.DownloadFileUseCase;
 import net.vaier.application.DownloadFileUseCase.Download;
 import net.vaier.application.ListMachineArchivesUseCase;
+import net.vaier.application.ViewFileUseCase;
+import net.vaier.application.ViewFileUseCase.View;
 import net.vaier.domain.Archive;
 import net.vaier.domain.CannotDeleteSftpRootException;
 import net.vaier.domain.Excludes;
@@ -34,6 +36,9 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.time.Instant;
 import java.util.List;
 
@@ -59,6 +64,7 @@ class ExplorerRestControllerTest {
     @Mock ListMachineArchivesUseCase listMachineArchivesUseCase;
     @Mock DownloadFileUseCase downloadFileUseCase;
     @Mock DeleteFileUseCase deleteFileUseCase;
+    @Mock ViewFileUseCase viewFileUseCase;
     // A real ObjectMapper (spied so @InjectMocks wires it): the selection JSON must be parsed for real.
     @org.mockito.Spy com.fasterxml.jackson.databind.ObjectMapper objectMapper =
         new com.fasterxml.jackson.databind.ObjectMapper();
@@ -380,6 +386,144 @@ class ExplorerRestControllerTest {
         java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
         response.getBody().writeTo(out);
         assertThat(out.toByteArray()).isEqualTo(zipBytes);
+    }
+
+    @Test
+    void download_ofAViewableFile_isStillAnAttachment_andStillOctetStream() throws Exception {
+        // The regression guard for Open (#…): adding a way to display a file must not change the way to save
+        // one. Download stays attachment/octet-stream for every file, images included — otherwise the button
+        // the operator already relies on quietly becomes "opens in a tab".
+        when(downloadFileUseCase.openForDownload(mid("apalveien5"), "apalveien5", "/home/geir/holiday.png", null))
+            .thenReturn(new Download("holiday.png", 4242, "application/octet-stream", out -> {
+            }));
+
+        ResponseEntity<StreamingResponseBody> response =
+            controller.download(mid("apalveien5").value(), "/home/geir/holiday.png", null, "apalveien5");
+
+        assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_OCTET_STREAM);
+        assertThat(response.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION))
+            .isEqualTo("attachment; filename=\"holiday.png\"");
+        // And it never grows the view endpoint's inline-safety headers, which would be meaningless on it.
+        assertThat(response.getHeaders().getFirst("Content-Security-Policy")).isNull();
+    }
+
+    // --- Open: displaying a viewable file in the browser ------------------------------------------------
+
+    @Test
+    void view_streamsTheFileInline_withTheDomainsMediaType_andTheSafetyHeaders() throws Exception {
+        byte[] payload = "PNGBYTES".getBytes();
+        when(viewFileUseCase.openForView(mid("apalveien5"), "/home/geir/holiday.png", null))
+            .thenReturn(new View("holiday.png", payload.length, "image/png",
+                "sandbox; default-src 'none'", out -> {
+                    try {
+                        out.write(payload);
+                    } catch (IOException e) {
+                        throw new UncheckedIOException(e);
+                    }
+                }));
+
+        ResponseEntity<StreamingResponseBody> response =
+            controller.view(mid("apalveien5").value(), "/home/geir/holiday.png", null);
+
+        assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
+        assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.IMAGE_PNG);
+        // inline, not attachment — that is the whole difference from /files/download.
+        assertThat(response.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION))
+            .isEqualTo("inline; filename=\"holiday.png\"");
+        // Serving fleet bytes on Vaier's own origin, to a signed-in operator: nosniff so the declared type is
+        // the only type, and the domain's policy so nothing in the response can act.
+        assertThat(response.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
+        assertThat(response.getHeaders().getFirst("Content-Security-Policy"))
+            .isEqualTo("sandbox; default-src 'none'");
+        assertThat(response.getHeaders().getContentLength()).isEqualTo(payload.length);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        response.getBody().writeTo(out);
+        assertThat(out.toByteArray()).isEqualTo(payload);
+    }
+
+    @Test
+    void view_ofATextFile_isServedAsPlainText() {
+        when(viewFileUseCase.openForView(any(), any(), any()))
+            .thenReturn(new View("notes.txt", 12, "text/plain;charset=utf-8", "sandbox;", out -> {
+            }));
+
+        ResponseEntity<StreamingResponseBody> response =
+            controller.view(mid("apalveien5").value(), "/home/geir/notes.txt", null);
+
+        assertThat(response.getHeaders().getContentType())
+            .isEqualTo(MediaType.valueOf("text/plain;charset=utf-8"));
+    }
+
+    @Test
+    void view_sanitisesTheFilenameInTheHeader_soItCannotBreakOutOfTheQuotes() {
+        when(viewFileUseCase.openForView(any(), any(), any()))
+            .thenReturn(new View("ev\"il\r\n.png", 1, "image/png", "sandbox;", out -> {
+            }));
+
+        ResponseEntity<StreamingResponseBody> response =
+            controller.view(mid("apalveien5").value(), "/tmp/x.png", null);
+
+        assertThat(response.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION))
+            .isEqualTo("inline; filename=\"ev_il__.png\"");
+    }
+
+    @Test
+    void view_withAnArchiveCoordinate_opensThePast_becauseAViewIsARead() throws Exception {
+        MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
+        when(viewFileUseCase.openForView(mid("apalveien5"), "/home/geir/holiday.png", "ab12"))
+            .thenReturn(new View("holiday.png", 3, "image/png", "sandbox;", out -> {
+            }));
+
+        mockMvc.perform(get("/machines/" + mid("apalveien5") + "/files/view")
+                .param("path", "/home/geir/holiday.png").param("at", "ab12"))
+            .andExpect(status().isOk());
+
+        verify(viewFileUseCase).openForView(mid("apalveien5"), "/home/geir/holiday.png", "ab12");
+    }
+
+    @Test
+    void view_ofAnHtmlFile_isRefused_asABadRequest() throws Exception {
+        MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller)
+            .setControllerAdvice(new GlobalExceptionHandler()).build();
+        // The domain refuses it; the controller must surface that refusal, never fall back to serving the
+        // bytes inline under another type. Inline HTML on Vaier's origin runs script against the session.
+        when(viewFileUseCase.openForView(any(), any(), any())).thenThrow(new IllegalArgumentException(
+            "Vaier will not display \"index.html\" in the browser. Download it instead."));
+
+        mockMvc.perform(get("/machines/" + mid("apalveien5") + "/files/view").param("path", "/srv/www/index.html"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("BAD_REQUEST"))
+            .andExpect(jsonPath("$.message").value(
+                "Vaier will not display \"index.html\" in the browser. Download it instead."));
+    }
+
+    @Test
+    void view_ofAnUppercaseSvg_isRefusedToo() throws Exception {
+        MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller)
+            .setControllerAdvice(new GlobalExceptionHandler()).build();
+        when(viewFileUseCase.openForView(any(), any(), any())).thenThrow(new IllegalArgumentException(
+            "Vaier will not display \"LOGO.SVG\" in the browser. Download it instead."));
+
+        mockMvc.perform(get("/machines/" + mid("apalveien5") + "/files/view").param("path", "/srv/LOGO.SVG"))
+            .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void get_marksWhichEntriesTheBrowserCanDisplay_soTheListingNeedsNoAllowlistOfItsOwn() {
+        when(browseFilesUseCase.listDirectory(mid("apalveien5"), "/home/geir", null)).thenReturn(at("/home/geir",
+            FileEntry.in("/home/geir", "holiday.png", false, 4242, WHEN),
+            FileEntry.in("/home/geir", "index.html", false, 500, WHEN),
+            FileEntry.in("/home/geir", "photos", true, 4096, WHEN)));
+
+        List<FileEntryResponse> entries =
+            controller.list(mid("apalveien5").value(), "/home/geir", null).getBody().entries();
+
+        assertThat(entries).filteredOn(e -> e.name().equals("holiday.png")).singleElement()
+            .extracting(FileEntryResponse::viewable).isEqualTo(true);
+        assertThat(entries).filteredOn(e -> e.name().equals("index.html")).singleElement()
+            .extracting(FileEntryResponse::viewable).isEqualTo(false);
+        assertThat(entries).filteredOn(e -> e.name().equals("photos")).singleElement()
+            .extracting(FileEntryResponse::viewable).isEqualTo(false);
     }
 
     // --- selection zip: download a whole fleet-wide selection as one zip -------------------------------

@@ -9,6 +9,8 @@ import net.vaier.application.DownloadFileUseCase;
 import net.vaier.application.DownloadFileUseCase.Download;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import net.vaier.application.ListMachineArchivesUseCase;
+import net.vaier.application.ViewFileUseCase;
+import net.vaier.application.ViewFileUseCase.View;
 import net.vaier.domain.Archive;
 import net.vaier.domain.FileEntry;
 import net.vaier.domain.MachineId;
@@ -51,6 +53,7 @@ public class ExplorerRestController {
     private final ListMachineArchivesUseCase listMachineArchivesUseCase;
     private final DownloadFileUseCase downloadFileUseCase;
     private final DeleteFileUseCase deleteFileUseCase;
+    private final ViewFileUseCase viewFileUseCase;
     private final ObjectMapper objectMapper;
 
     /**
@@ -98,6 +101,48 @@ public class ExplorerRestController {
         }
         return response.body(body);
     }
+
+    /**
+     * Open one file from a machine <b>in the browser</b> — the Explorer's Open verb. Deliberately a second
+     * endpoint rather than a mode of {@code /files/download}: download always means "save this", and turning
+     * it into "opens in a tab for some file types" would change a verb the operator already relies on.
+     *
+     * <p>Everything that makes this safe is the domain's ({@link net.vaier.domain.ViewableFile}), because
+     * serving fleet bytes inline happens on <em>Vaier's own origin</em> with the operator's session in reach.
+     * The use case answers only for a viewable file — a request for anything else is an
+     * {@code IllegalArgumentException}, a {@code 400} via {@link GlobalExceptionHandler}, never a fallback to
+     * serving the bytes inline under some other type. What the controller adds is only the wiring:
+     * {@code inline} rather than {@code attachment}, {@code nosniff} so the declared type is the only type the
+     * browser will consider, and the {@code Content-Security-Policy} the domain chose for that media type.
+     *
+     * <p>{@code at} may name an archive: a view is a read, so opening a file as it was in the past works
+     * exactly as downloading it does.
+     */
+    @GetMapping("/machines/{machineId}/files/view")
+    public ResponseEntity<StreamingResponseBody> view(@PathVariable String machineId,
+                                                      @RequestParam String path,
+                                                      @RequestParam(required = false) String at) {
+        log.info("Opening {} from machine {} at archive {}",
+            LogSafe.forLog(path), LogSafe.forLog(machineId), LogSafe.forLog(at));
+        View view = viewFileUseCase.openForView(MachineId.of(machineId), path, at);
+        StreamingResponseBody body = view.writer()::accept;
+        ResponseEntity.BodyBuilder response = ResponseEntity.ok()
+            .header(HttpHeaders.CONTENT_DISPOSITION,
+                "inline; filename=\"" + sanitiseFilename(view.filename()) + "\"")
+            .header(CONTENT_TYPE_OPTIONS, "nosniff")
+            .header(CONTENT_SECURITY_POLICY, view.contentSecurityPolicy())
+            .contentType(MediaType.parseMediaType(view.mediaType()));
+        if (view.sizeBytes() >= 0) {
+            response = response.contentLength(view.sizeBytes());
+        }
+        return response.body(body);
+    }
+
+    /** "Treat the declared type as the only type" — no MIME sniffing on a response Vaier serves inline. */
+    private static final String CONTENT_TYPE_OPTIONS = "X-Content-Type-Options";
+
+    /** The policy an inline response is served under; what it says is the domain's decision, not this one. */
+    private static final String CONTENT_SECURITY_POLICY = "Content-Security-Policy";
 
     /**
      * Download a whole fleet-wide selection as one zip — the Explorer selection bar's "download everything"
@@ -236,16 +281,22 @@ public class ExplorerRestController {
      * exclude carves a hole anywhere inside it — a full shield promises the whole folder is in the archive.
      * {@code containsBackedUp} is the half shield: backed-up content lives inside, but the entry is not whole.
      * The two are mutually exclusive. Both are always {@code false} for an archived (past) listing.
+     *
+     * <p>{@code viewable} is the server's verdict — via {@link FileEntry#viewable()} — on whether Vaier will
+     * hand this entry to the browser to display, so the Explorer can render its name as a link without holding
+     * a copy of the allowlist. The browser must not hold one: the allowlist is a security boundary, and a
+     * second copy of a security boundary is a copy that drifts. Unaffected by the past — opening a file as it
+     * was in an archive is a read like any other.
      */
     record FileEntryResponse(String name, String path, boolean directory, long size, String modifiedAt,
-                             boolean backedUp, boolean containsBackedUp) {
+                             boolean backedUp, boolean containsBackedUp, boolean viewable) {
         static FileEntryResponse from(FileEntry entry, ProtectedPaths protectedPaths) {
             // Both verdicts are asked of the domain whole — including their mutual exclusion. Restating that
             // rule here with a !backedUp guard is how the two copies eventually disagree.
             boolean backedUp = protectedPaths.isBackedUp(entry.path());
             boolean containsBackedUp = protectedPaths.containsBackedUp(entry.path());
             return new FileEntryResponse(entry.name(), entry.path(), entry.directory(),
-                entry.sizeBytes(), entry.modified().toString(), backedUp, containsBackedUp);
+                entry.sizeBytes(), entry.modified().toString(), backedUp, containsBackedUp, entry.viewable());
         }
     }
 }

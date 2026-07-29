@@ -141,7 +141,7 @@ public class SettingsRestController {
 
     /**
      * The nightly fleet-backup schedule hour is a plain scheduling preference (like the disk-alert
-     * threshold), so it lives here on the ungated settings endpoint rather than on the enterprise-gated
+     * threshold), so it lives here on the settings endpoint rather than on
      * {@code BackupRestController}. {@code GET /settings/config} carries the current value.
      */
     @PutMapping("/backup-schedule")

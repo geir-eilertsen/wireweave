@@ -6,7 +6,7 @@ package net.vaier.application;
  * operator picks which LAN to scan first, so the sweep touches only that one CIDR and settles fast,
  * rather than fanning out over every relay LAN at once ({@link ScanLanUseCase}). Runs
  * asynchronously: the call returns immediately and the results land in the snapshot read via
- * {@link GetDiscoveredLanMachinesUseCase}. An Enterprise-only capability.
+ * {@link GetDiscoveredLanMachinesUseCase}.
  */
 public interface ScanLanAnchorUseCase {
 

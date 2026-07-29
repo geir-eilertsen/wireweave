@@ -308,4 +308,5 @@ class LanScannerRestControllerTest {
         assertThat(body.lastScanCompleted()).isNull();
         assertThat(body.machines()).isEmpty();
     }
+
 }

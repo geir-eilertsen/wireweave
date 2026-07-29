@@ -119,7 +119,7 @@ class LanServerRestControllerTest {
         verify(registerLanServerUseCase).register("printer", "192.168.3.20", false, null, null, null);
     }
 
-    // --- probe (manual add-by-address parity — Community-available, not Enterprise) ---
+    // --- probe (manual add-by-address parity) ---
 
     @Test
     void probe_reachable_reportsPortsFlagsCategoryAndRoute() {

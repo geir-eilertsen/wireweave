@@ -357,13 +357,13 @@
             </div>
         </div>
 
-        <!-- About — which Vaier build/edition this instance is running -->
+        <!-- About — which Vaier build this instance is running -->
         <div class="settings-section">
             <div class="settings-section-title">About</div>
             <div class="settings-card">
                 <div class="settings-card-info">
                     <div class="settings-card-title">V<span class="brand-ai">ai</span>er</div>
-                    <div class="settings-card-desc">The version and edition this instance is running.</div>
+                    <div class="settings-card-desc">The version this instance is running.</div>
                 </div>
                 <div class="settings-card-action">
                     <span id="aboutVersion" class="file-label" style="max-width:none">Loading…</span>
@@ -515,16 +515,12 @@
                            :                    'var(--text-muted)';
         }
 
-        // About: show "<version> · <Edition>" from the build version and the licence edition.
+        // About: show the build version this instance is running.
         async function loadAbout() {
             const el = document.getElementById('aboutVersion');
-            let version = null, edition = null;
+            let version = null;
             try { version = (await (await fetch('/settings/version')).json()).version; } catch (_) {}
-            try { edition = (await (await fetch('/license')).json()).edition; } catch (_) {}
-            const editionLabel = edition ? edition.charAt(0) + edition.slice(1).toLowerCase() : null;
-            const parts = [version ? 'v' + version : 'version unknown'];
-            if (editionLabel) parts.push(editionLabel);
-            el.textContent = parts.join(' · ');
+            el.textContent = version ? 'v' + version : 'version unknown';
         }
 
         loadSettings();

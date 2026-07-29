@@ -1,25 +1,12 @@
 package net.vaier.config;
 
-import net.vaier.rest.EnterpriseLicenseInterceptor;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.AsyncSupportConfigurer;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
-import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 @Configuration
 public class WebConfig implements WebMvcConfigurer {
-
-    private final EnterpriseLicenseInterceptor enterpriseLicenseInterceptor;
-
-    public WebConfig(EnterpriseLicenseInterceptor enterpriseLicenseInterceptor) {
-        this.enterpriseLicenseInterceptor = enterpriseLicenseInterceptor;
-    }
-
-    @Override
-    public void addInterceptors(InterceptorRegistry registry) {
-        registry.addInterceptor(enterpriseLicenseInterceptor);
-    }
 
     /**
      * Disable the default async-request timeout, so a long-but-healthy streaming download is never cut off

@@ -125,7 +125,7 @@
         peersById: new Map(),            // WireGuard peer id -> the same peer (the SSE keys stats that way)
         lan: new Map(),                  // machine identity -> its LAN server (the domain's MachineStatus)
         serverLocation: null,            // GET /vpn/peers/server-location — the Vaier server's geo (Frankfurt), for the map
-        lanScan: null,                   // GET /lan-scan — the discovered-machines snapshot { status, machines, lastScanCompleted }, or { gated } on Community
+        lanScan: null,                   // GET /lan-scan — the discovered-machines snapshot { status, machines, lastScanCompleted }
         lanScanLans: null,               // GET /lan-scan/lans — the LANs an operator can pick to scan [{ anchor, name, cidr }]
         dirs: new Map(),                 // dirKey -> one directory's read: its state, its children, its reader
         services: [],                    // GET /published-services/discover — the whole fleet's routes
@@ -151,7 +151,7 @@
         preparing: new Set(),            // machine identities Vaier is readying to back up (first back-up), cleared on prepare-client-settled
         readying: new Map(),             // machine identity -> the one `sudo bash …` line Vaier staged where it could not gain root itself
         provisionWatch: null,            // { serverName, bodyEl } while a provision dialog awaits its provision-settled push
-        settings: { state: 'idle', config: null, version: '', edition: '' },   // the native Settings entry, read on view
+        settings: { state: 'idle', config: null, version: '' },   // the native Settings entry, read on view
         palSel: 0,
     };
 
@@ -1535,7 +1535,7 @@
     function addMachine() { addMachineFork('fork', null); }
 
     // One modal, internal screens — the fork Vaier can't infer, then (LAN-server branch) discover + adopt, with
-    // a quiet by-address fallback for Community instances and empty scans. Optionally opens straight on a screen
+    // a quiet by-address fallback for empty scans. Optionally opens straight on a screen
     // (the fleet's "Discovered on the LAN" list jumps in at 'adopt' for a chosen candidate). Cached-first and
     // push-driven: candidates show instantly from the last scan, and a finished scan repaints the list over the
     // lan-scan-updated stream the shell already holds — never a timer, never a poll.
@@ -1620,11 +1620,11 @@
             peer.onclick = () => screen('peerWhat');
             const lan = choiceCard('server', 'A LAN server',
                 'A machine already running on one of your networks. Vaier scans, finds it, and adopts it.');
-            lan.onclick = () => { screen(S.lanScan && S.lanScan.gated ? 'byaddress' : 'pickLan'); };
+            lan.onclick = () => { screen('pickLan'); };
             grid.append(peer, lan);
             content.append(sub, section('What are you adding?'), grid);
-            // Read the snapshot now so the gated check (Community) and the cached candidates are ready the
-            // moment they pick the LAN-server branch — never a wait on the next screen.
+            // Read the snapshot now so the cached candidates are ready the moment they pick the LAN-server
+            // branch — never a wait on the next screen.
             if (S.lanScan === null) loadLanScan();
         }
 
@@ -1635,7 +1635,6 @@
         function paintPickLan() {
             titleEl.textContent = 'Add a LAN server';
             content.innerHTML = '';
-            if (S.lanScan && S.lanScan.gated) { screen('byaddress'); return; }
             const sub = el('div', 'ex-dialog-body');
             sub.textContent = 'Pick the network to look on. Vaier scans that one LAN — quicker than sweeping them '
                 + 'all — and shows what it finds.';
@@ -1714,7 +1713,6 @@
                 content.appendChild(discoverFoot());
                 return;
             }
-            if (snap.gated) { screen('byaddress'); return; }
 
             const scanning = snap.status === 'SCANNING';
             const found = (snap.machines || [])
@@ -1907,7 +1905,6 @@
             try {
                 const res = await fetch('/lan-scan/' + encodeURIComponent(cand.ipAddress) + '/adopt', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(bodyObj) });
-                if (res.status === 402) { toast('Adopting a discovered machine is an Enterprise feature.'); restore(); return; }
                 if (!res.ok) { const e = await res.json().catch(() => ({})); toast(e.message || 'Vaier could not add that machine.'); restore(); return; }
                 const resp = await res.json();
                 await loadFleet(); await loadLanScan();
@@ -1972,12 +1969,12 @@
             content.appendChild(actions);
         }
 
-        // ---- by address: the fallback (Community, and empty/failed scans) ------------------------------
-        // The scan is Enterprise, and it can come back empty, so registering a LAN server by hand never goes
-        // away — it just steps out of the way of discovery. But once the operator names an address, Vaier can
-        // still probe that one host (POST /lan-servers/probe) and offer the same detected readout + SSH
-        // credential test the adopt flow does. Detection never blocks Add: an unreachable host just leaves the
-        // plain fields to fill in by hand.
+        // ---- by address: the fallback (an empty scan, or a LAN Vaier can't reach) -----------------------
+        // The scan can come back empty, or find nothing on a LAN Vaier can't reach, so registering a LAN
+        // server by hand never goes away — it just steps out of the way of discovery. But once the operator
+        // names an address, Vaier can still probe that one host (POST /lan-servers/probe) and offer the same
+        // detected readout + SSH credential test the adopt flow does. Detection never blocks Add: an
+        // unreachable host just leaves the plain fields to fill in by hand.
         function paintByAddress() {
             titleEl.textContent = 'Add a LAN server';
             content.innerHTML = '';
@@ -2100,7 +2097,7 @@
 
             const actions = actionsRow();
             const back = el('button', 'ex-btn'); back.textContent = 'Back';
-            back.onclick = () => screen(S.lanScan && S.lanScan.gated ? 'fork' : 'pickLan');
+            back.onclick = () => screen('pickLan');
             const add = el('button', 'ex-btn is-accent'); add.textContent = 'Add machine';
             const sync = () => { add.disabled = !(name.value.trim() && lanAddr.value.trim()); };
             name.oninput = sync; lanAddr.oninput = () => { lastProbed = null; sync(); }; sync();
@@ -4700,20 +4697,18 @@
         if (S.settings.state === 'loading') return;
         S.settings = { ...S.settings, state: 'loading' };
         try {
-            const [cfg, ver, lic, upg] = await Promise.all([
+            const [cfg, ver, upg] = await Promise.all([
                 fetch('/settings/config', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)),
                 fetch('/settings/version').then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
-                fetch('/license').then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
                 // Whether a newer Vaier is being served, and how the last upgrade went. Read with the rest of
                 // the page rather than polled: an image going stale is not news that decays in seconds.
                 fetch('/settings/upgrade', { cache: 'no-store' })
                     .then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
             ]);
             S.settings = { state: cfg ? 'ready' : 'error', config: cfg,
-                version: (ver || {}).version || '', edition: (lic || {}).edition || '',
-                upgrade: upg || {} };
+                version: (ver || {}).version || '', upgrade: upg || {} };
         } catch (e) {
-            S.settings = { state: 'error', config: null, version: '', edition: '', upgrade: {} };
+            S.settings = { state: 'error', config: null, version: '', upgrade: {} };
         }
         render();
     }
@@ -5074,7 +5069,6 @@
         body.appendChild(section('About'));
         body.appendChild(kv([
             ['Version', S.settings.version],
-            ['Edition', S.settings.edition],
             ['Domain', c.domain],
             ['Let’s Encrypt email', c.acmeEmail],
             ['DNS', c.dnsProvider],
@@ -5263,8 +5257,19 @@
                 render();
             }, (ticked ? 'Deselect ' : 'Select ') + entry.name);
 
-            const name = document.createElement(entry.directory ? 'button' : 'span');
+            // Three shapes for one name, and the entry decides which: a folder is a button (it navigates in
+            // place), a file Vaier can display is a link (it opens in a tab), and everything else is plain
+            // text. Whether a file can be displayed is the SERVER's verdict, riding on the entry — the
+            // allowlist behind it is a security boundary, and a second copy of one in the browser is a copy
+            // that drifts. Opening is an addition: the Download button stays on every row either way.
+            const name = document.createElement(entry.directory ? 'button' : (entry.viewable ? 'a' : 'span'));
             name.className = 'ex-lname';
+            if (!entry.directory && entry.viewable) {
+                name.href = viewUrl(machineId, entry);
+                name.target = '_blank';
+                name.rel = 'noopener noreferrer';
+                name.title = 'Open ' + entry.name + ' in a new tab';
+            }
             name.innerHTML = svg(entry.directory ? 'dir' : 'file', 'ex-ico');
             const nm = document.createElement('span');
             nm.className = 'ex-nm';
@@ -5417,6 +5422,17 @@
 
     const clipClear = () => { S.clipboard = []; render(); };
     const clipRemove = (id) => { S.clipboard = S.clipboard.filter((c) => clipId(c.machine, c.path, c.at) !== id); render(); };
+
+    // Where a viewable file opens. A separate endpoint from the download, because they are separate verbs:
+    // /files/download always saves, /files/view always displays, and neither has a mode that behaves like the
+    // other. The coordinate is the same (path, at) the listing carries, so a file opened from an archive shows
+    // its past self — a view is a read, and reads are allowed in the past.
+    function viewUrl(machineId, entry, at) {
+        at = arguments.length >= 3 ? at : S.at;
+        const params = new URLSearchParams({ path: entry.path });
+        if (at) params.set('at', at);
+        return '/machines/' + encodeURIComponent(machineId) + '/files/view?' + params.toString();
+    }
 
     // A download is a paste whose destination is the browser: Vaier streams the file's bytes straight through.
     // The coordinate travels as the same (path, at) the listing carries, so a file from an archive downloads
@@ -6297,8 +6313,9 @@
     }
 
     // The discovered-machines snapshot — read when the fleet is looked at, and again whenever a scan settles
-    // (the backend pushes lan-scan-updated on the vpn-peers stream, so this never polls). A Community instance
-    // is refused with 402; the section then simply does not show. Guarded so a re-render can't re-fetch it.
+    // (the backend pushes lan-scan-updated on the vpn-peers stream, so this never polls). An unreadable
+    // response (offline, a fleet with no scannable LAN yet) just leaves the section empty. Guarded so a
+    // re-render can't re-fetch it.
     let _lanScanLoading = false;
     let _showIgnoredLan = false;   // whether the dismissed finds are revealed under the "Show ignored" toggle
     let _showIgnoredServices = false;   // the same, for a machine's ignored publishable ports
@@ -6310,8 +6327,7 @@
         _lanScanLoading = true;
         try {
             const res = await fetch('/lan-scan', { cache: 'no-store' });
-            S.lanScan = res.status === 402 ? { gated: true }
-                : (res.ok ? await res.json() : { status: 'IDLE', machines: [] });
+            S.lanScan = res.ok ? await res.json() : { status: 'IDLE', machines: [] };
         } catch (e) { S.lanScan = { status: 'IDLE', machines: [] }; }
         _lanScanLoading = false;
         render();
@@ -6326,17 +6342,15 @@
         try {
             const url = anchor ? '/lan-scan?anchor=' + encodeURIComponent(anchor) : '/lan-scan';
             const res = await fetch(url, { method: 'POST' });
-            if (res.status === 402) { toast('The LAN scan is an Enterprise feature.'); return; }
             if (res.status === 404) { toast('Vaier no longer knows that network.'); return; }
             if (!res.ok && res.status !== 202) { toast('Vaier could not start the scan.'); return; }
             toast(anchor ? 'Scanning that network…' : 'Scanning the LAN…');
-            if (S.lanScan && !S.lanScan.gated) { S.lanScan.status = 'SCANNING'; render(); }
+            if (S.lanScan) { S.lanScan.status = 'SCANNING'; render(); }
         } catch (e) { toast('Vaier could not start the scan.'); }
     }
 
     // The LANs an operator can pick to scan — each relay's LAN plus the Vaier-server LAN, resolved server-side
-    // so the browser never reconstructs the server's own CIDR. Read once when the picker opens; a Community
-    // instance is refused with 402 and the picker routes to add-by-address instead.
+    // so the browser never reconstructs the server's own CIDR. Read once when the picker opens.
     let _lanScanLansLoading = false;
     async function loadLanScanLans() {
         if (_lanScanLansLoading) return;

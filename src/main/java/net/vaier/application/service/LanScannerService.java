@@ -186,8 +186,7 @@ public class LanScannerService implements ScanLanUseCase, ScanLanAnchorUseCase,
     /**
      * Probe one operator-typed address for the manual "add a LAN server by address" helper. This is the
      * home for the probe because it already holds the scan and anchor ports; the operation itself is a
-     * targeted, non-intrusive single-host probe (NOT the Enterprise CIDR sweep), so it stays
-     * Community-available at the controller. Orchestration only: the domain decides what routes to the
+     * targeted, non-intrusive single-host probe (NOT the CIDR sweep). Orchestration only: the domain decides what routes to the
      * address ({@link LanAnchor#resolve}) and derives the read-offs ({@link DiscoveredLanMachine}); the
      * driven {@link ForScanningLan#scanHost} does the probe. Empty address, no covering anchor, or a
      * silent no-answer all map to {@link LanHostProbe#notReachable()} — never an error.

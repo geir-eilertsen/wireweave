@@ -455,9 +455,14 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
     color: var(--text);
 }
 .ex-lname .ex-nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-button.ex-lname { cursor: pointer; }
-button.ex-lname:hover .ex-nm { color: var(--accent); text-decoration: underline; }
-button.ex-lname:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* A file Vaier can display is an <a>, a folder is a <button>. Two elements, one affordance: both are names
+   that do something when you click them, so they share the hover and focus treatment rather than the link
+   growing a look of its own. The link is not underlined at rest — a listing where half the rows are underlined
+   reads as a page of links, not a folder — it earns the underline on hover like the folder beside it. */
+button.ex-lname, a.ex-lname { cursor: pointer; }
+a.ex-lname { color: var(--text); text-decoration: none; }
+button.ex-lname:hover .ex-nm, a.ex-lname:hover .ex-nm { color: var(--accent); text-decoration: underline; }
+button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .ex-lmeta {
     font-family: inherit; font-size: 13px;
     color: var(--text-dim);
@@ -1418,7 +1423,7 @@ select.ex-input { cursor: pointer; }
         transform: translateY(-50%) rotate(45deg);
     }
     /* Underlining a name on tap is a pointer idiom; a touch row says "pressed" with its whole surface. */
-    button.ex-lname:hover .ex-nm { color: inherit; text-decoration: none; }
+    button.ex-lname:hover .ex-nm, a.ex-lname:hover .ex-nm { color: inherit; text-decoration: none; }
     .ex-lrow:active { background: var(--bg-hover); }
     /* 16px keeps iOS from zooming the layout the instant a field takes focus — the search field, and every
        form input (Settings, Add machine, credentials). */

@@ -30,9 +30,9 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 /**
- * Enterprise-only endpoint behind issue #246's "Discovered LAN machines". Gated as a whole with
- * {@link RequiresEnterprise}: a Community instance gets {@code 402 Payment Required} from
- * {@link EnterpriseLicenseInterceptor} and never reaches a handler.
+ * The endpoint behind issue #246's "Discovered LAN machines". The whole add-a-machine flow, scan
+ * through adopt, is freely available and consistent with {@link LanServerRestController}'s
+ * single-host probe.
  *
  * <p>The scan is on demand and asynchronous: {@code POST /lan-scan} kicks off a background sweep and
  * returns {@code 202 Accepted} immediately; {@code GET /lan-scan} returns the latest snapshot
@@ -41,8 +41,7 @@ import java.util.List;
  */
 @RestController
 @RequestMapping("/lan-scan")
-@RequiresEnterprise
-@Tag(name = "LAN scanner", description = "Discover unregistered machines on the relay LANs (Enterprise)")
+@Tag(name = "LAN scanner", description = "Discover unregistered machines on the relay LANs")
 public class LanScannerRestController {
 
     private final ScanLanUseCase scanLan;

@@ -170,7 +170,7 @@ class ExplorerShellTest {
         List<String> allowed = List.of("/machines", "/vpn/peers", "/lan-servers", "/users/me",
                                        "/docker-services", "/published-services", "/access/services",
                                        "/transfers", "/backup-servers", "/backup-repositories", "/backup-jobs",
-                                       "/settings", "/license", "/lan-scan", "/survival-kit");
+                                       "/settings", "/lan-scan", "/survival-kit");
         String js = read("explorer-shell.js");
         Matcher m = Pattern.compile("fetch\\([`']([^`']+)[`']").matcher(js);
         int found = 0;
@@ -1587,5 +1587,47 @@ class ExplorerShellTest {
         // The reserved rail is real chrome with nothing on it yet. Without a mark for that state it reads as
         // "this machine has no backups", which is the opposite of true.
         assertThat(read("explorer-shell.css")).contains(".ex-rail.is-waiting");
+    }
+
+    // --- Open: a viewable file's name is a link ---------------------------------------------------------
+
+    @Test
+    void aViewableFile_opensInANewTab_fromItsOwnName() throws IOException {
+        String js = read("explorer-shell.js");
+
+        // The listing paints a link for a viewable file, pointing at the view endpoint, opened in a new tab
+        // with no handle back to the Explorer.
+        assertThat(js).contains("/files/view?");
+        assertThat(js).contains("entry.viewable");
+        assertThat(js).contains("noopener noreferrer");
+        // And the link gets the same affordance a directory's name has, rather than a look of its own.
+        assertThat(read("explorer-shell.css")).contains("a.ex-lname");
+    }
+
+    @Test
+    void theShell_holdsNoAllowlistOfItsOwn_becauseTheServerDecidesWhatItWillDisplay() throws IOException {
+        // The allowlist is a security boundary (an inline file runs on Vaier's origin, against the operator's
+        // session). A second copy in the browser is a copy that drifts, so the listing carries the server's
+        // per-entry verdict and the shell only honours it.
+        String js = read("explorer-shell.js");
+        assertThat(js).doesNotContain("'.html'");
+        assertThat(js).doesNotContain("image/jpeg");
+        // Nothing in the shell decides viewability by looking at a filename — the flag arrives with the entry.
+        int from = js.indexOf("function viewUrl(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).doesNotContain("entry.name");
+    }
+
+    @Test
+    void openDoesNotReplaceDownload_everyFileCanStillBeSaved() throws IOException {
+        // Opening is an addition, not a swap: the Download button stays on every row, viewable or not, and
+        // /files/download is untouched — it always saves.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function rowActions(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).as("Download is unconditional in the row's actions").contains("download(machineId, entry)");
+        assertThat(body).doesNotContain("viewable");
     }
 }

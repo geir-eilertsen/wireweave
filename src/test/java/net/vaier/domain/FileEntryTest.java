@@ -143,4 +143,18 @@ class FileEntryTest {
     void aListing_ofNothing_isEmpty_notNull() {
         assertThat(FileEntry.listing(List.of())).isEmpty();
     }
+
+    // --- viewable: whether the browser can be handed this entry to display ------------------------
+
+    @Test
+    void anEntry_isViewable_whenVaierWillHandItToTheBrowser() {
+        // The listing carries the verdict so the browser never has to hold its own copy of the allowlist.
+        assertThat(file("/srv", "holiday.png").viewable()).isTrue();
+        assertThat(file("/srv", "notes.txt").viewable()).isTrue();
+        // Markup that can carry script is never viewable, and neither is anything unlisted.
+        assertThat(file("/srv", "index.html").viewable()).isFalse();
+        assertThat(file("/srv", "backup.tar.gz").viewable()).isFalse();
+        // A directory has no bytes to render — it is a zip when it is downloaded.
+        assertThat(dir("/srv", "photos.png").viewable()).isFalse();
+    }
 }

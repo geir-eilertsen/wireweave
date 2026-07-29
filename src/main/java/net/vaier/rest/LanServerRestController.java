@@ -93,10 +93,11 @@ public class LanServerRestController {
      * Probe a single address the operator typed while adding a LAN server <em>by hand</em>, so the manual
      * path can offer the same detected readout + SSH credential test that adopting a scanned host does.
      *
-     * <p>Community-available on purpose — NOT {@link RequiresEnterprise}: this inspects the one host the
-     * operator already named (a targeted, non-intrusive port probe), not the Enterprise LAN discovery
-     * sweep. An unroutable address or a silent host comes back {@code reachable:false} with empty fields
-     * (never a 500), so the UI falls back to the manual fields rather than erroring.
+     * <p>Community-available, like the rest of the add-a-machine flow (#338): this inspects the one host
+     * the operator already named (a targeted, non-intrusive port probe), the manual counterpart to
+     * {@link LanScannerRestController}'s LAN-wide sweep. An unroutable address or a silent host comes
+     * back {@code reachable:false} with empty fields (never a 500), so the UI falls back to the manual
+     * fields rather than erroring.
      */
     @PostMapping("/probe")
     public ProbeResponse probe(@RequestBody ProbeRequest request) {

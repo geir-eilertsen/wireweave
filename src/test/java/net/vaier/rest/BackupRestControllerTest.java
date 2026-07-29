@@ -36,7 +36,6 @@ import net.vaier.domain.BackupRepository;
 import net.vaier.domain.BackupRun;
 import net.vaier.domain.BackupRunStatus;
 import net.vaier.domain.ConflictException;
-import net.vaier.domain.Edition;
 import net.vaier.domain.SurvivalKitHosts;
 import net.vaier.domain.SurvivalKitRollout;
 import net.vaier.domain.BackupServer;
@@ -53,7 +52,6 @@ import net.vaier.rest.BackupRestController.RunResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -72,9 +70,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 class BackupRestControllerTest {
@@ -174,11 +170,8 @@ class BackupRestControllerTest {
             null, "10.13.13.9", false, null, DeviceCategory.SERVER, null);
     }
 
-    /** MockMvc that runs the Enterprise-edition gate (a licensed instance) in front of the controller. */
-    private MockMvc enterpriseMockMvc() {
-        return MockMvcBuilders.standaloneSetup(controller)
-            .addInterceptors(new EnterpriseLicenseInterceptor(() -> Edition.ENTERPRISE))
-            .build();
+    private MockMvc mockMvc() {
+        return MockMvcBuilders.standaloneSetup(controller).build();
     }
 
     private BackupServer server() {
@@ -203,7 +196,7 @@ class BackupRestControllerTest {
         jobs.save(job());
         runs.record(BackupRun.failed(job(), "run-1", Instant.parse("2026-07-22T02:00:00Z"), "borg died"));
 
-        String body = enterpriseMockMvc().perform(get("/backup-jobs"))
+        String body = mockMvc().perform(get("/backup-jobs"))
             .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
 
         assertThat(body).contains("\"lastRunStatus\":\"FAILED\"");
@@ -215,68 +208,10 @@ class BackupRestControllerTest {
         // would be the tree's first lie.
         jobs.save(job());
 
-        String body = enterpriseMockMvc().perform(get("/backup-jobs"))
+        String body = mockMvc().perform(get("/backup-jobs"))
             .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
 
         assertThat(body).contains("\"lastRunStatus\":null");
-    }
-
-    /** MockMvc that runs the Community-edition Enterprise gate in front of the controller. */
-    private MockMvc communityMockMvc() {
-        return MockMvcBuilders.standaloneSetup(controller)
-            .addInterceptors(new EnterpriseLicenseInterceptor(() -> Edition.COMMUNITY))
-            .build();
-    }
-
-    @Test
-    void communityEditionGets402OnAllRoutes() throws Exception {
-        MockMvc mvc = communityMockMvc();
-
-        // Slice 3: the backup-server routes are gated too.
-        mvc.perform(get("/backup-servers")).andExpect(status().isPaymentRequired());
-        mvc.perform(get("/backup-servers/nas-borg")).andExpect(status().isPaymentRequired());
-        mvc.perform(put("/backup-servers/nas-borg")
-            .contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isPaymentRequired());
-        mvc.perform(delete("/backup-servers/nas-borg")).andExpect(status().isPaymentRequired());
-        mvc.perform(get("/backup-servers/nas-borg/setup.sh")).andExpect(status().isPaymentRequired());
-        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
-            .post("/backup-servers/nas-borg/provision")).andExpect(status().isPaymentRequired());
-        mvc.perform(get("/backup-servers/nas-borg/provision/status")).andExpect(status().isPaymentRequired());
-        // Slice 4: the key-trust route is gated too.
-        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
-            .post("/backup-servers/nas-borg/authorize/colina27")).andExpect(status().isPaymentRequired());
-
-        mvc.perform(get("/backup-repositories")).andExpect(status().isPaymentRequired());
-        mvc.perform(get("/backup-repositories/nas-borg")).andExpect(status().isPaymentRequired());
-        mvc.perform(put("/backup-repositories/nas-borg")
-            .contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isPaymentRequired());
-        mvc.perform(delete("/backup-repositories/nas-borg")).andExpect(status().isPaymentRequired());
-        mvc.perform(get("/backup-repositories/nas-borg/archives")).andExpect(status().isPaymentRequired());
-
-        mvc.perform(get("/backup-jobs")).andExpect(status().isPaymentRequired());
-        mvc.perform(get("/backup-jobs/colina-home")).andExpect(status().isPaymentRequired());
-        mvc.perform(put("/backup-jobs/colina-home")
-            .contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isPaymentRequired());
-        mvc.perform(delete("/backup-jobs/colina-home")).andExpect(status().isPaymentRequired());
-
-        // Slice 8: the provisioning routes are gated too.
-        mvc.perform(get("/backup-jobs/colina-home/provision/check")).andExpect(status().isPaymentRequired());
-        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
-            .post("/backup-repositories/nas-borg/provision/init")).andExpect(status().isPaymentRequired());
-        // Prepare-client routes are gated too.
-        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
-            .post("/backup-jobs/colina-home/prepare-client")).andExpect(status().isPaymentRequired());
-        mvc.perform(get("/backup-jobs/colina-home/prepare-client/status"))
-            .andExpect(status().isPaymentRequired());
-        // The backup SSE stream is gated too.
-        mvc.perform(get("/backup-jobs/events")).andExpect(status().isPaymentRequired());
-
-        // Just-select-and-back-up: the protected-paths routes are gated too.
-        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
-            .post("/machines/colina/backup/paths")
-            .contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isPaymentRequired());
-        mvc.perform(delete("/machines/colina/backup/paths")
-            .contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isPaymentRequired());
     }
 
     @Test
@@ -861,7 +796,7 @@ class BackupRestControllerTest {
         backupServers.save(server());
         when(generateSetupScript.generateSetupScript("nas-borg"))
             .thenReturn(Optional.of("#!/usr/bin/env bash\nimage: horaceworblehat/borg-server:2.8.6\n"));
-        MockMvc mvc = enterpriseMockMvc();
+        MockMvc mvc = mockMvc();
 
         mvc.perform(get("/backup-servers/nas-borg/setup.sh"))
             .andExpect(status().isOk())
@@ -877,7 +812,7 @@ class BackupRestControllerTest {
     @Test
     void setupScriptUnknownServerReturns404() throws Exception {
         when(generateSetupScript.generateSetupScript("nope")).thenReturn(Optional.empty());
-        MockMvc mvc = enterpriseMockMvc();
+        MockMvc mvc = mockMvc();
 
         mvc.perform(get("/backup-servers/nope/setup.sh")).andExpect(status().isNotFound());
     }

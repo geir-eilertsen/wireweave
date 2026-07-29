@@ -6,6 +6,8 @@ import net.vaier.application.BrowseFilesUseCase;
 import net.vaier.application.DeleteFileUseCase;
 import net.vaier.application.DownloadFileUseCase;
 import net.vaier.application.ResolveFileCoordinateUseCase;
+import net.vaier.application.ViewFileUseCase;
+import net.vaier.application.ViewFileUseCase.View;
 import net.vaier.domain.FileEntry;
 import net.vaier.domain.MachineId;
 import net.vaier.domain.MountedArchive;
@@ -15,6 +17,7 @@ import net.vaier.domain.Selection;
 import net.vaier.domain.SftpRoot;
 import net.vaier.domain.ProtectedPaths;
 import net.vaier.domain.SshTarget;
+import net.vaier.domain.ViewableFile;
 import net.vaier.domain.port.ForBrowsingRemoteFiles;
 import net.vaier.domain.port.ForBrowsingRemoteFiles.DirectoryListing;
 import net.vaier.domain.port.ForBrowsingRemoteFiles.RemoteStat;
@@ -46,7 +49,8 @@ import java.util.zip.ZipOutputStream;
 @Slf4j
 @RequiredArgsConstructor
 public class ExplorerService
-    implements BrowseFilesUseCase, ResolveFileCoordinateUseCase, DownloadFileUseCase, DeleteFileUseCase {
+    implements BrowseFilesUseCase, ResolveFileCoordinateUseCase, DownloadFileUseCase, ViewFileUseCase,
+               DeleteFileUseCase {
 
     private final ForResolvingSshTargets forResolvingSshTargets;
     private final ForBrowsingRemoteFiles forBrowsingRemoteFiles;
@@ -181,6 +185,29 @@ public class ExplorerService
         String filename = basename(coordinate.path());
         log.debug("Opening {} on {} for download ({} bytes)", filename, machineId, stat.sizeBytes());
         return new Download(filename, stat.sizeBytes(), OCTET_STREAM,
+            out -> forBrowsingRemoteFiles.download(coordinate.target(), coordinate.path(), out));
+    }
+
+    /**
+     * Open a file to be displayed in the browser rather than saved — the same resolve-and-stat as a download,
+     * with one decision on top that is not the service's: {@link ViewableFile} says whether Vaier will hand
+     * this file to a browser at all, and as what media type and under what {@code Content-Security-Policy}. A
+     * file that is not viewable is refused here, so nothing unallowlisted can ever be served inline; the
+     * refusal is an {@link IllegalArgumentException}, a {@code 400} carrying the domain's own sentence.
+     *
+     * <p>The verdict is asked once, after the stat, because it needs both halves of the answer — the filename
+     * and whether the coordinate turned out to be a directory. The path trust boundary still stands in front
+     * of everything ({@link #resolve}), so a hostile path is refused before any machine is touched. A view is
+     * a read, so {@code at} may name an archive and the bytes come from under the mountpoint.
+     */
+    @Override
+    public View openForView(MachineId machineId, String path, String at) {
+        ResolvedFileCoordinate coordinate = resolve(machineId, path, at);
+        RemoteStat stat = forBrowsingRemoteFiles.stat(coordinate.target(), coordinate.path());
+        ViewableFile viewable = ViewableFile.require(basename(coordinate.path()), stat.directory());
+        log.debug("Opening {} on {} for viewing as {}", viewable.filename(), machineId, viewable.mediaType());
+        return new View(viewable.filename(), stat.sizeBytes(), viewable.mediaType(),
+            viewable.contentSecurityPolicy(),
             out -> forBrowsingRemoteFiles.download(coordinate.target(), coordinate.path(), out));
     }
 

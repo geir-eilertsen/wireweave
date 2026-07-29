@@ -9,8 +9,8 @@ import java.util.Optional;
  * to every relay peer's LAN) and the parsing of its output. Callers get back only responsive
  * hosts — an empty list when nothing answered or the CIDR is unreachable.
  *
- * <p>An Enterprise-only capability (issue #246): the scan is intrusive, so it runs only when the
- * application explicitly asks and the licence permits it.
+ * <p>The scan is intrusive, so it runs only when the application explicitly asks for it — never on
+ * a timer and never as a side effect of reading something.
  */
 public interface ForScanningLan {
 

@@ -8,8 +8,7 @@ import java.util.List;
 /**
  * Reads the latest LAN-scan snapshot (issue #246): whether a scan is currently running, the
  * machines found by the most recent completed scan, and when that scan finished. The scan itself is
- * kicked off via {@link ScanLanUseCase}; this query never blocks on a sweep. An Enterprise-only
- * capability.
+ * kicked off via {@link ScanLanUseCase}; this query never blocks on a sweep.
  */
 public interface GetDiscoveredLanMachinesUseCase {
 

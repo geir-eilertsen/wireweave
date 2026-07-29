@@ -52,6 +52,16 @@ public record FileEntry(String name, String path, boolean directory, long sizeBy
         return new FileEntry(name, path, directory, sizeBytes, modified);
     }
 
+    /**
+     * Whether Vaier will hand this entry to the browser to <b>display</b> rather than only to save —
+     * {@link ViewableFile}'s decision, asked by name and kind, so the one allowlist answers both the listing
+     * and the view request itself. The listing carries the verdict per entry precisely so the browser never
+     * holds a second copy of it.
+     */
+    public boolean viewable() {
+        return ViewableFile.of(name, directory).isPresent();
+    }
+
     /** {@code entries} in listing order: directories before files, then by name, case-insensitively. */
     public static List<FileEntry> listing(Collection<FileEntry> entries) {
         return entries.stream().sorted(LISTING_ORDER).toList();

@@ -6,7 +6,6 @@ import java.util.List;
  * Lists the LANs Vaier can sweep for unregistered machines (issue #246): each relay peer that
  * routes a LAN, plus the Vaier server's own LAN when its CIDR is known. The "pick a LAN first"
  * picker offers exactly these, so an operator scans one LAN at a time rather than every LAN at once.
- * An Enterprise-only capability.
  */
 public interface ListScannableLansUseCase {
 

@@ -2,6 +2,7 @@ package net.vaier.application.service;
 
 import net.vaier.application.BrowseFilesUseCase.MachineDirectory;
 import net.vaier.application.DownloadFileUseCase.Download;
+import net.vaier.application.ViewFileUseCase.View;
 import net.vaier.domain.AuthMethod;
 import net.vaier.domain.CannotDeleteSftpRootException;
 import net.vaier.domain.FileEntry;
@@ -20,6 +21,7 @@ import net.vaier.domain.port.ForBrowsingRemoteFiles.DirectoryListing;
 import net.vaier.domain.Excludes;
 import net.vaier.domain.ProtectedPaths;
 import net.vaier.domain.SourcePaths;
+import net.vaier.domain.ViewableFile;
 import net.vaier.domain.port.ForMountingArchives;
 import net.vaier.domain.port.ForReadingProtectedPaths;
 import net.vaier.domain.port.ForResolvingSftpRoots;
@@ -35,6 +37,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -767,5 +770,100 @@ class ExplorerServiceTest {
         // A download is a read, so the past is fine — the file is read under the mountpoint.
         assertThat(download.filename()).isEqualTo("notes.txt");
         verify(forBrowsingRemoteFiles).stat(any(), eq(MOUNTPOINT + "/home/geir/notes.txt"));
+    }
+
+    // --- Open: handing a viewable file to the browser to display ----------------------------------------
+
+    @Test
+    void openForView_ofAViewableFile_carriesItsMediaTypeSizeAndBytes() throws Exception {
+        machineResolves("apalveien5", "SHA256:pinned");
+        when(forBrowsingRemoteFiles.stat(any(), eq("/home/geir/holiday.png")))
+            .thenReturn(new ForBrowsingRemoteFiles.RemoteStat(false, 4242));
+        doAnswer(inv -> {
+            ((OutputStream) inv.getArgument(2)).write("PNGBYTES".getBytes());
+            return null;
+        }).when(forBrowsingRemoteFiles).download(any(), eq("/home/geir/holiday.png"), any());
+
+        View view = service.openForView(mid("apalveien5"), "/home/geir/holiday.png", null);
+
+        assertThat(view.filename()).isEqualTo("holiday.png");
+        assertThat(view.sizeBytes()).isEqualTo(4242);
+        // The media type is the domain's (ViewableFile), never octet-stream — that is what makes it render.
+        assertThat(view.mediaType()).isEqualTo("image/png");
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        view.writer().accept(out);
+        assertThat(out.toString()).isEqualTo("PNGBYTES");
+    }
+
+    @Test
+    void openForView_ofATextishFile_servesItAsPlainText() {
+        machineResolves("apalveien5", "SHA256:pinned");
+        when(forBrowsingRemoteFiles.stat(any(), eq("/etc/docker-compose.yml")))
+            .thenReturn(new ForBrowsingRemoteFiles.RemoteStat(false, 90));
+
+        View view = service.openForView(mid("apalveien5"), "/etc/docker-compose.yml", null);
+
+        assertThat(view.mediaType()).isEqualTo("text/plain;charset=utf-8");
+    }
+
+    @Test
+    void openForView_carriesTheContentSecurityPolicyTheDomainChose() {
+        machineResolves("apalveien5", "SHA256:pinned");
+        when(forBrowsingRemoteFiles.stat(any(), eq("/home/geir/holiday.png")))
+            .thenReturn(new ForBrowsingRemoteFiles.RemoteStat(false, 10));
+
+        View view = service.openForView(mid("apalveien5"), "/home/geir/holiday.png", null);
+
+        // The policy is not the controller's to invent: it differs per media type (a PDF cannot be sandboxed
+        // and still render), so it travels from the domain with the file.
+        assertThat(view.contentSecurityPolicy())
+            .isEqualTo(ViewableFile.require("holiday.png", false).contentSecurityPolicy());
+    }
+
+    @Test
+    void openForView_ofSomethingNotViewable_isRefused_andNeverServedAnyway() {
+        machineResolves("apalveien5", "SHA256:pinned");
+        when(forBrowsingRemoteFiles.stat(any(), eq("/srv/www/index.html")))
+            .thenReturn(new ForBrowsingRemoteFiles.RemoteStat(false, 500));
+
+        // Inline HTML from a fleet machine runs script against the operator's Vaier session. Refused, never
+        // quietly served under some other type.
+        assertThatThrownBy(() -> service.openForView(mid("apalveien5"), "/srv/www/index.html", null))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("index.html");
+        verify(forBrowsingRemoteFiles, never()).download(any(), any(), any());
+    }
+
+    @Test
+    void openForView_ofADirectory_isRefused() {
+        machineResolves("apalveien5", "SHA256:pinned");
+        when(forBrowsingRemoteFiles.stat(any(), eq("/home/geir/photos.png")))
+            .thenReturn(new ForBrowsingRemoteFiles.RemoteStat(true, 4096));
+
+        // A folder named like an image is still a folder: nothing to render, and a zip when downloaded.
+        assertThatThrownBy(() -> service.openForView(mid("apalveien5"), "/home/geir/photos.png", null))
+            .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void openForView_inThePast_readsUnderTheMountpoint_becauseAViewIsARead() {
+        machineResolves("apalveien5", "SHA256:pinned");
+        archiveMountsAt("apalveien5", "ab12", MOUNTPOINT);
+        when(forBrowsingRemoteFiles.stat(any(), eq(MOUNTPOINT + "/home/geir/holiday.png")))
+            .thenReturn(new ForBrowsingRemoteFiles.RemoteStat(false, 4242));
+
+        View view = service.openForView(mid("apalveien5"), "/home/geir/holiday.png", "ab12");
+
+        assertThat(view.filename()).isEqualTo("holiday.png");
+        assertThat(view.mediaType()).isEqualTo("image/png");
+        verify(forBrowsingRemoteFiles).stat(any(), eq(MOUNTPOINT + "/home/geir/holiday.png"));
+    }
+
+    @Test
+    void openForView_appliesThePathTrustBoundary_beforeTouchingAnyMachine() {
+        assertThatThrownBy(() -> service.openForView(mid("apalveien5"), "/../etc/shadow", null))
+            .isInstanceOf(IllegalArgumentException.class);
+
+        verify(forResolvingSshTargets, never()).resolve(any());
     }
 }

@@ -1,6 +1,5 @@
 package net.vaier.config;
 
-import net.vaier.rest.EnterpriseLicenseInterceptor;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.springframework.web.servlet.config.annotation.AsyncSupportConfigurer;
@@ -15,7 +14,7 @@ class WebConfigTest {
 
     @Test
     void configureAsyncSupport_disablesTheDefaultAsyncTimeout_soLongStreamingDownloadsAreNotCutOff() {
-        WebConfig config = new WebConfig(Mockito.mock(EnterpriseLicenseInterceptor.class));
+        WebConfig config = new WebConfig();
         AsyncSupportConfigurer configurer = Mockito.mock(AsyncSupportConfigurer.class);
 
         config.configureAsyncSupport(configurer);

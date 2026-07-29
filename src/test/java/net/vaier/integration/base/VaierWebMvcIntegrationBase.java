@@ -45,11 +45,6 @@ public abstract class VaierWebMvcIntegrationBase {
     @MockBean
     protected GetIconUseCase getIconUseCase;
 
-    // Required by WebConfig -> EnterpriseLicenseInterceptor, which every @WebMvcTest
-    // context loads; without it the whole controller IT suite fails to start.
-    @MockBean
-    protected GetEditionUseCase getEditionUseCase;
-
     // --- Social-login authorization use cases ---
     @MockBean
     protected VerifyAccessUseCase verifyAccessUseCase;
@@ -302,6 +297,9 @@ public abstract class VaierWebMvcIntegrationBase {
     @MockBean
     protected DeleteFileUseCase deleteFileUseCase;
 
+    @MockBean
+    protected ViewFileUseCase viewFileUseCase;
+
     // --- Explorer Transfer (Clipboard) use cases ---
     @MockBean
     protected StartTransferUseCase startTransferUseCase;
@@ -333,11 +331,7 @@ public abstract class VaierWebMvcIntegrationBase {
     @MockBean
     protected GetAppVersionUseCase getAppVersionUseCase;
 
-    // --- Licensing ---
-    @MockBean
-    protected GetLicenseStatusUseCase getLicenseStatusUseCase;
-
-    // --- LAN scanner (Enterprise) use cases ---
+    // --- LAN scanner use cases ---
     @MockBean
     protected ScanLanUseCase scanLanUseCase;
 
@@ -362,7 +356,7 @@ public abstract class VaierWebMvcIntegrationBase {
     @MockBean
     protected net.vaier.application.VerifySshCredentialUseCase verifySshCredentialUseCase;
 
-    // --- Fleet backup (Enterprise) CRUD use cases ---
+    // --- Fleet backup CRUD use cases ---
     @MockBean
     protected SaveBackupRepositoryUseCase saveBackupRepositoryUseCase;
 

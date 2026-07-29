@@ -1,11 +1,14 @@
 package net.vaier.adapter.driven;
 
+import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.yaml.snakeyaml.Yaml;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -228,6 +231,140 @@ class DockerComposeStructureTest {
         assertThat(render).as("github connector secret inlined").contains("clientSecret: $${VAIER_OIDC_GITHUB_CLIENT_SECRET}");
         assertThat(render).as("Dex connectors/clients cannot read a secret from a file")
             .doesNotContain("clientSecretFile").doesNotContain("secretFile");
+    }
+
+    // --- #332: each identity provider is independently optional, not both-mandatory ---
+
+    private record DexInitResult(int exitCode, String stdout, String stderr) {}
+
+    @SuppressWarnings("unchecked")
+    private String dexInitScript() throws Exception {
+        Map<String, Object> compose = (Map<String, Object>) new Yaml()
+            .load(Files.readString(Path.of("docker-compose.yml")));
+        Map<String, Object> services = (Map<String, Object>) compose.get("services");
+        Map<String, Object> dexInit = (Map<String, Object>) services.get("dex-init");
+        List<String> command = (List<String>) dexInit.get("command");
+        // command is ["sh", "-c", "<script>"] — the script itself is the last element.
+        return command.get(command.size() - 1);
+    }
+
+    // Runs the ACTUAL rendered dex-init script under sh, so these tests pin real shell behaviour
+    // rather than a regex over the YAML. Two test-only substitutions make that practical without
+    // requiring root in the test JVM: /dex/config is redirected to a temp dir (the real path is
+    // root-owned), and `chown` is stubbed to a no-op via a PATH-prepended shim (unprivileged users
+    // cannot chown to an arbitrary uid). Neither substitution touches the script's own logic.
+    private DexInitResult runDexInit(Path tempDir, Map<String, String> providerEnv) throws Exception {
+        // docker-compose itself collapses the $${...} escaping to a single $ before the shell ever
+        // sees the command — we bypass compose entirely here, so that collapse has to happen in the
+        // test too, or the shell reads a literal "$$" as its own PID special parameter.
+        String script = dexInitScript()
+            .replace("$$", "$")
+            .replace("/dex/config", tempDir.toString());
+
+        Path stubBin = Files.createDirectories(tempDir.resolve("stub-bin"));
+        Path chownStub = stubBin.resolve("chown");
+        Files.writeString(chownStub, "#!/bin/sh\nexit 0\n");
+        chownStub.toFile().setExecutable(true);
+
+        ProcessBuilder builder = new ProcessBuilder("sh", "-c", script);
+        Map<String, String> env = builder.environment();
+        env.put("PATH", stubBin + File.pathSeparator + env.get("PATH"));
+        env.put("VAIER_DOMAIN", "example.com");
+        env.put("VAIER_DEX_CLIENT_SECRET", providerEnv.getOrDefault("VAIER_DEX_CLIENT_SECRET", "dex-shared-secret"));
+        env.put("VAIER_OIDC_GOOGLE_CLIENT_ID", providerEnv.getOrDefault("VAIER_OIDC_GOOGLE_CLIENT_ID", ""));
+        env.put("VAIER_OIDC_GOOGLE_CLIENT_SECRET", providerEnv.getOrDefault("VAIER_OIDC_GOOGLE_CLIENT_SECRET", ""));
+        env.put("VAIER_OIDC_GITHUB_CLIENT_ID", providerEnv.getOrDefault("VAIER_OIDC_GITHUB_CLIENT_ID", ""));
+        env.put("VAIER_OIDC_GITHUB_CLIENT_SECRET", providerEnv.getOrDefault("VAIER_OIDC_GITHUB_CLIENT_SECRET", ""));
+
+        Process process = builder.start();
+        boolean finished = process.waitFor(10, TimeUnit.SECONDS);
+        if (!finished) {
+            process.destroyForcibly();
+            throw new IllegalStateException("dex-init script did not finish within 10s");
+        }
+        String stdout = new String(process.getInputStream().readAllBytes());
+        String stderr = new String(process.getErrorStream().readAllBytes());
+        return new DexInitResult(process.exitValue(), stdout, stderr);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void dexInit_emitsOnlyTheGoogleConnector_whenOnlyGoogleCredentialsAreSet(@TempDir Path tempDir) throws Exception {
+        DexInitResult result = runDexInit(tempDir, Map.of(
+            "VAIER_OIDC_GOOGLE_CLIENT_ID", "google-id",
+            "VAIER_OIDC_GOOGLE_CLIENT_SECRET", "google-secret"));
+
+        assertThat(result.exitCode()).as("stderr: %s", result.stderr()).isEqualTo(0);
+        String rendered = Files.readString(tempDir.resolve("config.yaml"));
+        Map<String, Object> configYaml = (Map<String, Object>) new Yaml().load(rendered);
+        List<Map<String, Object>> connectors = (List<Map<String, Object>>) configYaml.get("connectors");
+
+        assertThat(connectors).hasSize(1);
+        assertThat(connectors.get(0).get("type")).isEqualTo("google");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void dexInit_emitsOnlyTheGithubConnector_whenOnlyGithubCredentialsAreSet(@TempDir Path tempDir) throws Exception {
+        DexInitResult result = runDexInit(tempDir, Map.of(
+            "VAIER_OIDC_GITHUB_CLIENT_ID", "github-id",
+            "VAIER_OIDC_GITHUB_CLIENT_SECRET", "github-secret"));
+
+        assertThat(result.exitCode()).as("stderr: %s", result.stderr()).isEqualTo(0);
+        String rendered = Files.readString(tempDir.resolve("config.yaml"));
+        Map<String, Object> configYaml = (Map<String, Object>) new Yaml().load(rendered);
+        List<Map<String, Object>> connectors = (List<Map<String, Object>>) configYaml.get("connectors");
+
+        assertThat(connectors).hasSize(1);
+        assertThat(connectors.get(0).get("type")).isEqualTo("github");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void dexInit_emitsBothConnectors_whenBothProvidersAreSet(@TempDir Path tempDir) throws Exception {
+        DexInitResult result = runDexInit(tempDir, Map.of(
+            "VAIER_OIDC_GOOGLE_CLIENT_ID", "google-id",
+            "VAIER_OIDC_GOOGLE_CLIENT_SECRET", "google-secret",
+            "VAIER_OIDC_GITHUB_CLIENT_ID", "github-id",
+            "VAIER_OIDC_GITHUB_CLIENT_SECRET", "github-secret"));
+
+        assertThat(result.exitCode()).as("stderr: %s", result.stderr()).isEqualTo(0);
+        String rendered = Files.readString(tempDir.resolve("config.yaml"));
+        Map<String, Object> configYaml = (Map<String, Object>) new Yaml().load(rendered);
+        List<Map<String, Object>> connectors = (List<Map<String, Object>>) configYaml.get("connectors");
+
+        assertThat(connectors).hasSize(2);
+        assertThat(connectors.stream().map(c -> c.get("type"))).containsExactlyInAnyOrder("google", "github");
+    }
+
+    @Test
+    void dexInit_failsFastNamingTheMissingVariables_whenNoProviderIsConfigured(@TempDir Path tempDir) throws Exception {
+        DexInitResult result = runDexInit(tempDir, Map.of());
+
+        assertThat(result.exitCode()).as("must fail fast, never render two empty connectors").isNotEqualTo(0);
+        assertThat(result.stderr())
+            .contains("VAIER_OIDC_GOOGLE_CLIENT_ID")
+            .contains("VAIER_OIDC_GOOGLE_CLIENT_SECRET")
+            .contains("VAIER_OIDC_GITHUB_CLIENT_ID")
+            .contains("VAIER_OIDC_GITHUB_CLIENT_SECRET");
+        assertThat(Files.exists(tempDir.resolve("config.yaml")))
+            .as("must never write a config with two empty connectors").isFalse();
+    }
+
+    @Test
+    void dexInit_failsFast_whenDexClientSecretIsBlank(@TempDir Path tempDir) throws Exception {
+        Map<String, String> providerEnv = new LinkedHashMap<>();
+        providerEnv.put("VAIER_DEX_CLIENT_SECRET", "");
+        providerEnv.put("VAIER_OIDC_GOOGLE_CLIENT_ID", "google-id");
+        providerEnv.put("VAIER_OIDC_GOOGLE_CLIENT_SECRET", "google-secret");
+
+        DexInitResult result = runDexInit(tempDir, providerEnv);
+
+        assertThat(result.exitCode())
+            .as("a blank shared secret must fail fast, never crash-loop Dex behind the login wall")
+            .isNotEqualTo(0);
+        assertThat(result.stderr()).contains("VAIER_DEX_CLIENT_SECRET");
+        assertThat(Files.exists(tempDir.resolve("config.yaml"))).isFalse();
     }
 
     @Test

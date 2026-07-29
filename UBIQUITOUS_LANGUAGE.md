@@ -95,7 +95,7 @@ The primary workflow. Always use these terms — the UI is built around them.
 | **Direct URL** | The `http://lanAddress:port` URL the launchpad hands out *to callers on the same LAN* as the hosting peer, bypassing Traefik and its auth. |
 | **Direct URL disabled** | Per-route opt-out (`directUrlDisabled`, persisted as `x-vaier-direct-url-disabled`). For services whose public origin differs from `http://lan:port` — Vaultwarden is the canonical case. |
 | **Auth-mediated tile URL** | The URL the launchpad hands out for auth-protected services when no direct-LAN bypass applies, routing the browser through the auth gateway first so a PWA's service worker on the service origin can't serve a cached SPA that bypasses sign-in. |
-| **Auth toggle** | Retired. The per-service on/off auth switch, superseded by **auth mode** (public or social login) — see §13. |
+| **Auth toggle** | Retired. The per-service on/off auth switch, superseded by **auth mode** (public or social login) — see §12. |
 | **Hidden from launchpad** | Per-route operator switch (`hiddenFromLaunchpad`, persisted as `x-vaier-hidden-from-launchpad`). When on, the route is kept reachable but the launchpad never shows a tile for it. Use for internal APIs that back another service and don't need their own tile. Settable via `PATCH /published-services/{dnsName}` with `{"hiddenFromLaunchpad": ...}`. |
 | **Offline page** | The branded, self-contained page Vaier serves in place of Traefik's default gateway error when a published service's backend is unreachable (502/503/504). Names the unavailable service, shows a friendly message, and offers a retry and a back-to-launchpad link. Backed by the domain `GatewayError` mapping (status → title + message). |
 | **Offline fallback** | The always-up stand-in that shows a branded offline page for the Vaier host when the Vaier container *itself* is down — served by a separate tiny static server, not by Vaier, so the control panel degrades gracefully instead of showing "Bad gateway". |
@@ -126,7 +126,7 @@ Avoid: "expose", "deploy", "route" (as a verb for the user-facing publish action
 | **TLS config** | Per-route TLS settings; `certResolver` names the ACME resolver in Traefik static config. |
 | **Middleware** | Traefik chain element. A social-gated route carries the oauth2-proxy → Vaier authorization chain (`oauth2-signin`, `oauth2-authn`, `vaier-authz`); a public route carries none. The Vaier **console** relies on the same three middlewares, so Vaier keeps their definitions present in its generated config at every startup — not only when a social service happens to be published. |
 | **Forward-auth** | The auth pattern where Traefik forwards each request to an external authenticator before passing it upstream. Under social login the chain is oauth2-proxy (Google sign-in) followed by Vaier's own `/authz/verify` authorization check. There is no in-process Spring Security. |
-| **Group** | A named set of identities used to gate who may reach protected services. In Vaier this is realised as an **access group** on an **access entry** (see §13); **access group** is the canonical term for the concept. |
+| **Group** | A named set of identities used to gate who may reach protected services. In Vaier this is realised as an **access group** on an **access entry** (see §12); **access group** is the canonical term for the concept. |
 | **ACME** | Let's Encrypt protocol for issuing TLS certs. `ACME_EMAIL` env var feeds the Traefik resolver. |
 
 Avoid: "vhost", "site", "auth provider".
@@ -141,9 +141,9 @@ Avoid: "vhost", "site", "auth provider".
 | **Reachability check** | A TCP probe (`ForProbingTcp`) used for LAN servers. Every 30s, hits ports 80/443/22; *any* response (handshake or RST) means pingable. If every TCP probe times out, an ICMP echo (`ForPingingHost`, backed by `/bin/ping`) fires as a fallback so printers / IoT / IPMI cards that don't expose any of those ports aren't falsely marked down. Drives the **machine status**. |
 | **Machine status** | The four-state health of a machine (`domain.MachineStatus`), decided in the domain so the browser only picks a colour: `OK` (on the network, and any auxiliary scrape passed), `DEGRADED` (on the network, but its **LAN server scrape** is failing), `DOWN` (unreachable), `UNKNOWN` (no probe has run yet). `UNKNOWN` is not a healthy state and is never rendered as one — it is the absence of an answer, not an answer. |
 | **LAN server scrape** | The 30s scheduled Docker-socket scrape of every Docker-enabled LAN server, owned by `LanServerScrapeService`. Status (`OK` / `UNREACHABLE`) is debounced with the same 3-cycle dampening rule as reachability so the icon doesn't flicker green↔yellow on a transient socket blip. The cached result is what `GET /docker-services/lan-servers` returns; on a confirmed status change it republishes the existing `lan-servers-updated` SSE event. The live `DiscoverLanServerContainersUseCase` is still used by the publishable-services flow, which needs current state. |
-| **LAN scanner** | (Enterprise, #246) An on-demand, **asynchronous** sweep of a **scannable LAN** the operator picks — one **relay peer's** `lanCidr`, or the **server LAN CIDR** — that surfaces responsive hosts on it not yet registered as **LAN servers** (a targeted scan keeps the result small and quick; an unfocused sweep of every scannable LAN at once still exists). The probe is a narrow TCP-connect sweep over common service ports, run from the Vaier WireGuard container (which already routes to every relay LAN) via `ForScanningLan`; `LanScannerService` (`ScanLanUseCase` to start, `GetDiscoveredLanMachinesUseCase` to read) orchestrates it. `POST /lan-scan` starts a background scan (`202`); `GET /lan-scan` returns the snapshot (status + machines + last-completed); completion fires the `lan-scan-updated` SSE event. Gated `@RequiresEnterprise`. |
+| **LAN scanner** | An on-demand, **asynchronous** sweep of a **scannable LAN** the operator picks — one **relay peer's** `lanCidr`, or the **server LAN CIDR** — that surfaces responsive hosts on it not yet registered as **LAN servers** (a targeted scan keeps the result small and quick; an unfocused sweep of every scannable LAN at once still exists). The probe is a narrow TCP-connect sweep over common service ports, run from the Vaier WireGuard container (which already routes to every relay LAN) via `ForScanningLan`; `LanScannerService` (`ScanLanUseCase` to start, `GetDiscoveredLanMachinesUseCase` to read) orchestrates it. `POST /lan-scan` starts a background scan (`202`); `GET /lan-scan` returns the snapshot (status + machines + last-completed); completion fires the `lan-scan-updated` SSE event. |
 | **Discovered LAN machine** | One responsive host the **LAN scanner** found that is **not already registered** as any machine (LAN server or VPN peer): its address, an optional hostname, the open ports it answered on, and the **LAN anchor** it sits behind. Modelled by `domain.DiscoveredLanMachine`. Surfaced in the **Add a machine** flow's LAN-server branch — the operator picks *A LAN server* at the fork, picks which **scannable LAN** to scan (said as *via <name>*), sees the cached candidates for just that LAN instantly (live over the `lan-scan-updated` stream), and **adopts** the chosen one in one call: a single editable name over a read-only *Detected by Vaier* readout, with the SSH-access section shown only when the host actually listens on SSH (`sshAvailable()`), tested live before it is stored; a host that does not speak SSH is adopted without a credential. Also listed in the fleet's *Discovered on the LAN* section, whose *Add* opens the same adopt sheet. Not persisted — recomputed each scan. |
-| **LAN host probe** | A targeted, single-host inspection of one LAN address the operator typed while adding a **LAN server** by hand — the Community-available counterpart to the Enterprise **LAN scanner** sweep. Non-intrusive: it inspects only the one host already named, reporting whether it is reachable, the ports it answered on, whether it speaks SSH, whether it runs Docker, its guessed **device category**, and which **LAN anchor** routes to it — the same detected readout **adopt** shows for a scanned host. Not reachable — no anchor covers the address, or nothing answered — is a normal outcome, not an error. Modelled by `domain.LanHostProbe`. |
+| **LAN host probe** | A targeted, single-host inspection of one LAN address the operator typed while adding a **LAN server** by hand — the manual counterpart to the **LAN scanner** sweep. Non-intrusive: it inspects only the one host already named, reporting whether it is reachable, the ports it answered on, whether it speaks SSH, whether it runs Docker, its guessed **device category**, and which **LAN anchor** routes to it — the same detected readout **adopt** shows for a scanned host. Not reachable — no anchor covers the address, or nothing answered — is a normal outcome, not an error. Modelled by `domain.LanHostProbe`. |
 | **Guessed role** | An advisory classification of a **discovered LAN machine** from its open ports (`domain.LanMachineRole`: `DOCKER_HOST`, `WEB_UI`, `SSH_HOST`, `PRINTER`, `UNKNOWN`). Pre-fills the Add Machine hint only — never a hard fact. |
 | **Probe result** | `CONNECTED` (open), `REFUSED` (host alive, port closed — still pingable), `UNREACHABLE` (timeout or low-level error). |
 | **Four-state machine-icon colour** | The machine's status dot/icon in the **Explorer** tree carries the status colour: **grey** (not yet probed / unknown), **green** (host pingable; if Docker-enabled, scrape also OK), **yellow** (Docker host pingable but scrape failed), **red** (host not pingable). |
@@ -299,20 +299,7 @@ These pairs come up often. Use the left, never the right.
 
 ---
 
-## 12. Licensing and editions
-
-| Term | Definition |
-|------|------------|
-| **Edition** | The product tier a running instance operates as: **Community** or **Enterprise** (`domain.Edition`). There is a single binary — the edition is resolved at runtime from the installed **licence**, never a separate build. |
-| **Community** | The free edition. The default when no valid licence is installed. Every non-Enterprise feature works exactly as before. |
-| **Enterprise** | The paid edition. Unlocks Enterprise-only features (the first being the **LAN scanner**, #246). Granted only by a valid **licence**. |
-| **Licence** | An offline, Ed25519-signed token that grants the Enterprise edition. Carries the customer, edition, issue/expiry instants, and unlocked features. Verified locally against a public key baked into the binary (`ForVerifyingLicense` → `Ed25519LicenseVerifierAdapter`) — no network call. Installed via the `VAIER_LICENSE` env var (`ForReadingLicenseToken`). Modelled by `domain.License`; an authentic-but-expired licence falls back to **Community**. |
-| **Licence token** | The wire form of a **licence**: `base64url(payload) "." base64url(signature)`. Minted by the issuer with the matching private key via `LicenseMintingTool`; the private key never ships. |
-| **Enterprise gate** | The rule that an `@RequiresEnterprise`-annotated controller or handler is reachable only while the **edition** is Enterprise. Enforced by `EnterpriseLicenseInterceptor`, which answers `402 Payment Required` otherwise. The UI hides gated features by reading `GET /license` first. |
-
----
-
-## 13. Social login and access
+## 12. Social login and access
 
 Vocabulary for the social-login authorization model — now the sole runtime auth mechanism. Authentication
 is delegated to an external **identity provider**; Vaier owns **authorization** through a file-based access store.
@@ -322,7 +309,7 @@ is delegated to an external **identity provider**; Vaier owns **authorization** 
 | **Social login** | Signing in with an external identity provider (Google or GitHub) instead of a Vaier-local password. Vaier no longer authenticates the user itself; it authorizes an already-authenticated identity. |
 | **Identity provider** | The external service that authenticates a user and asserts their email to Vaier — Google or GitHub, reached through **Dex**. Abbreviated IdP. |
 | **Dex** | The identity broker that sits behind **oauth2-proxy** and federates the **identity providers**: oauth2-proxy speaks one OIDC dialect to Dex, and Dex fans out to a **connector** per provider. Lets Vaier offer several sign-in choices while identity stays keyed on email. |
-| **Connector** | One upstream provider wired into **Dex** — currently a Google connector and a GitHub connector. The sign-in page's provider choice selects which connector Dex hands the user to. |
+| **Connector** | One upstream provider wired into **Dex** — a Google connector and/or a GitHub connector, each independently optional (`dex-init` only renders a provider's connector once both its client id and its client secret are set; at least one is required). The sign-in page's provider choice selects which connector Dex hands the user to. With only one connector configured, Dex skips its own picker screen and goes straight to it. |
 | **Access entry** | One known identity in the access store: its email, its **role**, its **access groups**, its **display name**, and the **last sign-in provider** it most recently signed in with (`domain.AccessEntry`). The unit the access overview lists and an admin actions. |
 | **Display name** (access entry) | The identity's human name as reported by the **identity provider** (the provider's `name` claim), stored on the **access entry** and shown beside the email in the access overview. Also greets the identity in the Vaier console when the console runs on Social **auth mode**. Null until a sign-in fills it in (e.g. a pre-approved entry); a sign-in without one never clears it. Distinct from the *launchpad display name* (a service tile's label). |
 | **Last sign-in provider** | The **identity provider** (its **Dex connector** id — `google` or `github`) an **access entry** most recently signed in with, stored on the entry and surfaced as a small provider glyph on the corner of the person's **avatar** in the access overview. Null until a sign-in fills it in (e.g. a pre-approved entry that has never authenticated); a sign-in whose provider is blank or unrecognised never clears it. |
@@ -341,7 +328,7 @@ is delegated to an external **identity provider**; Vaier owns **authorization** 
 
 ---
 
-## 14. Web terminal
+## 13. Web terminal
 
 | Term | Definition |
 |------|------------|
@@ -367,11 +354,11 @@ is delegated to an external **identity provider**; Vaier owns **authorization** 
 
 ---
 
-## 15. Fleet backup
+## 14. Fleet backup
 
 | Term | Definition |
 |------|------------|
-| **Fleet backup** | The feature by which Vaier backs up data from the machines in the fleet to a **backup repository** on a **backup server**, using borg. Enterprise-only. Not to be confused with **Backup snapshot**, which is Vaier's own configuration export. |
+| **Fleet backup** | The feature by which Vaier backs up data from the machines in the fleet to a **backup repository** on a **backup server**, using borg. Not to be confused with **Backup snapshot**, which is Vaier's own configuration export. |
 | **Backup server** | A machine running a borg server that Vaier can address and that holds **backup repositories**. It names its machine by **machine id**, so renaming that machine leaves the role where it was. The fleet has **at most one**. Its name is an **identifier** (letters, digits, `_` and `-` only); a friendlier label an operator types is slugged to it, so spaces become hyphens. An operator **designates** which machine plays the role from that machine in the **Explorer**; Vaier can provision one from nothing on the designated machine, or adopt an existing one, and can trust each client machine's SSH key on it so backup jobs authenticate. |
 | **Backup client** | A machine in the fleet whose data a **backup job** backs up — the host borg runs on to push a **backup run** to a **backup server**. It needs the borg client installed; **Prepare client** installs it. Distinct from the **backup server**, which holds the repositories. |
 | **Prepare client** | Preparing a **backup client** to run backups: installing the borg client where it is missing, so its **backup runs** don't fail with "borg not found", and granting the SSH user passwordless root for the borg binary alone, which is what a job that backs up **as root** needs. Vaier does it itself where it can gain root over SSH, or hands the operator one command to run where it can't — and where it can't, that `sudo bash …` line is kept on the machine's **backup** entry rather than announced once, because it has to be retyped on another machine. A run whose machine has no borg is refused up front, and the refusal offers the fix in place: the entry grows a **Get this machine ready** action (the operator-facing name for this, the way "Back up files owned by other users" names **Back up as root**). Whether a failure means this is `BackupRun.needsClientReadying()` — a domain verdict, never a string the browser matches on. Preparing is no longer confined to a **first back-up**: a machine whose job already exists can be readied on demand, which used to be impossible and left such a machine failing nightly with no reachable fix. |
@@ -399,7 +386,7 @@ is delegated to an external **identity provider**; Vaier owns **authorization** 
 
 ---
 
-## 16. Explorer
+## 15. Explorer
 
 | Term | Definition |
 |------|------------|
@@ -417,15 +404,17 @@ is delegated to an external **identity provider**; Vaier owns **authorization** 
 | **Clipboard** | The Explorer's holding area for one file's **coordinate** (its machine, **path**, and point-in-time), carried until it is pasted. Where the coordinate is pasted names the operation: a different machine is a **Transfer**, the browser is a **download**. |
 | **Selection** | The set of file **coordinates** the operator has picked in the **Explorer**'s selection bar, to act on together — where the **Clipboard** holds one coordinate, a Selection holds many. It may span machines and points in time, and survives navigation between folders and machines rather than clearing on each move. Its verbs fan out per machine; a Selection of more than one item is **downloaded** as a single zip. |
 | **Download** | Sending a file or directory from a machine straight to the operator's browser — the **Clipboard** coordinate pasted to the browser rather than to another machine, or a whole **Selection** streamed as one zip. A read, so it is allowed from the past (an **archive**) as well as the present. A file streams as-is; a directory streams as a zip of its whole tree. |
+| **Viewable** | Said of a file Vaier will hand to the browser to display rather than only to save. Decided by the file's extension against a fixed allowlist — images, PDFs, common audio and video, and text-ish files, which are all displayed as plain text. A directory is never viewable, and neither is markup a browser can run script from (HTML, SVG and their relatives), because a displayed file is served from Vaier's own origin with the operator's session in reach. |
+| **Open** | Displaying a **viewable** file in the operator's browser, in a new tab — the Explorer's second destination for a file's bytes, alongside **download**. A read, so it is allowed from the past (an **archive**) as well as the present. Never replaces **download**: every file can still be saved, viewable or not, and a file that is not viewable can only be saved. |
 | **Restore** | Putting an archived file back onto its own live **path** — a **Transfer** whose source is a machine's past (a **mounted archive**) and whose destination is that same machine's present. Not an operation of its own, but the past-to-present case of a Transfer. |
 | **Delete** | Removing a file or directory from a machine's live filesystem in the **Explorer**; a directory is removed with everything inside it. Present-only and destructive: there is no point-in-time to delete, because a machine's past (an **archive**) is read-only by construction. A machine's **SFTP root** — its whole browsable tree — is never deletable. |
 
 ---
 
-## 17. Out-of-language
+## 16. Out-of-language
 
 Terms that look like they belong here but don't — these are explicitly **not** Vaier vocabulary because the underlying concept is out of scope:
 
 - Cloudflare, nginx, Caddy, Keycloak, Vault, Kubernetes, Portainer, Coolify, Pi-hole — listed only to record that they were considered and rejected.
-- "Backup snapshot" / "export" — Vaier's own configuration export, still out of scope; V2 will add it (see #153). Distinct from **Fleet backup** (§15), which backs up the fleet's machines to a NAS and does exist.
+- "Backup snapshot" / "export" — Vaier's own configuration export, still out of scope; V2 will add it (see #153). Distinct from **Fleet backup** (§14), which backs up the fleet's machines to a NAS and does exist.
 - "Multi-server", "WireGuard mesh" — single Vaier server, period.
