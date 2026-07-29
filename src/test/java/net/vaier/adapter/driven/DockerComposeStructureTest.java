@@ -7,6 +7,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
+import net.vaier.domain.ReverseProxyRoute;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.yaml.snakeyaml.Yaml;
@@ -58,8 +60,8 @@ class DockerComposeStructureTest {
         assertThat(rule).doesNotContain("services-authenticated");
         assertThat(rule).doesNotContain("/users/me");
 
-        // Public tier carries the offline middleware only — never any auth link.
-        assertThat(mw).isEqualTo("vaier-down");
+        // Public tier carries the offline middleware and the #258 frame guard — never any auth link.
+        assertThat(mw).isEqualTo("vaier-down,vaier-frame-guard@file");
         assertThat(mw).doesNotContain("oauth2");
         assertThat(mw).doesNotContain("authz");
     }
@@ -516,6 +518,302 @@ class DockerComposeStructureTest {
         assertThat(aliases)
             .as("the three infra hostnames must resolve to Traefik from inside the stack")
             .contains("vaier.${VAIER_DOMAIN}", "oauth2.${VAIER_DOMAIN}", "dex.${VAIER_DOMAIN}");
+    }
+
+    // --- #258 edge hardening: security headers + TLS options -------------------------------------
+    //
+    // `traefik/` is gitignored in its entirety, so the edge's security policy cannot be a committed
+    // file. It is RENDERED by Traefik's own entrypoint before `exec traefik`. These tests run that
+    // real entrypoint under `sh` (stubbing only the binaries a test JVM cannot have — getent, ip,
+    // nslookup, traefik) and assert on the file it actually produces, rather than regexing YAML.
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> composeServices() throws Exception {
+        Map<String, Object> compose = (Map<String, Object>) new Yaml()
+            .load(Files.readString(Path.of("docker-compose.yml")));
+        return (Map<String, Object>) compose.get("services");
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> traefikCommand() throws Exception {
+        Map<String, Object> traefik = (Map<String, Object>) composeServices().get("traefik");
+        return (List<String>) traefik.get("command");
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, String> labelsOf(String serviceName) throws Exception {
+        Map<String, Object> service = (Map<String, Object>) composeServices().get(serviceName);
+        List<String> labels = (List<String>) service.get("labels");
+        Map<String, String> byKey = new LinkedHashMap<>();
+        for (String label : labels) {
+            int eq = label.indexOf('=');
+            if (eq > 0) {
+                byKey.put(label.substring(0, eq), label.substring(eq + 1));
+            }
+        }
+        return byKey;
+    }
+
+    /** The lines of {@code text} that are not comments — what a parser actually sees. */
+    private String withoutComments(String text) {
+        return text.lines()
+            .filter(line -> !line.trim().startsWith("#"))
+            .collect(Collectors.joining("\n"));
+    }
+
+    /**
+     * Runs the real traefik entrypoint under {@code sh} and returns the dynamic-config directory it
+     * wrote into. {@code VAIER_DOMAIN} is left empty so the ACME DNS wait short-circuits; the
+     * container-only binaries are stubbed on PATH exactly the way {@link #runDexInit} stubs chown.
+     */
+    @SuppressWarnings("unchecked")
+    private Path runTraefikEntrypoint(Path tempDir) throws Exception {
+        Map<String, Object> traefik = (Map<String, Object>) composeServices().get("traefik");
+        List<String> entrypoint = (List<String>) traefik.get("entrypoint");
+        Path configDir = Files.createDirectories(tempDir.resolve("traefik-config"));
+
+        // docker-compose collapses $${...} to a single $ before the shell sees it; we bypass compose
+        // here, so the collapse has to happen in the test too.
+        String script = entrypoint.get(entrypoint.size() - 1)
+            .replace("$$", "$")
+            .replace("/traefik/config", configDir.toString());
+
+        Path stubBin = Files.createDirectories(tempDir.resolve("stub-bin"));
+        for (String binary : List.of("getent", "ip", "nslookup", "traefik")) {
+            Path stub = stubBin.resolve(binary);
+            Files.writeString(stub, "#!/bin/sh\nexit 0\n");
+            stub.toFile().setExecutable(true);
+        }
+
+        ProcessBuilder builder = new ProcessBuilder("sh", "-c", script);
+        Map<String, String> env = builder.environment();
+        env.put("PATH", stubBin + File.pathSeparator + env.get("PATH"));
+        env.put("VAIER_DOMAIN", "");
+
+        Process process = builder.start();
+        boolean finished = process.waitFor(10, TimeUnit.SECONDS);
+        if (!finished) {
+            process.destroyForcibly();
+            throw new IllegalStateException("traefik entrypoint did not finish within 10s");
+        }
+        String stderr = new String(process.getErrorStream().readAllBytes());
+        assertThat(process.exitValue()).as("traefik entrypoint failed. stderr: %s", stderr).isEqualTo(0);
+        return configDir;
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void traefikEntrypoint_rendersTheSafeSecurityHeadersMiddlewareBeforeTraefikStarts(@TempDir Path tempDir)
+            throws Exception {
+        // nosniff and a referrer policy are the two headers that are safe on a THIRD-PARTY app Vaier
+        // did not write: nosniff cannot break a correctly-typed response, and
+        // strict-origin-when-cross-origin is already the modern browser default, so overwriting an
+        // app's own value can never break a flow that depends on the referrer.
+        Path configDir = runTraefikEntrypoint(tempDir);
+        Path securityFile = configDir.resolve("security.yml");
+
+        assertThat(Files.exists(securityFile))
+            .as("the edge policy must exist before traefik parses a router — traefik/ is gitignored, "
+                + "so it has to be rendered at boot")
+            .isTrue();
+
+        Map<String, Object> rendered = (Map<String, Object>) new Yaml().load(Files.readString(securityFile));
+        Map<String, Object> middlewares =
+            (Map<String, Object>) ((Map<String, Object>) rendered.get("http")).get("middlewares");
+        Map<String, Object> headers =
+            (Map<String, Object>) ((Map<String, Object>) middlewares.get("vaier-security-headers")).get("headers");
+
+        assertThat(headers.get("contentTypeNosniff")).isEqualTo(true);
+        assertThat(headers.get("referrerPolicy")).isEqualTo("strict-origin-when-cross-origin");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void safeHeaders_ridePerEntrypointSoEveryRouterCarriesThem_publishedServicesIncluded(@TempDir Path tempDir)
+            throws Exception {
+        // Applying the safe headers at the `websecure` ENTRYPOINT rather than per router is what makes
+        // "every router" true by construction: it covers the compose-label routers, every route
+        // TraefikReverseProxyAdapter generates, and any route added by hand later — with no backfill
+        // and without touching remote-apps.yml, so the adapter's middleware readers cannot regress.
+        assertThat(traefikCommand())
+            .as("the safe headers must be bound to the entrypoint, not to individual routers")
+            .contains("--entrypoints.websecure.http.middlewares=vaier-security-headers@file");
+
+        // ...and the middleware it names has to exist, or Traefik disables every websecure router.
+        Path configDir = runTraefikEntrypoint(tempDir);
+        Map<String, Object> rendered = (Map<String, Object>) new Yaml()
+            .load(Files.readString(configDir.resolve("security.yml")));
+        assertThat((Map<String, Object>) ((Map<String, Object>) rendered.get("http")).get("middlewares"))
+            .as("the entrypoint reference must resolve in the file provider")
+            .containsKey("vaier-security-headers");
+    }
+
+    @Test
+    void frameProtection_neverRidesTheEntrypoint_soAPublishedThirdPartyAppIsUnaffected() throws Exception {
+        // A published app may legitimately embed, or be embedded by, another site. Vaier generates
+        // those routers, so a frame default would break them silently and at scale.
+        String entrypointChain = traefikCommand().stream()
+            .filter(arg -> arg.startsWith("--entrypoints.websecure.http.middlewares="))
+            .findFirst()
+            .orElse("");
+        assertThat(entrypointChain)
+            .as("frame protection must not be applied fleet-wide")
+            .doesNotContain("vaier-frame-guard");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void frameGuard_isSameOriginNotDeny_becauseTheExplorerFramesItsOwnPages(@TempDir Path tempDir) throws Exception {
+        // explorer-shell.js renders the not-yet-ported globals (Users, Concepts) in a same-origin
+        // iframe. X-Frame-Options: DENY would blank those panes, so the guard is SAMEORIGIN.
+        Path configDir = runTraefikEntrypoint(tempDir);
+        Map<String, Object> rendered = (Map<String, Object>) new Yaml()
+            .load(Files.readString(configDir.resolve("security.yml")));
+        Map<String, Object> middlewares =
+            (Map<String, Object>) ((Map<String, Object>) rendered.get("http")).get("middlewares");
+        Map<String, Object> headers =
+            (Map<String, Object>) ((Map<String, Object>) middlewares.get("vaier-frame-guard")).get("headers");
+
+        assertThat(headers.get("customFrameOptionsValue")).isEqualTo("SAMEORIGIN");
+        assertThat(headers.get("frameDeny"))
+            .as("DENY would break the Explorer's own bridged panes")
+            .isNotEqualTo(true);
+    }
+
+    @Test
+    void frameGuard_ridesEveryVaierOwnedRouter() throws Exception {
+        Map<String, String> vaierLabels = labelsOf("vaier");
+        for (String router : List.of("vaier", "vaier-public", "vaier-identity", "vaier-oauth2")) {
+            assertThat(vaierLabels.get("traefik.http.routers." + router + ".middlewares"))
+                .as("%s is one of Vaier's own surfaces and must carry frame protection", router)
+                .contains("vaier-frame-guard@file");
+        }
+        assertThat(labelsOf("oauth2-proxy").get("traefik.http.routers.oauth2-proxy.middlewares"))
+            .contains("vaier-frame-guard@file");
+        assertThat(labelsOf("dex").get("traefik.http.routers.dex.middlewares"))
+            .contains("vaier-frame-guard@file");
+        assertThat(labelsOf("vaier-offline").get("traefik.http.routers.vaier-offline.middlewares"))
+            .contains("vaier-frame-guard@file");
+    }
+
+    @Test
+    void frameGuard_isAppendedAfterTheAuthChain_soTheAdaptersMiddlewareReadersAreUnaffected() throws Exception {
+        // TraefikReverseProxyAdapter.extractAuthInfoFromMiddlewareNames returns the FIRST auth-looking
+        // middleware on a router. The guard's name matches none of the auth keywords and it is appended
+        // last, so what the console reports for its own routers is byte-identical to before.
+        Map<String, String> labels = labelsOf("vaier");
+        String consoleChain = labels.get("traefik.http.routers.vaier.middlewares");
+        assertThat(consoleChain).startsWith("oauth2-signin@file,oauth2-authn@file,vaier-authz@file,vaier-down");
+        assertThat(consoleChain.indexOf("vaier-frame-guard"))
+            .isGreaterThan(consoleChain.indexOf("vaier-authz@file"));
+
+        assertThat(ReverseProxyRoute.AuthInfo.isAuthMiddlewareName("vaier-frame-guard@file"))
+            .as("the guard must not read as an auth middleware, or a public route reports as gated")
+            .isFalse();
+        assertThat(ReverseProxyRoute.AuthInfo.isAuthMiddlewareName("vaier-security-headers@file"))
+            .isFalse();
+    }
+
+    @Test
+    void edgePolicy_setsNoContentSecurityPolicy_becauseTheApplicationOwnsIt(@TempDir Path tempDir) throws Exception {
+        // GET /machines/{id}/files/view serves every previewed file under its own tight, per-media-type
+        // CSP (ViewableFile.SANDBOXED_POLICY / PDF_POLICY). A CSP at the edge would either overwrite
+        // that one — silently weakening a security boundary — or stack with it, and a browser enforces
+        // the INTERSECTION of every CSP header it receives, which breaks file viewing outright.
+        String rendered = Files.readString(runTraefikEntrypoint(tempDir).resolve("security.yml"));
+
+        assertThat(rendered.toLowerCase())
+            .as("the edge must never set a CSP — the application owns it")
+            .doesNotContain("contentsecuritypolicy:")
+            .doesNotContain("content-security-policy:");
+        assertThat(rendered)
+            .as("a reader must find out WHY the CSP is absent without going digging")
+            .contains("Content-Security-Policy");
+    }
+
+    @Test
+    void edgePolicy_setsNoHsts_becauseItIsDeferredToItsOwnIssue(@TempDir Path tempDir) throws Exception {
+        // HSTS cannot be taken back once a browser has seen it, so it is a deliberate decision of its
+        // own (issue #342) rather than a side effect of this file — not even commented out.
+        String rendered = Files.readString(runTraefikEntrypoint(tempDir).resolve("security.yml"));
+
+        assertThat(withoutComments(rendered).toLowerCase())
+            .doesNotContain("stsseconds")
+            .doesNotContain("strict-transport-security")
+            .doesNotContain("includesubdomains")
+            .doesNotContain("preload");
+        assertThat(rendered)
+            .as("a reader must find the deferral, and where it is tracked, in the file itself")
+            .contains("#342");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void tlsOptions_defaultRaisesTheFloorToTls12AndPrunesWeakSuites(@TempDir Path tempDir) throws Exception {
+        // `default` is Traefik's implicit option set: every router that does not name one gets it, so
+        // this covers the compose-label routers AND every generated published-service router without
+        // touching a single router definition.
+        Map<String, Object> rendered = (Map<String, Object>) new Yaml()
+            .load(Files.readString(runTraefikEntrypoint(tempDir).resolve("security.yml")));
+        Map<String, Object> options =
+            (Map<String, Object>) ((Map<String, Object>) rendered.get("tls")).get("options");
+        Map<String, Object> defaults = (Map<String, Object>) options.get("default");
+
+        assertThat(defaults.get("minVersion")).isEqualTo("VersionTLS12");
+
+        List<String> suites = (List<String>) defaults.get("cipherSuites");
+        assertThat(suites).isNotEmpty();
+        assertThat(suites).allSatisfy(suite -> assertThat(suite)
+            .as("forward secrecy only — no static RSA key exchange")
+            .startsWith("TLS_ECDHE_"));
+        assertThat(suites).allSatisfy(suite -> assertThat(suite)
+            .as("AEAD only — CBC/RC4/3DES suites are the weak ones being pruned")
+            .matches(".*(_GCM_|CHACHA20_POLY1305).*"));
+        assertThat(suites).noneMatch(suite -> suite.contains("_CBC_")
+            || suite.contains("_RC4_")
+            || suite.contains("3DES"));
+    }
+
+    @Test
+    void tlsOptions_cannotInterfereWithAcme_becauseTheHttp01ChallengeIsServedOverPlainHttp() throws Exception {
+        List<String> command = traefikCommand();
+
+        assertThat(command)
+            .as("HTTP-01 stays on the plain `web` entrypoint, which terminates no TLS at all")
+            .contains("--certificatesresolvers.letsencrypt.acme.httpchallenge=true")
+            .contains("--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web");
+        assertThat(command)
+            .as("no TLS-ALPN challenge, so the pruned suites and TLS floor are not on the issuance path")
+            .noneMatch(arg -> arg.contains("tlschallenge"));
+        assertThat(command)
+            .as("the safe headers must not be bolted onto the entrypoint that serves the ACME challenge")
+            .noneMatch(arg -> arg.startsWith("--entrypoints.web.http.middlewares"));
+    }
+
+    @Test
+    void edgePolicy_isRewrittenOnEveryBoot_soAStaleOrDeletedFileSelfHeals(@TempDir Path tempDir) throws Exception {
+        Path configDir = runTraefikEntrypoint(tempDir);
+        Path securityFile = configDir.resolve("security.yml");
+        String first = Files.readString(securityFile);
+
+        Files.writeString(securityFile, "http: {}\n");
+        Path second = runTraefikEntrypoint(tempDir);
+
+        assertThat(Files.readString(second.resolve("security.yml")))
+            .as("the rendered policy is generated state, not operator state")
+            .isEqualTo(first);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void edgePolicy_neverLandsInTheFileVaierOwns() throws Exception {
+        // Vaier writes exactly one file into the watched directory, by atomic move. A second file is
+        // safe; writing INTO remote-apps.yml would be clobbered by the next publish.
+        String script = String.join("\n",
+            (List<String>) ((Map<String, Object>) composeServices().get("traefik")).get("entrypoint"));
+        assertThat(withoutComments(script))
+            .as("the edge policy is a second file; the one Vaier owns must never be a write target here")
+            .doesNotContain("remote-apps.yml");
     }
 
 }

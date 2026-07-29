@@ -190,6 +190,68 @@ services:
       - /bin/sh
       - -c
       - |
+        # --- #258 edge hardening. `traefik/` is gitignored in its entirety, so the edge's security
+        # policy cannot be a committed file — it is rendered here, on every boot, before Traefik is
+        # started at the bottom of this script. That ordering is not cosmetic: the middlewares below are
+        # referenced from Traefik's own static config (--entrypoints.websecure.http.middlewares) and from
+        # Vaier's compose labels, and a reference Traefik cannot resolve DISABLES the router that carries
+        # it. Rendering here — rather than from Vaier, which boots after Traefik — closes that window.
+        # This is a SECOND file in the watched directory. Vaier owns exactly one of its own, which it
+        # rewrites by atomic move on every publish; writing into that one would be clobbered.
+        mkdir -p /traefik/config
+        cat > /traefik/config/.security.yml.tmp <<'VAIER_EDGE_POLICY'
+        # GENERATED ON EVERY BOOT by the traefik entrypoint in docker-compose.yml. Edits here are lost.
+        #
+        # There is deliberately NO Content-Security-Policy in this file. Vaier's file viewer
+        # (GET /machines/{id}/files/view) already serves every previewed file under its own tight,
+        # per-media-type CSP — see ViewableFile.SANDBOXED_POLICY / PDF_POLICY. A CSP set at the edge
+        # would either overwrite that one, silently weakening a real security boundary, or stack with
+        # it — and a browser enforces the INTERSECTION of every CSP header it receives, which breaks
+        # file viewing outright. The application owns CSP; the edge stays out of it.
+        #
+        # There is deliberately no Strict-Transport-Security either. HSTS cannot be taken back once a
+        # browser has seen it, so it is a decision of its own — deferred, tracked as issue #342.
+        http:
+          middlewares:
+            # Applied to EVERY router via the websecure entrypoint, published third-party services
+            # included. Only headers that are safe on an application Vaier did not write: nosniff
+            # cannot break a correctly-typed response, and strict-origin-when-cross-origin is already
+            # the modern browser default, so replacing an app's own value never breaks a flow that
+            # depends on the referrer.
+            vaier-security-headers:
+              headers:
+                contentTypeNosniff: true
+                referrerPolicy: strict-origin-when-cross-origin
+            # Applied to VAIER'S OWN routers only, via compose labels. Frame protection is not safe as
+            # a fleet-wide default: a published app may legitimately embed or be embedded, and Vaier
+            # generates those routers, so a bad default would break them silently and at scale.
+            # SAMEORIGIN rather than DENY because the Explorer frames its own pages same-origin (the
+            # Users/Concepts bridge in explorer-shell.js) — DENY would blank those panes.
+            vaier-frame-guard:
+              headers:
+                customFrameOptionsValue: SAMEORIGIN
+        tls:
+          options:
+            # `default` is Traefik's implicit option set: every router that does not name one inherits
+            # it. That covers the compose-label routers AND every route TraefikReverseProxyAdapter
+            # generates, without touching a single router definition. The ACME HTTP-01 challenge is
+            # served over the plain `web` entrypoint, which terminates no TLS, so none of this is on
+            # the certificate-issuance path.
+            default:
+              minVersion: VersionTLS12
+              # TLS 1.2 suites only — Go does not allow the TLS 1.3 suites to be configured, and they
+              # are all AEAD already. ECDHE for forward secrecy, AEAD only: no CBC, no RC4, no 3DES,
+              # no static RSA key exchange. Both ECDSA and RSA leaf types are listed because Let's
+              # Encrypt can issue either.
+              cipherSuites:
+                - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+                - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+                - TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305
+                - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+                - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+                - TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305
+        VAIER_EDGE_POLICY
+        mv /traefik/config/.security.yml.tmp /traefik/config/security.yml
         WG_IP=$$(getent hosts wireguard | awk '{print $$1}')
         ip route add 10.13.13.0/24 via "$$WG_IP" 2>/dev/null || true
         # LAN routes via relay peers — scan VAIER metadata in peer configs.
@@ -240,6 +302,15 @@ services:
       # Let's Encrypt issuance is unaffected.
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      # #258: the safe security headers ride the ENTRYPOINT, not individual routers. That is what makes
+      # "every router carries them" true by construction — the compose-label routers, every route
+      # TraefikReverseProxyAdapter generates into remote-apps.yml, and anything added by hand later — with
+      # no backfill and without touching the file Vaier owns. Deliberately NOT on the `web` entrypoint:
+      # that one serves the ACME HTTP-01 challenge and 308s everything else, so headers there buy nothing.
+      # Frame protection is NOT here — it is per-router, on Vaier's own surfaces only (see the labels on
+      # the vaier, oauth2-proxy, dex and vaier-offline services). The middleware itself is rendered by
+      # this service's entrypoint above, before traefik starts, so this reference always resolves.
+      - --entrypoints.websecure.http.middlewares=vaier-security-headers@file
       - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
       - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
       - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-}
@@ -530,7 +601,7 @@ services:
       - traefik.http.routers.vaier-identity.rule=Host(`vaier.${VAIER_DOMAIN}`) && (Path(`/launchpad/services-authenticated`) || Path(`/users/me`) || Path(`/published-services/events`))
       - traefik.http.routers.vaier-identity.entrypoints=websecure
       - traefik.http.routers.vaier-identity.tls.certresolver=letsencrypt
-      - traefik.http.routers.vaier-identity.middlewares=oauth2-authn@file,vaier-down
+      - traefik.http.routers.vaier-identity.middlewares=oauth2-authn@file,vaier-down,vaier-frame-guard@file
       - traefik.http.routers.vaier-identity.priority=250
       # Tier 3 — ADMIN catch-all: everything else (admin.html, all admin APIs). Gated by the full
       # Social chain, and vaier-authz enforces admin for the console — non-admins get 403.
@@ -539,7 +610,9 @@ services:
       - traefik.http.routers.vaier.tls.certresolver=letsencrypt
       # #305: the console is gated by the Social chain (Google). The oauth2-* middlewares live in
       # the file provider (kept alive by social-gated services + the startup backfill).
-      - traefik.http.routers.vaier.middlewares=oauth2-signin@file,oauth2-authn@file,vaier-authz@file,vaier-down
+      # #258: vaier-frame-guard is APPENDED, never prepended — TraefikReverseProxyAdapter reports a
+      # router's auth by the first auth-looking middleware on the chain, so the order above must stand.
+      - traefik.http.routers.vaier.middlewares=oauth2-signin@file,oauth2-authn@file,vaier-authz@file,vaier-down,vaier-frame-guard@file
       - traefik.http.routers.vaier.priority=100
       # /oauth2/* on the console host must reach oauth2-proxy (sign-in / callback / sign_out),
       # above the console router so the Google flow isn't swallowed by the auth chain.
@@ -548,11 +621,12 @@ services:
       - traefik.http.routers.vaier-oauth2.tls.certresolver=letsencrypt
       - traefik.http.routers.vaier-oauth2.priority=300
       - traefik.http.routers.vaier-oauth2.service=oauth2-proxy
+      - traefik.http.routers.vaier-oauth2.middlewares=vaier-frame-guard@file
       - traefik.http.services.vaier.loadbalancer.server.port=8080
       # When the Vaier backend itself is unreachable (502/503/504), the vaier-down errors middleware
       # (defined on vaier-offline) serves the branded offline page instead of Traefik's bare "Bad
       # gateway". vaier-public also carries it so unauthenticated public paths degrade gracefully.
-      - traefik.http.routers.vaier-public.middlewares=vaier-down
+      - traefik.http.routers.vaier-public.middlewares=vaier-down,vaier-frame-guard@file
     networks:
       - vaier-network
 
@@ -677,6 +751,8 @@ services:
       - traefik.http.routers.oauth2-proxy.rule=Host(`oauth2.${VAIER_DOMAIN}`)
       - traefik.http.routers.oauth2-proxy.entrypoints=websecure
       - traefik.http.routers.oauth2-proxy.tls.certresolver=letsencrypt
+      # #258: a Vaier-owned surface, so it carries frame protection. Nothing frames the sign-in host.
+      - traefik.http.routers.oauth2-proxy.middlewares=vaier-frame-guard@file
       - traefik.http.services.oauth2-proxy.loadbalancer.server.port=4180
     networks:
       - vaier-network
@@ -802,6 +878,8 @@ services:
       - traefik.http.routers.dex.rule=Host(`dex.${VAIER_DOMAIN}`)
       - traefik.http.routers.dex.entrypoints=websecure
       - traefik.http.routers.dex.tls.certresolver=letsencrypt
+      # #258: a Vaier-owned surface, so it carries frame protection. Dex's login page is never framed.
+      - traefik.http.routers.dex.middlewares=vaier-frame-guard@file
       - traefik.http.services.dex.loadbalancer.server.port=5556
     networks:
       - vaier-network
@@ -829,6 +907,8 @@ services:
       - traefik.http.routers.vaier-offline.entrypoints=websecure
       - traefik.http.routers.vaier-offline.tls.certresolver=letsencrypt
       - traefik.http.routers.vaier-offline.service=vaier-offline
+      # #258: the offline page is served on Vaier's own host, so it is a Vaier surface too.
+      - traefik.http.routers.vaier-offline.middlewares=vaier-frame-guard@file
       # Also catch app-level gateway errors while the vaier container is still running (e.g. a
       # mid-restart 502/503/504): the errors middleware swaps in the same static page.
       - traefik.http.middlewares.vaier-down.errors.status=502-504

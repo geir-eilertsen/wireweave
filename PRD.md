@@ -2176,6 +2176,61 @@ invisible except as a test that fails for the right reason.
 back up `vaier/config/` first, migrate, then build and deploy in the same step: the running container and the
 config files must agree about which key they use.
 
+### 6.23 Edge hardening ✅ (headers + TLS options half of [#258](https://github.com/getvaier/vaier/issues/258))
+
+**Why.** Traefik emitted no security headers at all and set no `tls.options`, so every response — Vaier's
+own console and every published service — went out with whatever the backend happened to send, and the
+handshake floor was Go's default rather than a deliberate choice. The redirect half of #258 was already
+done (`--entrypoints.web.http.redirections.entrypoint.to=websecure`); the issue's claim otherwise was stale.
+
+**Where it lives.** `traefik/` is gitignored in its entirety, so the **edge security policy** cannot be a
+committed file — Traefik's own entrypoint renders `security.yml` into its watched dynamic-config directory
+before it starts, on every boot. That is a correctness requirement, not a convenience: the middlewares are
+referenced from Traefik's *static* config and from Vaier's compose labels, and a reference Traefik cannot
+resolve **disables** the router carrying it. Rendering from Vaier — which boots after Traefik — would leave
+that window open. It is a second file in the directory; the one Vaier generates is never written to here.
+
+**What it sets, and what it deliberately does not.**
+
+- **Security headers** (`X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`)
+  are bound to the `websecure` **entry point**, not to individual routers. That is what makes "every router"
+  true by construction — compose-label routers, every route `TraefikReverseProxyAdapter` generates, and
+  anything added by hand later — with **no backfill** and without touching `remote-apps.yml`, so the
+  adapter's middleware readers (`extractAuthInfo`, `extractRootRedirectPath`) cannot regress. Both headers
+  are safe to impose on an application Vaier did not write.
+- **Frame guard** (`X-Frame-Options: SAMEORIGIN`) is per-router, on Vaier's own surfaces only — `vaier`,
+  `vaier-public`, `vaier-identity`, `vaier-oauth2`, `oauth2-proxy`, `dex`, `vaier-offline`. Fleet-wide frame
+  protection would break a published app that legitimately embeds or is embedded, silently and at scale.
+  `SAMEORIGIN` rather than `DENY` because the Explorer frames its own pages (the Users/Concepts bridge).
+  It is **appended** to each chain, never prepended, because the adapter reports a router's auth from the
+  first auth-looking middleware on the list.
+- **No `Content-Security-Policy` at the edge, on purpose.** `GET /machines/{id}/files/view` already serves
+  every previewed file under its own tight per-media-type CSP (`ViewableFile.SANDBOXED_POLICY` / `PDF_POLICY`).
+  An edge CSP would either overwrite that — silently weakening a real boundary — or stack with it, and a
+  browser enforces the **intersection** of every CSP header, breaking file viewing outright. The rendered
+  file carries a comment saying so, since its absence is otherwise the thing a reader would ask about first.
+- **No HSTS.** Deferred deliberately — it cannot be taken back once a browser has seen it, so it is a
+  decision of its own, tracked as [#342](https://github.com/getvaier/vaier/issues/342). Not present in any
+  form, not even commented out.
+- **Edge TLS policy** — `tls.options.default`: `minVersion: VersionTLS12` and ECDHE+AEAD cipher suites only
+  (GCM / ChaCha20-Poly1305; no CBC, RC4, 3DES or static-RSA key exchange). Being named `default` it applies
+  to every router that does not name its own, so it needs no route-definition changes. Certificate issuance
+  is untouched: the ACME HTTP-01 challenge is served over the plain `web` entry point, which terminates no
+  TLS, and no TLS-ALPN challenge is configured.
+
+**Testing.** `DockerComposeStructureTest` executes the *real* traefik entrypoint under `sh` (stubbing only
+`getent`/`ip`/`nslookup`/`traefik`, the same PATH-shim trick the `dex-init` cases use) and asserts on the
+file it actually writes, rather than regexing YAML. The policy was additionally booted against the pinned
+`traefik:v3.6.14` image: both middlewares load `enabled`, the entrypoint middleware attaches to a router
+that declares none, a published-service-shaped router answers with the two safe headers and **no**
+`X-Frame-Options`, a Vaier-shaped router answers with all three, TLS 1.1 is refused while 1.2 and 1.3
+negotiate — and a deliberately corrupted cipher name is rejected by Traefik, which proves the accepted list
+is really being validated.
+
+**No Java changed.** There is no per-route decision to encode: the middleware set is identical for every
+router, and Traefik's static config enforces it. This is the opposite case to `AuthMode.authMiddlewareNames()`,
+which lives in the domain precisely because the auth chain *does* vary per route.
+
 ---
 
 ## 7. End-to-End Workflows
