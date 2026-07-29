@@ -7,6 +7,8 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -71,7 +73,7 @@ class BorgCommandTest {
             "W=/var/lib/vaier-backup; mkdir -p \"$W\"; nohup sh -c \""
                 + "export BORG_PASSCOMMAND='cat /var/lib/vaier-backup/nas-borg.pass'; "
                 + "export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes; "
-                + "borg info " + url + " > /dev/null 2>&1 || "
+                + "borg info " + url + " > /dev/null || "
                 + "borg init --encryption=repokey-blake2 --make-parent-dirs " + url
                 + " && borg create --json --stats --compression zstd,6 --exclude-caches"
                 + " --exclude '/var/lib/vaier-backup' --exclude '*/.config/borg'"
@@ -193,9 +195,10 @@ class BorgCommandTest {
     void detachedRun_whenBackupAsRoot_passesThePasscommandOnTheSudoLineBecauseSudoResetsTheEnv() {
         String exec = BorgCommand.detachedRun(server(), rootJob(), repo(), "run-1", WORK_DIR, SSH_HOME).exec();
 
-        assertThat(exec).contains("BORG_PASSCOMMAND='cat /var/lib/vaier-backup/nas-borg.pass' borg");
-        // Each of the five sudo lines carries it — not just the create.
-        assertThat(countOf(exec, "BORG_PASSCOMMAND='cat /var/lib/vaier-backup/nas-borg.pass' borg")).isEqualTo(5);
+        assertThat(exec).contains("BORG_PASSCOMMAND='cat /var/lib/vaier-backup/nas-borg.pass'");
+        // Each of the five sudo lines carries it — not just the create. Pinned via the whole prefix, so a
+        // variable dropped from the sudo line (the 2026-07-29 relocation bug) fails here too.
+        assertThat(countOf(exec, sudoPrefix() + "borg ")).isEqualTo(5);
         // Still no plaintext passphrase anywhere.
         assertThat(exec).doesNotContain("s3cr3t").doesNotContain("BORG_PASSPHRASE");
     }
@@ -293,7 +296,8 @@ class BorgCommandTest {
         return "sudo -n HOME='/home/ubuntu' BORG_BASE_DIR='/var/lib/vaier-backup/root'"
             + " BORG_RSH='ssh -i /home/ubuntu/.ssh/id_ed25519"
             + " -o UserKnownHostsFile=/home/ubuntu/.ssh/known_hosts'"
-            + " BORG_PASSCOMMAND='cat /var/lib/vaier-backup/nas-borg.pass' ";
+            + " BORG_PASSCOMMAND='cat /var/lib/vaier-backup/nas-borg.pass'"
+            + " BORG_RELOCATED_REPO_ACCESS_IS_OK='yes' ";
     }
 
     private static int countOf(String haystack, String needle) {
@@ -382,7 +386,9 @@ class BorgCommandTest {
 
         // info-or-init guard, chained with && to the create so a genuine init failure aborts the run
         // (rather than being swallowed and then failing create with the same cryptic error).
-        assertThat(exec).contains("borg info " + url + " > /dev/null 2>&1 || "
+        // Only stdout is silenced: borg's stderr is the sole record of WHY the probe failed, and the probe
+        // cannot tell "absent" from "there but unopenable" on its own.
+        assertThat(exec).contains("borg info " + url + " > /dev/null || "
             + "borg init --encryption=repokey-blake2 --make-parent-dirs " + url);
         // The guard runs BEFORE create.
         assertThat(exec.indexOf("borg info " + url)).isLessThan(exec.indexOf("borg create --json"));
@@ -1073,5 +1079,49 @@ class BorgCommandTest {
             .contains("BORG_RELOCATED_REPO_ACCESS_IS_OK=yes");
         assertThat(BorgCommand.detachedRun(server(), job(), repo(), "run-1", WORK_DIR, "/home/geir").exec())
             .contains("BORG_RELOCATED_REPO_ACCESS_IS_OK=yes");
+    }
+
+    /**
+     * The relocation acknowledgement has to cross sudo, and the assertion above cannot see whether it does.
+     * {@code contains} is satisfied by the shell-level {@code export} alone — but sudo resets the
+     * environment, so for an as-root job that export never reaches root's borg. Every sudo prefix must carry
+     * the variable itself, exactly as it already carries {@code BORG_PASSCOMMAND}.
+     *
+     * <p>Found in production on 2026-07-29: three of five nightly jobs failed the first time they ran as
+     * root after repositories became identity-named. Root's isolated {@code BORG_BASE_DIR} still recorded
+     * the old, name-keyed location, so root's borg hit the relocation prompt and aborted — while the
+     * non-root jobs, which do inherit the export, kept succeeding.
+     */
+    @Test
+    void everySudoedBorgInAnAsRootChainCarriesTheRelocationAcknowledgement() {
+        String exec = BorgCommand.detachedRun(server(), rootJob(), repo(), "run-1", WORK_DIR, SSH_HOME).exec();
+
+        Matcher sudoed = Pattern.compile("sudo -n ([^;&|]*)").matcher(exec);
+        int found = 0;
+        while (sudoed.find()) {
+            found++;
+            assertThat(sudoed.group(1))
+                .as("sudo prefix #%d must carry the relocation acknowledgement", found)
+                .contains("BORG_RELOCATED_REPO_ACCESS_IS_OK='yes'");
+        }
+        assertThat(found).as("every borg in the chain runs under sudo").isEqualTo(5);
+    }
+
+    /**
+     * The ensure-initialised probe must not discard borg's stderr. It decides "does this repository exist?"
+     * from {@code borg info}'s exit code alone, and then {@code borg init}s when it failed — so when info
+     * fails for any OTHER reason (a relocated repository, a held lock, an unreadable passphrase), the run
+     * inits over a repository that is really there and dies on borg's "A repository already exists".
+     *
+     * <p>Silencing stdout keeps the log clean; silencing stderr throws away the only evidence of why the
+     * probe failed. On 2026-07-29 that reduced a whole night's failure, on three machines, to a single
+     * misleading line. The reason belongs in the run log.
+     */
+    @Test
+    void theEnsureInitialisedProbeKeepsBorgsReasonForFailing() {
+        String exec = BorgCommand.detachedRun(server(), job(), repo(), "run-1", WORK_DIR, SSH_HOME).exec();
+
+        assertThat(exec).contains("borg info 'ssh://borg@192.168.3.3:8022/./colina' > /dev/null ||");
+        assertThat(exec).doesNotContain("borg info 'ssh://borg@192.168.3.3:8022/./colina' > /dev/null 2>&1");
     }
 }

@@ -86,7 +86,7 @@ public final class BorgCommand {
      * root-owned files (container volumes, {@code 0600} broker state) the SSH user would otherwise be silently
      * denied, leaving holes in the archive.
      *
-     * <p>Four things sudo would otherwise break, all handled on this one line:
+     * <p>Five things sudo would otherwise break, all handled on this one line:
      * <ul>
      *   <li><b>SSH cannot find the key or the host pin — and {@code HOME} does not fix it.</b> The client's SSH
      *       key ({@link #ensureClientKeyPair}) and the server's pinned host key ({@link #pinHostKeys}) both live
@@ -109,6 +109,15 @@ public final class BorgCommand {
      *       discards it, so root's borg would have no passphrase and would hang or fail. It is passed explicitly
      *       on the sudo line — which is exactly what the {@code SETENV:} tag in the sudoers drop-in
      *       ({@link BorgClientSetupScript}) permits, and which equally covers {@code BORG_RSH}.</li>
+     *   <li><b>The relocation acknowledgement is reset too.</b> Same mechanism, separate bug, and it cost a
+     *       night of backups on three machines. {@code BORG_RELOCATED_REPO_ACCESS_IS_OK} is exported into
+     *       the shell by {@code exportPasscommand}, so a NON-root run inherits it — but sudo drops it, and
+     *       it was missing from this line. Root's borg keeps its own {@code BORG_BASE_DIR}, so the first
+     *       as-root run after a repository was renamed to its machine's identity (§6.22) still remembered
+     *       the old, name-keyed location, hit borg's relocation prompt with no terminal to answer at, and
+     *       aborted — while the non-root jobs sailed on. Worse, {@link #ensureInitializedBody} read that
+     *       abort as "the repository does not exist" and ran {@code borg init} over a live repository. It
+     *       belongs here, next to the passcommand, for exactly the reason the passcommand does.</li>
      *   <li><b>Root's borg cache.</b> Left alone, root's borg would write into the SSH user's
      *       {@code ~/.cache/borg} and leave root-owned files that break a later NON-root run of the same job
      *       (when the toggle is turned back off). {@code BORG_BASE_DIR} isolates it under
@@ -137,6 +146,7 @@ public final class BorgCommand {
             + " BORG_BASE_DIR=" + singleQuote(rootBaseDir(workDir))
             + " BORG_RSH=" + singleQuote(rootRsh(sshHome))
             + " BORG_PASSCOMMAND=" + singleQuote("cat " + passFilePath(repo, workDir))
+            + " BORG_RELOCATED_REPO_ACCESS_IS_OK=" + singleQuote("yes")
             + " borg";
     }
 
@@ -180,10 +190,18 @@ public final class BorgCommand {
      * init failure aborts the run with init's own error, rather than being swallowed and re-failing create
      * with the same message. Init reads the passphrase from the same {@code BORG_PASSCOMMAND} file, so no
      * secret is added to the command.
+     *
+     * <p><b>Only stdout is silenced.</b> The probe infers "the repository does not exist" from a non-zero
+     * exit, which {@code borg info} also returns when the repository is plainly <em>there</em> and merely
+     * cannot be opened — relocated, locked, or unreadable with the passphrase on hand. Vaier then inits over
+     * a live repository and the run dies on borg's "A repository already exists", which names none of that.
+     * Silencing stderr as well used to throw away the one line that explains it: on 2026-07-29 three
+     * machines failed all night and the entire run log was that one misleading sentence. borg's reason now
+     * lands in the log, whether or not the probe's verdict is right.
      */
     private static String ensureInitializedBody(BackupServer server, BackupRepository repo, String borg) {
         String url = singleQuote(repo.borgRepoUrl(server));
-        return borg + " info " + url + " > /dev/null 2>&1 || " + buildInitBody(server, repo, borg);
+        return borg + " info " + url + " > /dev/null || " + buildInitBody(server, repo, borg);
     }
 
     private static String buildInitBody(BackupServer server, BackupRepository repo, String borg) {
