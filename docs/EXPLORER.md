@@ -16,6 +16,8 @@ Once a machine is on the mesh, its pane in the Explorer surfaces evidence-backed
 
 Every machine is an **entry** you can open, and it grows only the entries Vaier can actually reach on it: **files** when Vaier has SSH to it, **containers** when it runs Docker, **services** when something is published from it, its **disk** when Vaier has SSH, and a **backup** entry on the one machine that is the fleet's backup server — so a machine with no SSH doesn't sprout files it can't read, and a machine running no Docker doesn't sprout an empty container list. A machine's **shell** is not a tree entry — its **SSH access** section carries an **Open shell** button that opens the terminal in its own window (see [Web terminal](#web-terminal) below).
 
+![The Explorer's fleet view](vaier-explorer.png)
+
 The **path** you're standing on is the address bar, the **Inspector** on the right renders whatever you select (a machine shows its details, a directory shows its listing, a container shows what Vaier knows about it, a published service shows its route), and **⌘K** searches every entry in the fleet by path — including containers and published services, since they're entries in the same namespace now.
 
 Each machine row also carries small **capability glyphs** just before its status dot — a relay mark when it's a relay peer routing a LAN behind it, a Docker mark when it runs Docker, and a safe when it's the fleet's backup server — so the fleet's shape reads at a glance: how a machine is reached, what it runs, what it keeps. The **status dot** beside a machine reports what Vaier actually knows: green when a peer's tunnel is up or a LAN machine answers its probe, amber when a machine is on the network but its Docker scrape is failing, red when it's unreachable, and grey only when nothing has probed it yet — grey means "no answer yet", never "fine".
@@ -23,6 +25,8 @@ Each machine row also carries small **capability glyphs** just before its status
 A machine's **backup** entry carries a dot of its own, coloured by that machine's last backup run (red for a failed *or* incomplete one, amber for a warning, green when it got everything, grey when it has never run), so a backup that went wrong is visible from the tree instead of only to whoever thinks to open that machine. And where a run failed for the one reason a single action fixes — the machine has no borg client yet — the entry offers **Get this machine ready** and does the install itself; where Vaier can't become root there, it leaves the one `sudo bash …` command on screen for you to run in that machine's shell.
 
 Infrastructure has moved into the tree wholesale — adding a machine, scanning a LAN, the world map (a **Map** entry at the fleet root), storing SSH credentials, running setup scripts, editing allowed groups, and publishing a discovered container are all native entries now, and the old Infrastructure page is gone. The sections not yet part of the tree — **Users**, **Concepts** — still appear as entries that open today's page unchanged (**Settings** and **Backups** are native now — the standalone Backups page is gone), and the **admin console** (`/admin.html`) survives only as a redirect for old links until those last sections move across.
+
+![The fleet's Map entry, plotting each machine's approximate location](vaier-map.png)
 
 ### Files and the SFTP root
 

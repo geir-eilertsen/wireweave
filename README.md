@@ -32,7 +32,7 @@ One box on the internet. Your machines at home, behind WireGuard. Every service 
 | **Suggested next steps** | Each machine's pane nudges you toward the next thing worth doing with it, with the evidence shown alongside. See [`docs/EXPLORER.md`](docs/EXPLORER.md). |
 | **Fleet-wide polish** | Inline field help, an in-app Concepts glossary, consistent sign-in branding, and device-category icons. See [`docs/EXPLORER.md`](docs/EXPLORER.md). |
 
-![docs/launchpad.png](docs/launchpad.png)
+![The Vaier launchpad](docs/vaier-launchpad.png)
 
 ---
 
