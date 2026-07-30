@@ -20,7 +20,7 @@ One box on the internet. Your machines at home, behind WireGuard. Every service 
 | Feature | Description |
 |---------|-------------|
 | **VPN mesh** | WireGuard peers and LAN servers (NAS, printers, extra Docker hosts) join one mesh, with cross-site routing between relays. See [`docs/NETWORKING.md`](docs/NETWORKING.md). |
-| **Reverse proxy & edge hardening** | Traefik terminates HTTPS with Let's Encrypt, enforces a security-header and TLS floor on every route, and shows a branded offline page when a backend is down. See [`docs/NETWORKING.md`](docs/NETWORKING.md). |
+| **Reverse proxy & edge hardening** | Traefik terminates HTTPS with Let's Encrypt, enforces a security-header and TLS floor on every route, blocks malicious traffic at the edge with a CrowdSec Security Engine and bouncer, and shows a branded offline page when a backend is down. See [`docs/NETWORKING.md`](docs/NETWORKING.md). |
 | **Wildcard DNS** | One `*.yourdomain.com` record, made once, covers the console, sign-in, and every service you ever publish. See [`docs/NETWORKING.md`](docs/NETWORKING.md). |
 | **Service publishing & launchpad** | Publish any container in one click; a viewer-adaptive dashboard links to whatever each visitor is allowed to reach. See [`docs/NETWORKING.md`](docs/NETWORKING.md). |
 | **Access management** | Google or GitHub sign-in via oauth2-proxy and Dex, with roles (pending → user → admin) and per-service access groups. See [`docs/AUTH.md`](docs/AUTH.md). |

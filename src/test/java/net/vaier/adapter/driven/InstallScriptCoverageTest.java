@@ -34,7 +34,14 @@ class InstallScriptCoverageTest {
         "vaier/config",
         "icons",
         "oauth2/config",
-        "dex/config"
+        "dex/config",
+        // #329: Traefik writes the access log; traefik-logrotate rotates it in place.
+        "traefik/logs",
+        // #329: the Security Engine's own state (hub cache, sqlite db, machine credentials).
+        "crowdsec/config",
+        "crowdsec/data",
+        // #329: Vaier's SecurityService writes the rendered trusted-networks allowlist here.
+        "crowdsec/whitelist"
     );
 
     private List<String> composeBindMountSources() throws Exception {

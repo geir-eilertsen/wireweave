@@ -1,0 +1,11 @@
+# Tells CrowdSec's Security Engine which file to tail for the crowdsecurity/traefik parser
+# collection (COLLECTIONS=crowdsecurity/traefik in docker-compose.yml). Installing the parser
+# alone is not an acquisition source — without this file CrowdSec never reads a single log line,
+# and #329 Slice 1's whole "malicious HTTP probing results in a block decision" acceptance
+# criterion cannot pass. Committed (not generated, not secret) — read-only bind-mounted into the
+# crowdsec container's /etc/crowdsec/acquis.d/, which CrowdSec's own default config already
+# scans (crowdsec_service.acquisition_dir).
+filenames:
+  - /var/log/traefik/access.log
+labels:
+  type: traefik

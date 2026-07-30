@@ -5,6 +5,7 @@ import net.vaier.domain.ConflictException;
 import net.vaier.application.DeletePublishedServiceUseCase;
 import net.vaier.application.GetPeerConfigUseCase.PeerConfigResult;
 import net.vaier.application.GetServerLocationUseCase.ServerLocation;
+import net.vaier.application.RefreshTrustedNetworksUseCase;
 import net.vaier.config.ConfigResolver;
 import net.vaier.domain.DnsRecordType;
 import net.vaier.domain.GeoLocation;
@@ -78,6 +79,7 @@ class VpnServiceTest {
     @Mock ForPersistingLanServers forPersistingLanServers;
     @Mock net.vaier.domain.port.ForPersistingHostCredentials forPersistingHostCredentials;
     @Mock net.vaier.domain.port.ForTrackingHostKeys forTrackingHostKeys;
+    @Mock RefreshTrustedNetworksUseCase refreshTrustedNetworksUseCase;
 
     @InjectMocks VpnService service;
 
@@ -540,6 +542,15 @@ class VpnServiceTest {
     }
 
     @Test
+    void deletePeer_refreshesTheCrowdSecTrustedNetworksAllowlist() {
+        when(peerConfigProvider.getPeerConfigByName("alice")).thenReturn(Optional.empty());
+
+        service.deletePeer("alice");
+
+        verify(refreshTrustedNetworksUseCase).refreshTrustedNetworks();
+    }
+
+    @Test
     void deletePeer_byIp_resolvesToNameBeforeDeleting() {
         when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice");
         when(peerConfigProvider.getPeerConfigByName("alice")).thenReturn(Optional.empty());
@@ -852,6 +863,19 @@ class VpnServiceTest {
         var order = inOrder(forUpdatingPeerConfigurations, forSyncingLanRoutes);
         order.verify(forUpdatingPeerConfigurations).updateLanCidr("apalveien5", "192.168.3.0/24");
         order.verify(forSyncingLanRoutes).syncLanRoutes(any());
+    }
+
+    @Test
+    void updateLanCidr_refreshesTheCrowdSecTrustedNetworksAllowlist() {
+        when(peerConfigProvider.getPeerConfigByName("apalveien5"))
+            .thenReturn(Optional.of(new PeerConfiguration("apalveien5", "10.13.13.6", "config",
+                MachineType.UBUNTU_SERVER, null, null)));
+        when(peerConfigProvider.getAllPeerConfigs()).thenReturn(List.of(
+            new PeerConfiguration("apalveien5", "10.13.13.6", "config", MachineType.UBUNTU_SERVER, null, null)));
+
+        service.updateLanCidr("apalveien5", "192.168.3.0/24");
+
+        verify(refreshTrustedNetworksUseCase).refreshTrustedNetworks();
     }
 
     // --- updateLanCidr (#176) ---

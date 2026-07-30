@@ -6,8 +6,10 @@ import net.vaier.domain.MachineId;
 import net.vaier.domain.MachineType;
 import net.vaier.domain.PeerId;
 
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 public interface ForGettingPeerConfigurations {
 
@@ -16,6 +18,23 @@ public interface ForGettingPeerConfigurations {
     Optional<PeerConfiguration> getPeerConfigByIp(String ipAddress);
 
     List<PeerConfiguration> getAllPeerConfigs();
+
+    /**
+     * Every distinct, non-blank {@code lanCidr} across {@code peers}, trimmed. The single home
+     * for "which LAN CIDRs does this fleet route" — {@code VpnService.syncLanRoutes()} and the
+     * CrowdSec trusted-networks allowlist (#329) both need exactly this list and used to each
+     * carry their own copy of the same filter/dedupe stream.
+     */
+    static List<String> allLanCidrs(List<PeerConfiguration> peers) {
+        Set<String> cidrs = new LinkedHashSet<>();
+        for (PeerConfiguration peer : peers) {
+            String lanCidr = peer.lanCidr();
+            if (lanCidr != null && !lanCidr.isBlank()) {
+                cidrs.add(lanCidr.trim());
+            }
+        }
+        return List.copyOf(cidrs);
+    }
 
     /**
      * A peer's persisted configuration.

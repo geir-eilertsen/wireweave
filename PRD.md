@@ -2386,6 +2386,73 @@ and PRESENT on any successful run (whatever `df`'s own exit status), publishing 
 credential), and evicting a deleted machine's stale state each sweep (`retainOnly`). `MachineRestControllerTest`
 covers the driving-edge composition into `GET /machines`.
 
+### 6.26 Fleet threat detection — Slice 1 ✅ (implemented 2026-07-30, closes Slice 1 of [#329](https://github.com/getvaier/vaier/issues/329))
+
+**What.** A real CrowdSec Security Engine + a standalone Traefik bouncer, blocking malicious HTTP
+traffic at the edge — with the operator's own networks provably un-bannable and a documented
+recovery path from a false-positive lockout. No UI, no notifications (Slice 2/3). The earlier
+"agent on every host" slice (Slice 4) was dropped before this work started: peers have no public
+IP, so the Vaier server's own Traefik entrypoint and SSH port are the only genuinely
+internet-facing surface.
+
+**Enforcement — entrypoint-level, zero `TraefikReverseProxyAdapter` changes.** `crowdsec-bouncer`
+rides `--entrypoints.websecure.http.middlewares=crowdsec-bouncer@file,vaier-security-headers@file`
+(bouncer first) — the same entrypoint-level mechanism that already carries the security headers to
+every router, published services included, with no per-route wiring. `AuthMode.isAuthMiddlewareName`
+(§6.24) already keeps this from being misread as an authenticator.
+
+**Bouncer key — a compose-level shared secret, not a Vaier-minted one.** The original design assumed
+`crowdsec-bouncer` (`fbonalair/traefik-crowdsec-bouncer:0.5.0`) needed a wrapper entrypoint that
+polled for a Vaier-minted key file, exported it, then exec'd the real binary. Hands-on image
+inspection (as the plan required before writing that wrapper) found the image is **distroless — no
+shell at all** (`docker run --entrypoint sh ...` fails outright), so no wrapper is possible. Two
+further findings replaced the whole mechanism: the bouncer reads `CROWDSEC_BOUNCER_API_KEY` and
+`CROWDSEC_AGENT_HOST` as plain env vars (confirmed via `strings` on the extracted binary), and
+CrowdSec's own `/docker_start.sh` already self-registers any bouncer named by a `BOUNCER_KEY_<name>`
+env var at its own boot (`register_bouncer`, idempotent). So `VAIER_CROWDSEC_BOUNCER_KEY` is a single
+install.sh-generated secret (`ensure_secret`, exactly like `VAIER_DEX_CLIENT_SECRET`) fed to both
+containers — `crowdsec` self-registers it, `crowdsec-bouncer` reads it — with no exec, no polling,
+and no Java-side minting code at all.
+
+**Domain-owned allowlist — `TrustedNetworks`.** VPN subnet + Docker bridge CIDR (own `@Value`,
+deliberately not shared with `LaunchpadRestController`'s `trusted-proxy-cidr` — same value today, a
+different concept) + every relay's `lanCidr` via `ForGettingPeerConfigurations.allLanCidrs(...)`
+(extracted from `VpnService.syncLanRoutes()`'s inline stream, closing a copy-paste gap).
+`SecurityService` (the new domain concept the issue calls for; scoped to exactly this one job in
+Slice 1) renders it via `CrowdSecWhitelistFileAdapter` into CrowdSec's real whitelist-parser schema,
+refreshed on Vaier boot and whenever `VpnService.updateLanCidr`/`deletePeer` runs.
+
+**Acquisition file — the gap that would have broken the whole slice.** `COLLECTIONS=crowdsecurity/traefik`
+installs the *parser* for Traefik's JSON log format; `crowdsec/acquis.d/traefik.yaml` (committed) is
+the acquisition source telling CrowdSec which file to actually tail. Traefik now writes its access
+log to a file (`--accesslog.filepath`) instead of stdout, rotated by a tiny `traefik-logrotate`
+alpine sidecar (`copytruncate` — Traefik has no reopen signal).
+
+**Confirmed empirically during deploy: CrowdSec does NOT hot-reload the whitelist.** Editing the
+mounted whitelist file while `crowdsec` keeps running has no effect — a repeat attack from a newly
+whitelisted IP still gets banned. A `crowdsec` restart is required to pick up a changed allowlist
+(parsers are compiled into the node tree once, at that process's own boot — unlike Traefik's file
+provider, which explicitly watches for changes). Tracked as a real, accepted Slice-1 limitation;
+Slice 2 may want `SecurityService` to trigger the restart itself.
+
+**Break-glass — `docker exec crowdsec cscli decisions delete --all`, zero new code.** A real
+unban UI/port belongs to Slice 2 (`ForBlockingAddresses`/`CrowdSecLapiAdapter` per the issue's own
+architecture) — building a throwaway one-off now would be wasted work.
+
+**Verified end-to-end on the dev stack**, including a live attack simulation: a burst of known
+scanner-signature paths (`/.env`, `/wp-login.php`, `/.git/config`, …) against a published service
+produced a real `crowdsecurity/http-probing` ban decision, after which the same source got refused
+(`403 Forbidden`) at Traefik — for every router, console included, confirming the fail-closed risk
+is real — before reaching oauth2-proxy or any backend; break-glass cleared it and reachability
+returned immediately. Separately, CrowdSec's community blocklist caught a genuine internet scanner
+(`74.248.24.145`, `crowdsecurity/http-crawl-non_statics`) unprompted during testing. The operator's
+own VPN/Docker-bridge traffic was confirmed never blocked via direct `forwardAuth` checks from
+within those CIDRs.
+
+**Backlog (Slice 2/3).** `ForBlockingAddresses`/`CrowdSecLapiAdapter` for a real unban affordance;
+threat-signal/breach-attempt notifications (the "notify only on trouble, predictive over reactive"
+convention already used for backups/certs); an Explorer surface for current decisions.
+
 ---
 
 ## 7. End-to-End Workflows

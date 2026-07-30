@@ -213,6 +213,17 @@ services:
         # browser has seen it, so it is a decision of its own — deferred, tracked as issue #342.
         http:
           middlewares:
+            # #329 Slice 1: applied to EVERY router via the websecure entrypoint, ahead of every
+            # other middleware — a CrowdSec block decision is refused before it ever reaches
+            # oauth2-proxy or a published backend. trustForwardHeader is safe here: Traefik is the
+            # only thing that can reach crowdsec-bouncer (same Docker network, no published port),
+            # so the X-Forwarded-For it reads is the one Traefik itself set from the real client.
+            # Verified healthy (cscli bouncers list, /healthz, /ping, /forwardAuth from vaier)
+            # BEFORE this was added to --entrypoints.websecure.http.middlewares below.
+            crowdsec-bouncer:
+              forwardAuth:
+                address: http://crowdsec-bouncer:8080/api/v1/forwardAuth
+                trustForwardHeader: true
             # Applied to EVERY router via the websecure entrypoint, published third-party services
             # included. Only headers that are safe on an application Vaier did not write: nosniff
             # cannot break a correctly-typed response, and strict-origin-when-cross-origin is already
@@ -288,6 +299,11 @@ services:
       - --log.format=json
       - --accesslog=true
       - --accesslog.format=json
+      # #329: written to a file (rotated by the traefik-logrotate sidecar) rather than left on
+      # stdout, so CrowdSec's Security Engine has a real acquisition source to tail
+      # (crowdsec/acquis.d/traefik.yaml) — the gap that would otherwise silently break every
+      # "malicious HTTP probing results in a block decision" scenario.
+      - --accesslog.filepath=/traefik/logs/access.log
       - --api.insecure=true
       - --providers.docker=true
       - --providers.docker.endpoint=tcp://docker-proxy:2375
@@ -310,7 +326,11 @@ services:
       # Frame protection is NOT here — it is per-router, on Vaier's own surfaces only (see the labels on
       # the vaier, oauth2-proxy, dex and vaier-offline services). The middleware itself is rendered by
       # this service's entrypoint above, before traefik starts, so this reference always resolves.
-      - --entrypoints.websecure.http.middlewares=vaier-security-headers@file
+      #
+      # #329 Slice 1: crowdsec-bouncer goes FIRST — every router's effective chain gets it ahead of
+      # the security headers (and, on Vaier's own routers, ahead of the Social auth chain too), so a
+      # CrowdSec block decision is refused before Traefik does anything else with the request.
+      - --entrypoints.websecure.http.middlewares=crowdsec-bouncer@file,vaier-security-headers@file
       - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
       - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
       - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-}
@@ -322,6 +342,7 @@ services:
       - ./traefik/config:/traefik/config
       - ./traefik/acme:/traefik/acme
       - ./wireguard/config:/wireguard-config:ro
+      - ./traefik/logs:/traefik/logs
     restart: unless-stopped
     depends_on:
       - wireguard
@@ -369,6 +390,93 @@ services:
     restart: unless-stopped
     networks:
       - vaier-network
+
+  # --- #329 Slice 1: CrowdSec fleet-threat-detection. Not yet wired into Traefik's request path —
+  # see the `traefik` service's --entrypoints.websecure.http.middlewares flag and security.yml for
+  # the actual enforcement point, added only once this container and crowdsec-bouncer are verified
+  # healthy (forwardAuth fails CLOSED: a broken bouncer would 401/502 every websecure route,
+  # console included, the moment it's on that flag).
+  #
+  # BOUNCER_KEY_vaier: crowdsec's own docker_start.sh scans every BOUNCER_KEY_* env var at boot and
+  # self-registers a bouncer named after the suffix with that value as its API key (see
+  # /docker_start.sh's register_bouncer loop) — no cscli exec from Vaier needed. The same value is
+  # handed to crowdsec-bouncer below as CROWDSEC_BOUNCER_API_KEY. VAIER_CROWDSEC_BOUNCER_KEY is
+  # install.sh-generated exactly like VAIER_DEX_CLIENT_SECRET — not operator-authored.
+  #
+  # COLLECTIONS=crowdsecurity/traefik installs the Traefik log parser + scenarios; the acquis.d
+  # mount below is the acquisition source that tells crowdsec which file to actually tail — the
+  # parser alone reads nothing without it.
+  crowdsec:
+    image: crowdsecurity/crowdsec:v1.7.8
+    container_name: crowdsec
+    mem_limit: 256m
+    environment:
+      COLLECTIONS: crowdsecurity/traefik
+      BOUNCER_KEY_vaier: ${VAIER_CROWDSEC_BOUNCER_KEY:-}
+    volumes:
+      - ./crowdsec/config:/etc/crowdsec
+      - ./crowdsec/data:/var/lib/crowdsec/data
+      - ./crowdsec/acquis.d:/etc/crowdsec/acquis.d:ro
+      # Single-file mount (not directory) — the image's parsers/s02-enrich already ships hub
+      # parsers (geoip-enrich, the private-IP whitelist, ...); mounting the whole directory would
+      # shadow all of them. Vaier's SecurityService writes this file; vaier-init pre-touches it.
+      - ./crowdsec/whitelist/vaier-trusted-networks.yaml:/etc/crowdsec/parsers/s02-enrich/vaier-trusted-networks.yaml:ro
+      - ./traefik/logs:/var/log/traefik:ro
+    depends_on:
+      vaier-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks:
+      - vaier-network
+
+  # fbonalair/traefik-crowdsec-bouncer: a distroless Go binary (no shell — confirmed by hand,
+  # `docker run --entrypoint sh` fails with "executable file not found"), so there is no wrapper
+  # entrypoint here. It reads CROWDSEC_BOUNCER_API_KEY and CROWDSEC_AGENT_HOST directly as plain
+  # env vars (confirmed via `strings` on the extracted binary), which is exactly what
+  # BOUNCER_KEY_vaier above and this service's environment provide at container creation — no
+  # exec, no polling, no restart-to-pick-up-a-new-key needed on this side either.
+  crowdsec-bouncer:
+    image: fbonalair/traefik-crowdsec-bouncer:0.5.0
+    container_name: crowdsec-bouncer
+    mem_limit: 64m
+    environment:
+      CROWDSEC_BOUNCER_API_KEY: ${VAIER_CROWDSEC_BOUNCER_KEY:-}
+      CROWDSEC_AGENT_HOST: crowdsec:8080
+    depends_on:
+      - crowdsec
+    restart: unless-stopped
+    networks:
+      - vaier-network
+
+  # Rotates Traefik's access log (copytruncate — Traefik has no reopen signal to support any other
+  # rotation strategy) so it can't grow unbounded now that it's written to a file for CrowdSec.
+  traefik-logrotate:
+    image: alpine:3.20
+    container_name: traefik-logrotate
+    mem_limit: 32m
+    volumes:
+      - ./traefik/logs:/traefik/logs
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -e
+        apk add --no-cache logrotate >/dev/null
+        cat > /etc/logrotate-traefik.conf <<'EOF'
+        /traefik/logs/access.log {
+          daily
+          rotate 7
+          compress
+          missingok
+          notifempty
+          copytruncate
+        }
+        EOF
+        while true; do
+          logrotate -s /tmp/logrotate.state /etc/logrotate-traefik.conf
+          sleep 3600
+        done
+    restart: unless-stopped
 
   # The Vaier host is the one machine in the fleet that IS the Docker host rather than something behind
   # the tunnel, so it inherits no LAN routes: `traefik-lan-routes` and Vaier's own LanRouteAdapter write
@@ -496,11 +604,20 @@ services:
         for d in /vaier/config /traefik/config /wireguard/config /icons; do
           [ -d "$$d" ] && chown -R 1000:1000 "$$d"
         done
+        # #329: crowdsec bind-mounts this exact file (read-only, single-file mount) into its
+        # parsers/s02-enrich stage dir. A file that doesn't exist yet on the host makes Docker
+        # silently create a DIRECTORY at both ends instead — breaking both Vaier's write and
+        # crowdsec's read. Pre-touch it here, before crowdsec's own bind mount is ever set up
+        # (crowdsec depends_on this container completing).
+        mkdir -p /crowdsec-whitelist
+        touch /crowdsec-whitelist/vaier-trusted-networks.yaml
+        chown -R 1000:1000 /crowdsec-whitelist
     volumes:
       - ./vaier/config:/vaier/config
       - ./traefik/config:/traefik/config
       - ./wireguard/config:/wireguard/config
       - ./icons:/icons
+      - ./crowdsec/whitelist:/crowdsec-whitelist
     restart: "no"
 
   vaier:
@@ -574,6 +691,9 @@ services:
       # Resolved service icons — read-write so a resolved icon is fetched online once then served
       # from disk across restarts (icon.cache.path).
       - ./icons:/icons
+      # #329: SecurityService (CrowdSecWhitelistFileAdapter) writes the trusted-networks
+      # allowlist here; crowdsec bind-mounts the same file read-only into its parsers stage.
+      - ./crowdsec/whitelist:/crowdsec-whitelist
     restart: unless-stopped
     labels:
       - traefik.enable=true

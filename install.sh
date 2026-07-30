@@ -28,6 +28,9 @@ RUNTIME_PATHS=(
   offline
   oauth2/templates
   dex/themes
+  # #329: the one committed, non-secret CrowdSec acquisition file — tells the Security Engine
+  # which log file to tail. Everything else under crowdsec/ is runtime-generated.
+  crowdsec/acquis.d
 )
 
 say() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
@@ -124,6 +127,10 @@ ensure_secret() {   # $1=var name  $2=generator function
 }
 ensure_secret VAIER_DEX_CLIENT_SECRET gen_hex
 ensure_secret VAIER_OAUTH2_COOKIE_SECRET gen_b64
+# #329: the shared bouncer API key between crowdsec (BOUNCER_KEY_vaier, self-registers on boot)
+# and crowdsec-bouncer (CROWDSEC_BOUNCER_API_KEY). Not operator-authored — same reasoning as the
+# two secrets above.
+ensure_secret VAIER_CROWDSEC_BOUNCER_KEY gen_hex
 
 cat <<EOF
 

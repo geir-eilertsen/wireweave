@@ -796,7 +796,7 @@ class DockerComposeStructureTest {
         // and without touching remote-apps.yml, so the adapter's middleware readers cannot regress.
         assertThat(traefikCommand())
             .as("the safe headers must be bound to the entrypoint, not to individual routers")
-            .contains("--entrypoints.websecure.http.middlewares=vaier-security-headers@file");
+            .contains("--entrypoints.websecure.http.middlewares=crowdsec-bouncer@file,vaier-security-headers@file");
 
         // ...and the middleware it names has to exist, or Traefik disables every websecure router.
         Path configDir = runTraefikEntrypoint(tempDir);
@@ -805,6 +805,31 @@ class DockerComposeStructureTest {
         assertThat((Map<String, Object>) ((Map<String, Object>) rendered.get("http")).get("middlewares"))
             .as("the entrypoint reference must resolve in the file provider")
             .containsKey("vaier-security-headers");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void crowdsecBouncer_ridesTheEntrypointFirst_soABlockDecisionIsRefusedBeforeAnythingElse(@TempDir Path tempDir)
+            throws Exception {
+        // #329 Slice 1: crowdsec-bouncer must come BEFORE vaier-security-headers (and, on Vaier's
+        // own routers, before the Social auth chain) in the entrypoint chain — a CrowdSec block
+        // decision is refused before Traefik does anything else with the request.
+        assertThat(traefikCommand())
+            .as("crowdsec-bouncer must be the first entry in the entrypoint's middleware chain")
+            .contains("--entrypoints.websecure.http.middlewares=crowdsec-bouncer@file,vaier-security-headers@file");
+
+        // ...and the middleware it names has to exist and point at the bouncer's forwardAuth
+        // endpoint, or Traefik disables every websecure router.
+        Path configDir = runTraefikEntrypoint(tempDir);
+        Map<String, Object> rendered = (Map<String, Object>) new Yaml()
+            .load(Files.readString(configDir.resolve("security.yml")));
+        Map<String, Object> middlewares =
+            (Map<String, Object>) ((Map<String, Object>) rendered.get("http")).get("middlewares");
+        Map<String, Object> forwardAuth =
+            (Map<String, Object>) ((Map<String, Object>) middlewares.get("crowdsec-bouncer")).get("forwardAuth");
+
+        assertThat(forwardAuth.get("address")).isEqualTo("http://crowdsec-bouncer:8080/api/v1/forwardAuth");
+        assertThat(forwardAuth.get("trustForwardHeader")).isEqualTo(true);
     }
 
     @Test

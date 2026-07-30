@@ -46,6 +46,12 @@ traefik/
 oauth2/config/
 # dex: config/ is runtime state — the rendered config.yaml plus the upstream/broker secret files.
 dex/config/
+# CrowdSec (#329): config/ + data/ are the Security Engine's own state (hub cache, sqlite db,
+# machine credentials); whitelist/ is the Vaier-rendered trusted-networks allowlist. acquis.d/ is
+# NOT listed — it holds the one committed, non-secret acquisition file (traefik.yaml).
+crowdsec/config/
+crowdsec/data/
+crowdsec/whitelist/
 
 # WireGuard
 wireguard-config/

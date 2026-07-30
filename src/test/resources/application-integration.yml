@@ -6,6 +6,13 @@ wireguard:
   config:
     path: /tmp/vaier-test-wg
 
+# #329 Slice 1: SecurityService writes this on ApplicationReadyEvent, which fires for real in
+# this full-context test — point it at a writable tmp path instead of the production absolute
+# default (/crowdsec-whitelist).
+crowdsec:
+  whitelist:
+    path: /tmp/vaier-test-crowdsec/vaier-trusted-networks.yaml
+
 logging:
   level:
     net.vaier: WARN
