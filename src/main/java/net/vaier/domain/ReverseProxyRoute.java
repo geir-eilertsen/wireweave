@@ -797,6 +797,11 @@ public class ReverseProxyRoute {
         static final ServerIdentity VAIER_SERVER = new ServerIdentity(null, LanAnchor.VAIER_SERVER_NAME);
     }
 
+    /**
+     * How a route is authenticated, as read back off Traefik. Whether a given middleware name
+     * authenticates anyone is {@link AuthMode#isAuthMiddlewareName} — stated once, next to the chain
+     * it is membership of.
+     */
     @AllArgsConstructor
     @Getter
     @ToString
@@ -804,21 +809,6 @@ public class ReverseProxyRoute {
         private final String type;
         private final String username;
         private final String realm;
-
-        /**
-         * Whether the Traefik middleware named {@code middlewareName} is an authentication
-         * middleware — case-insensitive substring match against the canonical keywords
-         * ({@code auth}, {@code oauth}, {@code sso}). Used by adapters reading back a route from the
-         * Traefik API where only middleware names (not their type) are exposed. The heuristic is
-         * good-enough rather than exhaustive; it's a domain decision so it isn't re-invented per adapter.
-         */
-        public static boolean isAuthMiddlewareName(String middlewareName) {
-            if (middlewareName == null) return false;
-            String lower = middlewareName.toLowerCase();
-            return lower.contains("auth")
-                || lower.contains("oauth")
-                || lower.contains("sso");
-        }
     }
 
     @AllArgsConstructor

@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
-import net.vaier.domain.ReverseProxyRoute;
+import net.vaier.domain.AuthMode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.yaml.snakeyaml.Yaml;
@@ -857,8 +857,8 @@ class DockerComposeStructureTest {
 
     @Test
     void frameGuard_isAppendedAfterTheAuthChain_soTheAdaptersMiddlewareReadersAreUnaffected() throws Exception {
-        // TraefikReverseProxyAdapter.extractAuthInfoFromMiddlewareNames returns the FIRST auth-looking
-        // middleware on a router. The guard's name matches none of the auth keywords and it is appended
+        // TraefikReverseProxyAdapter.extractAuthInfoFromMiddlewareNames returns the FIRST auth
+        // middleware on a router. The guard is not one of Vaier's auth middlewares and it is appended
         // last, so what the console reports for its own routers is byte-identical to before.
         Map<String, String> labels = labelsOf("vaier");
         String consoleChain = labels.get("traefik.http.routers.vaier.middlewares");
@@ -866,10 +866,10 @@ class DockerComposeStructureTest {
         assertThat(consoleChain.indexOf("vaier-frame-guard"))
             .isGreaterThan(consoleChain.indexOf("vaier-authz@file"));
 
-        assertThat(ReverseProxyRoute.AuthInfo.isAuthMiddlewareName("vaier-frame-guard@file"))
+        assertThat(AuthMode.isAuthMiddlewareName("vaier-frame-guard@file"))
             .as("the guard must not read as an auth middleware, or a public route reports as gated")
             .isFalse();
-        assertThat(ReverseProxyRoute.AuthInfo.isAuthMiddlewareName("vaier-security-headers@file"))
+        assertThat(AuthMode.isAuthMiddlewareName("vaier-security-headers@file"))
             .isFalse();
     }
 

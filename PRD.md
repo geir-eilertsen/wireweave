@@ -2222,8 +2222,9 @@ that window open. It is a second file in the directory; the one Vaier generates 
   `vaier-public`, `vaier-identity`, `vaier-oauth2`, `oauth2-proxy`, `dex`, `vaier-offline`. Fleet-wide frame
   protection would break a published app that legitimately embeds or is embedded, silently and at scale.
   `SAMEORIGIN` rather than `DENY` because the Explorer frames its own pages (the Users/Concepts bridge).
-  It is **appended** to each chain, never prepended, because the adapter reports a router's auth from the
-  first auth-looking middleware on the list.
+  It is **appended** to each chain, never prepended — at the time it was written the adapter reported a
+  router's auth from the first auth-*looking* middleware on the list, so position mattered. Since §6.24 it
+  no longer does: the guard is simply not one of the **auth middlewares**, wherever it sits.
 - **No `Content-Security-Policy` at the edge, on purpose.** `GET /machines/{id}/files/view` already serves
   every previewed file under its own tight per-media-type CSP (`ViewableFile.SANDBOXED_POLICY` / `PDF_POLICY`).
   An edge CSP would either overwrite that — silently weakening a real boundary — or stack with it, and a
@@ -2250,6 +2251,49 @@ is really being validated.
 **No Java changed.** There is no per-route decision to encode: the middleware set is identical for every
 router, and Traefik's static config enforces it. This is the opposite case to `AuthMode.authMiddlewareNames()`,
 which lives in the domain precisely because the auth chain *does* vary per route.
+
+---
+
+---
+
+### 6.24 A forward-auth middleware is not proof of authentication ✅ (implemented 2026-07-29, closes [#341](https://github.com/getvaier/vaier/issues/341))
+
+**Why.** Reading a route back out of Traefik, Vaier decided "this service is authenticated" from the mere
+presence of a `forwardAuth` block on one of its middlewares. That held only because oauth2-proxy was the
+single `forwardAuth` in the stack — an accident of there being exactly one, not a property of `forwardAuth`,
+which is a general transport. Chain any second one **in front of** oauth2-proxy (where you would put a
+bouncer, since you want it to reject traffic before the auth hop) and two things broke without erroring: a
+**public** published service reported as **authenticated**, and a gated one named the new middleware as its
+auth provider. That value is what the Explorer shows as a service's **auth mode** and what the launchpad's
+viewer-adaptive logic keys on, so a service genuinely open to the internet was displayed as protected.
+Prerequisite for **#329 slice 1** (CrowdSec chains its bouncer exactly this way), but not a CrowdSec bug —
+any second `forwardAuth` does it, and a future rate limiter or maintenance gate would have found it instead.
+
+**The fix — positive identification, in the domain.** `AuthMode.isAuthMiddlewareName` answers the question
+once: exact membership of `AuthMode.allAuthMiddlewareNames()` (`oauth2-signin`, `oauth2-authn`,
+`vaier-authz`), tolerating the `@provider` suffix Traefik's API appends. It sits beside the list it tests
+membership of, so the two cannot drift. Identification is positive rather than a blocklist on purpose: a
+blocklist means every future non-auth `forwardAuth` reintroduces the bug by default, which is exactly how
+this one arrived. `TraefikReverseProxyAdapter.extractAuthInfo` now gates its `forwardAuth` branch on that
+predicate and **keeps walking** the chain instead of returning on the first hit — so a bouncer is stepped
+over and the provider label comes from the middleware that actually authenticates, in any order. `basicAuth`
+and `digestAuth` are untouched: those are authentication **by type**, which is precisely what `forwardAuth`
+never was, and that asymmetry is the lesson of the bug.
+
+**A second site, not in the issue.** The same defect lived one layer up as
+`ReverseProxyRoute.AuthInfo.isAuthMiddlewareName` — a substring heuristic (`contains("auth") ||
+contains("oauth") || contains("sso")`) used on the Traefik-API read path, where only middleware *names* are
+exposed. It failed in both directions: a CrowdSec bouncer named `crowdsec-forwardauth` matched and
+authenticates nobody; so would `authenticated-rate-limit`. That method is **deleted**, not repaired —
+keeping it as a delegating forwarder would have left two names for one rule and somewhere for a second rule
+to regrow. Every caller now asks `AuthMode`.
+
+**Testing.** `AuthModeTest` pins the predicate itself, including the names the old heuristic wrongly matched.
+`TraefikReverseProxyAdapterTest` covers **both** read paths end to end — the config-file path via a seeded
+`remote-apps.yml`, and the API path via a stub Traefik API serving `@file`-qualified names — for: a bouncer
+alone reporting **public**; a bouncer before *and* after the auth chain both naming oauth2-proxy; the
+CrowdSec-shaped regression (`crowdsec-bouncer@file` and the nastier `crowdsec-forwardauth@file`); `basicAuth`
+still detected whatever its middleware is called; and today's stack shape reported byte-identically to before.
 
 ---
 

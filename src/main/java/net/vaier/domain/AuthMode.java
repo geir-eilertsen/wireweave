@@ -76,6 +76,34 @@ public enum AuthMode {
     }
 
     /**
+     * Whether {@code middlewareName} names one of Vaier's authentication middlewares — exact
+     * membership of {@link #allAuthMiddlewareNames()}, so the list of authenticators and the test for
+     * "is this an authenticator?" are the same statement and cannot drift.
+     *
+     * <p>Identification is <em>positive</em> on purpose. It used to be a keyword heuristic
+     * ({@code contains("auth")}), and a Traefik {@code forwardAuth} block used to be taken as proof on
+     * its own — but {@code forwardAuth} is a transport, not a verdict. Plenty of middlewares that
+     * authenticate nobody use it (a CrowdSec bouncer, a rate limiter, a geo-filter, a maintenance
+     * gate), and any of them chained ahead of oauth2-proxy made a deliberately public service report
+     * as gated. A blocklist would let the next such name back in by default; membership of the chain
+     * Vaier itself emits cannot.
+     *
+     * <p>Traefik qualifies names by provider when read back over its API ({@code oauth2-authn@file}),
+     * so the suffix is stripped before comparing.
+     */
+    public static boolean isAuthMiddlewareName(String middlewareName) {
+        if (middlewareName == null || middlewareName.isBlank()) {
+            return false;
+        }
+        String bare = middlewareName.trim();
+        int at = bare.indexOf('@');
+        if (at >= 0) {
+            bare = bare.substring(0, at);
+        }
+        return allAuthMiddlewareNames().contains(bare);
+    }
+
+    /**
      * Read the mode back off a router's middleware list. Social wins when its forward-auth links are
      * present, else none — so the published-services API and the UI picker reflect what the route
      * actually carries.

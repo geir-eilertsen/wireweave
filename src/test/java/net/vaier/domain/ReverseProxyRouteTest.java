@@ -1283,22 +1283,8 @@ class ReverseProxyRouteTest {
         assertThat(ReverseProxyRoute.dnsNameFromRouterName("app-example-com-service")).isNull();
     }
 
-    // --- AuthInfo.isAuthMiddlewareName (#229) ---
-
-    @Test
-    void isAuthMiddlewareName_recognisesCommonAuthKeywords() {
-        assertThat(ReverseProxyRoute.AuthInfo.isAuthMiddlewareName("authelia@docker")).isTrue();
-        assertThat(ReverseProxyRoute.AuthInfo.isAuthMiddlewareName("forward-auth")).isTrue();
-        assertThat(ReverseProxyRoute.AuthInfo.isAuthMiddlewareName("oauth-proxy")).isTrue();
-        assertThat(ReverseProxyRoute.AuthInfo.isAuthMiddlewareName("SSO")).isTrue();
-    }
-
-    @Test
-    void isAuthMiddlewareName_rejectsUnrelatedMiddleware() {
-        assertThat(ReverseProxyRoute.AuthInfo.isAuthMiddlewareName("strip-prefix")).isFalse();
-        assertThat(ReverseProxyRoute.AuthInfo.isAuthMiddlewareName("compress")).isFalse();
-        assertThat(ReverseProxyRoute.AuthInfo.isAuthMiddlewareName(null)).isFalse();
-    }
+    // "is this an auth middleware?" moved to AuthMode (#341) — see AuthModeTest. It lived here as a
+    // substring keyword match, which read a CrowdSec bouncer as an authenticator.
 
     // --- helpers ---
 

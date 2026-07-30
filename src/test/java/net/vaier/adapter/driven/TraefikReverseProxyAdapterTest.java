@@ -1,5 +1,7 @@
 package net.vaier.adapter.driven;
 
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
 import net.vaier.config.ServiceNames;
 import net.vaier.domain.ReverseProxyRoute;
 import org.junit.jupiter.api.BeforeEach;
@@ -7,6 +9,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -257,6 +262,217 @@ class TraefikReverseProxyAdapterTest {
 
         List<ReverseProxyRoute> routes = adapter.getReverseProxyRoutes();
         assertThat(routes.getFirst().getAuthInfo()).isNull();
+    }
+
+    // --- auth detection: forwardAuth is a mechanism, not a verdict (#341) ---
+
+    /** A router plus the middleware definitions it references, as Vaier's own config file stores them. */
+    private void writeConfigWithRouterMiddlewares(List<String> routerMiddlewares, String middlewareDefinitions)
+            throws IOException {
+        StringBuilder chain = new StringBuilder();
+        for (String name : routerMiddlewares) {
+            chain.append("  - ").append(name).append("\n");
+        }
+        Files.writeString(tempDir.resolve("remote-apps.yml"), """
+            http:
+              routers:
+                app-example-com-router:
+                  rule: "Host(`app.example.com`)"
+                  entryPoints:
+                  - websecure
+                  service: app-service
+                  middlewares:
+            """ + chain.toString().indent(4) + """
+              services:
+                app-service:
+                  loadBalancer:
+                    servers:
+                    - url: http://10.0.0.9:7000
+              middlewares:
+            """ + middlewareDefinitions.indent(4));
+    }
+
+    /** A CrowdSec-shaped bouncer: a forwardAuth middleware that rejects traffic but authenticates nobody. */
+    private static final String CROWDSEC_DEFINITION = """
+        crowdsec-bouncer:
+          forwardAuth:
+            address: http://crowdsec-bouncer:8080/api/v1/forwardAuth
+            trustForwardHeader: true
+        """;
+
+    private static final String SOCIAL_CHAIN_DEFINITION = """
+        oauth2-signin:
+          forwardAuth:
+            address: http://oauth2-proxy:4180/oauth2/sign_in
+        oauth2-authn:
+          forwardAuth:
+            address: http://oauth2-proxy:4180/oauth2/auth
+        vaier-authz:
+          forwardAuth:
+            address: http://vaier:8080/authz/verify
+        """;
+
+    @Test
+    void getReverseProxyRoutes_nonAuthenticatingForwardAuthAlone_reportsThePublicServiceAsPublic() throws IOException {
+        writeConfigWithRouterMiddlewares(List.of("crowdsec-bouncer"), CROWDSEC_DEFINITION);
+
+        ReverseProxyRoute route = adapter.getReverseProxyRoutes().getFirst();
+
+        assertThat(route.getAuthInfo())
+            .as("a bouncer in front of a deliberately public service must not make it report as gated")
+            .isNull();
+    }
+
+    @Test
+    void getReverseProxyRoutes_bouncerBeforeTheAuthChain_namesOauth2ProxyAsTheProvider() throws IOException {
+        writeConfigWithRouterMiddlewares(
+            List.of("crowdsec-bouncer", "oauth2-signin", "oauth2-authn", "vaier-authz"),
+            CROWDSEC_DEFINITION + SOCIAL_CHAIN_DEFINITION);
+
+        ReverseProxyRoute route = adapter.getReverseProxyRoutes().getFirst();
+
+        assertThat(route.getAuthInfo()).isNotNull();
+        assertThat(route.getAuthInfo().getType()).isEqualTo("forwardAuth");
+        assertThat(route.getAuthInfo().getUsername())
+            .as("the provider label must come from the middleware that actually authenticates")
+            .isEqualTo("oauth2-proxy");
+    }
+
+    @Test
+    void getReverseProxyRoutes_bouncerAfterTheAuthChain_namesOauth2ProxyAsTheProvider() throws IOException {
+        writeConfigWithRouterMiddlewares(
+            List.of("oauth2-signin", "oauth2-authn", "vaier-authz", "crowdsec-bouncer"),
+            SOCIAL_CHAIN_DEFINITION + CROWDSEC_DEFINITION);
+
+        ReverseProxyRoute route = adapter.getReverseProxyRoutes().getFirst();
+
+        assertThat(route.getAuthInfo()).isNotNull();
+        assertThat(route.getAuthInfo().getUsername()).isEqualTo("oauth2-proxy");
+    }
+
+    @Test
+    void getReverseProxyRoutes_todaysStackShape_isUnchanged() throws IOException {
+        writeConfigWithRouterMiddlewares(
+            List.of("oauth2-signin", "oauth2-authn", "vaier-authz"), SOCIAL_CHAIN_DEFINITION);
+
+        ReverseProxyRoute route = adapter.getReverseProxyRoutes().getFirst();
+
+        assertThat(route.getAuthInfo()).isNotNull();
+        assertThat(route.getAuthInfo().getType()).isEqualTo("forwardAuth");
+        assertThat(route.getAuthInfo().getUsername()).isEqualTo("oauth2-proxy");
+    }
+
+    @Test
+    void getReverseProxyRoutes_authChainWithTraefiksProviderSuffix_isStillRecognised() throws IOException {
+        writeConfigWithRouterMiddlewares(List.of("oauth2-authn@file"), """
+            oauth2-authn@file:
+              forwardAuth:
+                address: http://oauth2-proxy:4180/oauth2/auth
+            """);
+
+        ReverseProxyRoute route = adapter.getReverseProxyRoutes().getFirst();
+
+        assertThat(route.getAuthInfo()).isNotNull();
+        assertThat(route.getAuthInfo().getUsername()).isEqualTo("oauth2-proxy");
+    }
+
+    @Test
+    void getReverseProxyRoutes_basicAuthIsStillAuthByType_whateverItsMiddlewareIsCalled() throws IOException {
+        // basicAuth and digestAuth ARE authentication by type — unlike forwardAuth, which is only
+        // a transport. That asymmetry is the whole point of #341, so the name is irrelevant here.
+        writeConfigWithRouterMiddlewares(List.of("legacy-gate"), """
+            legacy-gate:
+              basicAuth:
+                realm: Restricted
+                users:
+                - admin:hashedpassword
+            """);
+
+        ReverseProxyRoute route = adapter.getReverseProxyRoutes().getFirst();
+
+        assertThat(route.getAuthInfo()).isNotNull();
+        assertThat(route.getAuthInfo().getType()).isEqualTo("basicAuth");
+        assertThat(route.getAuthInfo().getUsername()).isEqualTo("admin");
+    }
+
+    // --- auth detection over the Traefik API, where names carry the @file suffix (#341) ---
+
+    /** Serves the four Traefik API endpoints the adapter reads, with one router carrying {@code middlewares}. */
+    private HttpServer startTraefikApiStub(String middlewaresJson) throws IOException {
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/api/http/routers", exchange -> respond(exchange, """
+            [{"name":"api-router@file","rule":"Host(`api.example.com`)","service":"api-service@file",
+              "provider":"file","entryPoints":["websecure"],"middlewares":%s}]
+            """.formatted(middlewaresJson)));
+        server.createContext("/api/http/services", exchange -> respond(exchange, """
+            [{"name":"api-service@file","loadBalancer":{"servers":[{"url":"http://10.0.0.9:7000"}]}}]
+            """));
+        server.createContext("/api/tcp/routers", exchange -> respond(exchange, "[]"));
+        server.createContext("/api/tcp/services", exchange -> respond(exchange, "[]"));
+        server.start();
+        return server;
+    }
+
+    private static void respond(HttpExchange exchange, String body) throws IOException {
+        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().add("Content-Type", "application/json");
+        exchange.sendResponseHeaders(200, bytes.length);
+        try (OutputStream out = exchange.getResponseBody()) {
+            out.write(bytes);
+        }
+    }
+
+    private ReverseProxyRoute apiRouteWithMiddlewares(String middlewaresJson) throws IOException {
+        HttpServer server = startTraefikApiStub(middlewaresJson);
+        try {
+            TraefikReverseProxyAdapter apiAdapter = new TraefikReverseProxyAdapter(
+                tempDir.resolve("remote-apps.yml").toString(),
+                "http://localhost:" + server.getAddress().getPort(), "example.com");
+            return apiAdapter.getReverseProxyRoutes().stream()
+                .filter(r -> "api.example.com".equals(r.getDomainName()))
+                .findFirst().orElseThrow();
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void apiRoutes_bouncerNamedForwardAuth_doesNotMakeAPublicServiceReportAsAuthenticated() throws IOException {
+        // "crowdsec-forwardauth@file" beat the old substring rule outright.
+        assertThat(apiRouteWithMiddlewares("[\"crowdsec-forwardauth@file\",\"vaier-errors@file\"]").getAuthInfo())
+            .isNull();
+        assertThat(apiRouteWithMiddlewares("[\"crowdsec-bouncer@file\"]").getAuthInfo())
+            .isNull();
+    }
+
+    @Test
+    void apiRoutes_bouncerBeforeTheAuthChain_isSteppedOver() throws IOException {
+        ReverseProxyRoute route = apiRouteWithMiddlewares(
+            "[\"crowdsec-forwardauth@file\",\"oauth2-signin@file\",\"oauth2-authn@file\",\"vaier-authz@file\"]");
+
+        assertThat(route.getAuthInfo()).isNotNull();
+        assertThat(route.getAuthInfo().getUsername())
+            .as("the label must name an authenticator, never the bouncer that happened to come first")
+            .isEqualTo("oauth2-signin");
+    }
+
+    @Test
+    void apiRoutes_bouncerAfterTheAuthChain_isIgnored() throws IOException {
+        ReverseProxyRoute route = apiRouteWithMiddlewares(
+            "[\"oauth2-signin@file\",\"oauth2-authn@file\",\"vaier-authz@file\",\"crowdsec-forwardauth@file\"]");
+
+        assertThat(route.getAuthInfo()).isNotNull();
+        assertThat(route.getAuthInfo().getUsername()).isEqualTo("oauth2-signin");
+    }
+
+    @Test
+    void apiRoutes_todaysStackShape_isUnchanged() throws IOException {
+        ReverseProxyRoute route = apiRouteWithMiddlewares(
+            "[\"oauth2-signin@file\",\"oauth2-authn@file\",\"vaier-authz@file\",\"vaier-errors@file\"]");
+
+        assertThat(route.getAuthInfo()).isNotNull();
+        assertThat(route.getAuthInfo().getType()).isEqualTo("forwardAuth");
+        assertThat(route.getAuthInfo().getUsername()).isEqualTo("oauth2-signin");
     }
 
     // --- setRouteDirectUrlDisabled ---

@@ -670,14 +670,15 @@ public class TraefikReverseProxyAdapter implements ForPersistingReverseProxyRout
 
     /**
      * Extract authentication info from middleware names when fetching from API. The "is this an
-     * auth middleware" predicate lives on {@link ReverseProxyRoute.AuthInfo#isAuthMiddlewareName}
-     * — the adapter only walks the list and pulls the provider label off the matching entry.
+     * auth middleware" predicate lives on {@link AuthMode#isAuthMiddlewareName} — the adapter only
+     * walks the list and pulls the provider label off the matching entry. Names arrive qualified by
+     * provider here ({@code oauth2-authn@file}), which the predicate handles.
      */
     private ReverseProxyRoute.AuthInfo extractAuthInfoFromMiddlewareNames(List<String> middlewareNames) {
         if (middlewareNames == null || middlewareNames.isEmpty()) return null;
 
         for (String middlewareName : middlewareNames) {
-            if (!ReverseProxyRoute.AuthInfo.isAuthMiddlewareName(middlewareName)) continue;
+            if (!AuthMode.isAuthMiddlewareName(middlewareName)) continue;
             String provider = middlewareName.contains("@")
                 ? middlewareName.substring(0, middlewareName.indexOf("@"))
                 : "middleware";
@@ -712,7 +713,9 @@ public class TraefikReverseProxyAdapter implements ForPersistingReverseProxyRout
             Map<String, Object> middlewareConfig = castToMap(middlewares.get(middlewareName));
 
             if (middlewareConfig != null) {
-                // Check for basicAuth
+                // basicAuth and digestAuth are authentication BY TYPE — the middleware type is itself
+                // the proof, so no name check applies. forwardAuth (below) never was: it is a
+                // transport that authenticators and non-authenticators alike use.
                 Map<String, Object> basicAuth = getNestedMap(middlewareConfig, "basicAuth");
                 if (basicAuth != null) {
                     String realm = (String) basicAuth.get("realm");
@@ -730,9 +733,12 @@ public class TraefikReverseProxyAdapter implements ForPersistingReverseProxyRout
                     return new ReverseProxyRoute.AuthInfo("digestAuth", username, realm);
                 }
 
-                // Check for forwardAuth
+                // A forwardAuth block is not on its own evidence of authentication — a bouncer, a
+                // geo-filter or a maintenance gate carries one too. Only the domain says which names
+                // authenticate; anything else is stepped over so the chain behind it is still read,
+                // whatever order the middlewares sit in.
                 Map<String, Object> forwardAuth = getNestedMap(middlewareConfig, "forwardAuth");
-                if (forwardAuth != null) {
+                if (forwardAuth != null && AuthMode.isAuthMiddlewareName(middlewareName)) {
                     String address = (String) forwardAuth.get("address");
                     String authProvider = extractAuthProvider(address);
                     return new ReverseProxyRoute.AuthInfo("forwardAuth", authProvider, null);

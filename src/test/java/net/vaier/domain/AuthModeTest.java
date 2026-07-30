@@ -57,6 +57,58 @@ class AuthModeTest {
             .isEqualTo(AuthMode.SOCIAL);
     }
 
+    // --- isAuthMiddlewareName (#341) ---
+
+    @Test
+    void isAuthMiddlewareName_matchesTheAuthChainExactly() {
+        assertThat(AuthMode.isAuthMiddlewareName("oauth2-signin")).isTrue();
+        assertThat(AuthMode.isAuthMiddlewareName("oauth2-authn")).isTrue();
+        assertThat(AuthMode.isAuthMiddlewareName("vaier-authz")).isTrue();
+    }
+
+    @Test
+    void isAuthMiddlewareName_toleratesTraefiksProviderSuffix() {
+        // The Traefik API returns middleware names qualified by their provider.
+        assertThat(AuthMode.isAuthMiddlewareName("oauth2-authn@file")).isTrue();
+        assertThat(AuthMode.isAuthMiddlewareName("vaier-authz@file")).isTrue();
+    }
+
+    @Test
+    void isAuthMiddlewareName_rejectsANonAuthenticatingForwardAuth() {
+        // forwardAuth is a general mechanism. A CrowdSec bouncer chained ahead of oauth2-proxy
+        // rejects traffic; it does not authenticate anyone, so it must not gate a public service.
+        assertThat(AuthMode.isAuthMiddlewareName("crowdsec-bouncer@file")).isFalse();
+        assertThat(AuthMode.isAuthMiddlewareName("crowdsec-forwardauth@file")).isFalse();
+    }
+
+    @Test
+    void isAuthMiddlewareName_isPositiveIdentification_notAKeywordHeuristic() {
+        // Every one of these matched the old "contains auth/oauth/sso" rule and none of them is
+        // an authenticator Vaier emits. A blocklist would let the next such name back in by default.
+        assertThat(AuthMode.isAuthMiddlewareName("authenticated-rate-limit")).isFalse();
+        assertThat(AuthMode.isAuthMiddlewareName("forward-auth")).isFalse();
+        assertThat(AuthMode.isAuthMiddlewareName("oauth-proxy")).isFalse();
+        assertThat(AuthMode.isAuthMiddlewareName("SSO")).isFalse();
+        assertThat(AuthMode.isAuthMiddlewareName("authelia@docker")).isFalse();
+    }
+
+    @Test
+    void isAuthMiddlewareName_rejectsUnrelatedMiddlewareAndNull() {
+        assertThat(AuthMode.isAuthMiddlewareName("strip-prefix")).isFalse();
+        assertThat(AuthMode.isAuthMiddlewareName("compress")).isFalse();
+        assertThat(AuthMode.isAuthMiddlewareName("vaier-frame-guard@file")).isFalse();
+        assertThat(AuthMode.isAuthMiddlewareName("vaier-errors")).isFalse();
+        assertThat(AuthMode.isAuthMiddlewareName(null)).isFalse();
+        assertThat(AuthMode.isAuthMiddlewareName("  ")).isFalse();
+    }
+
+    @Test
+    void isAuthMiddlewareName_agreesWithTheSingleSourcedChain() {
+        // The rule is membership of allAuthMiddlewareNames() — stated once, so the list and the
+        // membership test can never drift apart.
+        assertThat(AuthMode.allAuthMiddlewareNames()).allMatch(AuthMode::isAuthMiddlewareName);
+    }
+
     @Test
     void isSocial_isTrueOnlyForSocial() {
         assertThat(AuthMode.SOCIAL.isSocial()).isTrue();
