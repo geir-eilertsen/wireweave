@@ -12,7 +12,6 @@ import net.vaier.application.GetVpnClientsUseCase;
 import net.vaier.application.GetVpnPeersUseCase;
 import net.vaier.application.GetVpnPeersUseCase.VpnPeerView;
 import net.vaier.application.ReissuePeerConfigUseCase;
-import net.vaier.application.RefreshTrustedNetworksUseCase;
 import net.vaier.application.RenamePeerUseCase;
 import net.vaier.application.ResolveVpnPeerIdUseCase;
 import net.vaier.application.SyncLanRoutesUseCase;
@@ -116,7 +115,6 @@ public class VpnService implements
     private final ForPersistingLanServers forPersistingLanServers;
     private final ForPersistingHostCredentials forPersistingHostCredentials;
     private final ForTrackingHostKeys forTrackingHostKeys;
-    private final RefreshTrustedNetworksUseCase refreshTrustedNetworksUseCase;
 
     public VpnService(ConfigResolver configResolver,
                       ForGettingVpnClients forGettingVpnClients,
@@ -136,8 +134,7 @@ public class VpnService implements
                       ForTrackingPeerConfigRetrieval forTrackingPeerConfigRetrieval,
                       ForPersistingLanServers forPersistingLanServers,
                       ForPersistingHostCredentials forPersistingHostCredentials,
-                      ForTrackingHostKeys forTrackingHostKeys,
-                      RefreshTrustedNetworksUseCase refreshTrustedNetworksUseCase) {
+                      ForTrackingHostKeys forTrackingHostKeys) {
         this.configResolver = configResolver;
         this.forGettingVpnClients = forGettingVpnClients;
         this.forResolvingPeerIds = forResolvingPeerIds;
@@ -157,7 +154,6 @@ public class VpnService implements
         this.forPersistingLanServers = forPersistingLanServers;
         this.forPersistingHostCredentials = forPersistingHostCredentials;
         this.forTrackingHostKeys = forTrackingHostKeys;
-        this.refreshTrustedNetworksUseCase = refreshTrustedNetworksUseCase;
     }
 
     // --- GetVpnClientsUseCase ---
@@ -378,7 +374,6 @@ public class VpnService implements
         log.info("Updated lanCidr for peer {} to {} (server-side AllowedIPs: {})", peerId, normalized, newAllowedIps);
 
         syncLanRoutes();
-        refreshTrustedNetworksUseCase.refreshTrustedNetworks();
     }
 
     // --- SyncLanRoutesUseCase ---
@@ -411,7 +406,6 @@ public class VpnService implements
 
         vpnPeerDeleter.deletePeer(peerId);
         log.info("Successfully deleted peer: {}", peerId);
-        refreshTrustedNetworksUseCase.refreshTrustedNetworks();
     }
 
     private void deletePublishedServicesForPeer(String peerId) {
