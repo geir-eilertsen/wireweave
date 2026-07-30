@@ -3,6 +3,7 @@ package net.vaier.application.service;
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.application.NotifyAdminsOfBackupFailureUseCase;
 import net.vaier.application.NotifyAdminsOfBackupServerDownUseCase;
+import net.vaier.application.NotifyAdminsOfBreachAttemptUseCase;
 import net.vaier.application.NotifyAdminsOfDiskFillForecastUseCase;
 import net.vaier.application.NotifyAdminsOfPeerTransitionUseCase;
 import net.vaier.application.NotifyAdminsOfRemoteDiskPressureUseCase;
@@ -10,6 +11,7 @@ import net.vaier.application.NotifyAdminsOfUpdateAvailableUseCase;
 import net.vaier.config.ConfigResolver;
 import net.vaier.domain.BackupRun;
 import net.vaier.domain.BackupServer;
+import net.vaier.domain.BreachAttemptRollup;
 import net.vaier.domain.DiskFillForecast;
 import net.vaier.domain.DiskFillForecastCleared;
 import net.vaier.domain.ImageUpdateRollup;
@@ -27,7 +29,8 @@ public class NotificationService implements
         NotifyAdminsOfDiskFillForecastUseCase,
         NotifyAdminsOfBackupFailureUseCase,
         NotifyAdminsOfBackupServerDownUseCase,
-        NotifyAdminsOfUpdateAvailableUseCase {
+        NotifyAdminsOfUpdateAvailableUseCase,
+        NotifyAdminsOfBreachAttemptUseCase {
 
     private final ForSendingAdminNotification adminNotifier;
     private final ConfigResolver configResolver;
@@ -110,6 +113,17 @@ public class NotificationService implements
         adminNotifier.sendToAdmins(rollup.subject(),
                 rollup.body(configResolver.getDomain()),
                 "update available for " + rollup.images().size() + " image(s)");
+    }
+
+    /**
+     * One rollup mail for the block decisions that just appeared. The rollup renders itself; this
+     * service only sequences the send.
+     */
+    @Override
+    public void notifyAdminsOfBreachAttempt(BreachAttemptRollup rollup) {
+        adminNotifier.sendToAdmins(rollup.subject(),
+                rollup.body(configResolver.getDomain()),
+                "breach attempt: " + rollup.decisions().size() + " new block decision(s)");
     }
 
 }

@@ -2453,6 +2453,65 @@ within those CIDRs.
 threat-signal/breach-attempt notifications (the "notify only on trouble, predictive over reactive"
 convention already used for backups/certs); an Explorer surface for current decisions.
 
+### 6.27 Fleet threat detection — Slice 2 ✅ (implemented 2026-07-30, closes Slice 2 of [#329](https://github.com/getvaier/vaier/issues/329))
+
+**What.** "Notify the operator when someone tries to break in" — the issue's own headline promise.
+Poll CrowdSec's active ban decisions, track which are new since the last sweep, email admins one
+rollup when they are. No unban action, no UI — those stay Slice 3.
+
+**Simplification — no new CrowdSec credential.** The issue's architecture called for two ports
+(`ForDetectingIntrusions` reading alerts, `ForBlockingAddresses` reading decisions) feeding two
+domain types (`ThreatSignal`, `BlockDecision`). Live-tested: the bouncer API key Slice 1 already
+mints authenticates `GET /v1/decisions` fine (scenario, source IP, duration — everything a breach
+notification needs); the richer `/v1/alerts` endpoint (geo/ASN enrichment) demanded a separate
+JWT-based "machine" credential, exactly the kind of new-credential machinery Slice 1 already
+avoided once. Collapsed to a single `BlockDecision`, read via the credential Vaier already holds.
+`CrowdSecLapiAdapter` (`adapter/driven/`) implements `ForDetectingIntrusions`, JDK `HttpClient` +
+Jackson, modeled on `RegistryV2ImageAdapter` — every failure is an empty list, never a throw.
+
+**`BreachAttemptTracker` — modeled on `ImageUpdateTracker`, not the level-crossing trackers.** A
+`Map<Long, Boolean>` of previously-seen decision ids, forgetting any id absent from the latest
+sweep. Deliberately **not baseline-quiet**: a ban already active the first time Vaier's watcher
+polls — including right after a restart — is real news, the same reasoning `ImageUpdateTracker`
+documents for an already-stale image. Deliberately **no recovery/cleared transition** either: a
+decision expiring on its own timer isn't good news the way draining disk space is. This is a real,
+deliberate disagreement with the issue's original acceptance text ("a recovery notification when
+it clears") — the issue was corrected to match once this was built, rather than left contradicting
+what shipped.
+
+**`BreachAttemptRollup` — one sweep, one mail.** Modeled on `ImageUpdateRollup`: wraps every
+newly-appeared decision, owns `subject()`/`body()`, and a `worthSending()` guard the watcher checks
+before notifying. `NotifyAdminsOfBreachAttemptUseCase` (`NotificationService`'s 7th `Notify*`
+use case) only sequences the send.
+
+**`BreachAttemptWatcher` (`rest/`) — no `SecurityService` growth.** A plain `@Scheduled(fixedDelay
+= 300000)` component injecting `ForDetectingIntrusions` and `NotifyAdminsOfBreachAttemptUseCase`
+directly, matching `RemoteDiskWatcher`/`BackupServerWatcher`'s existing idiom of a `rest/`
+scheduler composing driven ports/use-cases with no intermediate service — `BackupServerWatcher`
+already injects a raw driven port (`ForProbingTcp`) as its primary poll mechanism the same way.
+`SecurityService` stays exactly as Slice 1 left it (allowlist refresh only).
+
+**A hex violation, caught and fixed along the way — not part of this slice, but surfaced by it.**
+While starting this slice, `VpnService.updateLanCidr()`/`deletePeer()` were found to be injecting
+and calling `RefreshTrustedNetworksUseCase` directly — a real "services never call use cases"
+violation, stretching the one documented cascade exception (`VpnService` → `DeletePublishedServiceUseCase`)
+to a case that doesn't share the property that justifies it (an orphaned published route is a real
+broken state; a briefly stale CrowdSec allowlist isn't, since CrowdSec doesn't hot-reload that file
+either way). Fixed by removing the coupling entirely: `SecurityService`'s existing boot-time
+refresh stands, and a new `TrustedNetworksScheduler` (`rest/`) now also refreshes it on its own
+5-minute schedule — decoupled from `VpnService` completely. Verified clean by the
+hex-architecture-checker agent.
+
+**Verified end-to-end on the dev stack, live, no synthetic testing needed.** Deploying straight
+into real accumulated CrowdSec traffic (24 active decisions from genuine internet scanners since
+Slice 1 went live) proved every behavior at once: the very first sweep after boot reported all 24
+as newly-appeared (no restart-quiet baseline), batched into exactly **one** rollup email
+(`[Vaier] Breach attempt: 24 new block decisions`), actually delivered over the configured SMTP
+(Gmail) — not just logged.
+
+**Backlog (Slice 3).** A Security view in the Explorer: live decisions/alerts over SSE, one-click
+unban (`ForBlockingAddresses`/a real `CrowdSecLapiAdapter` write path), "trust this address".
+
 ---
 
 ## 7. End-to-End Workflows

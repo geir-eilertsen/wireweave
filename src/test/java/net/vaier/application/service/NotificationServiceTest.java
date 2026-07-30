@@ -202,4 +202,19 @@ class NotificationServiceTest {
                 .contains("lscr.io/linuxserver/wireguard:1.0.x on Colina 27")
                 .contains("vaier.example.com");
     }
+
+    @Test
+    void notifyAdminsOfBreachAttempt_composesOneRollup() {
+        when(configResolver.getDomain()).thenReturn("example.com");
+        net.vaier.domain.BreachAttemptRollup rollup = new net.vaier.domain.BreachAttemptRollup(List.of(
+                new net.vaier.domain.BlockDecision(1L, "crowdsecurity/http-probing", "1.2.3.4", "ban", "3h59m48s")));
+
+        service.notifyAdminsOfBreachAttempt(rollup);
+
+        ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(adminNotifier).sendToAdmins(subject.capture(), body.capture(), any());
+        assertThat(subject.getValue()).isEqualTo(rollup.subject());
+        assertThat(body.getValue()).contains("1.2.3.4").contains("vaier.example.com");
+    }
 }

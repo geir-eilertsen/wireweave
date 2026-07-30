@@ -670,6 +670,11 @@ services:
       WIREGUARD_CONTAINER_NAME: wireguard
       TRAEFIK_CONFIG_PATH: /traefik/config
       TRAEFIK_API_URL: http://traefik:8080
+      # #329 Slice 2: CrowdSecLapiAdapter reads active decisions from LAPI, authenticating with the
+      # same bouncer key crowdsec-bouncer already uses (BOUNCER_KEY_vaier above) — GET /v1/decisions
+      # authenticates fine with a bouncer key, no separate machine/JWT credential needed.
+      CROWDSEC_LAPI_URL: http://crowdsec:8080
+      VAIER_CROWDSEC_BOUNCER_KEY: ${VAIER_CROWDSEC_BOUNCER_KEY:-}
       VAIER_CONFIG_PATH: /vaier/config
       DOCKER_HOST: tcp://docker-proxy:2375
     depends_on:

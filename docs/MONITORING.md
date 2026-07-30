@@ -8,7 +8,7 @@ Disk-pressure watching and its early-warning forecast, container image drift det
 
 ## Email notifications
 
-SMTP-powered admin alerts when any server-type machine (VPN server peers and LAN servers) goes up or down, when a filesystem on any SSH-reachable machine behind the VPN — including the Vaier host itself — fills past its threshold, when a container's image newly has an **update available**, or when someone signs in for the first time and lands as a pending access request awaiting approval.
+SMTP-powered admin alerts when any server-type machine (VPN server peers and LAN servers) goes up or down, when a filesystem on any SSH-reachable machine behind the VPN — including the Vaier host itself — fills past its threshold, when a container's image newly has an **update available**, when someone signs in for the first time and lands as a pending access request awaiting approval, or when the [edge's CrowdSec bouncer](NETWORKING.md#edge-hardening) blocks a new attempt to break in.
 
 ---
 
