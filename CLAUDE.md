@@ -104,13 +104,14 @@ Never write implementation code without a corresponding test written first. PRs 
 
 ## Keeping docs in sync
 
-After any change to the feature set — new features, changed behaviour, removed functionality, renamed concepts — update `README.md`, `PRD.md`, and `UBIQUITOUS_LANGUAGE.md` before committing:
+After any change to the feature set — new features, changed behaviour, removed functionality, renamed concepts — update `README.md`, `PRD.md`, `UBIQUITOUS_LANGUAGE.md`, and `web/index.html` before committing:
 
 - **README.md** — user-facing; update feature tables, workflow descriptions, and any affected quick-start steps
 - **PRD.md** — planning document; mark implemented items ✅, update planned items, and add backlog entries for anything new that was discussed
 - **UBIQUITOUS_LANGUAGE.md** — vocabulary; add new terms, update definitions when behaviour changes, retire terms that no longer apply
+- **web/index.html** — the public promo page (deployed to GitHub Pages via `.github/workflows/pages.yml` on every push to `main` that touches `web/**`); update its feature cards, architecture diagram, and quick-start steps to match. It isn't linked from anywhere else in the repo, which is exactly why it drifts silently if skipped — treat it as a fourth living doc, not a one-off page.
 
-All three documents must always reflect the actual state of the codebase. Stale docs are treated as bugs.
+All four must always reflect the actual state of the codebase. Stale docs are treated as bugs.
 
 ## Ubiquitous language is authoritative
 

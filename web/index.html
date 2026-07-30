@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Vaier — Self-hosted infrastructure for homelab developers</title>
-    <meta name="description" content="Vaier wires together WireGuard, Traefik, Google or GitHub sign-in (via oauth2-proxy), and AWS Route53 into a single web UI. Add a Docker container on any VPN peer, pick a subdomain — Vaier handles DNS, reverse proxy, and HTTPS automatically.">
+    <meta name="description" content="Vaier wires together WireGuard, Traefik, and Google or GitHub sign-in (via oauth2-proxy) into a single web UI. One wildcard DNS record, made once, covers everything — add a Docker container on any VPN peer, pick a subdomain, and Vaier handles the reverse proxy and HTTPS automatically.">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22 fill=%22none%22 stroke=%22%234fc3f7%22 stroke-width=%221.5%22 stroke-linecap=%22round%22><circle cx=%228%22 cy=%228%22 r=%222.2%22 fill=%22%234fc3f7%22 stroke=%22none%22/><line x1=%222.5%22 y1=%223.5%22 x2=%226%22 y2=%226.5%22/><line x1=%2213.5%22 y1=%223.5%22 x2=%2210%22 y2=%226.5%22/><line x1=%222.5%22 y1=%2212.5%22 x2=%226%22 y2=%229.5%22/><line x1=%2213.5%22 y1=%2212.5%22 x2=%2210%22 y2=%229.5%22/><circle cx=%222.5%22 cy=%223.5%22 r=%221.5%22 fill=%22%234fc3f7%22 stroke=%22none%22/><circle cx=%2213.5%22 cy=%223.5%22 r=%221.5%22 fill=%22%234fc3f7%22 stroke=%22none%22/><circle cx=%222.5%22 cy=%2212.5%22 r=%221.5%22 fill=%22%234fc3f7%22 stroke=%22none%22/><circle cx=%2213.5%22 cy=%2212.5%22 r=%221.5%22 fill=%22%234fc3f7%22 stroke=%22none%22/></svg>">
     <link rel="stylesheet" href="styles.css">
     <style>
@@ -409,9 +409,10 @@
         </div>
         <h1>Self-hosted infrastructure<br/>for <span class="accent">homelab developers</span>.</h1>
         <p class="lede">
-            Vaier wires together WireGuard, Traefik, Google or GitHub sign-in (via oauth2-proxy),
-            and AWS Route53 into a single web UI. Add a Docker container on any VPN peer, pick a
-            subdomain — Vaier handles DNS, reverse proxy, and HTTPS automatically.
+            <strong>Vaier</strong> — Norwegian for <em>wire</em>, pronounced <strong>VY-er</strong> — wires
+            together WireGuard, Traefik, and Google or GitHub sign-in (via oauth2-proxy) into a single web
+            UI. One wildcard DNS record, made once, covers everything from here: add a Docker container on
+            any VPN peer, pick a subdomain, and Vaier handles the reverse proxy and HTTPS automatically.
         </p>
         <div class="hero-actions">
             <a href="#quickstart" class="btn btn-primary btn-large">Get started</a>
@@ -433,22 +434,23 @@
         <div class="why">
             <div class="why-card">
                 <div class="label">// without vaier</div>
-                <h3>Six tools, six config files, six places to mess up</h3>
+                <h3>Five tools, five config files, five places to mess up</h3>
                 <p>
-                    You spin up a container on a homelab box. Now you need a WireGuard peer, a Route53
-                    CNAME, a Traefik dynamic-config entry, a Let's Encrypt cert, a forward-auth rule,
+                    You spin up a container on a homelab box. Now you need a WireGuard peer, a DNS
+                    record, a Traefik dynamic-config entry, a Let's Encrypt cert, a forward-auth rule,
                     and a bookmark somewhere you'll actually find later. Every new service repeats the
                     whole dance. Every drift is silent.
                 </p>
             </div>
             <div class="why-card">
                 <div class="label">// with vaier</div>
-                <h3>One UI. One click. One subdomain.</h3>
+                <h3>One UI. One click. Zero DNS, ever again.</h3>
                 <p>
-                    Vaier discovers containers on every connected peer, lets you pick a subdomain,
-                    creates the DNS record, generates the Traefik route, provisions the cert,
-                    optionally gates it behind Google or GitHub sign-in, and rolls back the entire
-                    flow if anything fails. Your homelab now feels like a PaaS.
+                    One wildcard DNS record, made once, before you ever run <code>docker compose up</code>.
+                    From then on, Vaier discovers containers on every connected peer, lets you pick a
+                    subdomain, generates the Traefik route, provisions the cert, optionally gates it behind
+                    Google or GitHub sign-in, and rolls back the flow if anything fails. Nothing to add to
+                    DNS, ever — the name already resolves. Your homelab now feels like a PaaS.
                 </p>
             </div>
         </div>
@@ -475,14 +477,14 @@
                     <line x1="13" y1="15" x2="17" y2="15"/>
                 </svg>
                 <h3>Web terminal</h3>
-                <p>Open a real SSH shell to any machine — peers, LAN servers, or the Vaier host — right from its card. Tabs survive navigation, tile into a split grid, and reconnect on their own. Credentials stay server-side; the browser never sees the secret.</p>
+                <p>Open a real, persistent SSH shell to any machine — peers, LAN servers, or the Vaier host itself — in its own window. Backed by tmux on the machine, it reattaches automatically across reconnects and even a Vaier redeploy. Credentials stay server-side; the browser never sees the secret.</p>
             </div>
             <div class="feature">
                 <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M12 2v6M12 16v6M2 12h6M16 12h6M5 5l4 4M19 5l-4 4M5 19l4-4M19 19l-4-4"/>
                 </svg>
                 <h3>One-click service publishing</h3>
-                <p>Any container on any peer becomes a public HTTPS subdomain in one click — with automatic rollback if DNS or TLS fails.</p>
+                <p>Any container on any peer becomes a public HTTPS subdomain in one click — no DNS step, since the name already resolves under your wildcard record — with automatic rollback if the route fails.</p>
             </div>
             <div class="feature">
                 <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -507,8 +509,8 @@
                     <circle cx="12" cy="12" r="9"/>
                     <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>
                 </svg>
-                <h3>DNS management</h3>
-                <p>Full CRUD for AWS Route53 zones and records — or skip AWS entirely and run in manual DNS mode if your domain lives elsewhere.</p>
+                <h3>Wildcard DNS</h3>
+                <p>Vaier stays out of DNS entirely: one <code>*.yourdomain.com</code> record, made once at whatever host your domain lives on, covers the console, sign-in, and every service you'll ever publish — checked and reported at every boot.</p>
             </div>
             <div class="feature">
                 <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -525,8 +527,26 @@
                     <rect x="3" y="5" width="18" height="14" rx="2"/>
                     <path d="m3 7 9 7 9-7"/>
                 </svg>
-                <h3>Email notifications</h3>
-                <p>SMTP-powered password resets, plus admin alerts when any server-type peer or LAN machine goes up or down.</p>
+                <h3>Monitoring &amp; alerts</h3>
+                <p>Every disk on every machine is watched, with a fill-rate forecast that warns before it's full — plus container image-update detection and up/down alerts, all by email.</p>
+            </div>
+            <div class="feature">
+                <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M4 4h11l5 5v11a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/>
+                    <path d="M8 20v-6h8v6M8 4v4h6"/>
+                </svg>
+                <h3>Fleet backup &amp; survival kit</h3>
+                <p>Automated borg backups to one designated backup server, with a self-updating "survival kit" so your archives stay readable even if Vaier itself is gone.</p>
+            </div>
+            <div class="feature">
+                <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 6h18M3 12h18M3 18h18"/>
+                    <circle cx="7" cy="6" r="1.3" fill="currentColor" stroke="none"/>
+                    <circle cx="7" cy="12" r="1.3" fill="currentColor" stroke="none"/>
+                    <circle cx="7" cy="18" r="1.3" fill="currentColor" stroke="none"/>
+                </svg>
+                <h3>Explorer</h3>
+                <p>One tree for the whole fleet — browse files and containers, select and transfer across machines, and step back in time through backup archives.</p>
             </div>
             <div class="feature">
                 <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -558,12 +578,6 @@
                     <text x="60" y="46" text-anchor="middle" fill="#858585" font-family="SF Mono, Consolas, monospace" font-size="10">on the internet</text>
                 </g>
 
-                <g transform="translate(220,30)">
-                    <rect width="180" height="48" rx="4" fill="#2d2d30" stroke="#3c3c3c"/>
-                    <text x="90" y="22" text-anchor="middle" fill="#d4d4d4" font-family="-apple-system, Segoe UI, sans-serif" font-size="12" font-weight="600">AWS Route53</text>
-                    <text x="90" y="38" text-anchor="middle" fill="#858585" font-family="SF Mono, Consolas, monospace" font-size="10">resolves *.yourdomain.com</text>
-                </g>
-
                 <g transform="translate(220,110)">
                     <rect width="220" height="60" rx="4" fill="#2d2d30" stroke="#4fc3f7" stroke-width="1.5"/>
                     <text x="110" y="26" text-anchor="middle" fill="#4fc3f7" font-family="-apple-system, Segoe UI, sans-serif" font-size="13" font-weight="600">Vaier server</text>
@@ -588,9 +602,6 @@
                     <text x="100" y="44" text-anchor="middle" fill="#858585" font-family="SF Mono, Consolas, monospace" font-size="10">phone · laptop · NAS</text>
                 </g>
 
-                <path d="M140 125 Q 200 60 220 54" fill="none" stroke="#4fc3f7" stroke-width="1.4" marker-end="url(#arr)"/>
-                <text x="172" y="78" fill="#858585" font-family="SF Mono, Consolas, monospace" font-size="10">DNS</text>
-
                 <path d="M140 140 L 215 140" fill="none" stroke="#4fc3f7" stroke-width="1.4" marker-end="url(#arr)"/>
                 <text x="155" y="134" fill="#858585" font-family="SF Mono, Consolas, monospace" font-size="10">HTTPS</text>
 
@@ -600,10 +611,10 @@
                 <text x="450" y="106" fill="#858585" font-family="SF Mono, Consolas, monospace" font-size="10">WireGuard tunnel</text>
             </svg>
             <p class="diagram-caption">
-                Every published service resolves via DNS to the single Vaier server, terminates TLS at
-                Traefik, optionally passes social-login authorization (Google or GitHub via
-                oauth2-proxy, then Vaier's own access check), and is proxied over WireGuard to the
-                container running on a peer. The peers never need a public IP.
+                Every published service resolves under your one wildcard DNS record to the single Vaier
+                server, terminates TLS at Traefik, optionally passes social-login authorization (Google or
+                GitHub via oauth2-proxy, then Vaier's own access check), and is proxied over WireGuard to
+                the container running on a peer. The peers never need a public IP.
             </p>
         </div>
     </section>
@@ -618,7 +629,7 @@
                 <div class="step-num">01</div>
                 <div class="step-body">
                     <h3>Bring a Linux server with a public IP</h3>
-                    <p>An EC2 <code>t3.small</code> or equivalent. Open TCP 22, 80, 443 and UDP 51820. Bring a domain you control and (optionally) AWS Route53 credentials for full DNS automation.</p>
+                    <p>An EC2 <code>t3.small</code> or equivalent. Open TCP 22, 80, 443 and UDP 51820. Bring a domain you control, hosted anywhere that can serve a wildcard <code>A</code> record.</p>
                 </div>
             </div>
             <div class="step">
@@ -633,38 +644,33 @@
             <div class="step">
                 <div class="step-num">03</div>
                 <div class="step-body">
-                    <h3>Grab the compose file</h3>
+                    <h3>Rig the machine</h3>
+                    <p>One script fetches the runtime files Vaier needs — the compose file and the assets it bind-mounts — and scaffolds a <code>.env</code> with two secrets already generated for you. No git clone.</p>
 <pre class="code"><span class="cmd">mkdir</span> -p vaier &amp;&amp; <span class="cmd">cd</span> vaier
-<span class="cmd">curl</span> -fsSL https://raw.githubusercontent.com/getvaier/vaier/main/docker-compose.yml \
-     -o docker-compose.yml</pre>
+<span class="cmd">curl</span> -fsSL https://raw.githubusercontent.com/getvaier/vaier/main/install.sh | <span class="cmd">bash</span></pre>
                 </div>
             </div>
             <div class="step">
                 <div class="step-num">04</div>
                 <div class="step-body">
-                    <h3>Configure sign-in, DNS, and secrets</h3>
-                    <p>Register a Google (and optionally GitHub) OAuth client with the callback URL <code>https://dex.yourdomain.com/callback</code>, then drop the ids into <code>.env</code>. Set <code>VAIER_ADMIN_EMAIL</code> to the account that becomes the first admin. Add <code>VAIER_AWS_KEY</code> / <code>VAIER_AWS_SECRET</code> for Route53 automation, or leave them out and maintain DNS yourself.</p>
-<pre class="code"><span class="cmd">cat</span> &gt; .env &lt;&lt;EOF
-<span class="var">VAIER_DOMAIN</span>=<span class="str">yourdomain.com</span>
+                    <h3>Point DNS, then configure sign-in</h3>
+                    <p>Make one wildcard record, before first boot, at whatever DNS host your domain lives on — it covers the console, sign-in, and every service you'll ever publish:</p>
+<pre class="code"><span class="comment"># *.yourdomain.com   A   &lt;this server's public IP&gt;</span></pre>
+                    <p>Then open the <code>.env</code> that step 3 created. Register a Google (and/or GitHub) OAuth client with the callback URL <code>https://dex.yourdomain.com/callback</code>, and drop the ids in — at least one provider is required. Set <code>VAIER_ADMIN_EMAIL</code> to the account that becomes the first admin. Don't recreate the file — it already holds two secrets <code>install.sh</code> generated for you.</p>
+<pre class="code"><span class="var">VAIER_DOMAIN</span>=<span class="str">yourdomain.com</span>
 <span class="var">ACME_EMAIL</span>=<span class="str">you@yourdomain.com</span>
 <span class="var">VAIER_ADMIN_EMAIL</span>=<span class="str">you@gmail.com</span>
 <span class="var">VAIER_OIDC_GOOGLE_CLIENT_ID</span>=<span class="str">...apps.googleusercontent.com</span>
-<span class="var">VAIER_OIDC_GOOGLE_CLIENT_SECRET</span>=<span class="str">...</span>
-<span class="comment"># optional: Route53 DNS automation</span>
-<span class="var">VAIER_AWS_KEY</span>=<span class="str">AKIA...</span>
-<span class="var">VAIER_AWS_SECRET</span>=<span class="str">...</span>
-EOF
-<span class="cmd">chmod</span> 600 .env</pre>
-                    <p>Point three records at the server: <code>vaier</code>, <code>oauth2</code>, and <code>dex</code> under <code>yourdomain.com</code>. With Route53 credentials Vaier creates them for you; otherwise add the CNAMEs yourself before first boot.</p>
+<span class="var">VAIER_OIDC_GOOGLE_CLIENT_SECRET</span>=<span class="str">...</span></pre>
                 </div>
             </div>
             <div class="step">
                 <div class="step-num">05</div>
                 <div class="step-body">
                     <h3>Start the stack and sign in</h3>
-                    <p>Bring everything up, open <code>https://vaier.yourdomain.com</code>, and sign in with the Google account you set as <code>VAIER_ADMIN_EMAIL</code> — Vaier seeds it as the first admin, so you land straight in the console. Anyone else who signs in lands as a <strong>pending</strong> request until you approve them on the Users page.</p>
+                    <p>Bring everything up, open <code>https://vaier.yourdomain.com</code>, and sign in with the account you set as <code>VAIER_ADMIN_EMAIL</code> — Vaier seeds it as the first admin, so you land straight in the console. Anyone else who signs in lands as a <strong>pending</strong> request until you approve them on the Users page.</p>
 <pre class="code"><span class="cmd">docker</span> compose up -d
-<span class="comment"># then open https://vaier.yourdomain.com and sign in with Google</span></pre>
+<span class="comment"># then open https://vaier.yourdomain.com and sign in</span></pre>
                 </div>
             </div>
         </div>
