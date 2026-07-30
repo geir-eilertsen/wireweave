@@ -10,6 +10,7 @@ import net.vaier.application.GetLanServerReachabilityUseCase;
 import net.vaier.application.GetMachineDiskUsageUseCase;
 import net.vaier.application.GetMachinesUseCase;
 import net.vaier.application.GetPublishableServicesUseCase;
+import net.vaier.application.GetSshServerPresenceUseCase;
 import net.vaier.application.GetVaierServerUseCase;
 import net.vaier.application.SetDiskWatchUseCase;
 import net.vaier.application.SetMachineSshAccessUseCase;
@@ -21,6 +22,7 @@ import net.vaier.domain.MachineNudge;
 import net.vaier.domain.MachineNudges;
 import net.vaier.domain.NotFoundException;
 import net.vaier.domain.Reachability;
+import net.vaier.domain.SshServerPresence;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -51,6 +53,7 @@ public class MachineRestController {
     private final GetBackupJobsUseCase getBackupJobsUseCase;
     private final GetBackupServersUseCase getBackupServersUseCase;
     private final GetLanServerReachabilityUseCase getLanServerReachabilityUseCase;
+    private final GetSshServerPresenceUseCase getSshServerPresenceUseCase;
 
     /**
      * Every machine Vaier knows. Each carries {@code hasCredential} — whether Vaier actually holds an SSH
@@ -58,6 +61,12 @@ public class MachineRestController {
      * Vaier-server and nudges endpoints do. The Explorer gates a machine's Files and Disk entries on it:
      * those ride on a credential, so the SSH-access toggle alone would grow entries that open onto a "no
      * login" wall.
+     *
+     * <p>Each also carries {@code sshServerPresence} — Vaier's last-known belief about whether an SSH server
+     * is actually listening there, read from {@link GetSshServerPresenceUseCase}. This is the page-load half
+     * of the live signal: the {@code ssh-server-presence-changed} event on the {@code vpn-peers} SSE stream
+     * carries deltas after the page is open, but a fresh load has no deltas to have received, so the list
+     * itself must carry the current state.
      */
     @GetMapping
     public List<MachineResponse> list() {
@@ -72,7 +81,8 @@ public class MachineRestController {
         // view because one machine could not be labelled is much the worse failure of the two.
         MachineId vaierServer = resolveVaierServerId();
         return getMachinesUseCase.getAllMachines().stream()
-            .map(m -> MachineResponse.from(m, hasStoredCredential(m.id()), m.id().equals(vaierServer)))
+            .map(m -> MachineResponse.from(m, hasStoredCredential(m.id()), m.id().equals(vaierServer),
+                getSshServerPresenceUseCase.getSshServerPresence(m.id())))
             .toList();
     }
 
@@ -263,13 +273,15 @@ public class MachineRestController {
         String deviceCategory,
         boolean sshAccess,
         boolean hasCredential,
-        boolean vaierServer
+        boolean vaierServer,
+        SshServerPresence sshServerPresence
     ) {
         static MachineResponse from(Machine m, boolean hasCredential) {
-            return from(m, hasCredential, false);
+            return from(m, hasCredential, false, SshServerPresence.UNKNOWN);
         }
 
-        static MachineResponse from(Machine m, boolean hasCredential, boolean vaierServer) {
+        static MachineResponse from(Machine m, boolean hasCredential, boolean vaierServer,
+                                    SshServerPresence sshServerPresence) {
             return new MachineResponse(
                 m.id().value(),
                 m.name(),
@@ -288,7 +300,8 @@ public class MachineRestController {
                 m.deviceCategory().name(),
                 m.effectiveSshAccess(),
                 hasCredential,
-                vaierServer
+                vaierServer,
+                sshServerPresence
             );
         }
     }

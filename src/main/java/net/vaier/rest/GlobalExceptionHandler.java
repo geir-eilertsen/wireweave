@@ -4,13 +4,17 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.domain.ConflictException;
 import net.vaier.domain.DiskUnreadableException;
+import net.vaier.domain.HostKeyMismatchException;
 import net.vaier.domain.LastAdminException;
 import net.vaier.domain.NoHostCredentialException;
+import net.vaier.domain.NoSftpSubsystemException;
+import net.vaier.domain.NoSshServerException;
 import net.vaier.domain.ArchivesUnreadableException;
 import net.vaier.domain.NotFoundException;
 import net.vaier.domain.PathOutsideSftpRootException;
 import net.vaier.domain.PermissionDeniedException;
 import net.vaier.domain.SshAuthException;
+import net.vaier.domain.SshConnectException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
@@ -134,6 +138,68 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public ResponseEntity<ApiError> handleDiskUnreadable(DiskUnreadableException e) {
         return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
                 .body(ApiError.of("DISK_UNREADABLE", e.getMessage()));
+    }
+
+    /**
+     * The machine answers SSH and simply cannot serve files — its SSH server has no SFTP subsystem (#344).
+     * {@code 502}: the far side answered, so the fault is neither Vaier's nor the operator's request; it is a
+     * fact about that machine. A code of its own because the operator's next move is unlike any other
+     * failure's — install a package, or change SSH servers. The sentence is the domain's own, remedy and
+     * all: what to do about a machine is knowledge about the machine, so this handler maps status and code
+     * and adds no words of its own. The machine rides in {@code detail}, as
+     * {@link NoHostCredentialException}'s does, so the browser can offer the fix for that exact machine.
+     * Registered explicitly: unmapped, this was the generic {@code 500} that made Vaier look broken while
+     * it knew precisely what was wrong.
+     */
+    @ExceptionHandler(NoSftpSubsystemException.class)
+    public ResponseEntity<ApiError> handleNoSftpSubsystem(NoSftpSubsystemException e) {
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                .body(ApiError.of("NO_SFTP_SUBSYSTEM", e.getMessage(), e.machineName()));
+    }
+
+    /**
+     * Vaier could not reach a machine over SSH at all — unreachable, or a handshake that timed out.
+     * {@code 502} for the same reason an unreadable disk is: the failure is on the far side of Vaier. The
+     * message is returned as it stands, like {@link DiskUnreadableException}'s — it names a host and a path
+     * the operator is already looking at on screen, so there is nothing in it they do not already know.
+     * (Deliberately unlike {@link SshAuthException} below, whose raw text can carry the SSH user.)
+     *
+     * <p>Registered explicitly because it was not, and every SSH transport failure therefore reached the
+     * browser as "an unexpected error occurred" — the exact dead-end the README promises the Explorer never
+     * takes.
+     */
+    @ExceptionHandler(SshConnectException.class)
+    public ResponseEntity<ApiError> handleSshConnect(SshConnectException e) {
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                .body(ApiError.of("SSH_UNREACHABLE", e.getMessage()));
+    }
+
+    /**
+     * The machine is up and answered the TCP handshake — it actively <b>refused</b> the connection, rather
+     * than timing out — but nothing is listening on its SSH port at all. Found live: Roon kjøkken with its
+     * SSH server deliberately uninstalled reads as an ordinary {@code SshConnectException} ("Connection
+     * refused") unless the domain is asked, which sends the operator hunting a network fault that is not
+     * there. {@code 502} for the same reason every far-side refusal is; the sentence is the domain's own,
+     * remedy included, so the Explorer and the web terminal both say the same actionable thing rather than
+     * one of them inventing its own words for it.
+     */
+    @ExceptionHandler(NoSshServerException.class)
+    public ResponseEntity<ApiError> handleNoSshServer(NoSshServerException e) {
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                .body(ApiError.of("NO_SSH_SERVER", e.getMessage(), e.machineName()));
+    }
+
+    /**
+     * The machine presented a host key that is not the one Vaier pinned. The web terminal has always shown
+     * this on its own socket; every other path that reaches a machine — files, disks, containers — went
+     * through the catch-all instead, hiding a refusal that is either a rebuilt host or a man in the middle
+     * behind a generic {@code 500}. {@code 502}, like the other far-side refusals, carrying the domain's own
+     * message: it names the machine, both fingerprints and the way out (clear the pin and reconnect).
+     */
+    @ExceptionHandler(HostKeyMismatchException.class)
+    public ResponseEntity<ApiError> handleHostKeyMismatch(HostKeyMismatchException e) {
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                .body(ApiError.of("HOST_KEY_MISMATCH", e.getMessage()));
     }
 
     /**

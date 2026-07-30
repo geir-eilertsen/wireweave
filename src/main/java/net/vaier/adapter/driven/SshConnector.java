@@ -3,6 +3,7 @@ package net.vaier.adapter.driven;
 import net.vaier.domain.AuthMethod;
 import net.vaier.domain.HostKeyMismatchException;
 import net.vaier.domain.HostKeyTrust;
+import net.vaier.domain.NoSshServerException;
 import net.vaier.domain.SshAuthException;
 import net.vaier.domain.SshConnectException;
 import net.vaier.domain.SshTarget;
@@ -85,8 +86,12 @@ final class SshConnector {
             if (mismatch.get()) {
                 throw new HostKeyMismatchException(target.host(), target.pinnedFingerprint(), presented[0]);
             }
+            String rootMessage = rootMessage(e);
+            if (NoSshServerException.isNoServerListening(rootMessage)) {
+                throw new NoSshServerException(target.host(), target.port());
+            }
             throw new SshConnectException(
-                "Could not reach " + target.host() + ":" + target.port() + " (" + rootMessage(e) + ")", e);
+                "Could not reach " + target.host() + ":" + target.port() + " (" + rootMessage + ")", e);
         }
     }
 

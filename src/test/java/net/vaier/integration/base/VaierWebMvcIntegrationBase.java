@@ -255,6 +255,9 @@ public abstract class VaierWebMvcIntegrationBase {
     @MockBean
     protected GetDiskWatchesUseCase getDiskWatchesUseCase;
 
+    @MockBean
+    protected GetSshServerPresenceUseCase getSshServerPresenceUseCase;
+
     // --- Host credential (web terminal, credential vault) use cases ---
     @MockBean
     protected SaveHostCredentialUseCase saveHostCredentialUseCase;

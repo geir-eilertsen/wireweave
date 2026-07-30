@@ -12,14 +12,19 @@ import net.vaier.domain.CommandResult;
 import net.vaier.domain.DiskWatch;
 import net.vaier.domain.DiskWatches;
 import net.vaier.domain.Machine;
+import net.vaier.domain.NoSshServerException;
 import net.vaier.domain.RemoteDiskForecastTracker;
 import net.vaier.domain.RemoteDiskPressureTracker;
 import net.vaier.domain.RemoteDiskUsage;
+import net.vaier.domain.SshServerPresence;
+import net.vaier.domain.port.ForPublishingEvents;
+import net.vaier.domain.port.ForRecordingSshServerPresence;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.Clock;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * Polls <b>every real filesystem</b> of every SSH-accessible machine that Vaier holds a credential for and
@@ -49,6 +54,15 @@ import java.util.List;
  * its threshold — so a filling disk pages once as a forecast and then the level alert takes over. No extra
  * SSH round-trip: the forecast reads the readings the level check already took, and a failed or unparseable
  * {@code df} records no sample (the failure paths {@code return} before the forecast feed).
+ *
+ * <p>A third consumer rides the same SSH attempt: whether the machine has an SSH server listening at all.
+ * A refused connect surfaces from the shared {@code SshConnector} as {@link NoSshServerException} — the one
+ * failure narrow enough to record with confidence, since a timeout or an auth failure could just as easily
+ * mean the machine is merely asleep. Recorded via {@link ForRecordingSshServerPresence} and, on a boundary
+ * crossing, published on the {@code vpn-peers} SSE stream so the Explorer can grey out SSH-dependent
+ * controls (and lift the greying the moment a later sweep reaches the machine again) without waiting for an
+ * operator's click to fail. No extra SSH traffic: this reads the very attempt {@code checkMachine} already
+ * makes.
  */
 @Component
 @Slf4j
@@ -62,8 +76,15 @@ public class RemoteDiskWatcher {
     private final GetDiskWatchesUseCase diskWatches;
     private final ConfigResolver configResolver;
     private final Clock clock;
+    private final ForRecordingSshServerPresence sshPresenceRecorder;
+    private final ForPublishingEvents eventPublisher;
     private final RemoteDiskPressureTracker tracker = new RemoteDiskPressureTracker();
     private final RemoteDiskForecastTracker forecastTracker = new RemoteDiskForecastTracker();
+
+    // The stream the Explorer already holds open for fleet liveness (peers, LAN reachability) — piggybacking
+    // here costs no new connection and no timer.
+    private static final String SSE_TOPIC = "vpn-peers";
+    private static final String SSH_SERVER_PRESENCE_SSE_EVENT = "ssh-server-presence-changed";
 
     public RemoteDiskWatcher(GetMachinesUseCase machines,
                              GetHostCredentialUseCase credentials,
@@ -72,7 +93,9 @@ public class RemoteDiskWatcher {
                              NotifyAdminsOfDiskFillForecastUseCase forecastNotifier,
                              GetDiskWatchesUseCase diskWatches,
                              ConfigResolver configResolver,
-                             Clock clock) {
+                             Clock clock,
+                             ForRecordingSshServerPresence sshPresenceRecorder,
+                             ForPublishingEvents eventPublisher) {
         this.machines = machines;
         this.credentials = credentials;
         this.remoteCommand = remoteCommand;
@@ -81,15 +104,20 @@ public class RemoteDiskWatcher {
         this.diskWatches = diskWatches;
         this.configResolver = configResolver;
         this.clock = clock;
+        this.sshPresenceRecorder = sshPresenceRecorder;
+        this.eventPublisher = eventPublisher;
     }
 
     @Scheduled(fixedDelay = 300000)
     public void checkRemoteDiskUsage() {
         int globalThreshold = configResolver.getDiskMonitorThresholdPercent();
         DiskWatches watches = diskWatches.getDiskWatches();
-        for (Machine machine : machines.getAllMachines()) {
+        List<Machine> allMachines = machines.getAllMachines();
+        for (Machine machine : allMachines) {
             checkMachine(machine, watches, globalThreshold);
         }
+        // A machine deleted while Vaier was running must not leave its SSH-server presence behind forever.
+        sshPresenceRecorder.retainOnly(allMachines.stream().map(Machine::id).collect(Collectors.toSet()));
     }
 
     private void checkMachine(Machine machine, DiskWatches watches, int globalThreshold) {
@@ -101,6 +129,9 @@ public class RemoteDiskWatcher {
         }
         try {
             CommandResult result = remoteCommand.run(machine.id(), RemoteDiskUsage.DF_COMMAND);
+            // Reaching a CommandResult at all — whatever df itself said — already proves the SSH session
+            // connected and authenticated, so the server is present regardless of df's own exit status.
+            recordSshServerPresent(machine);
             if (result.timedOut() || result.exitCode() != 0) {
                 log.debug("Remote df on {} failed (exit={}, timedOut={}); skipping",
                         machine.name(), result.exitCode(), result.timedOut());
@@ -114,8 +145,31 @@ public class RemoteDiskWatcher {
             for (RemoteDiskUsage filesystem : filesystems) {
                 checkFilesystem(machine, filesystem, watches, globalThreshold);
             }
+        } catch (NoSshServerException e) {
+            // The one failure narrow enough to record with confidence — see NoSshServerException.
+            recordSshServerAbsent(machine);
         } catch (Exception e) {
+            // Every other failure (timeout, auth, host-key mismatch, an unreachable network) is ambiguous —
+            // it could just as easily mean the machine is asleep — so it must never move the tracker either
+            // way.
             log.debug("Remote disk check failed for {}: {}", machine.name(), e.getMessage());
+        }
+    }
+
+    /** Records that the SSH server is gone and, only on the boundary crossing, wakes the Explorer. */
+    private void recordSshServerAbsent(Machine machine) {
+        SshServerPresence previous = sshPresenceRecorder.record(machine.id(), SshServerPresence.ABSENT);
+        log.debug("No SSH server detected on {} ({})", machine.name(), machine.id());
+        if (previous != SshServerPresence.ABSENT) {
+            eventPublisher.publish(SSE_TOPIC, SSH_SERVER_PRESENCE_SSE_EVENT, "");
+        }
+    }
+
+    /** Records that the SSH server answered and, only when recovering from a known-absent state, wakes it. */
+    private void recordSshServerPresent(Machine machine) {
+        SshServerPresence previous = sshPresenceRecorder.record(machine.id(), SshServerPresence.PRESENT);
+        if (previous == SshServerPresence.ABSENT) {
+            eventPublisher.publish(SSE_TOPIC, SSH_SERVER_PRESENCE_SSE_EVENT, "");
         }
     }
 

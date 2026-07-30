@@ -11,6 +11,7 @@ import net.vaier.application.SendHostPasswordUseCase;
 import net.vaier.application.SendHostPasswordUseCase.SendPasswordResult;
 import net.vaier.domain.HostKeyMismatchException;
 import net.vaier.domain.NoHostCredentialException;
+import net.vaier.domain.NoSshServerException;
 import net.vaier.domain.NotFoundException;
 import net.vaier.domain.PasswordPrompt;
 import net.vaier.domain.MachineId;
@@ -103,6 +104,12 @@ public class TerminalWebSocketHandler extends AbstractWebSocketHandler {
                 "Host key changed — refused. Clear the pinned key if the host was rebuilt.");
         } catch (SshAuthException e) {
             closeWith(wsSession, CLOSE_AUTH_FAILED, "Authentication failed — check the stored credential");
+        } catch (NoSshServerException e) {
+            // Same close code as the generic connect failure below (both mean "could not open a shell here")
+            // but its own short reason: a refused connection means no SSH server is running at all, not that
+            // the machine is merely asleep or behind a network fault. The full remedy lives in e.getMessage()
+            // for callers with more room than a WebSocket close frame's ~123-byte reason allows.
+            closeWith(wsSession, CLOSE_CONNECT_FAILED, "No SSH server is running on this machine");
         } catch (SshConnectException e) {
             closeWith(wsSession, CLOSE_CONNECT_FAILED, "Could not reach the host");
         } catch (RuntimeException e) {

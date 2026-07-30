@@ -1187,6 +1187,48 @@ job**'s source paths against the tree and would have reported a backed-up direct
   carry the SSH `user@host`, so it is logged server-side but **never returned** — the operator is told to check
   the credential Vaier holds instead. `ApiError` gains a three-arg `of(code, message, detail)` factory to carry
   the machine name.
+- **A machine whose SSH server has no SFTP subsystem now says so ✅ (2026-07-29, closes
+  [#344](https://github.com/getvaier/vaier/issues/344)).** The third and last browse failure that dead-ended on
+  the generic `500`, and the one that hid best: SSH works completely — shell, `df`, the Docker scrape — and only
+  the SFTP channel dies during subsystem init, so the machine looks healthy from everywhere except its files.
+  **A fleet fact, not one machine:** both DietPi **Roon** endpoints (`192.168.3.104` Roon kjøkken,
+  `192.168.3.106` Roon loftstue) run Dropbear, which serves SFTP only when an external `sftp-server` binary is
+  present and a minimal install has none — so both were silently unbrowsable, kjøkken since the day it was added.
+  New domain type `NoSftpSubsystemException`, shaped like `NoHostCredentialException` (it carries the machine so
+  a handler can name it) and owning the **decision**: `isSubsystemRefusal(rootMessage)` is a static domain
+  predicate, deliberately narrow — it recognises MINA's `Closing while await init message`, the shape a channel
+  closed during subsystem init takes, and nothing that could equally be a refused connection, a timeout or a
+  rejected credential, because sending an operator to install a package on a machine that is merely asleep is a
+  worse answer than an imprecise one. `MinaSftpAdapter.translate` **asks** the predicate rather than
+  string-matching (its `SSH_FX_NO_SUCH_FILE` → `NotFoundException` and `SSH_FX_PERMISSION_DENIED` →
+  `PermissionDeniedException` branches are unchanged); it names the machine by its SSH host, which is all an
+  `SshTarget` carries. → **`502 Bad Gateway`** `ApiError(code=NO_SFTP_SUBSYSTEM)`, machine in `detail`, message
+  naming the machine *and the action*: install `openssh-sftp-server`, or switch it to OpenSSH.
+- **`SshConnectException` and `HostKeyMismatchException` are mapped too ✅ (2026-07-29, #344).** The actual
+  reported defect: `SshConnectException` was never registered, so **every** SSH transport failure — refused,
+  unreachable, timed out — reached the browser as "an unexpected error occurred". → **`502`**
+  `ApiError(code=SSH_UNREACHABLE)` returning `e.getMessage()`, like `DiskUnreadableException`'s handler: the
+  message names a host and a path the operator is already looking at, so there is nothing in it they do not
+  know (deliberately unlike `SshAuthException`, whose raw text can carry the SSH user and is withheld). A
+  sibling audit of every `net.vaier.domain` exception against the registered handlers found one more of the
+  same defect: `HostKeyMismatchException`, handled on the terminal's own socket but falling to the catch-all on
+  every REST path that reaches a machine — hiding a rebuilt host or a man in the middle behind a generic `500`.
+  → **`502`** `ApiError(code=HOST_KEY_MISMATCH)` carrying the domain's own message, which names the machine,
+  both fingerprints and the way out. No frontend change was needed: `explorer-listing.js` already passes the
+  envelope's `message` through verbatim, so the new sentences reach the rail's hover title and the Inspector on
+  their own.
+- **A refused SSH connect now says exactly that ✅ (2026-07-29, #344).** Uninstalling a machine's SSH server
+  entirely reads as a plain `SshConnectException` ("Connection refused") unless the domain is asked — the
+  same shape as a network fault, which sends the operator hunting for one that is not there. Found live on
+  **Roon kjøkken** (`192.168.3.104`), whose SSH server had been deliberately removed. New domain type
+  `NoSshServerException`, shaped like `NoSftpSubsystemException`: a static predicate,
+  `isNoServerListening(rootMessage)`, recognises "Connection refused" specifically — narrow and
+  high-confidence, never a timeout or "no route to host" (either of which could just mean the machine is
+  asleep) — thrown from `SshConnector.establish`, the one shared connect path both the Explorer's SFTP client
+  and the web terminal go through. → **`502`** `ApiError(code=NO_SSH_SERVER)`, machine in `detail`, message
+  naming the machine and the remedy: install and start Dropbear or OpenSSH. §6.25 builds on this predicate to
+  stop the Explorer from offering SSH-dependent controls on a machine already known to have none, rather than
+  only failing reactively after the click.
 
 **Notes / open risks:**
 - **`borg mount` is verified ✅** — confirmed end-to-end on the Vaier server (mount + list + read over SFTP with
@@ -2254,8 +2296,6 @@ which lives in the domain precisely because the auth chain *does* vary per route
 
 ---
 
----
-
 ### 6.24 A forward-auth middleware is not proof of authentication ✅ (implemented 2026-07-29, closes [#341](https://github.com/getvaier/vaier/issues/341))
 
 **Why.** Reading a route back out of Traefik, Vaier decided "this service is authenticated" from the mere
@@ -2294,6 +2334,57 @@ to regrow. Every caller now asks `AuthMode`.
 alone reporting **public**; a bouncer before *and* after the auth chain both naming oauth2-proxy; the
 CrowdSec-shaped regression (`crowdsec-bouncer@file` and the nastier `crowdsec-forwardauth@file`); `basicAuth`
 still detected whatever its middleware is called; and today's stack shape reported byte-identically to before.
+
+---
+
+### 6.25 Proactive SSH-server-presence gating ✅ (implemented 2026-07-30)
+
+**Why.** §6.20/§6.24's `NoSshServerException` fix made a refused SSH connect surface as a precise, actionable
+error — but only reactively, after the operator clicked. Uninstall a machine's SSH server (as happened on
+**Roon kjøkken**, `192.168.3.104`) and the Explorer still offered the SSH-access checkbox, **Open shell**, and
+the Files/Disk tree entries exactly as if the server were there, each one a dead end that took a click to
+discover.
+
+**The fix — piggyback on the existing sweep, never a second SSH round-trip.** `RemoteDiskWatcher` already
+SSHes into every SSH-accessible, credentialed machine every 5 minutes to read disk usage. Its `checkMachine`
+now recognises `NoSshServerException` specifically (via the existing `isNoServerListening` predicate) and
+records the machine **ABSENT**; any successful command run (regardless of the command's own exit status —
+reaching a result at all proves the session authenticated) records it **PRESENT**, self-healing the gate the
+next time a sweep reaches the machine. Every other failure (a timeout, a rejected credential, a host-key
+mismatch) is ambiguous — it could just as easily mean the machine is asleep — and leaves the tracker
+untouched. New domain enum `SshServerPresence` (`UNKNOWN` / `PRESENT` / `ABSENT`) — Vaier's *last-known
+belief*, distinct from **SSH access** (the operator's intent) and from **machine status**/reachability
+(general network liveness, not SSH-specific). Tracked in `InMemorySshServerPresenceCache`
+(`adapter/driven/`, implementing the new `ForCheckingSshServerPresence` / `ForRecordingSshServerPresence`
+ports, keyed by `MachineId`), the fleet-wide sibling of the existing LAN-reachability cache. `TerminalService`
+— the domain service that already owns the SSH/credential/terminal concept — gains one narrow
+`GetSshServerPresenceUseCase` reading the cache.
+
+**Wiring.** `GET /machines` composes `sshServerPresence` into `MachineResponse` at the driving edge (same
+pattern as the existing `hasCredential`), so the Explorer has the current state on page load. On a boundary
+crossing, `RemoteDiskWatcher` publishes `ssh-server-presence-changed` on the `vpn-peers` SSE stream the
+Explorer already holds open for fleet liveness — no new connection, no timer, and no noise on every sweep
+(only on the crossing).
+
+**Four UI gates, greyed rather than removed** (`explorer-shell.js`): the state is transient and
+self-healing, so nothing disappears — it becomes inert with a tooltip until a later sweep lifts it.
+1. The **SSH access** checkbox disables (with "No SSH server detected on last check") only while it is
+   currently *off* — an operator who already turned access on can always turn it back off, see the stored
+   credential, or retry; the gate never stops turning access **off**, only turning it **on** for a machine
+   already known to have nothing listening.
+2. **Open shell** disables for either of two independent reasons, each with its own words: no stored
+   credential ("Give this machine an SSH credential first" — a separate, static condition, already carried
+   by `hasCredential`), or no known SSH server.
+3. The Files and Disk entries — both in the machine pane's "Inside this machine" grid and the fleet tree
+   rail — grey out the same way, closing the gap where a `sshAccess=true` machine with a dead SSH server
+   still showed clickable entries that only relocated the dead end one click deeper.
+
+**Testing.** `InMemorySshServerPresenceCacheTest` covers the adapter in isolation. `TerminalServiceTest`
+covers the use case delegation. `RemoteDiskWatcherTest` covers: recording ABSENT on `NoSshServerException`
+and PRESENT on any successful run (whatever `df`'s own exit status), publishing only on a boundary crossing
+(never on a repeat), never touching the tracker on an ambiguous failure or a skipped machine (no access, no
+credential), and evicting a deleted machine's stale state each sweep (`retainOnly`). `MachineRestControllerTest`
+covers the driving-edge composition into `GET /machines`.
 
 ---
 

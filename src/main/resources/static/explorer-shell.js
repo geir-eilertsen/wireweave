@@ -785,6 +785,17 @@
             row.title = (entry && entry.error) || 'This directory could not be read.';
         }
 
+        // Files and disk both ride on SSH — greyed rather than removed when Vaier's last check found no
+        // server on the owning machine, so the entry still names what is there and the greying lifts on its
+        // own the moment a later sweep reaches the machine again.
+        if (kind === 'files' || kind === 'disk') {
+            const owner = machineById(path[1]);
+            if (owner && owner.sshServerPresence === 'ABSENT') {
+                row.disabled = true;
+                row.title = 'No SSH server detected on last check';
+            }
+        }
+
         if (kind === 'machine') {
             row.appendChild(machineCaps(path[1]));
             row.appendChild(dot(path[1]));
@@ -912,7 +923,10 @@
         return el;
     }
 
-    function card(icon, name, nameIsId, noteText, onClick, dotMachineId) {
+    // disabledTitle: when set, the card is greyed and inert rather than removed — the entry still names what
+    // is there, it just cannot be opened right now (e.g. Vaier's last check found no SSH server). Pass a
+    // falsy value for a normal, live card.
+    function card(icon, name, nameIsId, noteText, onClick, dotMachineId, disabledTitle) {
         const btn = document.createElement('button');
         btn.className = 'ex-card';
 
@@ -931,7 +945,12 @@
         n.textContent = noteText;
         btn.appendChild(n);
 
-        btn.onclick = onClick;
+        if (disabledTitle) {
+            btn.disabled = true;
+            btn.title = disabledTitle;
+        } else {
+            btn.onclick = onClick;
+        }
         return btn;
     }
 
@@ -1190,9 +1209,17 @@
                 disk:       'Its filesystems, and how full they are',
                 backup:     'The fleet backs up here',
             };
+            // Files and disk both ride on SSH — a credential alone got them into the tree, but a machine
+            // whose last check found no SSH server would just relocate the same dead end one click deeper.
+            // Grey them out rather than remove them: the entry still names what is there, and the next sweep
+            // (or an SSH server put back) lifts the greying on its own.
+            const noSshServer = m.sshServerPresence === 'ABSENT';
+            const SSH_ENTRY_KINDS = new Set(['files', 'disk']);
             inside.forEach((kid) => {
+                const disabledTitle = (noSshServer && SSH_ENTRY_KINDS.has(kid.kind))
+                    ? 'No SSH server detected on last check' : null;
                 grid.appendChild(card(iconFor(kid.kind, kid.name), kid.name, true,
-                    NOTE[kid.name], () => go(['fleet', m.id, kid.name])));
+                    NOTE[kid.name], () => go(['fleet', m.id, kid.name]), null, disabledTitle));
             });
             body.appendChild(grid);
         }
@@ -1217,8 +1244,21 @@
         // Turning access off hides the files and disk entries in the tree — it stops claiming a reach it lost.
         if (m.type !== 'MOBILE_CLIENT' && m.type !== 'WINDOWS_CLIENT') {
             body.appendChild(section('SSH access'));
+            // Vaier's last-known belief about whether this machine has an SSH server at all — pushed live by
+            // the same 5-minute sweep that already reaches every SSH-accessible, credentialed machine
+            // (RemoteDiskWatcher), never a fresh probe from here. Transient and self-healing: the next sweep
+            // that reaches the machine lifts every greying below without a reload.
+            const noSshServer = m.sshServerPresence === 'ABSENT';
             const access = el('label', 'ex-check-row');
             const box = el('input'); box.type = 'checkbox'; box.checked = !!m.sshAccess;
+            // Never disable an already-on toggle: an operator who turned access on must still be able to turn
+            // it back off, see the stored credential, or retry — never stranded behind a control with no way
+            // back. The gate only ever stops turning access ON for a machine Vaier already knows has nothing
+            // listening.
+            if (!m.sshAccess && noSshServer) {
+                box.disabled = true;
+                box.title = 'No SSH server detected on last check';
+            }
             box.onchange = () => toggleSshAccess(m.id, box.checked, box);
             const atxt = el('span'); atxt.textContent = 'Let Vaier open an SSH session to this machine';
             access.append(box, atxt);
@@ -1227,7 +1267,17 @@
                 const cred = el('div', 'ex-lactions is-static');
                 // The shell lives here now, beside the credential it uses — opening a terminal is the most direct
                 // thing SSH access is for, so it sits with it rather than as a separate entry in the tree.
-                cred.appendChild(selVerb('shell', 'Open shell', 'ex-btn is-accent', () => openShellWindow(m.id)));
+                const shellBtn = selVerb('shell', 'Open shell', 'ex-btn is-accent', () => openShellWindow(m.id));
+                // Two distinct, independent reasons a shell cannot open right now — each earns its own words,
+                // since "give it a credential" and "nothing is listening" call for different next steps.
+                if (!m.hasCredential) {
+                    shellBtn.disabled = true;
+                    shellBtn.title = 'Give this machine an SSH credential first';
+                } else if (noSshServer) {
+                    shellBtn.disabled = true;
+                    shellBtn.title = 'No SSH server detected on last check';
+                }
+                cred.appendChild(shellBtn);
                 cred.appendChild(selVerb('gear', 'SSH credential', 'ex-btn', () => credentialDialog(m.id)));
                 body.appendChild(cred);
                 body.appendChild(note('The shell opens in its own window and runs on ' + m.name + ' itself, so it '
@@ -6513,6 +6563,11 @@
         events.addEventListener('lan-servers-updated', () => loadLanServers().then(paintDots));
         // A LAN scan finished on the backend — re-read the discovered snapshot (it renders when it lands).
         events.addEventListener('lan-scan-updated', () => loadLanScan());
+        // RemoteDiskWatcher's existing 5-minute sweep found (or stopped finding) an SSH server on a machine —
+        // published only on the crossing, never every sweep. sshServerPresence rides on /machines, so a full
+        // reload picks it up; re-rendering greys or lifts the SSH-access checkbox, Open shell, and the
+        // Files/Disk tree entries without the operator needing to reload the page.
+        events.addEventListener('ssh-server-presence-changed', () => loadFleet().then(render));
     }
 
     // The fleet's second stream, and the last one. `published-services` is a different topic on a different

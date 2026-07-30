@@ -3,17 +3,24 @@ package net.vaier.adapter.driven;
 import net.vaier.domain.AuthMethod;
 import net.vaier.domain.FileEntry;
 import net.vaier.domain.HostKeyMismatchException;
+import net.vaier.domain.NoSftpSubsystemException;
+import net.vaier.domain.NoSshServerException;
 import net.vaier.domain.NotFoundException;
 import net.vaier.domain.PermissionDeniedException;
 import net.vaier.domain.SshAuthException;
-import net.vaier.domain.SshConnectException;
 import net.vaier.domain.SftpRoot;
 import net.vaier.domain.SshTarget;
 import net.vaier.domain.port.ForBrowsingRemoteFiles;
 import net.vaier.domain.port.ForBrowsingRemoteFiles.DirectoryListing;
+import org.apache.sshd.common.channel.Channel;
+import org.apache.sshd.common.channel.ChannelListener;
 import org.apache.sshd.common.file.virtualfs.VirtualFileSystemFactory;
 import org.apache.sshd.server.SshServer;
+import org.apache.sshd.server.channel.ChannelSession;
+import org.apache.sshd.server.command.AbstractCommandSupport;
+import org.apache.sshd.server.command.Command;
 import org.apache.sshd.server.keyprovider.SimpleGeneratorHostKeyProvider;
+import org.apache.sshd.server.subsystem.SubsystemFactory;
 import org.apache.sshd.sftp.server.SftpSubsystemFactory;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -21,6 +28,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -156,6 +164,107 @@ class MinaSftpAdapterTest {
 
         assertThatThrownBy(() -> adapter.list(target(port, "wrong", null), remote("")))
             .isInstanceOf(SshAuthException.class);
+    }
+
+    @Test
+    void noServerListeningAtAll_throwsNoSshServer_namingTheMachine() throws Exception {
+        // Found live: Roon kjøkken with its SSH server deliberately uninstalled. The port is bound and
+        // freed rather than picked at random, so the connect is guaranteed to be refused (nothing else can
+        // race to claim it in between) rather than merely time out — the two read very differently to the
+        // domain, and only a refusal is safe to call "no SSH server here" (SSH_UNREACHABLE otherwise).
+        int freedPort;
+        try (ServerSocket socket = new ServerSocket(0)) {
+            freedPort = socket.getLocalPort();
+        }
+
+        assertThatThrownBy(() -> adapter.list(target(freedPort), remote("")))
+            .isInstanceOf(NoSshServerException.class)
+            .hasMessageContaining("localhost")
+            .hasMessageContaining("Install and start an SSH server");
+    }
+
+    @Test
+    void anSshServerWithNoSftpSubsystem_throwsNoSftpSubsystem_namingTheMachine() throws Exception {
+        // DietPi's Dropbear, exactly (#344): SSH answers, the login succeeds, and only the SFTP channel dies
+        // during subsystem init because there is no sftp-server behind it. It must NOT read as an ordinary
+        // transport failure — the operator's move here is to install a package, not to go looking for a
+        // network fault.
+        server = SshServer.setUpDefaultServer();
+        server.setPort(0);
+        server.setKeyPairProvider(new SimpleGeneratorHostKeyProvider());
+        server.setSubsystemFactories(List.of(sftpSubsystemThatNeverAnswers()));
+        server.addChannelListener(closeEveryChannelShortlyAfterItOpens());
+        server.setPasswordAuthenticator((u, p, s) -> "test".equals(u) && "secret".equals(p));
+        server.start();
+
+        assertThatThrownBy(() -> adapter.list(target(server.getPort()), remote("")))
+            .isInstanceOf(NoSftpSubsystemException.class)
+            .hasMessageContaining("localhost");
+    }
+
+    /**
+     * A subsystem factory that accepts the "sftp" request — so it is never synchronously refused the way an
+     * empty factory list is — but never behaves like one. {@link #closeEveryChannelShortlyAfterItOpens} is
+     * what actually ends the channel; kept as a separate, lower-level mechanism because a command's own
+     * {@link org.apache.sshd.server.ExitCallback#onExit(int, String, boolean) onExit(..., true)} turned out
+     * to be the same trap as below — {@code true} tears the channel down locally without ever telling the
+     * client, so a client waiting on a reply never learns of it.
+     */
+    private static SubsystemFactory sftpSubsystemThatNeverAnswers() {
+        return new SubsystemFactory() {
+            @Override
+            public String getName() {
+                return "sftp";
+            }
+
+            @Override
+            public Command createSubsystem(ChannelSession channel) {
+                return new AbstractCommandSupport("sftp", null) {
+                    @Override
+                    public void run() {
+                        // Deliberately does nothing: the channel listener below ends this channel, not the
+                        // command exiting. A command that never starts, on a machine with no sftp-server
+                        // binary behind "Subsystem sftp", is exactly the shape Dropbear takes.
+                    }
+                };
+            }
+        };
+    }
+
+    /**
+     * Ends every channel a short, fixed delay after it opens, with a <em>graceful</em>
+     * {@link Channel#close(boolean) close(false)} — {@code true} ("immediately") tears the channel down on
+     * this side only and never sends {@code SSH_MSG_CHANNEL_CLOSE}, so a client waiting on a reply would
+     * simply wait it out; a graceful close is what actually reaches the far end.
+     *
+     * <p>The delay is what makes the test deterministic. MINA's SFTP client verifies its own local write of
+     * {@code SSH_FXP_INIT} before it ever waits for a reply (see {@code DefaultSftpClient.init}), so whether
+     * the client observes "closed while awaiting the reply" — the one signature
+     * {@link NoSftpSubsystemException#isSubsystemRefusal} recognises — or "channel closed under the write
+     * itself" is a race against how fast the close arrives. A real network's round trip always loses that
+     * race to the client's local write; a same-process loopback server that rejects instantly does not,
+     * which is exactly what made this test flaky before. The delay stands in for that network latency.
+     */
+    private static ChannelListener closeEveryChannelShortlyAfterItOpens() {
+        return new ChannelListener() {
+            @Override
+            public void channelOpenSuccess(Channel channel) {
+                Thread closer = new Thread(() -> {
+                    try {
+                        Thread.sleep(200);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                    // Graceful (false), not immediate: an immediate close tears the channel down locally
+                    // without ever sending SSH_MSG_CHANNEL_CLOSE to the peer, so the client would sit
+                    // waiting until its own 15s init timeout regardless of this delay.
+                    channel.close(false);
+                });
+                closer.setDaemon(true);
+                closer.start();
+            }
+        };
     }
 
     @Test

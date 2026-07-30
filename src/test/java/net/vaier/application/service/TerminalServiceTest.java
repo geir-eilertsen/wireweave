@@ -15,8 +15,10 @@ import net.vaier.domain.SshAuthException;
 import net.vaier.domain.SshConnectException;
 import net.vaier.domain.SshCredentialDraft;
 import net.vaier.domain.SshCredentialVerification;
+import net.vaier.domain.SshServerPresence;
 import net.vaier.domain.SshTarget;
 import net.vaier.domain.TestMachineIds;
+import net.vaier.domain.port.ForCheckingSshServerPresence;
 import net.vaier.domain.port.ForOpeningSshSessions;
 import net.vaier.domain.port.ForOpeningSshSessions.SshOutputListener;
 import net.vaier.domain.port.ForOpeningSshSessions.SshSession;
@@ -60,6 +62,7 @@ class TerminalServiceTest {
     @Mock ForRunningSshCommands forRunningSshCommands;
     @Mock ForTrackingHostKeys forTrackingHostKeys;
     @Mock ForVerifyingSshCredentials forVerifyingSshCredentials;
+    @Mock ForCheckingSshServerPresence forCheckingSshServerPresence;
 
     // There is no name->id crossing left to arrange: every path into this service is handed an identity,
     // and nothing it does resolves a name to find anything.
@@ -103,6 +106,13 @@ class TerminalServiceTest {
     void deleteHostCredential_deletesViaPort() {
         service.deleteHostCredential(mid("nas"));
         verify(forPersistingHostCredentials).deleteByMachine(mid("nas"));
+    }
+
+    @Test
+    void getSshServerPresence_readsViaPort() {
+        when(forCheckingSshServerPresence.getPresence(mid("kitchen"))).thenReturn(SshServerPresence.ABSENT);
+
+        assertThat(service.getSshServerPresence(mid("kitchen"))).isEqualTo(SshServerPresence.ABSENT);
     }
 
     // --- pre-registration SSH credential verify ("Add a machine" slice 2, Part A) ---

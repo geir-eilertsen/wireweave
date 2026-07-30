@@ -19,7 +19,11 @@ import net.vaier.domain.DiskWatches;
 import net.vaier.domain.HostCredentialView;
 import net.vaier.domain.Machine;
 import net.vaier.domain.MachineType;
+import net.vaier.domain.NoSshServerException;
 import net.vaier.domain.RemoteDiskUsage;
+import net.vaier.domain.SshServerPresence;
+import net.vaier.domain.port.ForPublishingEvents;
+import net.vaier.domain.port.ForRecordingSshServerPresence;
 import org.junit.jupiter.api.BeforeEach;
 import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.Test;
@@ -31,10 +35,12 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -56,6 +62,8 @@ class RemoteDiskWatcherTest {
     NotifyAdminsOfDiskFillForecastUseCase forecastNotifier;
     GetDiskWatchesUseCase diskWatches;
     ConfigResolver configResolver;
+    ForRecordingSshServerPresence sshPresenceRecorder;
+    ForPublishingEvents eventPublisher;
     SteppableClock clock;
     RemoteDiskWatcher watcher;
 
@@ -79,12 +87,14 @@ class RemoteDiskWatcherTest {
         forecastNotifier = mock(NotifyAdminsOfDiskFillForecastUseCase.class);
         diskWatches = mock(GetDiskWatchesUseCase.class);
         configResolver = mock(ConfigResolver.class);
+        sshPresenceRecorder = mock(ForRecordingSshServerPresence.class);
+        eventPublisher = mock(ForPublishingEvents.class);
         clock = new SteppableClock();
         // Nothing configured: every filesystem is watched at the global threshold (#325).
         lenient().when(diskWatches.getDiskWatches()).thenReturn(new DiskWatches(List.of()));
         when(configResolver.getDiskMonitorThresholdPercent()).thenReturn(85);
         watcher = new RemoteDiskWatcher(machines, credentials, runner, notifier, forecastNotifier,
-            diskWatches, configResolver, clock);
+            diskWatches, configResolver, clock, sshPresenceRecorder, eventPublisher);
     }
 
     /** An SSH-capable server-type machine (effectiveSshAccess() true by default). */
@@ -506,5 +516,128 @@ class RemoteDiskWatcherTest {
             .containsExactly("/volume1")
             .doesNotContain("/tmp")
             .noneMatch(mount -> mount.startsWith("/volume1/@docker"));
+    }
+
+    // --- SSH server presence (#341-adjacent): the same sweep, not a second SSH round-trip ------------------
+    //
+    // A refused connect (NoSshServerException, thrown from the one shared SshConnector) is the one signal
+    // narrow enough to record without risking a false positive — a timeout or an auth failure could just as
+    // easily mean the machine is asleep. So only that exception moves the tracker; every other failure the
+    // sweep already tolerates (timeout, non-zero exit, unparseable output, a generic RuntimeException) leaves
+    // it untouched.
+
+    @Test
+    void noSshServer_recordsAbsent() {
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("kitchen")));
+        hasCredential("kitchen");
+        when(runner.run(eq(mid("kitchen")), any())).thenThrow(new NoSshServerException("kitchen", 22));
+
+        watcher.checkRemoteDiskUsage();
+
+        verify(sshPresenceRecorder).record(mid("kitchen"), SshServerPresence.ABSENT);
+    }
+
+    @Test
+    void noSshServer_firstObservation_publishesTheTransition() {
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("kitchen")));
+        hasCredential("kitchen");
+        when(runner.run(eq(mid("kitchen")), any())).thenThrow(new NoSshServerException("kitchen", 22));
+        when(sshPresenceRecorder.record(mid("kitchen"), SshServerPresence.ABSENT))
+            .thenReturn(SshServerPresence.UNKNOWN);
+
+        watcher.checkRemoteDiskUsage();
+
+        verify(eventPublisher).publish(eq("vpn-peers"), anyString(), anyString());
+    }
+
+    @Test
+    void noSshServer_repeatedObservation_doesNotRepublish() {
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("kitchen")));
+        hasCredential("kitchen");
+        when(runner.run(eq(mid("kitchen")), any())).thenThrow(new NoSshServerException("kitchen", 22));
+        when(sshPresenceRecorder.record(mid("kitchen"), SshServerPresence.ABSENT))
+            .thenReturn(SshServerPresence.ABSENT);
+
+        watcher.checkRemoteDiskUsage();
+
+        verify(eventPublisher, never()).publish(any(), any(), any());
+    }
+
+    @Test
+    void successfulRun_recordsPresent_regardlessOfDfsOwnExitStatus() {
+        // Reaching a CommandResult at all — even a df that itself failed — already proves the SSH session
+        // connected and authenticated. The server is present whatever df said.
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("kitchen")));
+        hasCredential("kitchen");
+        when(runner.run(eq(mid("kitchen")), any()))
+            .thenReturn(new CommandResult(127, "", "df: not found", false, "SHA256:abc"));
+
+        watcher.checkRemoteDiskUsage();
+
+        verify(sshPresenceRecorder).record(mid("kitchen"), SshServerPresence.PRESENT);
+    }
+
+    @Test
+    void successfulRun_recoveringFromAbsent_publishesTheTransition() {
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("kitchen")));
+        hasCredential("kitchen");
+        when(runner.run(eq(mid("kitchen")), any())).thenReturn(df(10));
+        when(sshPresenceRecorder.record(mid("kitchen"), SshServerPresence.PRESENT))
+            .thenReturn(SshServerPresence.ABSENT);
+
+        watcher.checkRemoteDiskUsage();
+
+        verify(eventPublisher).publish(eq("vpn-peers"), anyString(), anyString());
+    }
+
+    @Test
+    void successfulRun_alreadyKnownPresent_doesNotRepublish() {
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("kitchen")));
+        hasCredential("kitchen");
+        when(runner.run(eq(mid("kitchen")), any())).thenReturn(df(10));
+        when(sshPresenceRecorder.record(mid("kitchen"), SshServerPresence.PRESENT))
+            .thenReturn(SshServerPresence.PRESENT);
+
+        watcher.checkRemoteDiskUsage();
+
+        verify(eventPublisher, never()).publish(any(), any(), any());
+    }
+
+    @Test
+    void ambiguousFailure_neverTouchesSshPresence() {
+        // A timeout, an auth failure, a host-key mismatch — none of them prove SSH is absent, so none of
+        // them may flip the tracker either way.
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("kitchen")));
+        hasCredential("kitchen");
+        when(runner.run(eq(mid("kitchen")), any())).thenThrow(new RuntimeException("Connection timed out"));
+
+        watcher.checkRemoteDiskUsage();
+
+        verify(sshPresenceRecorder, never()).record(any(), any());
+        verify(eventPublisher, never()).publish(any(), any(), any());
+    }
+
+    @Test
+    void skippedMachine_neverTouchesSshPresence() {
+        // No SSH access, or no stored credential — the sweep never attempts SSH at all, so it has observed
+        // nothing and must not guess.
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("kitchen")));
+        when(credentials.getHostCredential(mid("kitchen"))).thenReturn(Optional.empty());
+
+        watcher.checkRemoteDiskUsage();
+
+        verify(sshPresenceRecorder, never()).record(any(), any());
+    }
+
+    @Test
+    void everySweep_retainsOnlyTheCurrentFleet() {
+        // A deleted machine's stale presence must not linger forever in the cache.
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("kitchen")));
+        hasCredential("kitchen");
+        when(runner.run(eq(mid("kitchen")), any())).thenReturn(df(10));
+
+        watcher.checkRemoteDiskUsage();
+
+        verify(sshPresenceRecorder).retainOnly(Set.of(mid("kitchen")));
     }
 }

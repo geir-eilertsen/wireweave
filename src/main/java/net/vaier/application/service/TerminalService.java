@@ -6,6 +6,7 @@ import net.vaier.application.ClearHostKeyUseCase;
 import net.vaier.application.DeleteHostCredentialUseCase;
 import net.vaier.application.EndTerminalSessionUseCase;
 import net.vaier.application.GetHostCredentialUseCase;
+import net.vaier.application.GetSshServerPresenceUseCase;
 import net.vaier.application.OpenTerminalSessionUseCase;
 import net.vaier.application.OpenTerminalSessionUseCase.OpenedTerminal;
 import net.vaier.application.RunRemoteCommandUseCase;
@@ -21,7 +22,9 @@ import net.vaier.domain.PasswordPrompt;
 import net.vaier.domain.PersistentShell;
 import net.vaier.domain.SshCredentialDraft;
 import net.vaier.domain.SshCredentialVerification;
+import net.vaier.domain.SshServerPresence;
 import net.vaier.domain.SshTarget;
+import net.vaier.domain.port.ForCheckingSshServerPresence;
 import net.vaier.domain.port.ForOpeningSshSessions;
 import net.vaier.domain.port.ForOpeningSshSessions.SshOutputListener;
 import net.vaier.domain.port.ForOpeningSshSessions.SshSession;
@@ -53,7 +56,8 @@ public class TerminalService implements
     RunRemoteCommandUseCase,
     SendHostPasswordUseCase,
     VerifySshCredentialUseCase,
-    ClearHostKeyUseCase {
+    ClearHostKeyUseCase,
+    GetSshServerPresenceUseCase {
 
     private final ForPersistingHostCredentials forPersistingHostCredentials;
     private final ForResolvingSshTargets forResolvingSshTargets;
@@ -61,6 +65,7 @@ public class TerminalService implements
     private final ForRunningSshCommands forRunningSshCommands;
     private final ForTrackingHostKeys forTrackingHostKeys;
     private final ForVerifyingSshCredentials forVerifyingSshCredentials;
+    private final ForCheckingSshServerPresence forCheckingSshServerPresence;
 
     @Override
     public void saveHostCredential(MachineId machineId, SshCredentialDraft draft) {
@@ -161,6 +166,11 @@ public class TerminalService implements
     public void clearHostKey(MachineId machineId) {
         forTrackingHostKeys.clear(machineId);
         log.info("Cleared pinned host key for {}", machineId);
+    }
+
+    @Override
+    public SshServerPresence getSshServerPresence(MachineId machineId) {
+        return forCheckingSshServerPresence.getPresence(machineId);
     }
 
     /**

@@ -2,8 +2,12 @@ package net.vaier.rest;
 
 import net.vaier.domain.NotFoundException;
 import net.vaier.domain.ConflictException;
+import net.vaier.domain.HostKeyMismatchException;
 import net.vaier.domain.NoHostCredentialException;
+import net.vaier.domain.NoSftpSubsystemException;
+import net.vaier.domain.NoSshServerException;
 import net.vaier.domain.SshAuthException;
+import net.vaier.domain.SshConnectException;
 import net.vaier.application.AddReverseProxyRouteUseCase;
 import net.vaier.application.DeleteReverseProxyRouteUseCase;
 import net.vaier.application.GetReverseProxyRoutesUseCase;
@@ -193,6 +197,72 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getBody().message()).isEqualTo(
                 "The SSH credential Vaier holds was rejected — check it.");
         assertThat(response.getBody().message()).doesNotContain("10.13.13.6").doesNotContain("geir");
+    }
+
+    @Test
+    void noSftpSubsystemException_mappedTo502_namingTheMachineAndTheFix() {
+        // #344: a machine whose SSH server has no SFTP subsystem (DietPi's Dropbear) used to dead-end the
+        // browse on the generic 500. 502 is the honest status — the far side answered, it simply cannot serve
+        // files — and the sentence must name both the machine and the operator's next move. The machine rides
+        // in `detail` too, as NoHostCredentialException's does, so the browser can offer the fix for that one.
+        ResponseEntity<ApiError> response = new GlobalExceptionHandler()
+                .handleNoSftpSubsystem(new NoSftpSubsystemException("Roon loftstue"));
+
+        assertThat(response.getStatusCode().value()).isEqualTo(502);
+        assertThat(response.getBody().code()).isEqualTo("NO_SFTP_SUBSYSTEM");
+        assertThat(response.getBody().detail()).isEqualTo("Roon loftstue");
+        assertThat(response.getBody().message())
+                .contains("Roon loftstue")
+                .contains("does not offer SFTP")
+                .contains("openssh-sftp-server");
+    }
+
+    @Test
+    void sshConnectException_mappedTo502_withItsOwnMessage_notThe500Generic() {
+        // The reported bug (#344): SshConnectException was unmapped and fell to the Exception catch-all, so
+        // every SSH transport failure read as "an unexpected error occurred". Its message names a host and a
+        // path the operator is already looking at — safe to return, exactly like DiskUnreadableException's.
+        ResponseEntity<ApiError> response = new GlobalExceptionHandler()
+                .handleSshConnect(new SshConnectException("Could not list / on 192.168.3.106 (Connection refused)"));
+
+        assertThat(response.getStatusCode().value()).isEqualTo(502);
+        assertThat(response.getBody().code()).isEqualTo("SSH_UNREACHABLE");
+        assertThat(response.getBody().message())
+                .isEqualTo("Could not list / on 192.168.3.106 (Connection refused)");
+    }
+
+    @Test
+    void noSshServerException_mappedTo502_namingTheMachineAndTheFix() {
+        // Found live: Roon kjøkken with its SSH server deliberately uninstalled used to read as an ordinary
+        // "Connection refused" transport failure -- accurate, but it sends the operator looking for a
+        // network fault that is not there. 502 is the honest status -- the machine answered the TCP
+        // handshake itself -- and the sentence must name both the machine and the actual remedy.
+        ResponseEntity<ApiError> response = new GlobalExceptionHandler()
+                .handleNoSshServer(new NoSshServerException("Roon kjøkken", 22));
+
+        assertThat(response.getStatusCode().value()).isEqualTo(502);
+        assertThat(response.getBody().code()).isEqualTo("NO_SSH_SERVER");
+        assertThat(response.getBody().detail()).isEqualTo("Roon kjøkken");
+        assertThat(response.getBody().message())
+                .contains("Roon kjøkken")
+                .contains("does not answer SSH")
+                .contains("Install and start an SSH server");
+    }
+
+    @Test
+    void hostKeyMismatchException_mappedTo502_withItsOwnActionableMessage() {
+        // Found by the sibling audit for #344: HostKeyMismatchException is a RuntimeException the web terminal
+        // handles itself, but every REST path that reaches a machine (files, disks, containers) can raise it —
+        // and there it fell to the catch-all, hiding a refusal that is either a rebuilt host or a man in the
+        // middle behind "an unexpected error occurred". Its message is already written for the operator.
+        ResponseEntity<ApiError> response = new GlobalExceptionHandler().handleHostKeyMismatch(
+                new HostKeyMismatchException("Roon server", "SHA256:old", "SHA256:new"));
+
+        assertThat(response.getStatusCode().value()).isEqualTo(502);
+        assertThat(response.getBody().code()).isEqualTo("HOST_KEY_MISMATCH");
+        assertThat(response.getBody().message())
+                .contains("Roon server")
+                .contains("clear its pinned key");
     }
 
     @Test

@@ -3,6 +3,7 @@ package net.vaier.adapter.driven;
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.adapter.driven.SshConnector.Connection;
 import net.vaier.domain.FileEntry;
+import net.vaier.domain.NoSftpSubsystemException;
 import net.vaier.domain.NotFoundException;
 import net.vaier.domain.PermissionDeniedException;
 import net.vaier.domain.SshConnectException;
@@ -385,6 +386,11 @@ public class MinaSftpAdapter implements ForBrowsingRemoteFiles {
      * machines, so much of a filesystem is legitimately unreadable. Collapsing them into a transport failure
      * would surface as a 500 and tell the operator that Vaier broke, when in truth the answer is simply "that
      * folder is gone" or "you cannot read this one". Anything else really is a transport failure.
+     *
+     * <p>One failure never reaches the SFTP layer at all: a machine whose SSH server has no SFTP subsystem
+     * (#344). The adapter does not decide that — it hands the root message to
+     * {@link NoSftpSubsystemException#isSubsystemRefusal} and lets the domain say what it means. The machine
+     * is named by its SSH host, which is all a {@link SshTarget} carries.
      */
     private static RuntimeException translate(Exception e, SshTarget target, String path) {
         Integer status = sftpStatus(e);
@@ -396,8 +402,11 @@ public class MinaSftpAdapter implements ForBrowsingRemoteFiles {
             return new PermissionDeniedException(
                 "Not allowed to read " + where + " as " + target.username() + ".");
         }
-        return new SshConnectException(
-            "Could not list " + where + " (" + SshConnector.rootMessage(e) + ")", e);
+        String rootMessage = SshConnector.rootMessage(e);
+        if (NoSftpSubsystemException.isSubsystemRefusal(rootMessage)) {
+            return new NoSftpSubsystemException(target.host());
+        }
+        return new SshConnectException("Could not list " + where + " (" + rootMessage + ")", e);
     }
 
     /** The SFTP status code buried in a failure, or {@code null} when it was not an SFTP-level error at all. */

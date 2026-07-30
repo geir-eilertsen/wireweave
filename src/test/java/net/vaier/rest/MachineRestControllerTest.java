@@ -10,6 +10,7 @@ import net.vaier.application.GetLanServerReachabilityUseCase;
 import net.vaier.application.GetMachineDiskUsageUseCase;
 import net.vaier.application.GetMachineDiskUsageUseCase.MachineFilesystemUco;
 import net.vaier.application.GetPublishableServicesUseCase;
+import net.vaier.application.GetSshServerPresenceUseCase;
 import net.vaier.application.SetDiskWatchUseCase;
 import net.vaier.application.GetMachinesUseCase;
 import net.vaier.application.GetVaierServerUseCase;
@@ -24,6 +25,7 @@ import net.vaier.domain.MachineType;
 import net.vaier.domain.NotFoundException;
 import net.vaier.domain.PublishableService;
 import net.vaier.domain.PublishableService.PublishableSource;
+import net.vaier.domain.SshServerPresence;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -63,6 +65,7 @@ class MachineRestControllerTest {
     @Mock GetBackupJobsUseCase getBackupJobsUseCase;
     @Mock GetBackupServersUseCase getBackupServersUseCase;
     @Mock GetLanServerReachabilityUseCase getLanServerReachabilityUseCase;
+    @Mock GetSshServerPresenceUseCase getSshServerPresenceUseCase;
 
     @InjectMocks MachineRestController controller;
 
@@ -184,6 +187,32 @@ class MachineRestControllerTest {
 
         assertThat(response.get(0).sshAccess()).isTrue();
         assertThat(response.get(1).sshAccess()).isFalse();
+    }
+
+    @Test
+    void list_reportsSshServerPresencePerMachine() {
+        // Composed at the driving edge, exactly like hasCredential: GetSshServerPresenceUseCase reads what
+        // RemoteDiskWatcher's existing sweep already observed, so the Explorer can grey out SSH-dependent
+        // controls without waiting for a click to fail.
+        when(getMachinesUseCase.getAllMachines()).thenReturn(List.of(
+            new Machine(mid("kitchen"), "Roon kjøkken", MachineType.LAN_SERVER,
+                null, null, null, null, null, null, null,
+                "192.168.3.0/24", "192.168.3.104", false, null, DeviceCategory.SERVER, null),
+            new Machine(mid("nas"), "nas", MachineType.LAN_SERVER,
+                null, null, null, null, null, null, null,
+                "192.168.3.0/24", "192.168.3.50", true, 2375, DeviceCategory.NAS, null)
+        ));
+        when(getSshServerPresenceUseCase.getSshServerPresence(mid("kitchen")))
+            .thenReturn(SshServerPresence.ABSENT);
+        when(getSshServerPresenceUseCase.getSshServerPresence(mid("nas")))
+            .thenReturn(SshServerPresence.PRESENT);
+
+        var response = controller.list();
+
+        assertThat(response).extracting("name", "sshServerPresence")
+            .containsExactly(
+                tuple("Roon kjøkken", SshServerPresence.ABSENT),
+                tuple("nas", SshServerPresence.PRESENT));
     }
 
     // --- SSH access override (#307) ---

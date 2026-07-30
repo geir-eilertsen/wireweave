@@ -7,6 +7,7 @@ import net.vaier.application.SendHostPasswordUseCase;
 import net.vaier.application.SendHostPasswordUseCase.SendPasswordResult;
 import net.vaier.domain.MachineId;
 import net.vaier.domain.NoHostCredentialException;
+import net.vaier.domain.NoSshServerException;
 import net.vaier.domain.PersistentShell;
 import net.vaier.domain.SshAuthException;
 import net.vaier.domain.TestMachineIds;
@@ -113,6 +114,24 @@ class TerminalWebSocketHandlerTest {
         ArgumentCaptor<CloseStatus> status = ArgumentCaptor.forClass(CloseStatus.class);
         verify(wsSession).close(status.capture());
         assertThat(status.getValue().getCode()).isEqualTo(TerminalWebSocketHandler.CLOSE_AUTH_FAILED);
+    }
+
+    @Test
+    void onConnect_noSshServerAtAll_closesWithConnectFailedAndASpecificReason() throws Exception {
+        // Found live: a machine with SSH deliberately uninstalled must not read as a generic connect
+        // failure -- the terminal already tells the operator a precise, actionable reason for every other
+        // SSH failure mode, and this one is no less diagnosable than a host-key mismatch or a bad password.
+        attrs();
+        when(wsSession.getUri()).thenReturn(URI.create("wss://host/machines/" + mid("nas") + "/terminal"));
+        when(openTerminalSessionUseCase.openTerminal(eq(mid("nas")), any(), any()))
+            .thenThrow(new NoSshServerException("nas", 22));
+
+        handler().afterConnectionEstablished(wsSession);
+
+        ArgumentCaptor<CloseStatus> status = ArgumentCaptor.forClass(CloseStatus.class);
+        verify(wsSession).close(status.capture());
+        assertThat(status.getValue().getCode()).isEqualTo(TerminalWebSocketHandler.CLOSE_CONNECT_FAILED);
+        assertThat(status.getValue().getReason()).isEqualTo("No SSH server is running on this machine");
     }
 
     @Test

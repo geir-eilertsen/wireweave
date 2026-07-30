@@ -175,6 +175,10 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 }
 .ex-row:hover { background: var(--bg-hover); color: var(--text); }
 .ex-row.is-sel { background: var(--bg-card); color: var(--text); }
+/* A tree entry Vaier cannot open right now (no SSH server on last check) — greyed and inert, never
+   removed: the entry still names what is there, and the state is transient and self-healing. */
+.ex-row:disabled { opacity: .4; cursor: not-allowed; }
+.ex-row:disabled:hover { background: none; color: var(--text-muted); }
 .ex-row.is-sel::before {
     content: '';
     position: absolute;
@@ -594,6 +598,10 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 }
 .ex-card:hover { border-color: var(--accent); background: var(--bg-hover); }
 .ex-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Same "greyed, not removed" treatment as .ex-btn:disabled — a card Vaier cannot open right now still
+   names what is there. */
+.ex-card:disabled { opacity: .4; cursor: not-allowed; }
+.ex-card:disabled:hover { border-color: var(--border); background: var(--bg-card); }
 .ex-card-top { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; }
 .ex-card-top .ex-ico { width: 15px; height: 15px; }
 .ex-card-name {
@@ -1223,6 +1231,8 @@ button.ex-brepo-name:focus-visible { outline: 2px solid var(--accent); outline-o
     font-size: 13px; color: var(--text-muted); line-height: 1.45; cursor: pointer;
 }
 .ex-check-row input { margin-top: 2px; accent-color: var(--accent); }
+.ex-check-row input:disabled { cursor: not-allowed; }
+.ex-check-row:has(input:disabled) { cursor: not-allowed; opacity: .55; }
 select.ex-input { cursor: pointer; }
 .ex-cred-key { resize: vertical; min-height: 84px; line-height: 1.4; white-space: pre; }
 /* A settings section's Save row: the button(s), then an inline note that turns green on save, red on error. */
