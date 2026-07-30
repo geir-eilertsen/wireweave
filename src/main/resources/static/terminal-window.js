@@ -99,6 +99,17 @@
     term.loadAddon(new WebLinksAddon.WebLinksAddon((_e, uri) => window.open(uri, '_blank', 'noopener,noreferrer')));
     state.term = term; state.fit = fit;
     term.open($('twTerm'));
+    // xterm.js's default keydown handling always sends Ctrl+C as a literal SIGINT and prevents the
+    // keydown's default action — even with text selected — so the browser's native copy never fires.
+    // Let Ctrl/Cmd+C through to the browser when there's a selection (xterm's own 'copy' listener then
+    // copies it), and let Ctrl/Cmd+V through always (xterm's own 'paste' listener already handles a real
+    // paste); every other key keeps going to the shell exactly as before.
+    term.attachCustomKeyEventHandler((e) => {
+        if (e.type !== 'keydown' || e.altKey || e.shiftKey || !(e.ctrlKey || e.metaKey)) return true;
+        const key = e.key.toLowerCase();
+        if (key === 'c' && term.hasSelection()) return false;
+        return key !== 'v';
+    });
     // Route input through sendTyped so an armed on-screen Ctrl/Alt (the phone key row) folds into the next
     // keystroke; with nothing armed it is a plain pass-through, so a physical keyboard is unaffected.
     term.onData((data) => sendTyped(data));

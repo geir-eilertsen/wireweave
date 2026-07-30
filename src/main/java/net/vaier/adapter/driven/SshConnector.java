@@ -15,6 +15,7 @@ import org.apache.sshd.common.config.keys.FilePasswordProvider;
 import org.apache.sshd.common.config.keys.KeyUtils;
 import org.apache.sshd.common.digest.BuiltinDigests;
 import org.apache.sshd.common.util.security.SecurityUtils;
+import org.apache.sshd.core.CoreModuleProperties;
 
 import java.io.IOException;
 import java.security.KeyPair;
@@ -37,6 +38,8 @@ final class SshConnector {
 
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(12);
     private static final Duration AUTH_TIMEOUT = Duration.ofSeconds(12);
+    /** Keeps the transport looking alive to anything in between (a WireGuard tunnel, a router's NAT table). */
+    private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(30);
 
     private SshConnector() {
     }
@@ -47,6 +50,11 @@ final class SshConnector {
      */
     static Connection establish(SshTarget target) {
         SshClient client = SshClient.setUpDefaultClient();
+        // A web-terminal PTY is meant to sit idle for arbitrarily long — that's the persistent shell's
+        // whole point — so Vaier's own client must never be the one to end it (MINA's default idle
+        // timeout is 10 minutes). Heartbeats replace the traffic an idle terminal doesn't generate.
+        CoreModuleProperties.IDLE_TIMEOUT.set(client, Duration.ZERO);
+        CoreModuleProperties.HEARTBEAT_INTERVAL.set(client, HEARTBEAT_INTERVAL);
         String[] presented = new String[1];
         AtomicBoolean mismatch = new AtomicBoolean(false);
         // Host-key TOFU: the domain decides trust; the verifier only records the presented fingerprint
