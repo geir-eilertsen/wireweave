@@ -94,7 +94,11 @@ Vaier tells you what actually happened rather than what you clicked: pick someth
 
 A **Security** entry of Vaier's own — beside Settings, outside the fleet, since a blocked address belongs to no machine — lists every address the [edge's CrowdSec bouncer](NETWORKING.md#edge-hardening) is keeping out **right now** — the source address, where CrowdSec places it (country and network operator, when it can), the scenario that caught it, and how long the block lasts. Nothing blocked says so in words, and a read that failed says *that* instead — an empty list is never used to mean "all quiet".
 
-Two verbs sit on each row. **Lift the block** lets that address back in immediately; it's one-off and self-healing, so it asks nothing first — the next scenario the address trips blocks it again. **Trust this address** is the lasting decision and does ask: it lifts the block *and* records the address among your **trusted networks**, so it is never blocked again. The permanent allowlist entry reaches CrowdSec at the engine's next restart, which Vaier deliberately won't perform for you — restarting the thing guarding the door is how an operator gets locked out — and the confirmation says so rather than implying otherwise.
+Two verbs sit on each row. **Lift the block** lets that address back in immediately; it's one-off and self-healing, so it asks nothing first — the next scenario the address trips blocks it again. **Trust this address** is the lasting decision and does ask: it lifts the block *and* records the address among your **trusted networks**, so it is never blocked again. The allowlist entry reaches CrowdSec at the engine's next restart, which Vaier deliberately won't perform for you — restarting the thing guarding the door is how an operator gets locked out — and the confirmation says so rather than implying otherwise.
+
+Below the blocked list, a second section names every address you have trusted, each with an **Untrust** verb. Trusting stands until you take it back there — and taking it back blocks nobody, since Vaier never blocks an address; CrowdSec simply judges it on its behaviour again. The same restart caveat applies in reverse: the address leaves CrowdSec's allowlist at the engine's next restart, which Vaier still won't perform for you. Untrusting an address that isn't in the list is a success, not an error.
+
+Only the addresses you trusted by hand are listed there, and that is deliberate. Your VPN, this server's own container network, and every network Vaier reaches through one of your machines are trusted too — but those are what stop CrowdSec turning away your own traffic, so removing one is exactly the lockout Vaier emails you about. They're named in the section as covered, and never drawn as a row anything can act on.
 
 Blocked addresses Vaier can place also appear on the fleet's **Map**, as radar-style pings on a layer of their own. They never move the map's framing: a lone scanner in Singapore would otherwise zoom the fleet view out to the whole globe.
 
@@ -140,7 +144,7 @@ Each machine carries a **device category** (phone, laptop, desktop, server, NAS,
 
 ## Polish
 
-**Inline field help** — Advanced fields (LAN CIDR, path prefix, root redirect, the auth toggle, direct LAN URL, hide-from-launchpad, version endpoint) carry a small "?" you can hover for a one-line plain-language explanation — no need to read the docs to know what a field does.
+**Inline field help** — Advanced fields (network behind it, path prefix, root redirect, the auth toggle, direct LAN URL, hide-from-launchpad, version endpoint) carry a small "?" you can hover for a one-line plain-language explanation — no need to read the docs to know what a field does.
 
 **Concepts page** — An in-app **Concepts** glossary in the admin shell explaining, in plain language, every term you meet in the UI — grouped by area, each with a short definition and a one-line "why it matters". Each entry is deep-linkable via its anchor (e.g. `concepts.html#lan-cidr`).
 

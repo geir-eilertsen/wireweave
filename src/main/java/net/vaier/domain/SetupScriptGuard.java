@@ -67,7 +67,7 @@ public final class SetupScriptGuard {
         sb.append("    echo \"  If this really is the right machine, re-run it with VAIER_FORCE=1.\" >&2\n");
         sb.append("    exit 3\n");
         sb.append("}\n");
-        if (checkRoutes) sb.append(cidrHelpers());
+        if (checkRoutes) sb.append(UplinkGuard.shellHelpers());
 
         sb.append("if [ \"${VAIER_FORCE:-0}\" != \"1\" ]; then\n");
 
@@ -89,21 +89,11 @@ public final class SetupScriptGuard {
         sb.append("        fi\n");
         sb.append("    fi\n");
 
-        // 3 — the uplink check: never tunnel the network this host is reachable on.
+        // 3 — the uplink check: never tunnel the network this host is reachable on. The rule itself lives
+        // on UplinkGuard, which also answers it in Java before Vaier ever offers a network to route (#333);
+        // two renderings of one rule, and only one place to change it.
         if (checkRoutes) {
-            sb.append("    vaier_def_if=\"$(ip route show default 2>/dev/null | awk '{print $5; exit}')\"\n");
-            sb.append("    if [ -n \"$vaier_def_if\" ]; then\n");
-            sb.append("        vaier_def_ip=\"$(ip -4 -o addr show dev \"$vaier_def_if\" 2>/dev/null \\\n");
-            sb.append("            | awk '{print $4}' | cut -d/ -f1 | head -1)\"\n");
-            sb.append("        for vaier_cidr in");
-            for (String cidr : tunneledCidrs) sb.append(" ").append(shellQuote(cidr));
-            sb.append("; do\n");
-            sb.append("            if [ -n \"$vaier_def_ip\" ] && vaier_in_cidr \"$vaier_def_ip\" \"$vaier_cidr\"; then\n");
-            sb.append("                vaier_refuse \"this host ($vaier_def_ip on $vaier_def_if) is inside $vaier_cidr,");
-            sb.append(" which this script routes into the VPN — it would cut the host off its own network.\"\n");
-            sb.append("            fi\n");
-            sb.append("        done\n");
-            sb.append("    fi\n");
+            sb.append(UplinkGuard.shellRefusal(tunneledCidrs));
         }
 
         // 4 — the address Vaier recorded for the machine, when it knows one.
@@ -132,31 +122,6 @@ public final class SetupScriptGuard {
             + "( sudo mkdir -p /etc/vaier 2>/dev/null || mkdir -p /etc/vaier 2>/dev/null ) || true\n"
             + "printf '%s\\n' " + machine + " | sudo tee " + STAMP_PATH + " >/dev/null 2>&1 \\\n"
             + "    || printf '%s\\n' " + machine + " > " + STAMP_PATH + " 2>/dev/null || true\n";
-    }
-
-    /**
-     * Shell helpers for IPv4-in-CIDR containment, kept separate so they can be exercised directly.
-     * Pure bash arithmetic — no python, no ipcalc, nothing a minimal host might lack.
-     */
-    public static String cidrHelpers() {
-        return """
-            vaier_ip_to_int() {
-                local IFS=.
-                local -a vaier_octets
-                read -r -a vaier_octets <<< "$1"
-                echo $(( (${vaier_octets[0]} << 24) + (${vaier_octets[1]} << 16) \\
-                    + (${vaier_octets[2]} << 8) + ${vaier_octets[3]} ))
-            }
-            vaier_in_cidr() {
-                local vaier_ip="$1" vaier_cidr_arg="$2" vaier_net vaier_bits vaier_mask
-                vaier_net="${vaier_cidr_arg%/*}"
-                vaier_bits="${vaier_cidr_arg#*/}"
-                if [ "$vaier_bits" = "$vaier_cidr_arg" ]; then vaier_bits=32; fi
-                vaier_mask=$(( 0xFFFFFFFF ^ ((1 << (32 - vaier_bits)) - 1) ))
-                [ $(( $(vaier_ip_to_int "$vaier_ip") & vaier_mask )) \\
-                    -eq $(( $(vaier_ip_to_int "$vaier_net") & vaier_mask )) ]
-            }
-            """;
     }
 
     /**

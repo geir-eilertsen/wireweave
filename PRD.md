@@ -2608,6 +2608,8 @@ not restart CrowdSec** to make the whitelist entry live — bouncing the engine 
 to apply a rule about who may pass it, is precisely the operator-lockout risk #329 names as this
 feature's largest. The honest promise, said in those words in the confirmation dialog and the docs:
 *unblocked now, permanently trusted from the next restart.*
+*(Half superseded in §6.32: the restart half stands, "permanently" does not — trusting is now undoable,
+the dialog says so, and the Security view grew a second section listing what has been trusted.)*
 
 **Two decisions kept in the domain that JavaScript would have got wrong.** `BlockDecision.locatable()`
 refuses null island: CrowdSec writes `0`/`0` for a source it could not place, and that point is
@@ -2813,6 +2815,159 @@ would leave the operator reading two accounts of the same event depending on whi
 fleet that fingerprint appears, or checking it against a key read over an already-trusted channel, as
 **backup host-key pinning** does for the borg server). Until then the operator's own knowledge is the only
 evidence, and the dialog is built to ask for it honestly rather than to look reassuring.
+
+### 6.32 Trusting an address is a one-way door no longer ✅ (implemented 2026-07-31, closes [#348](https://github.com/getvaier/vaier/issues/348))
+
+**The problem.** §6.28 shipped **trust this address** as a verb with no inverse and nothing to look at. The
+moment an address was trusted it left the Security view along with the block it came from, and the only
+record of the decision was a YAML file on the server the operator would have to SSH in to read. Nothing about
+a trusted address is permanent in reality — a dynamic ISP address is handed back, a VPS is re-let, an
+operator changes their mind about a colleague's office — and Vaier offered no way to see the list, let alone
+change it. A decision the product will not show you is a decision you cannot audit.
+
+**Seeing — a read that deliberately answers a narrower question.** `GetTrustedAddressesUseCase` (on the
+existing `SecurityService`) → `GET /security/trusted-addresses`, and a second section, **Trusted addresses**,
+in the **Security view**. It returns `ForPersistingTrustedAddresses.getAll()` **straight**, and deliberately
+not `getTrustedNetworks()`: that assembles the structural entries too — the VPN subnet, the Docker bridge
+CIDR, every relay peer's LAN CIDR — and this payload feeds a screen that hangs an untrust verb off every row
+it draws. `SecurityRestController` does not even hold `GetTrustedNetworksUseCase`, so there is nothing there
+to leak. The response is a bare dotted quad (`TrustedAddressResponse`), never the `/32` the whitelist file
+carries: the operator trusted an address, and that is what the list should say back to them.
+
+**Untrusting.** `UntrustAddressUseCase.untrustAddress(String sourceIp)` → `DELETE
+/security/trusted-addresses/{sourceIp}`, reaching `SourceAddress.untrust(store)` — the domain owns the port
+call, symmetrically with `trust` — over a new `ForPersistingTrustedAddresses.delete(SourceAddress)` and its
+`TrustedAddressFileAdapter` implementation (`synchronized`, read-modify-write like `save`, and an early
+return when the address was not there so an unchanged file is not rewritten to say the same thing).
+**Removing an address that is not trusted is a success, never an error**: the operator asked for this address
+not to be trusted and it is not trusted, and a second click — or a second admin on the same screen — must not
+be told otherwise.
+
+**Untrusting is one effect, and that asymmetry is the point.** `trustAddress` is two (persist, then lift the
+block); `untrustAddress` is one, because **Vaier never blocks an address**. CrowdSec's scenarios decide that,
+as §6.28's `ForLiftingBlocks` rename already recorded, so there is no second half here to mirror the unban:
+an untrusted address is simply back to being judged on its behaviour. The confirmation says exactly that, so
+nobody clicks it believing they have just banned someone.
+
+**The structural trusted networks are unreachable from either endpoint — two independent gates.** The read
+does not return them. And the untrust path has no *name* for one: every structural entry is a prefix wider
+than a single host, and `SourceAddress` refuses anything wider than `/32` in its canonical constructor
+(§6.28), so no request can be spelled that would remove the VPN subnet. That matters because removing one is
+not an unban, it is the **lockout warning**'s own scenario arriving by invitation. The view states in prose
+that they are trusted too, are not listed, and cannot be untrusted — in operator words per §17 and §6.20,
+never the mechanism ones: *"your VPN, this server's own container network, and every network Vaier reaches
+through one of your machines"*.
+
+**The restart asymmetry, now said in both directions.** §6.26 established that CrowdSec re-reads its
+whitelist parser only on container restart, and Vaier deliberately does not restart the engine guarding the
+edge to apply a rule about who may pass it. Trusting already said so. So does untrusting: the whitelist file
+is rewritten without the address on `TrustedNetworksScheduler`'s next five-minute pass, but it leaves
+CrowdSec's view of the world at CrowdSec's next restart. Saying it on the way in and staying quiet on the way
+out would have been the more comfortable half-truth.
+
+**The trust dialog stopped claiming permanence.** It was titled *"Trust ‹ip› for good?"* and made no claim
+about how long the decision lasted, which was fine only while the answer was "forever". It now says the trust
+*"lasts until you untrust it here"*. Nothing in Vaier's copy calls this decision final any more — including
+the README and the promo page, which both said "trust it for good".
+
+**SSE — a second event on the `security` topic, and nothing on a clock sends it.** `trusted-addresses`,
+published by `SecurityRestController` immediately after a trust or an untrust (act, then publish, exactly as
+`block-decisions` is republished on a mutation), so the address leaves the list on the click rather than at
+some later sweep. Its constant lives on the controller rather than beside `BreachAttemptWatcher`'s, because
+the trusted list changes *only* when a person changes it and this is the only place that happens — there is
+no watcher to own it. A publish failure is logged and dropped rather than turning a completed change into an
+error; the view re-reads on its next SSE reconnect. The browser reads the list once at boot beside
+`loadSecurity()` (so `render()` stays a pure function of state), re-reads on every reconnect after the first,
+and **never polls** — `ExplorerShellTest` still asserts no `setInterval`. Unlike the blocked list this one has
+exactly one screen to repaint: a trusted address is not a threat and gets no **threat ping** on the Map.
+
+**The row is an address and one verb.** A trusted address has no scenario and no expiry — it is not a ban,
+it is a decision — so the trusted list has its own two-column grid rather than inheriting the blocked list's
+four and leaving two of them empty on every row. Its verb stays visible on a phone for the same reason
+§6.28's does: no selection bar carries it, and hiding it would leave an operator able to see what they
+trusted and not to take it back.
+
+**Backlog — the "trusted on ‹date›" timestamp, deliberately not shipped.** The obvious next column is when
+each address was trusted, and it was left out on purpose: `SourceAddress`'s **value identity** is
+load-bearing in two places — `save`'s dedupe and `delete`'s remove-by-value both rely on two equal addresses
+being the same object — so folding a timestamp into the record breaks both, and the alternative is a second
+domain type plus a widened port for one line of metadata. More machinery than the feature has earned. The
+consequence is that `trusted-addresses.yml` rows stay `- address: ‹ip›` exactly as they were, so the on-disk
+format is unchanged and every existing file keeps loading.
+
+### 6.33 The network behind a relay is detected, not asked for ✅ (implemented 2026-07-31, closes [#333](https://github.com/getvaier/vaier/issues/333))
+
+**The problem.** Making a house reachable from the fleet meant typing a CIDR into a free-text field. That
+asks a homelab operator to know CIDR notation, to know which subnet their router hands out, and to know that
+getting it wrong either does nothing at all or severs a host's uplink — three pieces of knowledge for a
+question Vaier could answer itself. It already holds an SSH credential for the machine and already runs `df`
+over that exact connection on a five-minute sweep, so the answer was one command away the whole time. Vaier
+now reads it and asks only the part that is genuinely the operator's: *should the fleet reach that network?*
+
+**Reading it on the sweep that already runs.** `MachineNetworks` (domain) owns the whole reading: the command
+(`ip -o -4 addr show; ip -o -4 route show default`, both halves on **one** exec because an address without the
+default-route interface cannot say which network the machine is *on*), the parse, and the two decisions the
+parse feeds — `isPseudoInterface` (the direct analogue of `RemoteDiskUsage.isPseudoFilesystem`: `lo`, `wg*`,
+`docker*`, `br-*`, `veth*`, `tailscale*`, `tun*`, … are never an operator's LAN) and `lanCandidate()` (the
+network on the default-route interface, and nothing else — there is deliberately **no** fallback guess from
+the machine's LAN address, because a guessed `/24` is a plausible-looking wrong answer). Parsing is total,
+like `RemoteDiskUsage.parseList`: a host without `ip`, a truncated run, a row in an unrecognised shape all
+yield an empty reading, never a guessed one. `RemoteDiskWatcher` takes it as a fourth consumer of its sweep —
+in its own try/catch, so a failed network read costs the machine neither its disk alerts nor the **SSH server
+presence** `df` has already earned on the same trip — and the reading is cached in memory
+(`InMemoryMachineNetworkCache`, sibling of `InMemorySshServerPresenceCache`), evicted with the fleet by the
+same `retainOnly` pass that clears SSH-server presence. **Opening a machine in the Explorer still costs no SSH
+round-trip**, which is the only reason detection could ride the nudges endpoint at all: that endpoint
+repaints on every machine click and every other signal it composes is already free. Ephemeral on purpose — a
+network can change under Vaier's feet, so losing it on restart is correct and the next sweep re-reads it
+within five minutes. A read that came back empty is never *recorded* over a good one, so a machine's detected
+network doesn't blink out for five minutes at a time on one bad trip.
+
+**The fifth nudge — ROUTE_LAN.** `MachineNudge.routeLan` joins publish / back-up / designate-backup-server /
+back-up-as-root, with the title in the operator's own words (*"Colina 27 sits on 192.168.1.0/24"*) and the
+**evidence** naming where the value came from — the machine itself, and the interface it was seen on. Four
+conditions, each closing a way the suggestion could be wrong: the machine can relay at all
+(`Machine.canRelayALan()` — a VPN peer of a server type; a LAN server has no tunnel to route into and a
+personal device is nobody's gateway), nothing is routed for it yet (a machine with a `lanCidr` has already
+answered this question, and a nudge is a question, not a correction), Vaier actually read a network, and
+routing it would not blackhole the host that installs the route. `MachineNudge` gained a `value` — the datum
+being said yes to — so the browser never recovers a CIDR by parsing the sentence it was rendered into; it is
+null for every other kind. Accepting goes through the one endpoint that has always routed a LAN, `PATCH
+/vpn/peers/{peerId}/lan-cidr`, so **the routing produced is identical to typing the CIDR by hand** with
+nothing reimplemented beside it.
+
+**`UplinkGuard` — one statement of a rule that previously existed only as generated bash.** *Never route a
+host's own network into the tunnel*: a CIDR containing the address of the host that installs the route
+blackholes that host's uplink the moment it lands. Until #333 the rule lived solely inside
+`SetupScriptGuard`'s emitted shell, so the Java side had nothing to reuse and every new consumer would have
+restated it. It is now one domain class carrying both forms — the predicate (`wouldBlackhole`) and the shell
+(`shellRefusal` / `shellHelpers`) — and **the generated setup script's behaviour is unchanged**. The address
+judged against is always the host that *installs* the route, never the one that owns the network: a relay is
+never at risk from its own LAN, because its own LAN is not routed into its own tunnel. Which is also why the
+**Vaier server can never be offered its own network** — its detected LAN contains its own uplink address by
+construction, and no rule had to be written for that case. Unknown is not danger: an unreadable address or a
+malformed CIDR refuses nothing, deliberately, because a guard that refuses whenever it cannot tell is the
+disk alert that could never fire (§6.28) wearing a different hat.
+
+**The free-text field survives, folded.** The Explorer's edit-machine form keeps the CIDR input, relabelled
+**Network behind it** and moved under an **Advanced** disclosure that says what it is now for: a network
+nothing can detect — a second subnet the machine also fronts. It opens automatically when a value is already
+set, because hiding live state behind a fold is worse than showing an advanced field. The nudge is how the
+question is normally answered; the field is the escape hatch, not the path.
+
+**Guards, stated as outcomes.** A machine Vaier cannot read is simply not nudged — no guess, no empty form —
+and that needed no rule of its own: detection sits behind `checkMachine`'s two existing gates (**SSH access**,
+a stored **host credential**). A machine that already has a **LAN CIDR** is never nudged. A pseudo-interface
+network is never offered. A network that would capture the routing host's uplink is never offered.
+
+**Backlog — detection for the Vaier server itself, explicitly out of scope here.** The **server LAN CIDR** is
+still resolved only by EC2 IMDSv2 or the `VAIER_SERVER_LAN_CIDR` override, which means off EC2 the env var
+remains the *only* way to state it — the one place an operator must still know a CIDR. The same reading now
+exists for the Vaier server (it is a **machine** like any other and the sweep reaches it via SSH-to-self), so
+the missing piece is a resolution step, not a detector. Left out on purpose: `ForResolvingServerLanCidr`'s
+order is memoized and load-bearing for LAN-server registration, LAN publishing and split-tunnel `AllowedIPs`,
+and folding a per-sweep in-memory reading into a memoized boot-time resolution is a change to *that*
+contract, not an extension of this one. `docs/ADVANCED.md`'s description of the env var is unchanged.
 
 ---
 

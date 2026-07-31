@@ -51,6 +51,20 @@ public record Machine(
     }
 
     /**
+     * Whether this machine could ever be a <b>relay peer</b> — carry a whole network into the fleet. Only
+     * a VPN peer of a {@link MachineType#isServerType() server type} can: a {@link MachineType#LAN_SERVER}
+     * is reached <em>through</em> a relay and has no tunnel of its own to route into, and a personal
+     * device is not somebody's gateway.
+     *
+     * <p>It is a machine's own reading of itself, not a rule for a form to re-derive — the Explorer's edit
+     * form has long asked the same question as {@code peers.has(id) && SERVER_TYPES.has(type)}, and #333
+     * needed to ask it a second time before offering a detected network.
+     */
+    public boolean canRelayALan() {
+        return type != null && type.isVpnPeer() && type.isServerType();
+    }
+
+    /**
      * Whether Vaier offers SSH for this machine: the operator's {@link #sshAccessOverride() override}
      * when one is set, otherwise the {@link #defaultSshAccess() smart default}. The override — not the
      * device category — is authoritative; the category only seeds the default.

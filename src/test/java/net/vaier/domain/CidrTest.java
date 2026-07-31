@@ -164,4 +164,24 @@ class CidrTest {
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("lanCidr");
     }
+
+    // --- the network an address sits on ---
+
+    @Test
+    void networkOf_masksTheHostBitsOffAnAddress() {
+        // "192.168.1.10/24" is an address on a network; "192.168.1.0/24" is the network. Only the second
+        // is a lanCidr, so the arithmetic that turns one into the other lives here with the rest of it.
+        assertThat(Cidr.networkOf("192.168.1.10", 24)).isEqualTo("192.168.1.0/24");
+        assertThat(Cidr.networkOf("172.31.37.204", 20)).isEqualTo("172.31.32.0/20");
+        assertThat(Cidr.networkOf("10.13.13.3", 32)).isEqualTo("10.13.13.3/32");
+        assertThat(Cidr.networkOf("10.4.9.7", 0)).isEqualTo("0.0.0.0/0");
+    }
+
+    @Test
+    void networkOf_refusesAnythingThatIsNotAnAddressAndAPrefix() {
+        assertThat(Cidr.networkOf("not-an-address", 24)).isNull();
+        assertThat(Cidr.networkOf(null, 24)).isNull();
+        assertThat(Cidr.networkOf("192.168.1.10", 33)).isNull();
+        assertThat(Cidr.networkOf("192.168.1.10", -1)).isNull();
+    }
 }

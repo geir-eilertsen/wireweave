@@ -703,6 +703,15 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 .ex-listing.is-threats .ex-lactions {
     position: static; opacity: 1; padding-left: 0; background: none; justify-content: flex-end;
 }
+/* The trusted list (#348). One address, one verb: a trusted address has no scenario and no expiry, so
+   inheriting the blocked list's four columns would leave two of them empty on every row. The verb column is
+   narrower for the same reason — there is only ever one button in it. */
+.ex-listing.is-trusted .ex-lhead,
+.ex-listing.is-trusted .ex-lrow { grid-template-columns: minmax(0, 1fr) 120px; }
+.ex-listing.is-trusted .ex-lactions {
+    position: static; opacity: 1; padding-left: 0; background: none; justify-content: flex-end;
+}
+
 /* The address is the coordinate, so it is mono; where it comes from is a human fact, so it is not. */
 .ex-tsource { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .ex-tip { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1497,6 +1506,18 @@ select.ex-input { cursor: pointer; }
     .ex-listing.is-threats .ex-lsub { grid-area: sub; display: flex; }
     .ex-listing.is-threats .ex-lactions {
         grid-area: acts; display: flex; justify-content: flex-start; gap: 6px; margin-top: 6px;
+    }
+
+    /* Same reason, same shape, for the trusted list: no selection bar carries its verb either, so hiding
+       row actions here would leave an operator able to see what they trusted and not to take it back. */
+    .ex-listing.is-trusted .ex-lrow {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-areas: "src" "acts";
+        padding: 10px;
+    }
+    .ex-listing.is-trusted .ex-tsource { grid-area: src; }
+    .ex-listing.is-trusted .ex-lactions {
+        grid-area: acts; display: flex; justify-content: flex-start; margin-top: 6px;
     }
 
     /* A 14px filename is a thumb-hostile target, so a folder's whole row opens it: the name button's hit area

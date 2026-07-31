@@ -258,6 +258,9 @@ public abstract class VaierWebMvcIntegrationBase {
     @MockBean
     protected GetSshServerPresenceUseCase getSshServerPresenceUseCase;
 
+    @MockBean
+    protected GetMachineNetworksUseCase getMachineNetworksUseCase;
+
     // --- Host credential (web terminal, credential vault) use cases ---
     @MockBean
     protected SaveHostCredentialUseCase saveHostCredentialUseCase;
@@ -300,6 +303,12 @@ public abstract class VaierWebMvcIntegrationBase {
 
     @MockBean
     protected TrustAddressUseCase trustAddressUseCase;
+
+    @MockBean
+    protected GetTrustedAddressesUseCase getTrustedAddressesUseCase;
+
+    @MockBean
+    protected UntrustAddressUseCase untrustAddressUseCase;
 
     // --- Server location use case ---
     @MockBean

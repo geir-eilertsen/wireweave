@@ -10,6 +10,7 @@ import net.vaier.application.GetHostCredentialUseCase;
 import net.vaier.application.GetLanServerReachabilityUseCase;
 import net.vaier.application.GetMachineDiskUsageUseCase;
 import net.vaier.application.GetMachineDiskUsageUseCase.MachineFilesystemUco;
+import net.vaier.application.GetMachineNetworksUseCase;
 import net.vaier.application.GetPublishableServicesUseCase;
 import net.vaier.application.GetSshServerPresenceUseCase;
 import net.vaier.application.SetDiskWatchUseCase;
@@ -24,6 +25,7 @@ import net.vaier.domain.DeviceCategory;
 import net.vaier.domain.HostCredentialView;
 import net.vaier.domain.LanAnchor;
 import net.vaier.domain.Machine;
+import net.vaier.domain.MachineNetworks;
 import net.vaier.domain.MachineNudge;
 import net.vaier.domain.MachineType;
 import net.vaier.domain.NotFoundException;
@@ -73,6 +75,7 @@ class MachineRestControllerTest {
     @Mock GetBackupServersUseCase getBackupServersUseCase;
     @Mock GetLanServerReachabilityUseCase getLanServerReachabilityUseCase;
     @Mock GetSshServerPresenceUseCase getSshServerPresenceUseCase;
+    @Mock GetMachineNetworksUseCase getMachineNetworksUseCase;
 
     @InjectMocks MachineRestController controller;
 
@@ -154,6 +157,27 @@ class MachineRestControllerTest {
 
         assertThat(response).hasSize(1);
         assertThat(response.get(0).vaierServer()).isFalse();
+    }
+
+    @Test
+    void list_carriesTheDomainsAnswerToWhetherAMachineCouldRelayANetwork() {
+        // #333: the browser used to work this out itself, with a SERVER_TYPES set that includes LAN_SERVER
+        // — a machine that has no tunnel to route into. Two definitions of one rule, already disagreeing;
+        // only an incidental "is it a peer?" guard kept them lined up. The domain answers it now.
+        Machine relay = new Machine(mid("colina"), "Colina 27", MachineType.UBUNTU_SERVER, "pk",
+            "10.13.13.3/32", null, null, null, null, null, null, null, true, null,
+            DeviceCategory.SERVER, null);
+        Machine printer = new Machine(mid("printer"), "printer", MachineType.LAN_SERVER, null, null, null,
+            null, null, null, null, "192.168.1.0/24", "192.168.1.11", false, null,
+            DeviceCategory.PRINTER, null);
+        Machine phone = new Machine(mid("phone"), "phone", MachineType.MOBILE_CLIENT, "pk", "10.13.13.8/32",
+            null, null, null, null, null, null, null, false, null, DeviceCategory.LAPTOP, null);
+        when(getMachinesUseCase.getAllMachines()).thenReturn(List.of(relay, printer, phone));
+
+        var response = controller.list();
+
+        assertThat(response).extracting("name", "canRelayALan")
+            .containsExactly(tuple("Colina 27", true), tuple("printer", false), tuple("phone", false));
     }
 
     @Test
@@ -389,6 +413,64 @@ class MachineRestControllerTest {
         assertThat(response).extracting(MachineRestController.NudgeResponse::kind)
             .containsExactly(MachineNudge.Kind.BACK_UP_AS_ROOT.name());
         assertThat(response.get(0).evidence()).contains("/home/mqtt/mosquitto.db");
+    }
+
+    @Test
+    void nudges_routeLan_offersWhatTheSweepDetected_andCarriesTheCidrToActOn() {
+        // #333: the detected network is one more already-cached signal the edge gathers. The controller
+        // still decides nothing — it hands the reading to MachineNudges and renders what comes back.
+        Machine colina = new Machine(mid("colina"), "Colina 27", MachineType.UBUNTU_SERVER, "pk",
+            "10.13.13.3/32", "1.2.3.4", "51820", "1", "1", "1", null, null, true, null,
+            DeviceCategory.SERVER, null);
+        when(getMachinesUseCase.getAllMachines()).thenReturn(List.of(colina));
+        when(getPublishableServicesUseCase.getPublishableServices()).thenReturn(List.of());
+        when(getBackupJobsUseCase.getBackupJobs()).thenReturn(List.of());
+        when(getBackupServersUseCase.getBackupServers()).thenReturn(List.of(
+            new BackupServer("nas-borg", mid("nas"), "192.168.3.50", 8022, "borg", null, "/vol", true)));
+        when(getMachineNetworksUseCase.getMachineNetworks(mid("colina"))).thenReturn(
+            MachineNetworks.parse("""
+                2: eth0    inet 192.168.1.10/24 brd 192.168.1.255 scope global eth0
+                default via 192.168.1.1 dev eth0 proto dhcp metric 100
+                """));
+
+        var response = controller.nudges(mid("colina").value());
+
+        assertThat(response).extracting(MachineRestController.NudgeResponse::kind)
+            .containsExactly(MachineNudge.Kind.ROUTE_LAN.name());
+        assertThat(response.get(0).title()).contains("192.168.1.0/24");
+        assertThat(response.get(0).evidence()).contains("eth0");
+        assertThat(response.get(0).value()).isEqualTo("192.168.1.0/24");
+    }
+
+    @Test
+    void nudges_routeLan_readsTheVaierServersOwnNetworksToJudgeTheOffer() {
+        // Accepting installs `ip route <cidr> dev wg0` on the Vaier server, so the network that must not be
+        // captured is the Vaier server's — gathered at the edge from the very same use case, by identity.
+        Machine vaierServer = Machine.vaierServer(mid("vaier"), null);
+        Machine colina = new Machine(mid("colina"), "Colina 27", MachineType.UBUNTU_SERVER, "pk",
+            "10.13.13.3/32", "1.2.3.4", "51820", "1", "1", "1", null, null, true, null,
+            DeviceCategory.SERVER, null);
+        when(getMachinesUseCase.getAllMachines()).thenReturn(List.of(colina));
+        when(getVaierServerUseCase.getVaierServerMachine()).thenReturn(vaierServer);
+        when(getPublishableServicesUseCase.getPublishableServices()).thenReturn(List.of());
+        when(getBackupJobsUseCase.getBackupJobs()).thenReturn(List.of());
+        when(getBackupServersUseCase.getBackupServers()).thenReturn(List.of(
+            new BackupServer("nas-borg", mid("nas"), "192.168.3.50", 8022, "borg", null, "/vol", true)));
+        // Colina sits in the same VPC subnet as Vaier itself — routing it would sever Vaier's own uplink.
+        when(getMachineNetworksUseCase.getMachineNetworks(mid("colina"))).thenReturn(
+            MachineNetworks.parse("""
+                2: eth0    inet 172.31.40.9/20 scope global eth0
+                default via 172.31.32.1 dev eth0
+                """));
+        when(getMachineNetworksUseCase.getMachineNetworks(mid("vaier"))).thenReturn(
+            MachineNetworks.parse("""
+                2: ens5    inet 172.31.37.204/20 scope global ens5
+                default via 172.31.32.1 dev ens5
+                """));
+
+        var response = controller.nudges(mid("colina").value());
+
+        assertThat(response).isEmpty();
     }
 
     @Test

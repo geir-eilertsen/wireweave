@@ -31,11 +31,27 @@ class MachineNudgesTest {
             "/home/mqtt/mosquitto.db: open: [Errno 13] Permission denied: 'mosquitto.db'\n");
     }
 
+    /**
+     * The signals every test here starts from, named rather than positional. The assembler used to take
+     * eight of these in a row — several adjacent {@code Optional}s and booleans — which is a swap-two-
+     * arguments bug waiting for a hurried edit.
+     */
+    private static MachineSignals.MachineSignalsBuilder signals() {
+        return MachineSignals.builder()
+            .publishableCount(0)
+            .reachable(false)
+            .hasCredential(false)
+            .job(Optional.empty())
+            .latestRun(Optional.empty())
+            .fleet(new BackupFleet(List.of()))
+            .networks(MachineNetworks.unknown())
+            .routingHostNetworks(MachineNetworks.unknown());
+    }
+
     @Test
     void composesAllThreeWhenEveryConditionHolds() {
-        List<MachineNudge> nudges = MachineNudges.forMachine(
-            machine(DeviceCategory.SERVER), 2, true, true, Optional.empty(), Optional.empty(),
-            new BackupFleet(List.of()));
+        List<MachineNudge> nudges = MachineNudges.forMachine(machine(DeviceCategory.SERVER),
+            signals().publishableCount(2).reachable(true).hasCredential(true).build());
 
         assertThat(nudges).extracting(MachineNudge::kind).containsExactly(
             MachineNudge.Kind.PUBLISH, MachineNudge.Kind.BACK_UP, MachineNudge.Kind.DESIGNATE_BACKUP_SERVER);
@@ -46,9 +62,8 @@ class MachineNudgesTest {
     void composesNothingWhenNoConditionHolds() {
         BackupServer existing = new BackupServer("nas-borg", TestMachineIds.of("nas"), "192.168.3.50",
             8022, "borg", null, "/volume1/docker/borg", true);
-        List<MachineNudge> nudges = MachineNudges.forMachine(
-            machine(DeviceCategory.PRINTER), 0, false, false, Optional.of(job(true)),
-            Optional.empty(), new BackupFleet(List.of(existing)));
+        List<MachineNudge> nudges = MachineNudges.forMachine(machine(DeviceCategory.PRINTER),
+            signals().job(Optional.of(job(true))).fleet(new BackupFleet(List.of(existing))).build());
 
         assertThat(nudges).isEmpty();
     }
@@ -57,9 +72,7 @@ class MachineNudgesTest {
     void composesOnlyTheNudgesThatApply() {
         // storage-class + no backup server ⇒ DESIGNATE; but unreachable/no-cred ⇒ no BACK_UP;
         // and nothing publishable ⇒ no PUBLISH.
-        List<MachineNudge> nudges = MachineNudges.forMachine(
-            machine(DeviceCategory.NAS), 0, false, false, Optional.empty(), Optional.empty(),
-            new BackupFleet(List.of()));
+        List<MachineNudge> nudges = MachineNudges.forMachine(machine(DeviceCategory.NAS), signals().build());
 
         assertThat(nudges).extracting(MachineNudge::kind)
             .containsExactly(MachineNudge.Kind.DESIGNATE_BACKUP_SERVER);
@@ -70,11 +83,36 @@ class MachineNudgesTest {
         // "Already protected" is not a boolean the caller works out and passes in — it is "this machine has
         // a job", which the assembler reads off the job it needs anyway for the back-up-as-root decision.
         BackupJob theJob = job(false);
-        List<MachineNudge> nudges = MachineNudges.forMachine(
-            machine(DeviceCategory.SERVER), 0, true, true, Optional.of(theJob),
-            Optional.of(incompleteRun(theJob)), new BackupFleet(List.of()));
+        List<MachineNudge> nudges = MachineNudges.forMachine(machine(DeviceCategory.SERVER),
+            signals().reachable(true).hasCredential(true).job(Optional.of(theJob))
+                .latestRun(Optional.of(incompleteRun(theJob))).build());
 
         assertThat(nudges).extracting(MachineNudge::kind).containsExactly(
             MachineNudge.Kind.DESIGNATE_BACKUP_SERVER, MachineNudge.Kind.BACK_UP_AS_ROOT);
+    }
+
+    @Test
+    void aDetectedNetworkNothingRoutesYetIsComposedLast() {
+        // #333: the detected LAN rides in as one more already-cached signal, exactly like the others — the
+        // assembler still decides nothing, it only gathers.
+        MachineNetworks detected = MachineNetworks.parse("""
+            2: eth0    inet 192.168.1.10/24 brd 192.168.1.255 scope global eth0
+            default via 192.168.1.1 dev eth0 proto dhcp metric 100
+            """);
+
+        List<MachineNudge> nudges = MachineNudges.forMachine(machine(DeviceCategory.SERVER),
+            signals().networks(detected).build());
+
+        assertThat(nudges).extracting(MachineNudge::kind).containsExactly(
+            MachineNudge.Kind.DESIGNATE_BACKUP_SERVER, MachineNudge.Kind.ROUTE_LAN);
+        assertThat(nudges.get(1).value()).isEqualTo("192.168.1.0/24");
+    }
+
+    @Test
+    void withNothingReadOffTheMachine_thereIsNoRouteNudge() {
+        List<MachineNudge> nudges = MachineNudges.forMachine(machine(DeviceCategory.SERVER),
+            signals().build());
+
+        assertThat(nudges).extracting(MachineNudge::kind).doesNotContain(MachineNudge.Kind.ROUTE_LAN);
     }
 }

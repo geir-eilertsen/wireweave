@@ -1,6 +1,8 @@
 package net.vaier.rest;
 
 import lombok.extern.slf4j.Slf4j;
+import net.vaier.application.DetectMachineNetworksUseCase;
+import net.vaier.application.ForgetMachineNetworksUseCase;
 import net.vaier.application.GetDiskWatchesUseCase;
 import net.vaier.application.GetHostCredentialUseCase;
 import net.vaier.application.GetMachinesUseCase;
@@ -12,6 +14,7 @@ import net.vaier.domain.CommandResult;
 import net.vaier.domain.DiskWatch;
 import net.vaier.domain.DiskWatches;
 import net.vaier.domain.Machine;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.NoSshServerException;
 import net.vaier.domain.RemoteDiskForecastTracker;
 import net.vaier.domain.RemoteDiskPressureTracker;
@@ -25,6 +28,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Clock;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -73,6 +77,19 @@ import java.util.stream.Collectors;
  * controls (and lift the greying the moment a later sweep reaches the machine again) without waiting for an
  * operator's click to fail. No extra SSH traffic: this reads the very attempt {@code checkMachine} already
  * makes.
+ *
+ * <p>A fourth consumer rides the same sweep (#333): the <b>network the machine is on</b>, read via
+ * {@link DetectMachineNetworksUseCase} and cached, so the Explorer can offer to route a relay's LAN
+ * instead of asking an operator to type a CIDR. Be honest about the cost — unlike the forecast and the
+ * SSH-server presence, this one is a second {@code exec} on the same machine, because it is a different
+ * question and {@code df} cannot answer it. What it is <em>not</em> is a per-page-paint cost: the nudges
+ * endpoint repaints every time a machine pane is opened, and every other signal it composes is already
+ * free. Detecting here and serving from cache is what keeps it that way, and it self-heals — a machine
+ * that moves house is re-read within five minutes.
+ *
+ * <p>Both extra consumers sit behind {@code checkMachine}'s two existing guards (SSH access, a stored
+ * credential), which is precisely why "a machine Vaier cannot read is simply not nudged" needs no rule of
+ * its own.
  */
 @Component
 @Slf4j
@@ -88,6 +105,8 @@ public class RemoteDiskWatcher {
     private final Clock clock;
     private final ForRecordingSshServerPresence sshPresenceRecorder;
     private final ForPublishingEvents eventPublisher;
+    private final DetectMachineNetworksUseCase detectMachineNetworks;
+    private final ForgetMachineNetworksUseCase forgetMachineNetworks;
     private final RemoteDiskPressureTracker tracker;
     private final RemoteDiskForecastTracker forecastTracker = new RemoteDiskForecastTracker();
 
@@ -106,7 +125,9 @@ public class RemoteDiskWatcher {
                              Clock clock,
                              ForRecordingSshServerPresence sshPresenceRecorder,
                              ForPublishingEvents eventPublisher,
-                             ForPersistingDiskPressureState diskPressureState) {
+                             ForPersistingDiskPressureState diskPressureState,
+                             DetectMachineNetworksUseCase detectMachineNetworks,
+                             ForgetMachineNetworksUseCase forgetMachineNetworks) {
         this.machines = machines;
         this.credentials = credentials;
         this.remoteCommand = remoteCommand;
@@ -117,6 +138,8 @@ public class RemoteDiskWatcher {
         this.clock = clock;
         this.sshPresenceRecorder = sshPresenceRecorder;
         this.eventPublisher = eventPublisher;
+        this.detectMachineNetworks = detectMachineNetworks;
+        this.forgetMachineNetworks = forgetMachineNetworks;
         // The domain owns the port call; this watcher only hands it in. Its state is on disk precisely so
         // that a redeploy — several a day here — no longer wipes what admins have already been told.
         this.tracker = new RemoteDiskPressureTracker(diskPressureState);
@@ -130,10 +153,18 @@ public class RemoteDiskWatcher {
         for (Machine machine : allMachines) {
             checkMachine(machine, watches, globalThreshold);
         }
-        // A machine deleted while Vaier was running must not leave its SSH-server presence behind forever.
-        sshPresenceRecorder.retainOnly(allMachines.stream().map(Machine::id).collect(Collectors.toSet()));
+        // A machine deleted while Vaier was running must not leave its SSH-server presence — or the network
+        // it was last seen on — behind forever.
+        Set<MachineId> fleet = allMachines.stream().map(Machine::id).collect(Collectors.toSet());
+        sshPresenceRecorder.retainOnly(fleet);
+        forgetMachineNetworks.forgetMachineNetworksExcept(fleet);
     }
 
+    /**
+     * One machine, behind the two guards that decide whether Vaier may reach it at all. Both consumers of
+     * this trip sit behind them, and that is what makes the acceptance criterion of #333 — "a machine Vaier
+     * cannot read is simply not nudged" — true without a rule of its own.
+     */
     private void checkMachine(Machine machine, DiskWatches watches, int globalThreshold) {
         if (!machine.effectiveSshAccess()) {
             return;
@@ -141,6 +172,28 @@ public class RemoteDiskWatcher {
         if (credentials.getHostCredential(machine.id()).isEmpty()) {
             return;
         }
+        checkDisks(machine, watches, globalThreshold);
+        detectNetworks(machine);
+    }
+
+    /**
+     * Reads the network the machine is on and caches it (#333), so the Explorer can offer to route it
+     * without ever reaching the machine itself.
+     *
+     * <p>In its own try/catch, deliberately. It is a second question on the same sweep, not a second half
+     * of the first: a network read that fails must not cost the machine its disk alerts, and — the subtler
+     * one — must not reach the {@link NoSshServerException} handler above and withdraw an SSH-server
+     * presence that {@code df} has already earned on this very trip.
+     */
+    private void detectNetworks(Machine machine) {
+        try {
+            detectMachineNetworks.detectMachineNetworks(machine.id());
+        } catch (Exception e) {
+            log.debug("Could not read the networks on {}: {}", machine.name(), e.getMessage());
+        }
+    }
+
+    private void checkDisks(Machine machine, DiskWatches watches, int globalThreshold) {
         try {
             CommandResult result = remoteCommand.run(machine.id(), RemoteDiskUsage.DF_COMMAND);
             // Reaching a CommandResult at all — whatever df itself said — already proves the SSH session

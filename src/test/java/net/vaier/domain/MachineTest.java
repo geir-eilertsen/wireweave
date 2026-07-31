@@ -192,6 +192,31 @@ class MachineTest {
         assertThat(Machine.vaierServer(MachineId.generate(), true).effectiveSshAccess()).isTrue();
     }
 
+    // --- which machines could ever relay a LAN (#333) -------------------------------------------------
+
+    @Test
+    void canRelayALan_aServerPeerCan() {
+        PeerConfiguration peer = new PeerConfiguration("srv", "srv", "10.13.13.2", "",
+            MachineType.UBUNTU_SERVER, null, null, null, null, null, MachineId.generate());
+        assertThat(Machine.fromPeer(peer, null).canRelayALan()).isTrue();
+    }
+
+    @Test
+    void canRelayALan_aPersonalDeviceCannot() {
+        PeerConfiguration phone = new PeerConfiguration("phone", "phone", "10.13.13.8", "",
+            MachineType.MOBILE_CLIENT, null, null, null, null, null, MachineId.generate());
+        assertThat(Machine.fromPeer(phone, null).canRelayALan()).isFalse();
+    }
+
+    @Test
+    void canRelayALan_aLanServerCannot() {
+        // It has no tunnel of its own — it is reached through a relay, it is not one.
+        Machine printer = Machine.fromLanServer(
+            new LanServer("p", "192.168.1.9", false, null, null, DeviceCategory.PRINTER, null,
+                MachineId.generate()), "192.168.1.0/24");
+        assertThat(printer.canRelayALan()).isFalse();
+    }
+
     // --- what to call a machine in something a person reads -------------------------------------------
 
     /**

@@ -2,11 +2,15 @@ package net.vaier.rest;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import net.vaier.application.GetBlockDecisionsUseCase;
+import net.vaier.application.GetTrustedAddressesUseCase;
+import net.vaier.application.GetTrustedNetworksUseCase;
 import net.vaier.application.LiftBlockUseCase;
 import net.vaier.application.TrustAddressUseCase;
+import net.vaier.application.UntrustAddressUseCase;
 import net.vaier.domain.BlockDecision;
 import net.vaier.domain.BlockDecisionsUnreadableException;
 import net.vaier.domain.BlockNotLiftedException;
+import net.vaier.domain.SourceAddress;
 import net.vaier.domain.port.ForPublishingEvents;
 import net.vaier.domain.port.ForSubscribingToEvents;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,6 +20,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.util.List;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
@@ -46,6 +51,8 @@ class SecurityRestControllerTest {
     GetBlockDecisionsUseCase getBlockDecisions = mock(GetBlockDecisionsUseCase.class);
     LiftBlockUseCase liftBlock = mock(LiftBlockUseCase.class);
     TrustAddressUseCase trustAddress = mock(TrustAddressUseCase.class);
+    GetTrustedAddressesUseCase getTrustedAddresses = mock(GetTrustedAddressesUseCase.class);
+    UntrustAddressUseCase untrustAddress = mock(UntrustAddressUseCase.class);
     ForPublishingEvents forPublishingEvents = mock(ForPublishingEvents.class);
     ForSubscribingToEvents forSubscribingToEvents = mock(ForSubscribingToEvents.class);
 
@@ -55,7 +62,8 @@ class SecurityRestControllerTest {
     @BeforeEach
     void setUp() {
         controller = new SecurityRestController(getBlockDecisions, liftBlock, trustAddress,
-            forPublishingEvents, forSubscribingToEvents, new ObjectMapper());
+            getTrustedAddresses, untrustAddress, forPublishingEvents, forSubscribingToEvents,
+            new ObjectMapper());
         mvc = MockMvcBuilders.standaloneSetup(controller)
             .setControllerAdvice(new GlobalExceptionHandler())
             .build();
@@ -210,6 +218,98 @@ class SecurityRestControllerTest {
         mvc.perform(post("/security/trusted-addresses").contentType("application/json")
                 .content("{\"sourceIp\":\"1.2.3.4; rm -rf /\"}"))
             .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(forPublishingEvents);
+    }
+
+    // --- seeing and undoing what has been trusted (#348) ----------------------------------------------
+
+    @Test
+    void getTrustedAddresses_listsWhatTheOperatorHasTrusted() throws Exception {
+        when(getTrustedAddresses.getTrustedAddresses())
+            .thenReturn(List.of(SourceAddress.of("195.178.110.155"), SourceAddress.of("8.8.8.8")));
+
+        mvc.perform(get("/security/trusted-addresses"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].sourceIp").value("195.178.110.155"))
+            .andExpect(jsonPath("$[1].sourceIp").value("8.8.8.8"));
+    }
+
+    /**
+     * The constraint #348 turns on. The response carries exactly the store's contents — the addresses a
+     * person chose — and never the structural trusted networks the whitelist is also assembled from. A
+     * payload that mixed the two would put a relay's LAN one click from removal, which is the operator
+     * lockout {@code LockoutWarning} exists to shout about. The controller has no way to reach them:
+     * {@code GetTrustedNetworksUseCase} is deliberately not a collaborator here.
+     */
+    @Test
+    void getTrustedAddresses_neverCarriesAStructuralTrustedNetwork() throws Exception {
+        when(getTrustedAddresses.getTrustedAddresses()).thenReturn(List.of(SourceAddress.of("8.8.8.8")));
+
+        mvc.perform(get("/security/trusted-addresses"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.length()").value(1));
+
+        assertThat(SecurityRestController.class.getDeclaredFields())
+            .as("no field of this controller can read the structural trusted networks")
+            .noneMatch(f -> f.getType() == GetTrustedNetworksUseCase.class);
+    }
+
+    @Test
+    void deleteTrustedAddress_untrustsThatAddress() throws Exception {
+        mvc.perform(delete("/security/trusted-addresses/195.178.110.155"))
+            .andExpect(status().isOk());
+
+        verify(untrustAddress).untrustAddress("195.178.110.155");
+    }
+
+    /**
+     * Act, then publish — the same idiom the unban uses, for the same reason: the operator must see the
+     * address leave the list on the click, not on some later read.
+     */
+    @Test
+    void deleteTrustedAddress_pushesTheRefreshedTrustedListAtOnce() throws Exception {
+        when(getTrustedAddresses.getTrustedAddresses()).thenReturn(List.of(SourceAddress.of("8.8.8.8")));
+
+        mvc.perform(delete("/security/trusted-addresses/195.178.110.155"));
+
+        verify(forPublishingEvents).publish(eq(BreachAttemptWatcher.SECURITY_TOPIC),
+            eq(SecurityRestController.TRUSTED_ADDRESSES_EVENT), contains("\"sourceIp\":\"8.8.8.8\""));
+    }
+
+    @Test
+    void postTrustedAddress_pushesTheRefreshedTrustedListToo() throws Exception {
+        when(getTrustedAddresses.getTrustedAddresses())
+            .thenReturn(List.of(SourceAddress.of("195.178.110.155")));
+
+        mvc.perform(post("/security/trusted-addresses").contentType("application/json")
+            .content("{\"sourceIp\":\"195.178.110.155\"}"));
+
+        verify(forPublishingEvents).publish(eq(BreachAttemptWatcher.SECURITY_TOPIC),
+            eq(SecurityRestController.TRUSTED_ADDRESSES_EVENT), contains("\"sourceIp\":\"195.178.110.155\""));
+    }
+
+    /**
+     * Idempotent, per #348: untrusting an address that is not in the list is the state the operator asked
+     * for, so it is a success. Anything else would turn a double-click, or two admins on the same screen,
+     * into an error about a decision that has already been carried out.
+     */
+    @Test
+    void deleteTrustedAddress_thatWasNeverTrusted_isNotAnError() throws Exception {
+        mvc.perform(delete("/security/trusted-addresses/8.8.8.8"))
+            .andExpect(status().isOk());
+
+        verify(untrustAddress).untrustAddress("8.8.8.8");
+    }
+
+    @Test
+    void deleteTrustedAddress_rejectsAnAddressThatIsNotAnIpv4Address() throws Exception {
+        doThrow(new IllegalArgumentException("Not a valid IPv4 address"))
+            .when(untrustAddress).untrustAddress("evil.example.com");
+
+        mvc.perform(delete("/security/trusted-addresses/evil.example.com"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
 
         verifyNoInteractions(forPublishingEvents);
     }

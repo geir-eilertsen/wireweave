@@ -123,7 +123,7 @@ class SetupScriptGuardTest {
 
     /** Extracts the guard's shell helpers and runs {@code vaier_in_cidr} for real under bash. */
     private boolean runInCidr(String ip, String cidr) throws IOException, InterruptedException {
-        String script = SetupScriptGuard.cidrHelpers()
+        String script = UplinkGuard.shellHelpers()
             + "\nif vaier_in_cidr '" + ip + "' '" + cidr + "'; then echo YES; else echo NO; fi\n";
         Path f = Files.createTempFile("vaier-guard-", ".sh");
         try {

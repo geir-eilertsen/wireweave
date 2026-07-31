@@ -9,6 +9,7 @@ import net.vaier.domain.DiskWatch;
 import net.vaier.domain.LanServer;
 import net.vaier.domain.Machine;
 import net.vaier.domain.MachineId;
+import net.vaier.domain.MachineNetworks;
 import net.vaier.domain.MachineType;
 import net.vaier.domain.SshTarget;
 import net.vaier.domain.TestMachineIds;
@@ -17,7 +18,9 @@ import net.vaier.domain.port.ForGettingLanServers;
 import net.vaier.domain.port.ForGettingLanServers.LanServerView;
 import net.vaier.domain.port.ForGettingPeerConfigurations;
 import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
+import net.vaier.domain.port.ForCachingMachineNetworks;
 import net.vaier.domain.port.ForGettingVpnClients;
+import net.vaier.domain.port.ForReadingMachineNetworks;
 import net.vaier.domain.port.ForPersistingAppConfiguration;
 import net.vaier.domain.port.ForPersistingDiskWatches;
 import net.vaier.domain.port.ForPersistingLanServers;
@@ -39,12 +42,14 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -74,6 +79,8 @@ class MachineServiceTest {
     @Mock ForPersistingDiskWatches forPersistingDiskWatches;
     @Mock ConfigResolver configResolver;
     @Mock ForResolvingVaierServerIdentity forResolvingVaierServerIdentity;
+    @Mock ForReadingMachineNetworks forReadingMachineNetworks;
+    @Mock ForCachingMachineNetworks forCachingMachineNetworks;
 
     MachineService service;
 
@@ -88,7 +95,8 @@ class MachineServiceTest {
             forResolvingServerLanCidr, forUpdatingPeerConfigurations, forPersistingLanServers,
             forPersistingAppConfiguration, forResolvingSshTargets, forRunningSshCommands,
             forTrackingHostKeys, forPersistingDiskWatches,
-            forResolvingVaierServerIdentity, configResolver);
+            forResolvingVaierServerIdentity, forReadingMachineNetworks, forCachingMachineNetworks,
+            configResolver);
         lenient().when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of());
         lenient().when(forGettingVpnClients.getClients()).thenReturn(List.of());
         lenient().when(forGettingLanServers.getAll()).thenReturn(List.of());
@@ -557,5 +565,58 @@ class MachineServiceTest {
 
         assertThat(watches.forFilesystem(mid("NAS"), "/").watched()).isFalse();
         assertThat(watches.forFilesystem(mid("NAS"), "/volume1").watched()).isTrue();
+    }
+
+    // --- detected machine networks (#333) -------------------------------------------------------------
+
+    private static final String COLINA_IP_OUTPUT = """
+        2: eth0    inet 192.168.1.10/24 brd 192.168.1.255 scope global eth0
+        default via 192.168.1.1 dev eth0 proto dhcp metric 100
+        """;
+
+    @Test
+    void detectMachineNetworks_readsTheMachineAndRemembersWhatItSaid() {
+        MachineId colina = mid("colina");
+        when(forReadingMachineNetworks.read(colina)).thenReturn(MachineNetworks.parse(COLINA_IP_OUTPUT));
+
+        MachineNetworks detected = service.detectMachineNetworks(colina);
+
+        assertThat(detected.lanCandidate())
+            .hasValueSatisfying(n -> assertThat(n.cidr()).isEqualTo("192.168.1.0/24"));
+        var recorded = ArgumentCaptor.forClass(MachineNetworks.class);
+        verify(forCachingMachineNetworks).record(eq(colina), recorded.capture());
+        assertThat(recorded.getValue().defaultRouteInterface()).isEqualTo("eth0");
+    }
+
+    @Test
+    void detectMachineNetworks_aReadingItCouldNotTake_leavesTheLastOneAlone() {
+        // The disk trackers' rule, applied here: a transient failure must never overwrite a good reading
+        // with "this machine has no network", because that is what the nudge would then be judged on.
+        MachineId colina = mid("colina");
+        when(forReadingMachineNetworks.read(colina)).thenReturn(MachineNetworks.unknown());
+
+        assertThat(service.detectMachineNetworks(colina).networks()).isEmpty();
+
+        verify(forCachingMachineNetworks, never()).record(any(), any());
+    }
+
+    @Test
+    void getMachineNetworks_servesTheCacheWithoutTouchingTheMachine() {
+        MachineId colina = mid("colina");
+        when(forCachingMachineNetworks.getNetworks(colina))
+            .thenReturn(MachineNetworks.parse(COLINA_IP_OUTPUT));
+
+        assertThat(service.getMachineNetworks(colina).uplinkAddress()).contains("192.168.1.10");
+
+        verify(forReadingMachineNetworks, never()).read(any());
+    }
+
+    @Test
+    void forgetMachineNetworksExcept_passesTheSurvivorsStraightToTheCache() {
+        MachineId kept = mid("colina");
+
+        service.forgetMachineNetworksExcept(Set.of(kept));
+
+        verify(forCachingMachineNetworks).retainOnly(Set.of(kept));
     }
 }

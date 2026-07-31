@@ -175,4 +175,76 @@ class SecurityServiceTest {
         verifyNoInteractions(forPersistingTrustedAddresses);
         verifyNoInteractions(forLiftingBlocks);
     }
+
+    // --- reading and undoing the operator's own trust decisions (#348) --------------------------------
+
+    /**
+     * Deliberately the store's contents and nothing else. The structural trusted networks — the VPN subnet,
+     * the Docker bridge, every relay's LAN — are assembled into {@code TrustedNetworks} for the whitelist
+     * file, and they must never reach the list the operator is offered an untrust verb next to. This read
+     * has no access to them at all, which is why it cannot show one by accident.
+     */
+    @Test
+    void getTrustedAddresses_returnsOnlyWhatTheOperatorTrustedByHand() {
+        when(forPersistingTrustedAddresses.getAll())
+            .thenReturn(List.of(SourceAddress.of("8.8.8.8"), SourceAddress.of("1.1.1.1")));
+
+        assertThat(service().getTrustedAddresses())
+            .containsExactly(SourceAddress.of("8.8.8.8"), SourceAddress.of("1.1.1.1"));
+
+        verifyNoInteractions(peerConfigProvider);
+    }
+
+    /**
+     * Untrusting removes the operator's decision and nothing else. In particular it does <em>not</em> block
+     * the address: Vaier never blocks anyone — CrowdSec's own scenarios decide that — so an untrusted
+     * address is simply back to being judged on its behaviour.
+     */
+    @Test
+    void untrustAddress_removesTheAddressAndBlocksNobody() {
+        service().untrustAddress("195.178.110.155");
+
+        verify(forPersistingTrustedAddresses).delete(SourceAddress.of("195.178.110.155"));
+        verifyNoInteractions(forLiftingBlocks);
+        verifyNoInteractions(forWritingCrowdSecWhitelist);
+    }
+
+    /**
+     * The guarantee that survives the prefix rule failing. A relay whose LAN is a single host is nameable
+     * here — {@code SourceAddress.of("192.168.9.9")} is perfectly valid — so if the {@code /32} refusal were
+     * the only thing standing between the untrust verb and a structural network, this would be the hole.
+     * It is not: the structural entries are assembled from the VPN subnet, the Docker bridge and the peer
+     * configurations, and the trust store cannot write any of them. Untrusting leaves all three untouched.
+     */
+    @Test
+    void untrustAddress_cannotRemoveAStructuralNetworkEvenWhenItsAddressIsNameable() {
+        when(peerConfigProvider.getAllPeerConfigs()).thenReturn(List.of(relay("colina27", "192.168.9.9/32")));
+
+        service().untrustAddress("192.168.9.9");
+
+        assertThat(service().getTrustedNetworks().allCidrs())
+            .as("the structural entries do not come from the store, so an untrust cannot reach them")
+            .contains("10.13.13.0/24", "172.20.0.0/16", "192.168.9.9/32");
+    }
+
+    @Test
+    void untrustAddress_rejectsAnAddressThatIsNotAnIpv4Address() {
+        assertThatThrownBy(() -> service().untrustAddress("1.2.3.4; rm -rf /"))
+            .isInstanceOf(IllegalArgumentException.class);
+
+        verifyNoInteractions(forPersistingTrustedAddresses);
+    }
+
+    /**
+     * The same guard {@code SourceAddress} enforces, asserted where an operator's request actually arrives:
+     * a structural trusted network is a prefix, not a host, so it cannot even be named to this use case.
+     * There is no code path from the untrust verb to the VPN subnet.
+     */
+    @Test
+    void untrustAddress_cannotBeAskedToRemoveAStructuralTrustedNetwork() {
+        assertThatThrownBy(() -> service().untrustAddress("10.13.13.0/24"))
+            .isInstanceOf(IllegalArgumentException.class);
+
+        verifyNoInteractions(forPersistingTrustedAddresses);
+    }
 }

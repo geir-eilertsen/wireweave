@@ -9,6 +9,7 @@ import net.vaier.application.GetBackupServersUseCase;
 import net.vaier.application.GetHostCredentialUseCase;
 import net.vaier.application.GetLanServerReachabilityUseCase;
 import net.vaier.application.GetMachineDiskUsageUseCase;
+import net.vaier.application.GetMachineNetworksUseCase;
 import net.vaier.application.GetMachinesUseCase;
 import net.vaier.application.GetPublishableServicesUseCase;
 import net.vaier.application.GetSshServerPresenceUseCase;
@@ -22,8 +23,10 @@ import net.vaier.domain.EffectiveUser;
 import net.vaier.domain.HostCredentialView;
 import net.vaier.domain.Machine;
 import net.vaier.domain.MachineId;
+import net.vaier.domain.MachineNetworks;
 import net.vaier.domain.MachineNudge;
 import net.vaier.domain.MachineNudges;
+import net.vaier.domain.MachineSignals;
 import net.vaier.domain.NotFoundException;
 import net.vaier.domain.Reachability;
 import net.vaier.domain.SshServerPresence;
@@ -60,6 +63,7 @@ public class MachineRestController {
     private final GetBackupServersUseCase getBackupServersUseCase;
     private final GetLanServerReachabilityUseCase getLanServerReachabilityUseCase;
     private final GetSshServerPresenceUseCase getSshServerPresenceUseCase;
+    private final GetMachineNetworksUseCase getMachineNetworksUseCase;
 
     /**
      * Every machine Vaier knows. Each carries {@code hasCredential} — whether Vaier actually holds an SSH
@@ -190,17 +194,39 @@ public class MachineRestController {
         Map<String, Reachability> lanReachability = target.lanAddress() == null ? Map.of()
             : Map.of(target.lanAddress(), getLanServerReachabilityUseCase.getReachability(target.lanAddress()));
         boolean reachable = target.isReachable(lanReachability);
+        // #333: the networks the scheduled sweep last read off this machine, and off the Vaier server —
+        // the host that would actually install a LAN route, and so the one whose uplink must not be
+        // captured. Both come from the cache, so opening a machine pane still costs no SSH round-trip.
+        MachineNetworks networks = getMachineNetworksUseCase.getMachineNetworks(target.id());
+        MachineId vaierServer = resolveVaierServerId();
+        MachineNetworks routingHostNetworks = vaierServer == null ? MachineNetworks.unknown()
+            : getMachineNetworksUseCase.getMachineNetworks(vaierServer);
 
-        return MachineNudges.forMachine(target, publishableCount, reachable, hasCredential,
-                job, latestRun, fleet).stream()
+        MachineSignals signals = MachineSignals.builder()
+            .publishableCount(publishableCount)
+            .reachable(reachable)
+            .hasCredential(hasCredential)
+            .job(job)
+            .latestRun(latestRun)
+            .fleet(fleet)
+            .networks(networks)
+            .routingHostNetworks(routingHostNetworks)
+            .build();
+
+        return MachineNudges.forMachine(target, signals).stream()
             .map(NudgeResponse::from)
             .toList();
     }
 
-    /** One nudge flattened for the browser: its kind, operator-facing title, evidence, and action hint. */
-    public record NudgeResponse(String kind, String title, String evidence, String action) {
+    /**
+     * One nudge flattened for the browser: its kind, operator-facing title, evidence, action hint, and
+     * — for the kinds whose action needs one — the {@code value} being accepted. Today that is the
+     * detected CIDR behind {@code ROUTE_LAN}, so the shell can PATCH it straight to the existing
+     * {@code /vpn/peers/{peerId}/lan-cidr} endpoint rather than recovering it from the rendered title.
+     */
+    public record NudgeResponse(String kind, String title, String evidence, String action, String value) {
         static NudgeResponse from(MachineNudge n) {
-            return new NudgeResponse(n.kind().name(), n.title(), n.evidence(), n.action());
+            return new NudgeResponse(n.kind().name(), n.title(), n.evidence(), n.action(), n.value());
         }
     }
 
@@ -311,7 +337,8 @@ public class MachineRestController {
         boolean vaierServer,
         SshServerPresence sshServerPresence,
         String effectiveUsername,
-        boolean effectiveUserPrivileged
+        boolean effectiveUserPrivileged,
+        boolean canRelayALan
     ) {
         static MachineResponse from(Machine m, boolean hasCredential) {
             return from(m, hasCredential, false, SshServerPresence.UNKNOWN);
@@ -350,7 +377,11 @@ public class MachineRestController {
                 vaierServer,
                 sshServerPresence,
                 effectiveUser == null ? null : effectiveUser.username(),
-                effectiveUser != null && effectiveUser.privileged()
+                effectiveUser != null && effectiveUser.privileged(),
+                // #333: whether this machine could carry a whole network into the fleet. The browser used
+                // to decide this itself, from a type set that included LAN_SERVER — a machine with no
+                // tunnel to route into. The domain owns the rule; the answer travels as a boolean.
+                m.canRelayALan()
             );
         }
     }

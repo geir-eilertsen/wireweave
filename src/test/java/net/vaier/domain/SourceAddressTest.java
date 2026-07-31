@@ -4,6 +4,8 @@ import net.vaier.domain.port.ForLiftingBlocks;
 import net.vaier.domain.port.ForPersistingTrustedAddresses;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
@@ -172,5 +174,34 @@ class SourceAddressTest {
         address.trust(store);
 
         verify(store).save(address);
+    }
+
+    @Test
+    void untrust_removesThisAddressFromTheStore() {
+        ForPersistingTrustedAddresses store = mock(ForPersistingTrustedAddresses.class);
+        SourceAddress address = SourceAddress.of("1.2.3.4");
+
+        address.untrust(store);
+
+        verify(store).delete(address);
+    }
+
+    /**
+     * The guard that makes untrusting safe (#348), and it is this type's, not the UI's. A trusted network
+     * comes in two kinds: the structural ones — the VPN subnet, the Docker bridge, every relay's LAN — which
+     * exist so the bouncer can never block the operator's own traffic, and the addresses trusted by hand.
+     * Only the second kind may ever be removed, and the reason no code path can confuse them is that
+     * <em>a structural network cannot be named as a source address at all</em>: every one of them is a
+     * prefix wider than a single host, and this constructor refuses those. So the untrust endpoint, which
+     * takes its argument through here, has no vocabulary for a structural network — the protection is a
+     * property of the type rather than a check someone has to remember to write.
+     */
+    @Test
+    void of_cannotNameAStructuralTrustedNetwork_soUntrustCanNeverReachOne() {
+        for (String structural : List.of("10.13.13.0/24", "172.20.0.0/16", "192.168.1.0/24")) {
+            assertThatThrownBy(() -> SourceAddress.of(structural))
+                .as("a structural trusted network must not be nameable as a source address")
+                .isInstanceOf(IllegalArgumentException.class);
+        }
     }
 }

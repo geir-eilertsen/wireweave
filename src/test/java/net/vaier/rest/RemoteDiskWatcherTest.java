@@ -10,6 +10,8 @@ import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.port.ForPersistingDiskPressureState;
 import net.vaier.application.GetDiskWatchesUseCase;
 import net.vaier.application.GetHostCredentialUseCase;
+import net.vaier.application.DetectMachineNetworksUseCase;
+import net.vaier.application.ForgetMachineNetworksUseCase;
 import net.vaier.application.GetMachinesUseCase;
 import net.vaier.application.NotifyAdminsOfDiskFillForecastUseCase;
 import net.vaier.application.NotifyAdminsOfRemoteDiskPressureUseCase;
@@ -70,6 +72,8 @@ class RemoteDiskWatcherTest {
     GetDiskWatchesUseCase diskWatches;
     ConfigResolver configResolver;
     ForRecordingSshServerPresence sshPresenceRecorder;
+    DetectMachineNetworksUseCase detectMachineNetworks;
+    ForgetMachineNetworksUseCase forgetMachineNetworks;
     ForPublishingEvents eventPublisher;
     ForPersistingDiskPressureState pressureState;
     SteppableClock clock;
@@ -96,6 +100,8 @@ class RemoteDiskWatcherTest {
         diskWatches = mock(GetDiskWatchesUseCase.class);
         configResolver = mock(ConfigResolver.class);
         sshPresenceRecorder = mock(ForRecordingSshServerPresence.class);
+        detectMachineNetworks = mock(DetectMachineNetworksUseCase.class);
+        forgetMachineNetworks = mock(ForgetMachineNetworksUseCase.class);
         eventPublisher = mock(ForPublishingEvents.class);
         pressureState = new InMemoryDiskPressureStateAdapter();
         clock = new SteppableClock();
@@ -108,7 +114,8 @@ class RemoteDiskWatcherTest {
     /** A watcher over the shared mocks and the shared pressure store — a fresh one models a redeploy. */
     private RemoteDiskWatcher newWatcher() {
         return new RemoteDiskWatcher(machines, credentials, runner, notifier, forecastNotifier,
-            diskWatches, configResolver, clock, sshPresenceRecorder, eventPublisher, pressureState);
+            diskWatches, configResolver, clock, sshPresenceRecorder, eventPublisher, pressureState,
+            detectMachineNetworks, forgetMachineNetworks);
     }
 
     /** An SSH-capable server-type machine (effectiveSshAccess() true by default). */
@@ -749,5 +756,65 @@ class RemoteDiskWatcherTest {
         } finally {
             watcherLog.detachAppender(appender);
         }
+    }
+
+    // --- detecting the network behind a machine (#333) -------------------------------------------------
+    //
+    // The sweep already reaches every SSH-accessible, credentialed machine every five minutes, and it
+    // already piggybacks SSH-server presence onto that trip. The detected LAN rides the same guards for
+    // the same reason: the Explorer's nudges endpoint repaints on every machine pane open, and opening a
+    // machine must never cost an SSH round-trip.
+
+    @Test
+    void everySweep_detectsTheNetworksOfEveryReachableCredentialedMachine() {
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("colina")));
+        hasCredential("colina");
+        when(runner.run(eq(mid("colina")), any())).thenReturn(df(10));
+
+        watcher.checkRemoteDiskUsage();
+
+        verify(detectMachineNetworks).detectMachineNetworks(mid("colina"));
+    }
+
+    @Test
+    void aMachineWithoutSshAccessOrACredential_isNeverAsked() {
+        // The acceptance criterion in prose: a machine Vaier cannot read is simply not nudged. It is the
+        // same guard that keeps the sweep from mounting a failed-auth storm.
+        Machine off = new Machine(MachineId.generate(), "printer", MachineType.LAN_SERVER, null, null, null,
+            null, null, null, null, null, "192.168.1.111", false, null, DeviceCategory.SERVER, false);
+        when(machines.getAllMachines()).thenReturn(List.of(off, sshMachine("nas")));
+        when(credentials.getHostCredential(mid("nas"))).thenReturn(Optional.empty());
+
+        watcher.checkRemoteDiskUsage();
+
+        verify(detectMachineNetworks, never()).detectMachineNetworks(any());
+    }
+
+    @Test
+    void aNetworkReadThatBlowsUp_neverStopsTheDiskSweep() {
+        // Two questions on one trip, and they must not be able to take each other down: a machine whose
+        // networks cannot be read still gets its disks judged, and the SSH-server presence its df earned
+        // is not withdrawn by a later failure.
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("nas")));
+        hasCredential("nas");
+        when(runner.run(eq(mid("nas")), any())).thenReturn(df(99));
+        when(detectMachineNetworks.detectMachineNetworks(mid("nas")))
+            .thenThrow(new RuntimeException("connection reset"));
+
+        watcher.checkRemoteDiskUsage();
+
+        verify(notifier).notifyAdminsOfRemoteDiskPressure(any(RemoteDiskUsage.class), eq(85));
+        verify(sshPresenceRecorder).record(mid("nas"), SshServerPresence.PRESENT);
+    }
+
+    @Test
+    void everySweep_forgetsTheNetworksOfMachinesTheFleetNoLongerHas() {
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("kitchen")));
+        hasCredential("kitchen");
+        when(runner.run(eq(mid("kitchen")), any())).thenReturn(df(10));
+
+        watcher.checkRemoteDiskUsage();
+
+        verify(forgetMachineNetworks).forgetMachineNetworksExcept(Set.of(mid("kitchen")));
     }
 }

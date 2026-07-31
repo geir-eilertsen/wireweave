@@ -158,6 +158,11 @@
         threats: [],                     // GET /security/decisions — who CrowdSec is keeping out right now
         threatsRead: false,              // whether that read has landed once (an empty list is an answer, [] is not)
         threatsError: '',                // why that read failed, when it did — never shown as "nothing blocked"
+        trusted: [],                     // GET /security/trusted-addresses — what the operator trusted by hand, and
+                                         //   deliberately only that: the structural networks are never in this list,
+                                         //   because this is the list the untrust verb hangs off (#348)
+        trustedRead: false,              // whether that read has landed once
+        trustedError: '',                // why it failed, when it did — never shown as "nothing trusted"
         palSel: 0,
     };
 
@@ -1422,12 +1427,16 @@
         // the only one that carries a `learn` slug: the operator can read what saying yes grants, on the
         // Concepts page, before answering. `run` is the single grant-and-flag action, never a wizard step.
         BACK_UP_AS_ROOT:         (m) => ({ icon: 'shield',  label: 'Back up everything', run: () => backUpAsRootNow(m.id), learn: 'back-up-as-root' }),
+        // The only nudge carrying a value: Vaier read the network off the machine, and the operator is
+        // answering whether the fleet should reach it. The CIDR travels on the nudge, so the shell never
+        // has to recover it from the sentence it was rendered into.
+        ROUTE_LAN:               (m, n) => ({ icon: 'relay',   label: 'Route this network', run: () => routeDetectedLan(m, n.value) }),
     };
 
     // One nudge, rendered as a quiet invitation: an accent glyph for its kind, the domain's title and the
     // evidence behind it ("the why"), and a single outline action button routed by NUDGE_ACTION.
     function nudgeCard(m, n) {
-        const a = (NUDGE_ACTION[n.kind] || (() => ({ icon: 'gear', label: 'Open', run: () => {} })))(m);
+        const a = (NUDGE_ACTION[n.kind] || (() => ({ icon: 'gear', label: 'Open', run: () => {} })))(m, n);
         const row = el('div', 'ex-nudge');
         row.innerHTML = svg(a.icon, 'ex-nudge-ico');
         const text = el('div', 'ex-nudge-text');
@@ -1449,6 +1458,20 @@
         const btn = el('button', 'ex-btn'); btn.textContent = a.label; btn.onclick = a.run;
         row.appendChild(btn);
         return row;
+    }
+
+    // Says yes to a detected network. It goes through the one endpoint that has always routed a LAN — the
+    // same one the Advanced CIDR field writes to — so accepting the nudge produces exactly the routing that
+    // typing the CIDR by hand produces, with nothing reimplemented alongside it.
+    async function routeDetectedLan(m, cidr) {
+        const peer = S.peers.get(m.id);
+        if (!peer || !cidr) { toast('Vaier cannot route that network.'); return; }
+        const ok = await patchJson('/vpn/peers/' + encodeURIComponent(peer.id) + '/lan-cidr',
+            { lanCidr: cidr }, 'Could not route that network — another machine may already carry it.');
+        if (!ok) return;
+        S.nudges.delete(m.id);   // the machine now routes it; the suggestion has been answered
+        await loadFleet();
+        toast('The fleet can now reach ' + cidr + ' through ' + m.name + '.');
     }
 
     // --- editing a machine, and its SSH access ---------------------------------------------------------
@@ -1475,9 +1498,10 @@
             ok = await patchJson(base + '/description', { description: v.description },
                 'Could not save the description.') && ok;
         }
-        // LAN address and CIDR are a server peer's to edit — the endpoints exist only for peers, and only a
-        // server routes a subnet.
-        if (!isLan && SERVER_TYPES.has(m.type)) {
+        // LAN address and CIDR are a relay-capable peer's to edit — the endpoints exist only for peers, and
+        // only a machine that could relay a network routes a subnet. `canRelayALan` is the domain's answer,
+        // carried on the machine; the shell no longer re-derives it from a type set of its own.
+        if (m.canRelayALan) {
             if (v.lanAddress !== (m.lanAddress || '')) {
                 ok = await patchJson(base + '/lan-address', { lanAddress: v.lanAddress },
                     'Could not save the LAN address.') && ok;
@@ -1513,7 +1537,7 @@
     function editMachineForm(m) {
         return new Promise((resolve) => {
             const rec = S.peers.get(m.id) || S.lan.get(m.id) || {};
-            const isServerPeer = S.peers.has(m.id) && SERVER_TYPES.has(m.type);
+            const isServerPeer = m.canRelayALan;
             const scrim = el('div', 'ex-scrim is-on');
             const dialog = el('div', 'ex-dialog');
             const h = el('div', 'ex-dialog-title'); h.textContent = 'Edit ' + m.name;
@@ -1536,12 +1560,22 @@
             const cat = catSelect(m.deviceCategory);
             form.append(field('Name', null, name), field('Description', 'Optional.', desc));
             if (isServerPeer) {
-                form.append(field('LAN address', 'Where this server answers on its own network.', lanAddr),
-                    field('LAN behind it', 'The address range of the network it sits on, so the fleet can '
-                        + 'reach the machines there too.', lanCidr));
+                form.append(field('LAN address', 'Where this server answers on its own network.', lanAddr));
             }
             form.append(field('Device category', 'Its shape in the tree and on the map. Auto-detect lets Vaier '
                 + 'choose from what it sees.', cat));
+            if (isServerPeer) {
+                // Vaier reads the network off the machine and offers it on the machine's own pane, so this
+                // field is no longer how the question gets answered — it is the escape hatch for the case
+                // nothing can detect: a machine fronting a second subnet. Folded, and it says why.
+                const adv = disclosure('Advanced');
+                adv.appendChild(field('Network behind it', 'Vaier reads this off the machine and offers it on '
+                    + 'the machine’s page. Set it by hand only for a network it cannot see — a second subnet '
+                    + 'this machine also fronts.', lanCidr));
+                // A machine that already routes a network shows it rather than hiding state behind a fold.
+                if (m.lanCidr) adv.open = true;
+                form.appendChild(adv);
+            }
 
             const actions = el('div', 'ex-dialog-actions');
             const cancel = el('button', 'ex-btn'); cancel.textContent = 'Cancel';
@@ -4944,13 +4978,37 @@
         S.threatsRead = true;
     }
 
+    // Read at boot beside the blocked list, so render() stays a pure function of state — a view that fetched
+    // while drawing would repaint mid-read. The list is small and changes only when a person changes it.
+    async function loadTrusted() {
+        try {
+            const res = await fetch('/security/trusted-addresses', { cache: 'no-store' });
+            if (!res.ok) {
+                S.trustedError = 'Vaier could not read which addresses you have trusted.';
+                S.trustedRead = true;
+                return;
+            }
+            S.trusted = await res.json();
+            S.trustedError = '';
+        } catch (e) {
+            S.trustedError = 'Vaier could not read which addresses you have trusted.';
+        }
+        S.trustedRead = true;
+    }
+
     function watchSecurity() {
         const events = new EventSource('/security/events');
         // SSE replays nothing missed while the stream was down, so re-read on every reconnect after the
         // first — the same edge-triggered re-sync watchFleet does. Not polling: this fires on a reconnect,
         // not on a clock.
         let opened = false;
-        events.onopen = () => { if (opened) loadSecurity().then(repaintThreats); opened = true; };
+        events.onopen = () => {
+            if (opened) {
+                loadSecurity().then(repaintThreats);
+                loadTrusted().then(repaintTrusted);
+            }
+            opened = true;
+        };
         events.addEventListener('block-decisions', (e) => {
             try {
                 S.threats = JSON.parse(e.data);
@@ -4958,6 +5016,17 @@
                 S.threatsError = '';
             } catch (err) { return; }   // a malformed push is not a reason to blank a good list
             repaintThreats();
+        });
+        // Nothing on a clock ever sends this one: the trusted list changes only when a person changes it,
+        // and the server pushes it the moment they do. Same contract as above — a malformed push is ignored
+        // rather than allowed to blank a list the operator is reading.
+        events.addEventListener('trusted-addresses', (e) => {
+            try {
+                S.trusted = JSON.parse(e.data);
+                S.trustedRead = true;
+                S.trustedError = '';
+            } catch (err) { return; }
+            repaintTrusted();
         });
     }
 
@@ -4971,32 +5040,97 @@
         else if (kind === 'map') paintThreatLayer();
     }
 
+    // The Map draws blocked addresses, never trusted ones — a trusted address is not a threat and has no
+    // pin — so unlike repaintThreats this has exactly one screen to repaint.
+    function repaintTrusted() {
+        if (kindOf(S.path) === 'security') render();
+    }
 
+
+    // Two sections, and the split is the whole of #348. The first is CrowdSec's answer to "who is knocking",
+    // which changes on its own every few minutes. The second is the operator's own standing decisions, which
+    // change only when they change them — and which, until now, they could neither see nor take back.
     function renderSecurity(pane) {
         const blocked = S.threats.length;
         pane.appendChild(paneHead('Security', false,
             blocked ? blocked + (blocked === 1 ? ' address blocked' : ' addresses blocked') : 'Nothing blocked'));
 
         const body = el('div', 'ex-pane-body');
+        body.appendChild(section('Blocked right now'));
+        renderBlocked(body);
+        body.appendChild(section('Trusted addresses'));
+        renderTrusted(body);
+        pane.appendChild(body);
+    }
+
+    function renderBlocked(body) {
         if (!S.threatsRead) {
             body.appendChild(note('Reading who CrowdSec is keeping out…', false));
-            pane.appendChild(body); return;
+            return;
         }
         if (S.threatsError) {
             body.appendChild(note(S.threatsError, true));
-            pane.appendChild(body); return;
+            return;
         }
-        if (!blocked) {
+        if (!S.threats.length) {
             body.appendChild(note('Nobody is blocked right now. CrowdSec is watching the edge, and Vaier '
                 + 'emails you the moment it starts turning someone away.', false));
-            pane.appendChild(body); return;
+            return;
         }
 
         const rows = el('div', 'ex-listing is-threats');
         rows.appendChild(listHead(['Source', 'Scenario', 'Expires in', '']));
         S.threats.forEach((d) => rows.appendChild(threatRow(d)));
         body.appendChild(rows);
-        pane.appendChild(body);
+    }
+
+    // Only the addresses a person chose, because this is where the untrust verb lives. Vaier trusts more
+    // than this — your VPN, this server's own container network, and every network it reaches through one of
+    // your machines — but those are what stop CrowdSec turning away your own traffic, so removing one is the
+    // lockout Vaier emails you about. They are stated below and never drawn as a row: a list that mixed the
+    // two kinds would put a whole network one click from the same button.
+    function renderTrusted(body) {
+        if (!S.trustedRead) {
+            body.appendChild(note('Reading which addresses you have trusted…', false));
+            return;
+        }
+        if (S.trustedError) {
+            body.appendChild(note(S.trustedError, true));
+            return;
+        }
+        if (!S.trusted.length) {
+            body.appendChild(note('You have not trusted any address by hand. Trusting a blocked address '
+                + 'above tells CrowdSec never to block it again.', false));
+        } else {
+            const rows = el('div', 'ex-listing is-trusted');
+            rows.appendChild(listHead(['Address', '']));
+            S.trusted.forEach((a) => rows.appendChild(trustedRow(a)));
+            body.appendChild(rows);
+        }
+        body.appendChild(note('Your VPN, this server’s own container network, and every network Vaier '
+            + 'reaches through one of your machines are trusted too. Those are not listed here and '
+            + 'cannot be untrusted — they are what stops CrowdSec turning away your own traffic.', false));
+    }
+
+    // The address and one verb. A trusted address has no scenario and no expiry: it is not a ban, it is a
+    // decision, and the only thing to say about it is that you made it.
+    function trustedRow(a) {
+        const row = el('div', 'ex-lrow');
+
+        const src = el('span', 'ex-tsource');
+        const ip = el('span', 'ex-tip');
+        ip.textContent = a.sourceIp;
+        src.appendChild(ip);
+        row.appendChild(src);
+
+        const acts = el('div', 'ex-lactions');
+        const untrust = el('button', 'ex-btn is-danger');
+        untrust.textContent = 'Untrust';
+        untrust.title = 'Stop trusting ' + a.sourceIp + '. CrowdSec judges it on its behaviour again.';
+        untrust.onclick = () => untrustAddress(a);
+        acts.appendChild(untrust);
+        row.appendChild(acts);
+        return row;
     }
 
     // No navigation target — a block decision has no Inspector of its own — so the source is plain text,
@@ -5056,16 +5190,37 @@
         toast('Lifted the block on ' + d.sourceIp + '.');
     }
 
+    // The copy says how long the decision lasts, and since #348 the honest answer is "until you take it
+    // back", not "forever". It stays honest about the delay, which has not changed: CrowdSec reads its
+    // whitelist at startup, and Vaier will not restart the thing guarding the door to apply a rule about who
+    // may pass it.
     async function trustAddress(d) {
-        const ok = await confirmModal('Trust ' + d.sourceIp + ' for good?',
-            'Vaier lifts the block now, and adds ' + d.sourceIp + ' to the networks it never blocks. The '
-            + 'trusted list itself reaches CrowdSec when CrowdSec next restarts — Vaier will not restart it '
-            + 'for you, because restarting the thing guarding the door is how an operator ends up locked out.',
+        const ok = await confirmModal('Trust ' + d.sourceIp + '?',
+            'Vaier lifts the block now, and adds ' + d.sourceIp + ' to the networks it never blocks. That '
+            + 'lasts until you untrust it here. The trusted list itself reaches CrowdSec when CrowdSec next '
+            + 'restarts — Vaier will not restart it for you, because restarting the thing guarding the door '
+            + 'is how an operator ends up locked out.',
             'Trust this address');
         if (!ok) return;
         if (!await securityAction('/security/trusted-addresses', 'POST', { sourceIp: d.sourceIp },
             'Vaier could not trust ' + d.sourceIp + '.')) return;
         toast('Now trusting ' + d.sourceIp + '.');
+    }
+
+    // The mirror image, and it asks first for the same reason trusting does: this is a standing decision
+    // either way. What it is not is a ban — Vaier never blocks an address, so the worst an untrust can do is
+    // let CrowdSec judge this one like any other.
+    async function untrustAddress(a) {
+        const ok = await confirmModal('Stop trusting ' + a.sourceIp + '?',
+            'Vaier forgets the decision now, and this blocks nobody — CrowdSec simply judges ' + a.sourceIp
+            + ' on its behaviour again. It leaves CrowdSec’s trusted list when CrowdSec next restarts — '
+            + 'Vaier will not restart it for you, because restarting the thing guarding the door is how an '
+            + 'operator ends up locked out.',
+            'Untrust');
+        if (!ok) return;
+        if (!await securityAction('/security/trusted-addresses/' + encodeURIComponent(a.sourceIp), 'DELETE',
+            null, 'Vaier could not untrust ' + a.sourceIp + '.')) return;
+        toast('No longer trusting ' + a.sourceIp + '.');
     }
 
     // The server pushes the new list straight after a successful action, so this does not re-read — but a
@@ -7187,6 +7342,8 @@
         // Not awaited, and read at boot rather than on view, because the Map draws threats too — an
         // operator who opens the Map first would otherwise see an honest-looking map with nobody on it.
         loadSecurity().then(repaintThreats);
+        // The Map has no use for this one, but render() must never fetch, so it is read here too.
+        loadTrusted().then(repaintTrusted);
         loadUser();
     }
 

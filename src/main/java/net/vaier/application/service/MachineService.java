@@ -1,8 +1,11 @@
 package net.vaier.application.service;
 
 import lombok.extern.slf4j.Slf4j;
+import net.vaier.application.DetectMachineNetworksUseCase;
+import net.vaier.application.ForgetMachineNetworksUseCase;
 import net.vaier.application.GetDiskWatchesUseCase;
 import net.vaier.application.GetMachineDiskUsageUseCase;
+import net.vaier.application.GetMachineNetworksUseCase;
 import net.vaier.application.GetMachinesUseCase;
 import net.vaier.application.GetVaierServerUseCase;
 import net.vaier.application.SetDiskWatchUseCase;
@@ -16,11 +19,13 @@ import net.vaier.domain.LanAnchor;
 import net.vaier.domain.LanServer;
 import net.vaier.domain.Machine;
 import net.vaier.domain.MachineId;
+import net.vaier.domain.MachineNetworks;
 import net.vaier.domain.NotFoundException;
 import net.vaier.domain.RemoteDiskUsage;
 import net.vaier.domain.SshTarget;
 import net.vaier.domain.VaierConfig;
 import net.vaier.domain.VpnClient;
+import net.vaier.domain.port.ForCachingMachineNetworks;
 import net.vaier.domain.port.ForGettingLanServers;
 import net.vaier.domain.port.ForGettingLanServers.LanServerView;
 import net.vaier.domain.port.ForGettingPeerConfigurations;
@@ -30,6 +35,7 @@ import net.vaier.domain.port.ForPersistingAppConfiguration;
 import net.vaier.domain.port.ForResolvingVaierServerIdentity;
 import net.vaier.domain.port.ForPersistingDiskWatches;
 import net.vaier.domain.port.ForPersistingLanServers;
+import net.vaier.domain.port.ForReadingMachineNetworks;
 import net.vaier.domain.port.ForResolvingServerLanCidr;
 import net.vaier.domain.port.ForResolvingSshTargets;
 import net.vaier.domain.port.ForRunningSshCommands;
@@ -41,13 +47,15 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
 @Slf4j
 public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase,
     SetMachineSshAccessUseCase, GetMachineDiskUsageUseCase, GetDiskWatchesUseCase,
-    SetDiskWatchUseCase {
+    SetDiskWatchUseCase, DetectMachineNetworksUseCase, GetMachineNetworksUseCase,
+    ForgetMachineNetworksUseCase {
 
     private final ForGettingPeerConfigurations forGettingPeerConfigurations;
     private final ForGettingVpnClients forGettingVpnClients;
@@ -61,6 +69,8 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
     private final ForRunningSshCommands forRunningSshCommands;
     private final ForTrackingHostKeys forTrackingHostKeys;
     private final ForPersistingDiskWatches forPersistingDiskWatches;
+    private final ForReadingMachineNetworks forReadingMachineNetworks;
+    private final ForCachingMachineNetworks forCachingMachineNetworks;
     private final ConfigResolver configResolver;
 
     public MachineService(ForGettingPeerConfigurations forGettingPeerConfigurations,
@@ -75,6 +85,8 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
                           ForTrackingHostKeys forTrackingHostKeys,
                           ForPersistingDiskWatches forPersistingDiskWatches,
                           ForResolvingVaierServerIdentity forResolvingVaierServerIdentity,
+                          ForReadingMachineNetworks forReadingMachineNetworks,
+                          ForCachingMachineNetworks forCachingMachineNetworks,
                           ConfigResolver configResolver) {
         this.forGettingPeerConfigurations = forGettingPeerConfigurations;
         this.forGettingVpnClients = forGettingVpnClients;
@@ -88,6 +100,8 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
         this.forTrackingHostKeys = forTrackingHostKeys;
         this.forPersistingDiskWatches = forPersistingDiskWatches;
         this.forResolvingVaierServerIdentity = forResolvingVaierServerIdentity;
+        this.forReadingMachineNetworks = forReadingMachineNetworks;
+        this.forCachingMachineNetworks = forCachingMachineNetworks;
         this.configResolver = configResolver;
     }
 
@@ -229,6 +243,40 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
             .findFirst()
             .map(Machine::name)
             .orElse(machineId.value());
+    }
+
+    // --- DetectMachineNetworksUseCase / GetMachineNetworksUseCase / ForgetMachineNetworksUseCase (#333) ---
+
+    /**
+     * Read a machine's own networks and remember them. Orchestration only: the read port asks the machine,
+     * {@link MachineNetworks} decides what the answer means, and the cache port keeps it.
+     *
+     * <p>A reading Vaier could not take is <b>not</b> recorded. That is the same rule the disk trackers
+     * follow — leave the last good state alone rather than let a transient failure look like an
+     * observation — and here it matters twice over: an empty reading recorded over a real one would make a
+     * machine's detected network vanish from the Explorer for five minutes at a time, and a machine
+     * flickering in and out of "we know nothing about it" is worse than one Vaier is simply quiet about.
+     */
+    @Override
+    public MachineNetworks detectMachineNetworks(MachineId machineId) {
+        MachineNetworks detected = forReadingMachineNetworks.read(machineId);
+        if (detected.isUnknown()) {
+            log.debug("No networks read from machine {}; keeping the previous reading", machineId);
+            return detected;
+        }
+        forCachingMachineNetworks.record(machineId, detected);
+        return detected;
+    }
+
+    /** What was last detected for a machine, straight from the cache — never a fresh SSH round-trip. */
+    @Override
+    public MachineNetworks getMachineNetworks(MachineId machineId) {
+        return forCachingMachineNetworks.getNetworks(machineId);
+    }
+
+    @Override
+    public void forgetMachineNetworksExcept(Set<MachineId> machineIds) {
+        forCachingMachineNetworks.retainOnly(machineIds);
     }
 
     private Machine vaierServerMachine() {

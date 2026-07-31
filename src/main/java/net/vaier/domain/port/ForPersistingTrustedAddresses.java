@@ -22,4 +22,16 @@ public interface ForPersistingTrustedAddresses {
 
     /** Stores {@code address}; storing one that is already trusted is a no-op, never a duplicate row. */
     void save(SourceAddress address);
+
+    /**
+     * Forgets {@code address}, so the next rewrite of the whitelist leaves it out (#348). Removing one that
+     * is not stored is a no-op, never an error: the operator asked for this address not to be trusted, and
+     * it is not trusted — a second click, or a second admin on the same screen, must not be told otherwise.
+     *
+     * <p>This store holds only what a person chose. The structural entries of
+     * {@link net.vaier.domain.TrustedNetworks} — the VPN subnet, the Docker bridge, every relay's LAN — are
+     * assembled elsewhere and are unreachable from here, which is what stops an untrust from becoming the
+     * lockout {@code LockoutWarning} exists to warn about.
+     */
+    void delete(SourceAddress address);
 }

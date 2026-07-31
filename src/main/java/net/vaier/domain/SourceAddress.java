@@ -98,4 +98,27 @@ public record SourceAddress(String value) {
     public void trust(ForPersistingTrustedAddresses store) {
         store.save(this);
     }
+
+    /**
+     * Forgets the operator's decision to trust this address (#348). Symmetrically to {@link #trust}, and for
+     * the same reason, this does not take effect at the edge until CrowdSec next restarts: the whitelist
+     * file is rewritten without the address within five minutes, but CrowdSec reads its parser files only at
+     * startup, and Vaier deliberately does not restart it.
+     *
+     * <p>It also blocks nobody. Vaier never blocks an address — CrowdSec's scenarios decide that — so an
+     * untrusted address is simply back to being judged on its behaviour.
+     *
+     * <p>Untrusting can only ever reach an address, never a network. Two independent things make that true,
+     * and the weaker one is the obvious one: nothing wider than a single host can become a
+     * {@code SourceAddress} at all, so a structural entry of {@link TrustedNetworks} has no name in this
+     * vocabulary. The <em>load-bearing</em> guarantee is the store separation behind it — the structural
+     * entries are assembled from the VPN subnet, the Docker bridge and the peer configurations, none of
+     * which this port can write. That is what still holds in the one case the prefix rule misses: a relay
+     * whose LAN happens to be a single host <em>is</em> nameable here, and deleting it from the store would
+     * still leave the structural entry exactly where it was. Do not let either guard be removed on the
+     * grounds that the other one covers it.
+     */
+    public void untrust(ForPersistingTrustedAddresses store) {
+        store.delete(this);
+    }
 }

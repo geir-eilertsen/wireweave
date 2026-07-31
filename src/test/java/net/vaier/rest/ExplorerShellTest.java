@@ -1291,6 +1291,60 @@ class ExplorerShellTest {
     }
 
     @Test
+    void theRouteLanNudge_acceptsStraightIntoTheEndpointThatAlreadyRoutesANetwork() throws IOException {
+        // #333: the operator answers "should the fleet reach my house?", never "what is your CIDR?". The
+        // accept must go through the very endpoint typing the CIDR by hand goes through — that is how
+        // "the same routing as before" comes free rather than being reimplemented here.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("const NUDGE_ACTION = {");
+        assertThat(from).isPositive();
+        String table = js.substring(from, js.indexOf("};", from));
+        assertThat(table).contains("ROUTE_LAN:");
+        assertThat(table).as("the accept takes the CIDR the domain detected, never one the browser derived")
+            .contains("routeDetectedLan(m, n.value)");
+
+        int fn = js.indexOf("async function routeDetectedLan(");
+        assertThat(fn).isPositive();
+        String body = js.substring(fn, js.indexOf("\n    }\n", fn));
+        assertThat(body).as("the one existing write path for a LAN CIDR").contains("'/lan-cidr'");
+        assertThat(body).contains("loadFleet()");
+        assertThat(body).as("the evidence has changed, so the pane re-asks on the next paint")
+            .contains("S.nudges.delete(m.id)");
+    }
+
+    @Test
+    void theEditFormFoldsTheHandTypedCidrUnderAdvanced() throws IOException {
+        // The CIDR field stays — a machine can front more than one subnet, and nothing detects that — but
+        // it is no longer the way an operator is expected to answer. It is the escape hatch, so it lives
+        // where escape hatches live.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function editMachineForm(");
+        String body = js.substring(from, js.indexOf("\n    }\n", from));
+
+        assertThat(body).contains("disclosure('Advanced')");
+        int fold = body.indexOf("disclosure('Advanced')");
+        assertThat(body.indexOf("lanCidr", fold)).as("the CIDR field sits inside the fold").isPositive();
+    }
+
+    @Test
+    void whetherAMachineCanRelayANetwork_isTheDomainsAnswer_notTheBrowsersOwn() throws IOException {
+        // The shell used to ask `S.peers.has(id) && SERVER_TYPES.has(type)` — and that type set includes
+        // LAN_SERVER, a machine with no tunnel to route into. Two spellings of one rule, already disagreeing
+        // on paper. Machine.canRelayALan settles it and rides on the machine.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function editMachineForm(");
+        String body = js.substring(from, js.indexOf("\n    }\n", from));
+
+        assertThat(body).contains("m.canRelayALan");
+        assertThat(body).as("no second definition of the rule in the browser").doesNotContain("SERVER_TYPES");
+
+        int save = js.indexOf("async function saveMachineEdits(");
+        String saveBody = js.substring(save, js.indexOf("\n    }\n", save));
+        assertThat(saveBody).as("the same one answer gates the write, not a parallel type check")
+            .contains("m.canRelayALan").doesNotContain("SERVER_TYPES");
+    }
+
+    @Test
     void aSettledRun_reopensTheMachinesNudges() throws IOException {
         // Nudges are read once per machine and never re-read, so without this the "this backup is missing 3
         // files" card would not appear until the operator left the machine pane and came back — i.e. exactly
@@ -1841,6 +1895,91 @@ class ExplorerShellTest {
         assertThat(css.substring(css.indexOf("@keyframes ex-threat-ping")))
             .as("the ping's animation is disabled under prefers-reduced-motion")
             .contains("prefers-reduced-motion");
+    }
+
+    // --- the trusted addresses, and undoing one (#348) -------------------------------------------------
+
+    @Test
+    void theSecurityViewListsWhatTheOperatorHasTrusted() throws IOException {
+        // The whole of #348: trusting was one confirm away, irreversible, and then invisible. The view now
+        // has a second section, read from its own endpoint, so an operator can go back six months later and
+        // see what they decided.
+        String js = read("explorer-shell.js");
+        assertThat(js).contains("fetch('/security/trusted-addresses'");
+        assertThat(js).contains("S.trusted.forEach((a) => rows.appendChild(trustedRow(a)));");
+        assertThat(js).contains("'Trusted addresses'");
+    }
+
+    /**
+     * The constraint #348 turns on. The trusted networks are two kinds: the structural ones — the VPN, this
+     * server's own container network, every network reached through a machine — which exist so CrowdSec can
+     * never block the operator's own traffic, and the addresses trusted by hand. Only the second kind is
+     * listed, because the list is where the untrust verb lives. The structural ones are named in a sentence
+     * so the operator knows they are covered, and are never rendered as a row anything could act on.
+     */
+    @Test
+    void theTrustedListRendersOnlyWhatCanBeUntrusted() throws IOException {
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function renderTrusted(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).as("the section is drawn from the hand-trusted list and nothing else")
+            .contains("S.trusted")
+            .doesNotContain("allCidrs")
+            .doesNotContain("trustedNetworks");
+        // ...and the structural networks are stated, not listed.
+        assertThat(js).contains("cannot be untrusted");
+    }
+
+    @Test
+    void untrustingSaysWhatItDoesAndWhenItTakesEffect() throws IOException {
+        // The same restart asymmetry the trust dialog already owns, said on the way out: the whitelist file
+        // loses the address on the next refresh, but CrowdSec reads its parser files only at startup and
+        // Vaier will not restart it. And the one thing an operator is most likely to fear here is wrong —
+        // untrusting blocks nobody, because Vaier never blocks anyone.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("async function untrustAddress(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).contains("blocks nobody");
+        assertThat(body).contains("when CrowdSec next restarts");
+        assertThat(body).contains("locked out");
+        assertThat(body).contains("'/security/trusted-addresses/' + encodeURIComponent(a.sourceIp), 'DELETE'");
+    }
+
+    @Test
+    void trustingNoLongerCallsItselfForever() throws IOException {
+        // Before #348 the confirmation could not say the decision was permanent, because the read/undo
+        // surface was assumed to follow. It has now — so the honest copy is the reversible one, and adding
+        // a "this is permanent" warning at this point would ship a sentence that is already false.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("async function trustAddress(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).contains("until you untrust it here");
+        assertThat(body).as("nothing in this dialog may claim the decision is final")
+            .doesNotContain("for good")
+            .doesNotContain("permanent");
+    }
+
+    @Test
+    void theTrustedListIsPushedNotPolled() throws IOException {
+        // Only a person ever changes this list, so nothing on a clock publishes it — the controller pushes
+        // it straight after the action, and the browser listens. A re-read on a timer would be the first
+        // poll in the file.
+        String js = read("explorer-shell.js");
+        assertThat(js).contains("events.addEventListener('trusted-addresses'");
+        assertThat(js).doesNotContain("setInterval");
+    }
+
+    @Test
+    void theTrustedListKeepsItsVerbOnANarrowScreen() throws IOException {
+        // Same reason the blocked list does: there is no selection bar in this view to carry the verb, so
+        // the phone-width rule that hides row actions would leave the section read-only on the device the
+        // operator is most likely holding.
+        String css = read("explorer-shell.css");
+        assertThat(css).contains(".ex-listing.is-trusted .ex-lactions {");
+        assertThat(css.substring(css.indexOf("@media"))).contains("grid-template-areas: \"src\" \"acts\";");
     }
 
     // --- the effective user, and the pin that refuses (#346, #345) -------------------------------------

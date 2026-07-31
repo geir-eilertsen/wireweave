@@ -4,9 +4,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.application.GetBlockDecisionsUseCase;
+import net.vaier.application.GetTrustedAddressesUseCase;
 import net.vaier.application.LiftBlockUseCase;
 import net.vaier.application.TrustAddressUseCase;
+import net.vaier.application.UntrustAddressUseCase;
 import net.vaier.domain.BlockDecision;
+import net.vaier.domain.SourceAddress;
 import net.vaier.domain.port.ForPublishingEvents;
 import net.vaier.domain.port.ForSubscribingToEvents;
 import org.springframework.http.MediaType;
@@ -43,9 +46,19 @@ import java.util.List;
 @Slf4j
 public class SecurityRestController {
 
+    /**
+     * The event this controller pushes when the operator's trusted list changes (#348). It lives here rather
+     * than beside {@code BreachAttemptWatcher.DECISIONS_EVENT} because nothing on a clock ever publishes it:
+     * the trusted list changes only when a person decides something, and this is the only place that
+     * happens.
+     */
+    static final String TRUSTED_ADDRESSES_EVENT = "trusted-addresses";
+
     private final GetBlockDecisionsUseCase getBlockDecisionsUseCase;
     private final LiftBlockUseCase liftBlockUseCase;
     private final TrustAddressUseCase trustAddressUseCase;
+    private final GetTrustedAddressesUseCase getTrustedAddressesUseCase;
+    private final UntrustAddressUseCase untrustAddressUseCase;
     private final ForPublishingEvents forPublishingEvents;
     private final ForSubscribingToEvents forSubscribingToEvents;
     private final ObjectMapper objectMapper;
@@ -86,9 +99,37 @@ public class SecurityRestController {
      */
     @PostMapping("/trusted-addresses")
     public ResponseEntity<Void> trustAddress(@RequestBody TrustAddressRequest request) {
-        log.info("Permanently trusting {}", LogSafe.forLog(request.sourceIp()));
+        log.info("Trusting {}", LogSafe.forLog(request.sourceIp()));
         trustAddressUseCase.trustAddress(request.sourceIp());
         publishDecisions();
+        publishTrustedAddresses();
+        return ResponseEntity.ok().build();
+    }
+
+    /**
+     * What the operator has trusted by hand — and nothing else. The structural trusted networks (the VPN
+     * subnet, the Docker bridge, every relay peer's LAN) are deliberately absent: they are what stops the
+     * bouncer blocking the operator's own traffic, removing one is the lockout {@code LockoutWarning}
+     * exists to shout about, and a payload that carried both kinds would put one a click from the untrust
+     * verb below. This controller does not even hold {@code GetTrustedNetworksUseCase}, so there is nothing
+     * here to leak.
+     */
+    @GetMapping("/trusted-addresses")
+    public List<TrustedAddressResponse> trustedAddresses() {
+        return trustedResponses(getTrustedAddressesUseCase.getTrustedAddresses());
+    }
+
+    /**
+     * Stop trusting one address. It is not blocked by this — Vaier never blocks anyone — it simply goes back
+     * to being judged on its behaviour, and it leaves CrowdSec's whitelist at CrowdSec's next restart, which
+     * Vaier still does not trigger. Untrusting an address that is not in the list succeeds: see
+     * {@link UntrustAddressUseCase}.
+     */
+    @DeleteMapping("/trusted-addresses/{sourceIp}")
+    public ResponseEntity<Void> untrustAddress(@PathVariable String sourceIp) {
+        log.info("No longer trusting {}", LogSafe.forLog(sourceIp));
+        untrustAddressUseCase.untrustAddress(sourceIp);
+        publishTrustedAddresses();
         return ResponseEntity.ok().build();
     }
 
@@ -111,12 +152,38 @@ public class SecurityRestController {
         }
     }
 
+    /**
+     * Act, then publish, exactly as {@link #publishDecisions()} does and for the same reason — the operator
+     * must watch the address leave the list on the click. Nothing on a clock refreshes this one, so this is
+     * the only push it ever gets; a failure here is still logged and dropped rather than turning a completed
+     * change into an error, and the view re-reads on its next SSE reconnect.
+     */
+    private void publishTrustedAddresses() {
+        try {
+            forPublishingEvents.publish(BreachAttemptWatcher.SECURITY_TOPIC, TRUSTED_ADDRESSES_EVENT,
+                objectMapper.writeValueAsString(
+                    trustedResponses(getTrustedAddressesUseCase.getTrustedAddresses())));
+        } catch (Exception e) {
+            log.debug("Publishing the refreshed trusted addresses failed: {}", e.getMessage());
+        }
+    }
+
     static List<BlockDecisionResponse> responses(List<BlockDecision> decisions) {
         return decisions.stream().map(BlockDecisionResponse::from).toList();
     }
 
-    /** Which address to trust for good. */
+    static List<TrustedAddressResponse> trustedResponses(List<SourceAddress> addresses) {
+        return addresses.stream().map(a -> new TrustedAddressResponse(a.value())).toList();
+    }
+
+    /** Which address to trust. */
     record TrustAddressRequest(String sourceIp) {}
+
+    /**
+     * One address the operator trusts. A bare dotted quad, never the {@code /32} form the whitelist file
+     * carries: the operator trusted an address, and that is what the list should say back to them.
+     */
+    record TrustedAddressResponse(String sourceIp) {}
 
     /**
      * One active ban as the browser sees it — the same shape the REST read returns and the SSE topic

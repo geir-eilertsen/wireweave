@@ -2,10 +2,12 @@ package net.vaier.application.service;
 
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.application.GetBlockDecisionsUseCase;
+import net.vaier.application.GetTrustedAddressesUseCase;
 import net.vaier.application.GetTrustedNetworksUseCase;
 import net.vaier.application.LiftBlockUseCase;
 import net.vaier.application.RefreshTrustedNetworksUseCase;
 import net.vaier.application.TrustAddressUseCase;
+import net.vaier.application.UntrustAddressUseCase;
 import net.vaier.domain.BlockDecision;
 import net.vaier.domain.SourceAddress;
 import net.vaier.domain.TrustedNetworks;
@@ -36,7 +38,8 @@ import java.util.List;
 @Service
 @Slf4j
 public class SecurityService implements RefreshTrustedNetworksUseCase, GetTrustedNetworksUseCase,
-    GetBlockDecisionsUseCase, LiftBlockUseCase, TrustAddressUseCase {
+    GetBlockDecisionsUseCase, LiftBlockUseCase, TrustAddressUseCase, GetTrustedAddressesUseCase,
+    UntrustAddressUseCase {
 
     @Value("${wireguard.vpn.subnet:10.13.13.0/24}")
     private String vpnSubnet;
@@ -134,5 +137,28 @@ public class SecurityService implements RefreshTrustedNetworksUseCase, GetTruste
         // Trusting alone would leave it blocked until the next CrowdSec restart (PRD §6.26), which Vaier
         // deliberately does not trigger — restarting the edge bouncer is the lockout risk #329 names first.
         address.liftBlock(forLiftingBlocks);
+    }
+
+    // --- GetTrustedAddressesUseCase ---
+
+    /**
+     * The operator's own decisions, straight from the store that holds nothing else (#348). It does not go
+     * through {@link #getTrustedNetworks()} on purpose: that assembles the structural entries too, and the
+     * screen this feeds hangs an untrust verb off every row it draws.
+     */
+    @Override
+    public List<SourceAddress> getTrustedAddresses() {
+        return forPersistingTrustedAddresses.getAll();
+    }
+
+    // --- UntrustAddressUseCase ---
+
+    /**
+     * One effect, unlike its counterpart above: the decision is forgotten, and nobody is blocked. Vaier
+     * never blocks an address, so there is no second half here to mirror {@code trustAddress}'s unban.
+     */
+    @Override
+    public void untrustAddress(String sourceIp) {
+        SourceAddress.of(sourceIp).untrust(forPersistingTrustedAddresses);
     }
 }

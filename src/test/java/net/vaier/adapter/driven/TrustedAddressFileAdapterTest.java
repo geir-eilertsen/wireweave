@@ -76,4 +76,39 @@ class TrustedAddressFileAdapterTest {
 
         assertThat(adapter().getAll()).isEmpty();
     }
+
+    // --- untrusting (#348) ---------------------------------------------------------------------------
+
+    @Test
+    void anUntrustedAddressDoesNotSurviveARestart() {
+        TrustedAddressFileAdapter adapter = adapter();
+        adapter.save(SourceAddress.of("8.8.8.8"));
+        adapter.save(SourceAddress.of("1.1.1.1"));
+
+        adapter.delete(SourceAddress.of("8.8.8.8"));
+
+        assertThat(adapter().getAll()).containsExactly(SourceAddress.of("1.1.1.1"));
+    }
+
+    /**
+     * Idempotent on purpose (#348). Two admins on the same list, or one double-click, must not turn the
+     * second untrust into an error about a decision that has already been carried out — the operator asked
+     * for this address not to be trusted, and it is not trusted.
+     */
+    @Test
+    void untrustingAnAddressThatWasNeverTrustedIsNotAnError() {
+        TrustedAddressFileAdapter adapter = adapter();
+        adapter.save(SourceAddress.of("1.1.1.1"));
+
+        adapter.delete(SourceAddress.of("8.8.8.8"));
+
+        assertThat(adapter.getAll()).containsExactly(SourceAddress.of("1.1.1.1"));
+    }
+
+    @Test
+    void untrustingWithNoFileYetIsNotAnError() {
+        adapter().delete(SourceAddress.of("8.8.8.8"));
+
+        assertThat(adapter().getAll()).isEmpty();
+    }
 }

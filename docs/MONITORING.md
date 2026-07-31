@@ -58,7 +58,7 @@ Pulled something and don't want to wait for tomorrow's sweep? **Check the regist
 
 ## What the edge blocks
 
-Every few minutes Vaier reads which addresses [the edge's CrowdSec bouncer](NETWORKING.md#edge-hardening) is currently turning away, and pushes the whole list, live, to the Explorer's **Security** view — where you can see every current block and lift or permanently trust an address. See [`docs/EXPLORER.md`](EXPLORER.md#security). Each entry reads as a sentence: the address, where CrowdSec places it (`195.178.110.155 (BG · Techoff Srv Limited)`), the scenario that caught it, and how long the block lasts.
+Every few minutes Vaier reads which addresses [the edge's CrowdSec bouncer](NETWORKING.md#edge-hardening) is currently turning away, and pushes the whole list, live, to the Explorer's **Security** view — where you can see every current block, lift it, or trust an address — and see and undo everything you've trusted. See [`docs/EXPLORER.md`](EXPLORER.md#security). Each entry reads as a sentence: the address, where CrowdSec places it (`195.178.110.155 (BG · Techoff Srv Limited)`), the scenario that caught it, and how long the block lasts.
 
 **Almost none of it is emailed to you, on purpose.** The internet scans every address it can reach, all day: probing, WordPress scans, backdoor attempts, bad user agents, crawlers. CrowdSec blocking them is CrowdSec working correctly, and a notification is meant to mean something is wrong or about to go wrong. Mailing each one buried the alerts that matter under alerts nobody can act on, so Vaier stopped. In normal operation the edge is busy and your inbox stays **empty** — the Security view still lists every single block.
 

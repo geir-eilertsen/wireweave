@@ -107,6 +107,35 @@ public final class Cidr {
     }
 
     /**
+     * The network an address sits on, as a CIDR — {@code 192.168.1.10} with a {@code /24} is the network
+     * {@code 192.168.1.0/24}. Null when {@code address} is not a strict IPv4 literal or the prefix is out
+     * of range, so a caller that cannot read a machine's output gets nothing rather than a guess.
+     *
+     * <p>It lives here because it is CIDR arithmetic and this class is where CIDR arithmetic lives — the
+     * difference between "an address on a network" and "the network" is exactly what a
+     * {@code lanCidr} means, and no caller should be re-deriving it with its own bit-masking.
+     */
+    public static String networkOf(String address, int prefixLength) {
+        if (!isIpv4(address) || prefixLength < 0 || prefixLength > 32) {
+            return null;
+        }
+        byte[] octets;
+        try {
+            octets = InetAddress.getByName(address).getAddress();
+        } catch (UnknownHostException e) {
+            return null;
+        }
+        int bits = 0;
+        for (byte octet : octets) {
+            bits = (bits << 8) | (octet & 0xFF);
+        }
+        int mask = prefixLength == 0 ? 0 : (int) (0xFFFFFFFFL << (32 - prefixLength));
+        int network = bits & mask;
+        return ((network >>> 24) & 0xFF) + "." + ((network >>> 16) & 0xFF) + "."
+            + ((network >>> 8) & 0xFF) + "." + (network & 0xFF) + "/" + prefixLength;
+    }
+
+    /**
      * True only for a strict dotted-quad IPv4 literal (no leading zeros, octets 0-255). The
      * single home for "is this string an IP address rather than a hostname / peer name?".
      */

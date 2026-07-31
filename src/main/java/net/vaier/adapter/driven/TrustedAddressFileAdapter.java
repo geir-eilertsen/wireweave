@@ -82,6 +82,15 @@ public class TrustedAddressFileAdapter implements ForPersistingTrustedAddresses 
         writeAll(current);
     }
 
+    @Override
+    public synchronized void delete(SourceAddress address) {
+        List<SourceAddress> current = new ArrayList<>(getAll());
+        // Idempotent, and the early return is the point: an address that was never trusted leaves the file
+        // untouched rather than being rewritten to say the same thing.
+        if (!current.remove(address)) return;
+        writeAll(current);
+    }
+
     /**
      * One YAML row into a {@link SourceAddress}, or null when it will not make one. {@code SourceAddress.of}
      * applies the dotted-quad-only rule; a row written by an older Vaier or by hand that carries anything
