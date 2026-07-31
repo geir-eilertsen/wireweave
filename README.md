@@ -123,6 +123,29 @@ From here: add your machines and publish their services from the **Explorer** �
 
 ---
 
+## Upgrading an existing install
+
+Re-run the same installer in your install directory, then bring the stack up:
+
+```bash
+cd vaier
+curl -fsSL https://raw.githubusercontent.com/getvaier/vaier/main/install.sh | bash
+docker compose up -d
+```
+
+It is safe to re-run: it refreshes the compose file and the assets the stack bind-mounts, leaves your `.env` untouched, and adds any secret a newer release generates but your `.env` predates. Steps 2 and 3 above are already done — there's no DNS record to add and nothing to edit.
+
+That last part is the one that bites. If `docker compose up -d` stops with something like
+
+```
+required variable VAIER_CROWDSEC_BOUNCER_KEY is missing a value:
+not in .env — re-run install.sh to generate it
+```
+
+your `.env` was written before that secret existed. Re-run the installer as above and start again. Compose refuses at config-parse time, before it touches a single container, so a stack that is already running keeps running — and the failure names the variable rather than letting it interpolate to an empty string and bringing the edge up broken.
+
+---
+
 ## Roadmap
 
 The backlog is tracked in [GitHub Issues](https://github.com/getvaier/vaier/issues). Feature specs for planned items are in [`PRD.md`](PRD.md).

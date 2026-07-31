@@ -12,6 +12,12 @@
 #   mkdir -p vaier && cd vaier
 #   curl -fsSL https://raw.githubusercontent.com/getvaier/vaier/main/install.sh | bash
 #
+# Safe to re-run on an existing install, and that is also how you UPGRADE the stack: it refreshes the
+# compose file and the committed assets, leaves .env alone, and tops up any auto-generated secret the
+# .env predates. That last part is not a nicety — a release that adds a secret finds every existing
+# .env without it, and compose now refuses to start rather than interpolate an empty one (see the
+# ${VAIER_..._SECRET:?} guards in docker-compose.yml). Re-running here is what clears that.
+#
 # Override the ref (branch or tag) with VAIER_REF, e.g. VAIER_REF=v1.2.3.
 set -euo pipefail
 
@@ -137,7 +143,9 @@ cat <<EOF
 $(say "Done.")
 Next:
   1. Edit .env       — set your domain, admin email, and OAuth client ids/secrets.
-                       (the two shared secrets above are already generated for you.)
-  2. Point DNS       — vaier.<domain>, oauth2.<domain>, dex.<domain> at this server.
+                       (every auto-generated secret is already filled in for you.)
+  2. Point DNS       — one record, once:  *.<domain>  A  <this server's public IP>
   3. Start the stack — docker compose up -d
+
+Upgrading an existing install? Steps 1 and 2 are already done — just: docker compose up -d
 EOF

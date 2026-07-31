@@ -22,12 +22,16 @@ Configure the providers you want — at least one. The sign-in page offers a but
 - **Google** — create an OAuth 2.0 Web application client in the [Google Cloud console](https://console.cloud.google.com/apis/credentials), set its authorized redirect URI to `https://dex.yourdomain.com/callback`, and put the client id and secret in `.env` as `VAIER_OIDC_GOOGLE_CLIENT_ID` / `VAIER_OIDC_GOOGLE_CLIENT_SECRET`.
 - **GitHub** — register an OAuth App in [GitHub developer settings](https://github.com/settings/developers), set its authorization callback URL to `https://dex.yourdomain.com/callback`, and put the client id and secret in `.env` as `VAIER_OIDC_GITHUB_CLIENT_ID` / `VAIER_OIDC_GITHUB_CLIENT_SECRET`. Any GitHub account may sign in — Vaier's pending → admin-approval gate decides who's actually let in.
 
-Set `VAIER_ADMIN_EMAIL` to the email that should become the first admin. The oauth2-proxy session cookie secret (`VAIER_OAUTH2_COOKIE_SECRET`) and the oauth2-proxy↔Dex shared secret (`VAIER_DEX_CLIENT_SECRET`) are **generated for you by `install.sh`** into `.env` — you don't author them. If you ever hand-write `.env` without them, generate them yourself, or Dex won't start:
+Set `VAIER_ADMIN_EMAIL` to the email that should become the first admin. Three secrets are **generated for you by `install.sh`** into `.env` — you don't author any of them: the oauth2-proxy session cookie secret (`VAIER_OAUTH2_COOKIE_SECRET`), the oauth2-proxy↔Dex shared secret (`VAIER_DEX_CLIENT_SECRET`), and the CrowdSec bouncer API key (`VAIER_CROWDSEC_BOUNCER_KEY`).
+
+If you hand-write `.env`, generate all three — a missing one now stops `docker compose` at config-parse time with a message naming the variable, rather than starting the stack in a broken state. That guard matters most for the bouncer key: its forward-auth sits ahead of every other middleware and fails closed, so an empty value takes down *every* route, console included — not just the service it belongs to.
 
 ```bash
-printf 'VAIER_DEX_CLIENT_SECRET=%s\nVAIER_OAUTH2_COOKIE_SECRET=%s\n' \
-  "$(openssl rand -hex 32)" "$(openssl rand -base64 32)" >> .env
+printf 'VAIER_DEX_CLIENT_SECRET=%s\nVAIER_OAUTH2_COOKIE_SECRET=%s\nVAIER_CROWDSEC_BOUNCER_KEY=%s\n' \
+  "$(openssl rand -hex 32)" "$(openssl rand -base64 32)" "$(openssl rand -hex 32)" >> .env
 ```
+
+Re-running `install.sh` in place does the same thing and is the simpler answer — it tops up whatever your `.env` is missing and never overwrites a value you set.
 
 Once `docker compose ps` shows every service as `Up`, open `https://vaier.yourdomain.com` and sign in with the account you set as `VAIER_ADMIN_EMAIL`. Vaier seeds that identity as the first admin, so you land straight in the console.
 

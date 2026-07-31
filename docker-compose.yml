@@ -412,7 +412,7 @@ services:
     mem_limit: 256m
     environment:
       COLLECTIONS: crowdsecurity/traefik
-      BOUNCER_KEY_vaier: ${VAIER_CROWDSEC_BOUNCER_KEY:-}
+      BOUNCER_KEY_vaier: ${VAIER_CROWDSEC_BOUNCER_KEY:?not in .env — re-run install.sh to generate it (it only appends what is missing and never overwrites a value you set)}
     volumes:
       - ./crowdsec/config:/etc/crowdsec
       - ./crowdsec/data:/var/lib/crowdsec/data
@@ -440,7 +440,7 @@ services:
     container_name: crowdsec-bouncer
     mem_limit: 64m
     environment:
-      CROWDSEC_BOUNCER_API_KEY: ${VAIER_CROWDSEC_BOUNCER_KEY:-}
+      CROWDSEC_BOUNCER_API_KEY: ${VAIER_CROWDSEC_BOUNCER_KEY:?not in .env — re-run install.sh to generate it (it only appends what is missing and never overwrites a value you set)}
       CROWDSEC_AGENT_HOST: crowdsec:8080
     depends_on:
       - crowdsec
@@ -774,7 +774,7 @@ services:
     container_name: oauth2-proxy-init
     environment:
       - VAIER_DOMAIN=${VAIER_DOMAIN:-}
-      - VAIER_DEX_CLIENT_SECRET=${VAIER_DEX_CLIENT_SECRET:-}
+      - VAIER_DEX_CLIENT_SECRET=${VAIER_DEX_CLIENT_SECRET:?not in .env — re-run install.sh to generate it (it only appends what is missing and never overwrites a value you set)}
       # Same four provider variables dex-init reads, applied by the same rule (both id and secret
       # non-empty) — see the sign-in render below.
       - VAIER_OIDC_GOOGLE_CLIENT_ID=${VAIER_OIDC_GOOGLE_CLIENT_ID:-}
@@ -887,7 +887,7 @@ services:
     mem_limit: 96m
     command:
       # Flags kept as flags — not covered by alpha config, or conflicting with it.
-      - --cookie-secret=${VAIER_OAUTH2_COOKIE_SECRET}
+      - --cookie-secret=${VAIER_OAUTH2_COOKIE_SECRET:?not in .env — re-run install.sh to generate it (it only appends what is missing and never overwrites a value you set)}
       - --cookie-domain=.${VAIER_DOMAIN}
       - --cookie-secure=true
       # Lax SameSite: defence-in-depth against cross-site use of the auth cookie (e.g. a WebSocket
@@ -947,7 +947,7 @@ services:
       - VAIER_OIDC_GOOGLE_CLIENT_SECRET=${VAIER_OIDC_GOOGLE_CLIENT_SECRET:-}
       - VAIER_OIDC_GITHUB_CLIENT_ID=${VAIER_OIDC_GITHUB_CLIENT_ID:-}
       - VAIER_OIDC_GITHUB_CLIENT_SECRET=${VAIER_OIDC_GITHUB_CLIENT_SECRET:-}
-      - VAIER_DEX_CLIENT_SECRET=${VAIER_DEX_CLIENT_SECRET:-}
+      - VAIER_DEX_CLIENT_SECRET=${VAIER_DEX_CLIENT_SECRET:?not in .env — re-run install.sh to generate it (it only appends what is missing and never overwrites a value you set)}
     command:
       - sh
       - -c
