@@ -15,6 +15,7 @@ import net.vaier.application.GetVaierServerUseCase;
 import net.vaier.application.SetDiskWatchUseCase;
 import net.vaier.application.SetMachineSshAccessUseCase;
 import net.vaier.domain.BackupFleet;
+import net.vaier.domain.EffectiveUser;
 import net.vaier.domain.HostCredentialView;
 import net.vaier.domain.Machine;
 import net.vaier.domain.MachineId;
@@ -35,6 +36,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/machines")
@@ -67,6 +69,12 @@ public class MachineRestController {
      * of the live signal: the {@code ssh-server-presence-changed} event on the {@code vpn-peers} SSE stream
      * carries deltas after the page is open, but a fresh load has no deltas to have received, so the list
      * itself must carry the current state.
+     *
+     * <p>Each also carries {@code effectiveUsername} and {@code effectiveUserPrivileged} (#346) — the user
+     * Vaier acts as there, and whether that user is privileged; the username is null where no credential is
+     * stored. It costs no new SSH round trip: the credential's username <em>is</em> the effective user, so
+     * the very lookup that answers {@code hasCredential} answers this too, and {@link EffectiveUser} owns
+     * the privilege decision so nothing downstream re-derives it from the string "root".
      */
     @GetMapping
     public List<MachineResponse> list() {
@@ -81,8 +89,17 @@ public class MachineRestController {
         // view because one machine could not be labelled is much the worse failure of the two.
         MachineId vaierServer = resolveVaierServerId();
         return getMachinesUseCase.getAllMachines().stream()
-            .map(m -> MachineResponse.from(m, hasStoredCredential(m.id()), m.id().equals(vaierServer),
-                getSshServerPresenceUseCase.getSshServerPresence(m.id())))
+            .map(m -> {
+                // One credential lookup per machine, answering both questions it can answer: whether a
+                // login is held at all, and which user that login makes Vaier on this machine. Asking
+                // twice would re-read the vault off disk for an answer already in hand.
+                Optional<HostCredentialView> credential = getHostCredentialUseCase.getHostCredential(m.id());
+                return MachineResponse.from(m,
+                    hasStoredCredential(credential),
+                    m.id().equals(vaierServer),
+                    getSshServerPresenceUseCase.getSshServerPresence(m.id()),
+                    credential.map(HostCredentialView::username).map(EffectiveUser::of).orElse(null));
+            })
             .toList();
     }
 
@@ -99,9 +116,16 @@ public class MachineRestController {
 
     /** Whether a host SSH credential with a secret is stored for this machine. */
     private boolean hasStoredCredential(MachineId machineId) {
-        return getHostCredentialUseCase.getHostCredential(machineId)
-            .map(HostCredentialView::hasSecret)
-            .orElse(false);
+        return hasStoredCredential(getHostCredentialUseCase.getHostCredential(machineId));
+    }
+
+    /**
+     * The same question asked of a credential already in hand — so {@code list()}, which needs the
+     * credential anyway for the effective user, does not re-read the vault just to re-ask it. One
+     * definition of "Vaier holds a usable login here"; two would be free to drift.
+     */
+    private static boolean hasStoredCredential(Optional<HostCredentialView> credential) {
+        return credential.map(HostCredentialView::hasSecret).orElse(false);
     }
 
     /**
@@ -274,7 +298,9 @@ public class MachineRestController {
         boolean sshAccess,
         boolean hasCredential,
         boolean vaierServer,
-        SshServerPresence sshServerPresence
+        SshServerPresence sshServerPresence,
+        String effectiveUsername,
+        boolean effectiveUserPrivileged
     ) {
         static MachineResponse from(Machine m, boolean hasCredential) {
             return from(m, hasCredential, false, SshServerPresence.UNKNOWN);
@@ -282,6 +308,16 @@ public class MachineRestController {
 
         static MachineResponse from(Machine m, boolean hasCredential, boolean vaierServer,
                                     SshServerPresence sshServerPresence) {
+            return from(m, hasCredential, vaierServer, sshServerPresence, null);
+        }
+
+        /**
+         * @param effectiveUser the user Vaier acts as on this machine, or null when it holds no login for
+         *                      it. Flattened onto the response: the decision travels as a boolean the
+         *                      browser reads, never as a name it re-judges.
+         */
+        static MachineResponse from(Machine m, boolean hasCredential, boolean vaierServer,
+                                    SshServerPresence sshServerPresence, EffectiveUser effectiveUser) {
             return new MachineResponse(
                 m.id().value(),
                 m.name(),
@@ -301,7 +337,9 @@ public class MachineRestController {
                 m.effectiveSshAccess(),
                 hasCredential,
                 vaierServer,
-                sshServerPresence
+                sshServerPresence,
+                effectiveUser == null ? null : effectiveUser.username(),
+                effectiveUser != null && effectiveUser.privileged()
             );
         }
     }

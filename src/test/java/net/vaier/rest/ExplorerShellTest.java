@@ -1715,4 +1715,80 @@ class ExplorerShellTest {
             .as("the ping's animation is disabled under prefers-reduced-motion")
             .contains("prefers-reduced-motion");
     }
+
+    // --- the effective user, and the pin that refuses (#346, #345) -------------------------------------
+
+    @Test
+    void theBrowserNeverDecidesWhoIsPrivileged_itIsTold() throws IOException {
+        // The whole point of domain.EffectiveUser: "is this user privileged?" is one judgement, made once,
+        // with its limits documented. A second copy in the browser — comparing a username to "root" — would
+        // be a second answer free to drift from the first, and it is exactly the shape this replaced.
+        String js = read("explorer-shell.js");
+        assertThat(js).contains("m.effectiveUserPrivileged");
+        assertThat(js)
+            .as("privilege arrives decided; the shell must not re-derive it from a username")
+            .doesNotContain("effectiveUsername === 'root'")
+            .doesNotContain("username === 'root'");
+    }
+
+    @Test
+    void aRootMachineSaysSoOnItsCardAndInItsInspector() throws IOException {
+        // Acceptance criteria 1 and 2 of #346: the machine states which user Vaier acts as, and the fleet
+        // can be read for "where am I root?" without opening every machine.
+        String js = read("explorer-shell.js");
+        assertThat(js).contains("'Vaier acts as ' + m.effectiveUsername");
+        assertThat(js).contains("rootTag(m.effectiveUsername)");
+        // The copy names the user the backend sent; it never asserts the word "root" on its own account,
+        // because EffectiveUser reserves the right to widen what counts as privileged.
+        assertThat(js).doesNotContain("Vaier acts as root");
+        assertThat(read("explorer-shell.css")).contains(".ex-card-root {");
+    }
+
+    @Test
+    void clearPinnedKeyIsOfferedOnlyWhereTheKeyWasActuallyRefused() throws IOException {
+        // Acceptance criterion 4 of #345. A pin that can be cleared from a machine's page on an ordinary day
+        // is a pin that gets cleared out of habit — which is the failure the pin exists to prevent. So the
+        // verb hangs off the error state a real mismatch produces, and nothing else raises it.
+        String js = read("explorer-shell.js");
+        assertThat(js).contains("if (held.errorCode !== 'HOST_KEY_MISMATCH') return;");
+        assertThat(js).contains("'Clear pinned key'");
+        // ...and the failure has to reach the browser as a code, not as a sentence to be pattern-matched.
+        assertThat(read("explorer-listing.js")).contains("errorCode: err && err.code");
+    }
+
+    @Test
+    void clearingAPinIsAnInformedAssertion_notAConfirm() throws IOException {
+        // A changed host key means either "you rebuilt this machine" or "something is impersonating it".
+        // The dialog states both, shows the two fingerprints so the assertion is informed, and stays
+        // disabled until the operator types the machine's name — the thing only they can assert.
+        String js = read("explorer-shell.js");
+        assertThat(js).contains("or something is impersonating it");
+        assertThat(js).contains("[['Pinned', prints.pinned], ['Now offered', prints.presented]]");
+        assertThat(js).contains("const armed = () => input.value === machineName;");
+        // And the machine is never left unpinned — the dialog says what happens next.
+        assertThat(js).contains("pins the ");
+        assertThat(js).contains("so it is never left unpinned");
+    }
+
+    @Test
+    void theTerminalOffersTheSameRemedy_armedInTwoSteps() throws IOException {
+        // The pop-out has no dialog primitives and should not grow a modal for one verb — but this verb
+        // must not be a reflex either. Arming in place is the assertion, made where the refusal is read.
+        String tw = read("terminal-window.js");
+        assertThat(tw).contains("} else if (ev.code === CLOSE_HOST_KEY_MISMATCH) {");
+        assertThat(tw).contains("armedLabel: 'Confirm — I changed this machine'");
+        assertThat(tw).contains("/host-key',\n                { method: 'DELETE' });");
+        // Cleared, then reconnect — the operator is told the way back, not left at a dead end.
+        assertThat(tw).contains("Reconnect to pin the key it presents now.");
+    }
+
+    @Test
+    void theRefusalSentenceStaysOneSentence() throws IOException {
+        // It already exists in three places (TerminalWebSocketHandler, terminal-window.js and the domain
+        // exception). Adding a fourth wording would leave the operator reading two different accounts of
+        // the same refusal depending on which door they came through.
+        assertThat(read("terminal-window.js"))
+            .contains("The host key changed and was refused. "
+                + "If you rebuilt this host, clear its pinned key and reconnect.");
+    }
 }

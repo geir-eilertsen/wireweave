@@ -309,6 +309,9 @@ These pairs come up often. Use the left, never the right.
 | Vaier server | local, local host, this host (when referring to the machine running the stack) |
 | operator | admin (means a role), user (means an access entry) |
 | configured administrator | initial admin, default user, bootstrap admin |
+| effective user | ssh user, login user, credential user (all name the same login; the concept has one name) |
+| privileged | superuser, elevated, sudo (sudo is a different thing and is never what this means) |
+| clear pinned key | reset the host key, forget the host, re-trust |
 | latest handshake | last seen (UI label only — derived from this) |
 | endpoint IP | public IP (peer's public IP, not the Vaier server's) |
 | public host | server hostname, our IP |
@@ -360,6 +363,8 @@ is delegated to an external **identity provider**; Vaier owns **authorization** 
 | Term | Definition |
 |------|------------|
 | **Host credential** | The single SSH login Vaier holds for a machine: a username, an **auth method** (password or private key), the secret material, and an optional key passphrase. Exactly one per machine. |
+| **Effective user** | The user Vaier acts as on a machine: the login name in that machine's **host credential**. It is that machine's blast radius — every file Vaier lists, transfers, writes or deletes over SFTP, and every borg read a **backup run** takes, happens as this user and reaches exactly what this user can reach. A machine with no host credential has no effective user. |
+| **Privileged** | Said of an **effective user** that is `root`, and of the machine Vaier acts as `root` on. Judged from the login name alone: a second account with uid 0 under another name is not privileged here, and neither is a user holding passwordless `sudo`, because Vaier's own file operations never go through sudo. |
 | **Credential vault** | The encrypted-at-rest store for host credentials. Secret material is sealed with a symmetric cipher before it is written to disk and never leaves the process in the clear. |
 | **Credential test** | Trying a **host credential** against a machine's address to prove it works before it is stored — the green-check an operator hits while **adopting** a machine that is still only a discovered candidate. Addressed by host and port (not by machine name, since the machine may not exist yet), it opens one throwaway SSH connection and reports only whether the host was reachable, whether the credential authenticated, and the host-key fingerprint the host presented — never the secret. It persists nothing: no credential is stored and no **host-key pin** is recorded. A reachable-but-rejected result and an unreachable host are ordinary outcomes, not errors. |
 | **Web terminal** | A live, in-browser SSH shell to a machine, opened from the machine's **SSH access** section in the **Explorer** (its **Open shell** button) into its own pop-out window — not from a tree entry, and not into an embedded dock. Vaier authenticates server-side from the credential vault; the browser only exchanges keystrokes and screen output, never the secret. |
@@ -377,7 +382,9 @@ is delegated to an external **identity provider**; Vaier owns **authorization** 
 | **Remote command** | One non-interactive command Vaier runs on a machine over SSH to read a result back in code — as opposed to the **web terminal**, which streams an interactive shell for a human. It uses the same host credential and **host-key pin**, opens a short-lived exec channel (not a PTY), and is bounded by a run timeout and an output cap so it can neither hang nor exhaust memory. The mechanism the alerting pipeline uses to sense hosts behind the VPN. |
 | **Command result** | The outcome of a **remote command**: the process exit code (or unknown when it timed out or the server sent none), the captured stdout and stderr, whether it timed out, and the host-key fingerprint the server presented (so a remote command can pin an unpinned host on first use, like the **web terminal**). A non-zero exit code is a normal result the caller inspects, not an error. |
 | **SSH address** | Where Vaier opens the SSH connection for a machine: a VPN peer's tunnel IP, a LAN server's LAN address, or — for the Vaier server host — the container's gateway host IP (or `VAIER_HOST_SSH_ADDRESS`). |
-| **Host-key pin** | The SSH host-key fingerprint Vaier records for a machine on first connect (trust-on-first-use). A later connect that presents a different fingerprint is refused as a **host-key mismatch**; clearing the pin lets a legitimately rebuilt host be re-pinned. |
+| **Host-key pin** | The SSH host-key fingerprint Vaier records for a machine on first connect (trust-on-first-use). Every SSH channel Vaier opens to that machine — the **web terminal**, a **remote command**, the **Explorer**'s SFTP reads — is verified against it. |
+| **Host-key mismatch** | A machine presenting a different SSH host key than its **host-key pin**, which Vaier refuses to connect through. It means one of two things and cannot tell them apart: the machine was rebuilt, reinstalled or given a new SSH server, or something is impersonating it — and the pin exists for the second. |
+| **Clear pinned key** | Discarding a machine's **host-key pin**, so the next connect pins whatever key the machine presents and the machine is never left unpinned. The operator's assertion that a **host-key mismatch** is their own rebuilt machine, which is the one thing only they can know; it is offered where a refusal was met, never as routine machine upkeep. |
 
 ---
 
@@ -436,7 +443,7 @@ is delegated to an external **identity provider**; Vaier owns **authorization** 
 | **Viewable** | Said of a file Vaier will hand to the browser to display rather than only to save. Decided by the file's extension against a fixed allowlist — images, PDFs, common audio and video, and text-ish files, which are all displayed as plain text. A directory is never viewable, and neither is markup a browser can run script from (HTML, SVG and their relatives), because a displayed file is served from Vaier's own origin with the operator's session in reach. |
 | **Open** | Displaying a **viewable** file in the operator's browser, in a new tab — the Explorer's second destination for a file's bytes, alongside **download**. A read, so it is allowed from the past (an **archive**) as well as the present. Never replaces **download**: every file can still be saved, viewable or not, and a file that is not viewable can only be saved. |
 | **Restore** | Putting an archived file back onto its own live **path** — a **Transfer** whose source is a machine's past (a **mounted archive**) and whose destination is that same machine's present. Not an operation of its own, but the past-to-present case of a Transfer. |
-| **Delete** | Removing a file or directory from a machine's live filesystem in the **Explorer**; a directory is removed with everything inside it. Present-only and destructive: there is no point-in-time to delete, because a machine's past (an **archive**) is read-only by construction. A machine's **SFTP root** — its whole browsable tree — is never deletable. |
+| **Delete** | Removing a file or directory from a machine's live filesystem in the **Explorer**; a directory is removed with everything inside it. Present-only and destructive: there is no point-in-time to delete, because a machine's past (an **archive**) is read-only by construction. It removes what the machine's **effective user** can remove, so the same action reaches further on a machine where that user is **privileged**. A machine's **SFTP root** — its whole browsable tree — is never deletable. |
 
 ---
 

@@ -612,6 +612,14 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 }
 .ex-card-name.is-word { font-family: inherit; }
 .ex-card-note { font-size: 13px; color: var(--text-dim); }
+/* "Vaier is root here" (#346), on the fleet card so the question "where am I root?" is answered without
+   opening every machine. Amber rather than red: it is a consequence to know about, not a fault. */
+.ex-card-root {
+    display: inline-block; margin-left: 7px; padding: 0 5px; border-radius: var(--radius-1);
+    font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: .02em;
+    color: var(--yellow); background: rgba(220, 220, 170, .1);
+    border: 1px solid rgba(220, 220, 170, .32);
+}
 
 .ex-kv {
     display: grid;
@@ -1012,6 +1020,13 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 .ex-dialog-title { font-family: var(--display); font-size: 1.06rem; font-weight: 600; color: var(--text); margin-bottom: 10px; }
 .ex-dialog-body { font-size: 14px; line-height: 1.5; color: var(--text-muted); white-space: pre-wrap; margin-bottom: 14px; }
 .ex-dialog-body b, .ex-dialog-coord { font-family: var(--mono); color: var(--text); }
+/* The two host-key fingerprints in the Clear-pinned-key dialog. They are read character by character, so
+   they take the dialog's full width with the label above rather than beside: the pane's 128px label column
+   would squeeze a 50-character fingerprint into three arbitrary wraps, which is precisely what a
+   comparison the operator is being asked to make cannot survive. Stacked, the two align for scanning. */
+.ex-dialog .ex-kv { grid-template-columns: minmax(0, 1fr); gap: 2px; margin-bottom: 16px; }
+.ex-dialog .ex-kv dt { font-size: 12px; }
+.ex-dialog .ex-kv dd { font-size: 13px; margin-bottom: 8px; }
 .ex-dialog-input {
     width: 100%;
     margin-bottom: 18px;

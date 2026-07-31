@@ -44,6 +44,7 @@ import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -169,6 +170,61 @@ class MachineRestControllerTest {
 
         assertThat(response).extracting("name", "hasCredential")
             .containsExactly(tuple("nas", true), tuple("printer", false));
+    }
+
+    @Test
+    void list_reportsTheEffectiveUserVaierActsAsPerMachine() {
+        // #346. The credential's username IS the user Vaier acts as, and it is already stored — so this
+        // costs no new SSH round trip. The DietPi box logs in as root (delete there can remove something
+        // the machine needs to boot); the Ubuntu one logs in as an ordinary account. Same tree, same
+        // buttons, two completely different blast radii, and until now nothing said which was which.
+        when(getMachinesUseCase.getAllMachines()).thenReturn(List.of(
+            new Machine(mid("dietpi"), "dietpi", MachineType.LAN_SERVER,
+                null, null, null, null, null, null, null,
+                "192.168.3.0/24", "192.168.3.60", false, null, DeviceCategory.SERVER, null),
+            new Machine(mid("ubuntu"), "ubuntu", MachineType.UBUNTU_SERVER,
+                null, null, null, null, null, null, null,
+                null, null, false, null, DeviceCategory.SERVER, null)
+        ));
+        when(getHostCredentialUseCase.getHostCredential(mid("dietpi"))).thenReturn(
+            Optional.of(new HostCredentialView(mid("dietpi"), "root", AuthMethod.PASSWORD, true)));
+        when(getHostCredentialUseCase.getHostCredential(mid("ubuntu"))).thenReturn(
+            Optional.of(new HostCredentialView(mid("ubuntu"), "geir", AuthMethod.PRIVATE_KEY, true)));
+
+        var response = controller.list();
+
+        assertThat(response).extracting("effectiveUsername", "effectiveUserPrivileged")
+            .containsExactly(tuple("root", true), tuple("geir", false));
+    }
+
+    @Test
+    void list_effectiveUserIsNullWhenNoCredentialIsStored() {
+        // Nothing to act as: Vaier holds no login here, so it must not invent an unprivileged-looking one.
+        when(getMachinesUseCase.getAllMachines()).thenReturn(List.of(
+            new Machine(mid("printer"), "printer", MachineType.LAN_SERVER,
+                null, null, null, null, null, null, null,
+                "192.168.3.0/24", "192.168.3.20", false, null, DeviceCategory.PRINTER, null)
+        ));
+
+        assertThat(controller.list().get(0).effectiveUsername()).isNull();
+        assertThat(controller.list().get(0).effectiveUserPrivileged()).isFalse();
+    }
+
+    @Test
+    void list_readsEachMachinesCredentialExactlyOnce() {
+        // hasCredential and the effective user come out of the same lookup — the credential vault is read
+        // from disk, and reading it twice per machine per fleet load is a cost with nothing to buy it.
+        when(getMachinesUseCase.getAllMachines()).thenReturn(List.of(
+            new Machine(mid("nas"), "nas", MachineType.LAN_SERVER,
+                null, null, null, null, null, null, null,
+                "192.168.3.0/24", "192.168.3.50", true, 2375, DeviceCategory.NAS, null)
+        ));
+        when(getHostCredentialUseCase.getHostCredential(mid("nas"))).thenReturn(
+            Optional.of(new HostCredentialView(mid("nas"), "root", AuthMethod.PASSWORD, true)));
+
+        controller.list();
+
+        verify(getHostCredentialUseCase, times(1)).getHostCredential(mid("nas"));
     }
 
     @Test

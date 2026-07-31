@@ -40,6 +40,9 @@ body.tw {
 }
 .tw-status.error { color: var(--red); }
 .tw-status-btn { margin-left: 6px; }
+/* Armed: the button has been clicked once and now states what the second click asserts. It changes colour
+   because it has changed meaning — the first click was "show me", the second one clears a security pin. */
+.tw-status-btn.is-armed { color: var(--red); border-color: var(--red); }
 
 .tw-actions { flex: none; display: flex; gap: 8px; }
 .tw-btn {

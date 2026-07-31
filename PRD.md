@@ -867,7 +867,8 @@ chain). Address selection (tunnel IP for peers, `lanAddress` for LAN servers) is
   `ForOpeningSshSessions` (adapter `MinaSshSessionAdapter`, Apache MINA sshd-core 2.15.0 — JSch is
   unmaintained). Host-key **trust-on-first-use**: `ForTrackingHostKeys` (`ssh-known-hosts.yml`) pins a
   fingerprint on first connect and the domain `HostKeyTrust` decision refuses a later mismatch
-  (`HostKeyMismatchException`); `DELETE /machines/{name}/host-key` clears a pin. The WebSocket relays
+  (`HostKeyMismatchException`); `DELETE /machines/{name}/host-key` clears a pin (now `{machineId}` — §6.22;
+  it had no caller in the UI until §6.31). The WebSocket relays
   keystrokes (binary) and resize (JSON control) to the shell and streams output back, closing with a
   distinct code per failure (no credential / auth / host-key mismatch / not found / connect). The path
   is non-whitelisted, so the oauth2 forward-auth runs on the upgrade (Traefik passes WebSockets through
@@ -1226,7 +1227,8 @@ job**'s source paths against the tree and would have reported a backed-up direct
   → **`502`** `ApiError(code=HOST_KEY_MISMATCH)` carrying the domain's own message, which names the machine,
   both fingerprints and the way out. No frontend change was needed: `explorer-listing.js` already passes the
   envelope's `message` through verbatim, so the new sentences reach the rail's hover title and the Inspector on
-  their own.
+  their own. *(Extended by §6.31: the handler now also fills `detail` with the two fingerprints as data, and
+  the Explorer grew the action the message had only been naming.)*
 - **A refused SSH connect now says exactly that ✅ (2026-07-29, #344).** Uninstalling a machine's SSH server
   entirely reads as a plain `SshConnectException` ("Connection refused") unless the domain is asked — the
   same shape as a network fault, which sends the operator hunting for one that is not there. Found live on
@@ -2716,6 +2718,100 @@ SSE payload, the Map and every frontend file are unchanged: they show every deci
 **Backlog.** If the silent default ever proves wrong for a scenario the operator cares about, the
 answer is a per-scenario override in Settings, not a looser word list — the word list is meant to be
 readable, and readability is the thing an accreting regex loses first.
+
+---
+
+### 6.30 Vaier says which user it acts as on a machine ✅ (implemented 2026-07-31, closes [#346](https://github.com/getvaier/vaier/issues/346))
+
+**The problem.** Vaier reaches every machine as the SSH user in its **host credential**, and that user's
+privilege is not uniform across the fleet: the DietPi boxes arrive logging in as `root`, the Ubuntu ones as an
+ordinary account. Nothing said so anywhere. Same file tree, same **Delete** button, two completely different
+blast radii — on one machine a delete removes a file you did not want, on the other it can remove a file the
+machine needs to boot; and on the unprivileged ones a **backup run** silently skips whatever the login cannot
+read (§6.19's "Back up as root" is the same fact met from the other end). Nobody *chose* root on the DietPi
+boxes; it arrived with the image, which is exactly why naming it is the first step to deciding whether it
+stays.
+
+**`domain.EffectiveUser` — one judgement, made once.** A record of `(username, privileged)` with a single
+factory `of(username)`; a blank or null login yields `null`, which is what "Vaier holds no credential here"
+looks like. It judges by the **login name Vaier connects with**, because that name is what fixes the blast
+radius of everything Vaier does over SFTP on that machine. The javadoc is deliberately explicit about what the
+judgement is *not*: it does **not** claim to detect a uid-0 alias under another name (a second account with
+uid 0 reads as unprivileged), and it claims **nothing about sudo** — a non-root user with passwordless sudo is
+still unprivileged for Vaier's own file operations, which never go through sudo. That is the honest answer to
+the question actually being asked, and it costs **no new SSH round trip**: the credential's username *is* the
+effective user and is already stored. Whitespace is trimmed; case is significant, because `Root` is a
+different Linux account and Vaier must not claim it is uid 0.
+
+**The feed.** `GET /machines` carries `effectiveUsername` (null when no credential is stored) and
+`effectiveUserPrivileged`. The list already asked the credential store one question per machine
+(`hasCredential`); it now asks **once** and answers both from the same `HostCredentialView` rather than
+re-reading the vault off disk for something already in hand. The boolean travels decided — nothing downstream
+re-derives privilege by comparing a string to `"root"`, and `ExplorerShellTest` asserts the browser contains
+no such comparison, because a second copy of the judgement is a second answer free to drift from the first.
+
+**Three surfaces, each answering a different question.**
+- The machine **Inspector**'s **SSH access** section states it in a sentence: *"Vaier acts as root on X.
+  Everything Vaier does here — reading, writing and deleting — runs unrestricted."* / *"Vaier acts as geir on
+  X. It reaches exactly what that user can reach, and nothing else."* The root form takes the warning
+  treatment.
+- The **fleet card** carries a small `root` tag (`.ex-card-root`, amber — a consequence to know about, not a
+  fault), so *"where am I root?"* is readable at a glance without opening every machine. A tag rather than a
+  third clause on the note line, which already carries a type and an address and would swallow it.
+- The **delete confirmation** gains a sentence on a privileged machine — *"Vaier is root on X, so this can
+  remove something the machine needs to run."* — beside the existing type-the-machine-name gate. The same
+  button means two different things depending on which machine you are standing on; the gate now says which.
+
+**Backlog.** The obvious next question is the one this deliberately does not answer: *should* Vaier be root
+there? A per-machine "act as this user instead" (or a warning when a machine's credential is root and does not
+need to be) is a real feature, but it is a change to what Vaier *does*, not to what it *says*, and stating the
+fact has to come first. Detecting a uid-0 alias, or probing `sudo -n`, would each cost an SSH round trip for
+an answer that does not change Vaier's own file operations — out of scope until something needs it.
+
+---
+
+### 6.31 A refused host key gets its remedy ✅ (implemented 2026-07-31, closes [#345](https://github.com/getvaier/vaier/issues/345))
+
+**The problem.** When a machine's SSH host key changes, Vaier refuses to connect on a **host-key mismatch**
+and *names* the way out — "clear its pinned key and reconnect" — in the terminal window, in the rail, and in
+the Inspector. Nothing in the UI cleared a pin. `DELETE /machines/{machineId}/host-key` had existed since
+§6.18 with **no caller**, so the only route out of a refusal was an API client: an instruction the product
+gives and cannot carry out.
+
+**The fingerprints travel as data.** `GlobalExceptionHandler.handleHostKeyMismatch` now fills the previously
+unused `ApiError.detail` slot with `pinned=<fp>;presented=<fp>`. The message already states both, but it
+states them inside a sentence written for a person, and the confirmation has to *show* them side by side; a
+client recovering them by parsing prose would break the first time the wording changed. Both are public
+host-key fingerprints, safe to hand an authenticated operator.
+
+**Offered only where the refusal was met.** `failureNote(...)` paints a failed Files or Disk read — the
+server's own sentence verbatim, as before — and adds **Clear pinned key** only when the envelope's code is
+`HOST_KEY_MISMATCH`. It is never routine machine maintenance on a machine's page: a pin that can be cleared on
+any ordinary day is a pin that gets cleared out of habit, which is precisely the failure the pin exists to
+prevent. `explorer-listing.js` and the disk read now carry `errorCode`/`errorDetail` alongside the message so
+the caller can tell that one failure from the others **without reading the prose**.
+
+**The confirmation is the feature.** A changed host key has two causes — a machine you rebuilt, and a machine
+somebody is impersonating — and the pin exists for the second, so this is not an "are you sure". The dialog
+names the machine, states both causes plainly, shows **Pinned** and **Now offered** as a monospace pair, and
+stays disabled until the operator types the machine's name: the assertion *"I changed this machine"* is the
+one thing only they can make. It also says what happens next — Vaier pins the new key on the next connect — so
+nobody is left believing they have turned host-key checking off. On success the cached failures for that
+machine (its disk read, its errored directory entries) are dropped so the retry is a real one, and the fleet
+reloads.
+
+**The pop-out terminal, without a modal.** `terminal-window.js` meets the same refusal as WebSocket close code
+`4403`. It has no dialog primitives and should not grow a modal for one verb, so `setStatus` gained an
+`action`: a status button that **arms on first click**, re-labelling itself *"Confirm — I changed this
+machine"* and turning red because it has changed meaning, and performs the `DELETE` on the second. Success
+re-labels the status with Reconnect, which re-pins on first use. The refusal sentence itself stays **one**
+sentence across `TerminalWebSocketHandler`, `terminal-window.js` and the domain exception — a fourth wording
+would leave the operator reading two accounts of the same event depending on which door they came through.
+
+**Backlog.** Vaier could offer to *verify* the new key rather than only accept it (showing where else on the
+fleet that fingerprint appears, or checking it against a key read over an already-trusted channel, as
+**backup host-key pinning** does for the borg server). Until then the operator's own knowledge is the only
+evidence, and the dialog is built to ask for it honestly rather than to look reassuring.
 
 ---
 

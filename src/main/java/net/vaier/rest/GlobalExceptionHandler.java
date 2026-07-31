@@ -197,11 +197,18 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
      * through the catch-all instead, hiding a refusal that is either a rebuilt host or a man in the middle
      * behind a generic {@code 500}. {@code 502}, like the other far-side refusals, carrying the domain's own
      * message: it names the machine, both fingerprints and the way out (clear the pin and reconnect).
+     *
+     * <p>The fingerprints also travel in {@code detail} as data (#345). The message states them, but it
+     * states them inside a sentence written for a person — and the <b>Clear pinned key</b> dialog has to
+     * <em>show</em> both, side by side, so the operator asserting "I changed this machine" is asserting
+     * something informed. A client that had to recover them by parsing prose would break the first time
+     * the wording changed. Both are public host-key fingerprints, safe to hand an authenticated operator.
      */
     @ExceptionHandler(HostKeyMismatchException.class)
     public ResponseEntity<ApiError> handleHostKeyMismatch(HostKeyMismatchException e) {
         return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
-                .body(ApiError.of("HOST_KEY_MISMATCH", e.getMessage()));
+                .body(ApiError.of("HOST_KEY_MISMATCH", e.getMessage(),
+                        "pinned=" + e.getPinnedFingerprint() + ";presented=" + e.getPresentedFingerprint()));
     }
 
     /**

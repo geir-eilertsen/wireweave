@@ -53,7 +53,8 @@
         4408: 'Could not reach the host (connection refused or timed out).',
         4500: 'The terminal failed to open. Check the Vaier logs.',
     };
-    const PERMANENT = new Set([1000, 4401, 4402, 4403, 4404]);
+    const CLOSE_HOST_KEY_MISMATCH = 4403;
+    const PERMANENT = new Set([1000, 4401, 4402, CLOSE_HOST_KEY_MISMATCH, 4404]);
     const MAX_RECONNECTS = 8;
 
     function monoFontStack() {
@@ -192,6 +193,14 @@
                 state.reconnectTimer = setTimeout(() => { if (!state.ended) connect(); }, delay);
             } else if (!PERMANENT.has(ev.code)) {
                 setStatus('Connection lost. The host did not come back.', true, () => { state.retries = 0; connect(); });
+            } else if (ev.code === CLOSE_HOST_KEY_MISMATCH) {
+                // The one permanent close with a remedy Vaier can carry out. Offered here rather than only
+                // in the Explorer: this window is where the operator met the refusal.
+                setStatus(CLOSE_REASONS[ev.code], true, null, {
+                    label: 'Clear pinned key',
+                    armedLabel: 'Confirm — I changed this machine',
+                    run: clearPinnedKey,
+                });
             } else {
                 setStatus(CLOSE_REASONS[ev.code] || (ev.reason || 'The terminal connection closed.'), true);
             }
@@ -247,7 +256,11 @@
         dot.classList.remove('error');
         if (kind) dot.classList.add(kind);
     }
-    function setStatus(message, isError, retry) {
+    // `action` is a two-step button: the first click arms it and re-labels it with what is actually being
+    // asserted, the second click performs it. This window has no dialog primitives and should not grow a
+    // modal for one verb — but the verb it needs (clearing a host-key pin) is exactly the kind that must not
+    // be a reflex, so the assertion is made in place instead of skipped.
+    function setStatus(message, isError, retry, action) {
         const el = $('twStatus');
         el.classList.toggle('error', !!isError);
         el.textContent = '';
@@ -258,6 +271,37 @@
             b.className = 'tw-btn tw-status-btn'; b.textContent = 'Reconnect';
             b.onclick = () => { setStatus(null); retry(); };
             el.appendChild(b);
+        }
+        if (action) {
+            const b = document.createElement('button');
+            b.className = 'tw-btn tw-status-btn'; b.textContent = action.label;
+            let armed = false;
+            b.onclick = () => {
+                if (!armed) { armed = true; b.textContent = action.armedLabel; b.classList.add('is-armed'); return; }
+                action.run(b);
+            };
+            el.appendChild(b);
+        }
+    }
+
+    // Clearing this machine's pinned host key, from the one place the refusal is actually read. Vaier has
+    // always named this remedy here and never offered it, so the only way out was an API client.
+    //
+    // The pin is not left off: the next connect pins whatever key the machine presents (trust on first use),
+    // which is why the success line points straight at Reconnect.
+    async function clearPinnedKey(btn) {
+        btn.disabled = true;
+        try {
+            const res = await fetch('/machines/' + encodeURIComponent(machineId) + '/host-key',
+                { method: 'DELETE' });
+            if (!res.ok && res.status !== 204) {
+                setStatus('Could not clear the pinned key. Check the Vaier logs.', true);
+                return;
+            }
+            setStatus(`Pinned key cleared for ${machine}. Reconnect to pin the key it presents now.`, false,
+                () => { state.retries = 0; connect(); });
+        } catch (e) {
+            setStatus('Could not reach Vaier to clear the pinned key.', true);
         }
     }
     function refit() { try { fit.fit(); } catch (e) { /* not laid out yet */ } }

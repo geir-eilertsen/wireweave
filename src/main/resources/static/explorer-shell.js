@@ -411,6 +411,8 @@
         if (result.error) {
             entry.state = 'error';
             entry.error = result.error;
+            entry.errorCode = result.errorCode;
+            entry.errorDetail = result.errorDetail;
         } else {
             entry.state = 'ready';
             entry.entries = result.entries;
@@ -516,7 +518,8 @@
                 // be asleep..." says everything a status code cannot. A disk Vaier failed to read is never
                 // painted as a disk with room on it.
                 S.disks.set(machineId, { state: 'error', filesystems: null,
-                    error: body.message || 'Vaier could not read the disks on ' + nameOf(machineId) + '.' });
+                    error: body.message || 'Vaier could not read the disks on ' + nameOf(machineId) + '.',
+                    errorCode: body.code, errorDetail: body.detail });
             }
         } catch (e) {
             S.disks.set(machineId, { state: 'error', filesystems: null,
@@ -961,6 +964,19 @@
         return btn;
     }
 
+    // "Vaier is root here", readable without opening the machine (#346). A tag rather than a third clause
+    // in the note line: that line already carries a type and an address, and a fact with this much
+    // consequence appended to the end of it is a fact that gets skimmed past.
+    function rootTag(username) {
+        const tag = el('span', 'ex-card-root');
+        // The name, not the literal "root". Today they are the same on every machine in the fleet, but
+        // EffectiveUser reserves the right to widen what counts as privileged — and a badge that asserts
+        // a word the backend never sent is a badge that starts lying the day it does.
+        tag.textContent = username;
+        tag.title = 'Vaier logs in as ' + username + ' here — a privileged user';
+        return tag;
+    }
+
     function kv(rows) {
         const dl = document.createElement('dl');
         dl.className = 'ex-kv';
@@ -1015,9 +1031,16 @@
             grid.className = 'ex-grid';
             sortedMachines().forEach((m) => {
                 const address = tunnelAddress(m);
-                grid.appendChild(card(machineIcon(m.id), m.name, true,
+                const c = card(machineIcon(m.id), m.name, true,
                     MACHINE_TYPE[m.type] + (address ? ' · ' + address : ''),
-                    () => { S.open.add(key(['fleet', m.id])); go(['fleet', m.id]); }, m.id));
+                    () => { S.open.add(key(['fleet', m.id])); go(['fleet', m.id]); }, m.id);
+                // Where Vaier is root, said on the card itself — the fleet is readable for it without
+                // opening every machine. The backend decided it (domain.EffectiveUser); nothing here
+                // re-judges a username.
+                if (m.effectiveUserPrivileged) {
+                    c.querySelector('.ex-card-note').appendChild(rootTag(m.effectiveUsername));
+                }
+                grid.appendChild(c);
             });
             body.appendChild(grid);
         }
@@ -1321,6 +1344,20 @@
                 cred.appendChild(shellBtn);
                 cred.appendChild(selVerb('gear', 'SSH credential', 'ex-btn', () => credentialDialog(m.id)));
                 body.appendChild(cred);
+                // Who Vaier actually is on this machine. The credential's username IS the effective user,
+                // so saying it costs nothing — and it is the whole difference between a delete that
+                // removes a file you did not want and one that removes a file the machine needs to boot.
+                // Nobody chose root on the DietPi boxes; it arrived with the image. Naming it is the first
+                // step to deciding whether it stays.
+                if (m.effectiveUsername) {
+                    const who = note('Vaier acts as ' + m.effectiveUsername + ' on ' + m.name
+                        + (m.effectiveUserPrivileged
+                            ? ', a privileged user. Everything Vaier does here — reading, writing and '
+                              + 'deleting — runs unrestricted.'
+                            : '. It reaches exactly what that user can reach, and nothing else.'), false);
+                    if (m.effectiveUserPrivileged) who.classList.add('is-warn');
+                    body.appendChild(who);
+                }
                 body.appendChild(note('The shell opens in its own window and runs on ' + m.name + ' itself, so it '
                     + 'survives closing the window — and even a Vaier restart. Reopening reattaches you right where '
                     + 'you left off; Exit shell (inside the window) is the one that stops it.', false));
@@ -3357,7 +3394,7 @@
         if (!held || held.state === 'loading') {
             return body.appendChild(note('Reading the disks on ' + machineName + '…', false));
         }
-        if (held.state === 'error') return body.appendChild(note(held.error, true));
+        if (held.state === 'error') return failureNote(body, machineId, held);
 
         held.filesystems.forEach(fs => body.appendChild(filesystemBlock(fs, machineId)));
 
@@ -5480,7 +5517,7 @@
         }
         // The server's own sentence, verbatim — "Not allowed to read /root as geir." says more than any
         // status code could.
-        if (entry.state === 'error') return rows.appendChild(note(entry.error, true));
+        if (entry.state === 'error') return failureNote(rows, machineId, entry);
 
         const result = { entries: entry.entries };
 
@@ -5729,8 +5766,15 @@
     async function deleteEntry(machineId, entry) {
         const machineName = nameOf(machineId);
         const what = entry.directory ? 'folder' : 'file';
+        // The same button means two different things depending on which machine you are standing on
+        // (#346). Where Vaier logs in as root it can delete what the machine needs to run, not merely
+        // what you wanted to keep — so the gate says which of the two this is.
+        const m = machineById(machineId);
         const body = entry.path + ' on ' + machineName
             + (entry.directory ? '\n\nEverything inside this folder is deleted too.' : '')
+            + (m && m.effectiveUserPrivileged
+                ? '\n\nVaier acts as ' + m.effectiveUsername + ' on ' + machineName + ', which is '
+                  + 'privileged — this can remove something the machine needs to run.' : '')
             + '\n\nThis cannot be undone. Type the machine name to confirm.';
         const ok = await confirmTyped('Delete this ' + what + '?', body, machineName, 'Delete');
         if (!ok) return;
@@ -6322,6 +6366,116 @@
             document.addEventListener('keydown', onKey);
             ok.focus();
         });
+    }
+
+    // --- a refused host key, and the one action that clears it (#345) -----------------------------------
+    //
+    // Vaier has always NAMED the remedy for a changed host key — "clear its pinned key and reconnect" — and
+    // then offered no way to perform it. The endpoint existed; nothing in the UI called it, so the only route
+    // out was an API client. This is that route, put where the refusal is actually met.
+    //
+    // It appears only in the error state a real mismatch produces, never as routine machine maintenance. A
+    // pin that can be cleared from a machine's page on any ordinary day is a pin that gets cleared out of
+    // habit, which is exactly the failure the pin exists to prevent.
+
+    /** The two fingerprints out of an ApiError detail ("pinned=…;presented=…"), or null if it says neither. */
+    function refusedFingerprints(detail) {
+        if (!detail) return null;
+        const pinned = /(?:^|;)pinned=([^;]*)/.exec(detail);
+        const presented = /(?:^|;)presented=([^;]*)/.exec(detail);
+        if (!pinned && !presented) return null;
+        return { pinned: pinned ? pinned[1] : '', presented: presented ? presented[1] : '' };
+    }
+
+    // A failed read, painted. The server's own sentence verbatim, as it has always been — plus, for the one
+    // failure Vaier can actually do something about, the action that does it.
+    function failureNote(host, machineId, held) {
+        host.appendChild(note(held.error, true));
+        if (held.errorCode !== 'HOST_KEY_MISMATCH') return;
+        const row = el('div', 'ex-lactions is-static');
+        row.appendChild(selVerb('shield', 'Clear pinned key', 'ex-btn',
+            () => clearHostKeyDialog(machineId, refusedFingerprints(held.errorDetail))));
+        host.appendChild(row);
+    }
+
+    // The confirmation, and the confirmation is the point. A changed host key has two causes: a machine you
+    // rebuilt, and a machine somebody is impersonating — and the pin exists for the second one. So this is
+    // not "are you sure". It shows what Vaier knows (both fingerprints, stacked to scan) and asks the operator
+    // to assert the one thing only they can know: that they changed this machine. Typing its name is that
+    // assertion; the mechanics are confirmTyped's, so the gate behaves exactly like every other one here.
+    function clearHostKeyDialog(machineId, prints) {
+        const machineName = nameOf(machineId);
+        const scrim = el('div', 'ex-scrim is-on');
+        const dialog = el('div', 'ex-dialog');
+        const h = el('div', 'ex-dialog-title');
+        h.textContent = 'Clear the pinned key for ' + machineName + '?';
+        const b = el('div', 'ex-dialog-body');
+        b.textContent = machineName + ' is presenting a different SSH host key than the one Vaier pinned, so '
+            + 'Vaier is refusing to connect.\n\nEither you rebuilt, reinstalled or changed this machine\u2019s '
+            + 'SSH server — or something is impersonating it. The pin exists for the second case.';
+        dialog.append(h, b);
+
+        // Both fingerprints, so the assertion below is informed rather than a shrug. Monospace and stacked
+        // full-width (see .ex-dialog .ex-kv): these are read character by character or not at all.
+        if (prints) {
+            dialog.appendChild(kv([['Pinned', prints.pinned], ['Now offered', prints.presented]]));
+        }
+
+        const ask = el('div', 'ex-dialog-body');
+        ask.textContent = 'Type ' + machineName + ' to confirm that you changed this machine. Vaier pins the '
+            + 'new key on the next connect, so it is never left unpinned.';
+        const input = el('input', 'ex-dialog-input');
+        input.type = 'text';
+        input.placeholder = machineName;
+        input.autocomplete = 'off';
+        input.spellcheck = false;
+
+        const actions = el('div', 'ex-dialog-actions');
+        const cancel = el('button', 'ex-btn');
+        cancel.textContent = 'Cancel';
+        const ok = el('button', 'ex-btn is-danger');
+        ok.textContent = 'Clear pinned key';
+        ok.disabled = true;
+        actions.append(cancel, ok);
+        dialog.append(ask, input, actions);
+        scrim.appendChild(dialog);
+        document.body.appendChild(scrim);
+
+        const close = () => { scrim.remove(); document.removeEventListener('keydown', onKey); };
+        const armed = () => input.value === machineName;
+        const onKey = (e) => { if (e.key === 'Escape') close(); };
+        input.oninput = () => { ok.disabled = !armed(); };
+        input.onkeydown = (e) => { if (e.key === 'Enter' && armed()) clear(); };
+        scrim.onclick = (e) => { if (e.target === scrim) close(); };
+        cancel.onclick = close;
+        ok.onclick = () => { if (armed()) clear(); };
+        document.addEventListener('keydown', onKey);
+        input.focus();
+
+        async function clear() {
+            ok.disabled = true;
+            try {
+                const res = await fetch('/machines/' + encodeURIComponent(machineId) + '/host-key',
+                    { method: 'DELETE' });
+                if (!res.ok && res.status !== 204) {
+                    toast('Could not clear the pinned key for ' + machineName + '.');
+                    ok.disabled = false;
+                    return;
+                }
+                toast('Pinned key cleared for ' + machineName + '. The next connect pins its new key.');
+                close();
+                // The refusal was a failed read cached against this machine; drop it so the retry is real.
+                S.disks.delete(machineId);
+                Array.from(S.dirs.entries()).forEach(([k, entry]) => {
+                    if (entry.machine === machineId && entry.state === 'error') S.dirs.delete(k);
+                });
+                await loadFleet();
+                render();
+            } catch (e) {
+                toast('Could not reach Vaier to clear the pinned key.');
+                ok.disabled = false;
+            }
+        }
     }
 
     // The destructive gate: a confirm whose button stays disabled until the operator types {@code required}

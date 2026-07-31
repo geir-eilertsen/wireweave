@@ -41,8 +41,8 @@
     function createBrowser() {
         let inFlight = 0;
 
-        // Resolves to { root, path, entries }, { error } — or { stale: true } when a newer listing has been
-        // asked for since, which the caller must simply drop on the floor.
+        // Resolves to { root, path, entries }, { error, errorCode, errorDetail } — or { stale: true } when
+        // a newer listing has been asked for since, which the caller must simply drop on the floor.
         //
         // `path` may be null, and that is a question rather than a default: "where does this machine's tree
         // begin?" (#326). A machine whose SFTP subsystem is chrooted — the NAS is jailed into /volume1 —
@@ -76,10 +76,14 @@
                     // over SFTP; this machine's SFTP service is rooted at /volume1." — which says more than
                     // any status code could. Pass it through verbatim; only a silent server gets a message of
                     // ours. A refusal is never painted as an empty folder.
+                    // The envelope's `code` and `detail` travel alongside the sentence (#345): a refused
+                    // host key is the one failure with a remedy Vaier can offer, and the caller can only
+                    // offer it if it can tell that failure from the others without reading the prose.
                     const err = await res.json().catch(() => null);
                     if (ticket !== inFlight) return { stale: true };
                     return { error: (err && err.message)
-                        || 'Could not list ' + where + ' on ' + machineName(machineId) + '.' };
+                            || 'Could not list ' + where + ' on ' + machineName(machineId) + '.',
+                        errorCode: err && err.code, errorDetail: err && err.detail };
                 }
 
                 const body = await res.json();

@@ -263,6 +263,10 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getBody().message())
                 .contains("Roon server")
                 .contains("clear its pinned key");
+        // #345: the two fingerprints survive as data, not only inside the sentence. The Clear-pinned-key
+        // dialog shows both so the operator's assertion ("I changed this machine") is informed — and it
+        // must read them, never parse them back out of prose written for a human.
+        assertThat(response.getBody().detail()).isEqualTo("pinned=SHA256:old;presented=SHA256:new");
     }
 
     @Test
