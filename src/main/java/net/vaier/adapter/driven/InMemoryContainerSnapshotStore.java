@@ -1,6 +1,8 @@
 package net.vaier.adapter.driven;
 
 import net.vaier.domain.DockerService;
+import net.vaier.domain.DockerService.PortMapping;
+import net.vaier.domain.DockerService.ServiceEndpoint;
 import net.vaier.domain.LanAnchor;
 import net.vaier.domain.PublishableService;
 import net.vaier.domain.PublishableService.PublishableSource;
@@ -19,6 +21,7 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * In-memory store for the cached container scrapes. Owns the peer- and Vaier-server snapshots and the
@@ -86,8 +89,7 @@ public class InMemoryContainerSnapshotStore implements
             container.ports().stream()
                 .filter(p -> "tcp".equals(p.type()))
                 .filter(p -> VaierServerCatalogue.isPublishablePort(name, p.privatePort()))
-                .forEach(p -> container.reachableEndpoint(p, vaierNetworkName, dockerGatewayIp)
-                    .filter(ep -> !ReverseProxyRoute.hasRouteFor(existingRoutes, ep.address(), ep.port()))
+                .forEach(p -> firstUnroutedEndpoint(container, p, existingRoutes)
                     .ifPresent(ep -> result.add(new PublishableService(
                         PublishableSource.VAIER_SERVER,
                         // The Vaier server is the one machine that cannot be found by searching a store,
@@ -102,6 +104,21 @@ public class InMemoryContainerSnapshotStore implements
                     ))));
         });
         return result;
+    }
+
+    /**
+     * The endpoint a publish of {@code port} would be written with, or empty when the port is unreachable
+     * or already routed. Both decisions are the domain's: {@code everyReachableEndpoint} knows the
+     * spellings of one service and leads with the preferred one, {@code hasRouteForAny} knows that a route
+     * under any of them means published.
+     */
+    private Optional<ServiceEndpoint> firstUnroutedEndpoint(
+            DockerService container, PortMapping port, List<ReverseProxyRoute> existingRoutes) {
+        List<ServiceEndpoint> endpoints =
+            container.everyReachableEndpoint(port, vaierNetworkName, dockerGatewayIp);
+        return ReverseProxyRoute.hasRouteForAny(existingRoutes, endpoints)
+            ? Optional.empty()
+            : endpoints.stream().findFirst();
     }
 
     /**

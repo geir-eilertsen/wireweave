@@ -63,6 +63,21 @@ class DockerServiceTest {
     }
 
     @Test
+    void isOnNetwork_seesThroughDockerComposesProjectPrefix() {
+        // Docker names a compose network `<project>_<name>`, so the network Vaier's own stack declares as
+        // `vaier-network` is reported by the daemon as `vaier_vaier-network`. Matching the bare name only
+        // meant every container in the stack read as off-network — and a container off the network is
+        // reachable only if it publishes a host port, which is how Traefik's dashboard (8080, published
+        // nowhere) stayed invisible to publishing no matter what the catalogue offered.
+        assertThat(container(List.of("vaier_vaier-network")).isOnNetwork("vaier-network")).isTrue();
+        assertThat(container(List.of("staging_vaier-network")).isOnNetwork("vaier-network")).isTrue();
+
+        // The suffix must be a whole segment, not any name that happens to end in the same letters.
+        assertThat(container(List.of("not-vaier-network")).isOnNetwork("vaier-network")).isFalse();
+        assertThat(container(List.of("vaier-network-external")).isOnNetwork("vaier-network")).isFalse();
+    }
+
+    @Test
     void isOnNetwork_trueWhenContainerReportsNoNetworks() {
         // No network info — assumed reachable by container name.
         assertThat(container(List.of()).isOnNetwork("vaier-network")).isTrue();
@@ -92,5 +107,39 @@ class DockerServiceTest {
         PortMapping unpublished = new PortMapping(3000, null, "tcp", "");
 
         assertThat(c.reachableEndpoint(unpublished, "vaier-network", "172.20.0.1")).isEmpty();
+    }
+
+    @Test
+    void everyReachableEndpoint_ofAnOnNetworkContainerThatAlsoPublishesAPort_listsBothSpellings() {
+        // The same port of the same container can be written two ways, and a route published before Vaier
+        // could see the container on its own network holds the gateway spelling. Asking "is this already
+        // published?" of only the preferred spelling would offer a published service all over again.
+        DockerService c = container(List.of("vaier_vaier-network"));
+        PortMapping port = c.ports().get(0);
+
+        assertThat(c.everyReachableEndpoint(port, "vaier-network", "172.20.0.1")).containsExactly(
+            new DockerService.ServiceEndpoint("grafana", 3000),
+            new DockerService.ServiceEndpoint("172.20.0.1", 13000));
+    }
+
+    @Test
+    void everyReachableEndpoint_leadsWithThePreferredSpelling() {
+        // Whatever else it lists, the first entry is what reachableEndpoint would pick — the endpoint a
+        // new route is actually written with.
+        DockerService c = container(List.of("vaier_vaier-network"));
+        PortMapping port = c.ports().get(0);
+
+        assertThat(c.everyReachableEndpoint(port, "vaier-network", "172.20.0.1").get(0))
+            .isEqualTo(c.reachableEndpoint(port, "vaier-network", "172.20.0.1").orElseThrow());
+    }
+
+    @Test
+    void everyReachableEndpoint_offNetwork_isJustTheGatewaySpelling() {
+        DockerService c = container(List.of("bridge"));
+
+        assertThat(c.everyReachableEndpoint(c.ports().get(0), "vaier-network", "172.20.0.1"))
+            .containsExactly(new DockerService.ServiceEndpoint("172.20.0.1", 13000));
+        assertThat(c.everyReachableEndpoint(new PortMapping(3000, null, "tcp", ""), "vaier-network", "172.20.0.1"))
+            .isEmpty();
     }
 }

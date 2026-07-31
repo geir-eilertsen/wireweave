@@ -338,6 +338,13 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    # Traefik's API/dashboard listens on :8080 (--api.insecure=true above), but the upstream image
+    # only EXPOSEs 80 and 443 — and Vaier discovers publishable services from a container's exposed
+    # ports, so the one container of its own stack worth publishing never showed up. `expose` is
+    # metadata: it publishes nothing to the host and changes no reachability (the port stays reachable
+    # only inside vaier-network, as it already was for TRAEFIK_API_URL), it just tells Vaier it exists.
+    expose:
+      - "8080"
     volumes:
       - ./traefik/config:/traefik/config
       - ./traefik/acme:/traefik/acme

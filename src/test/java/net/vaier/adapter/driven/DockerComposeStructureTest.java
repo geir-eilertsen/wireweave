@@ -137,6 +137,29 @@ class DockerComposeStructureTest {
         assertThat(oauth2ProxyInit).as("oauth2-proxy-init must always start").doesNotContainKey("profiles");
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void traefik_declaresItsDashboardPortSoVaierCanOfferItForPublishing() throws Exception {
+        // Traefik runs its API/dashboard on :8080 (--api.insecure=true), and the catalogue has always
+        // meant to offer exactly that port. But the upstream image only EXPOSEs 80 and 443, and Vaier
+        // discovers publishable services from a container's exposed ports — so the one container of
+        // Vaier's own stack worth publishing never appeared. `expose` is metadata only: it publishes
+        // nothing to the host and changes no reachability, it just tells Vaier the port is there.
+        Map<String, Object> compose = (Map<String, Object>) new Yaml()
+            .load(Files.readString(Path.of("docker-compose.yml")));
+        Map<String, Object> services = (Map<String, Object>) compose.get("services");
+        Map<String, Object> traefik = (Map<String, Object>) services.get("traefik");
+
+        List<Object> exposed = (List<Object>) traefik.get("expose");
+        assertThat(exposed).as("Traefik must declare its dashboard port").isNotNull();
+        assertThat(exposed.stream().map(Object::toString).toList()).contains("8080");
+
+        List<Object> published = (List<Object>) traefik.get("ports");
+        assertThat(published.stream().map(Object::toString).toList())
+            .as("the dashboard must stay unpublished to the host — it is reached through Traefik itself")
+            .noneMatch(p -> p.contains("8080"));
+    }
+
     // --- #305 follow-up: Dex OIDC broker federates Google + GitHub behind oauth2-proxy ---
 
     @Test

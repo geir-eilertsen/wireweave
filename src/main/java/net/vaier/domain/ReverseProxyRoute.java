@@ -189,6 +189,17 @@ public class ReverseProxyRoute {
     }
 
     /**
+     * True iff any of {@code endpoints} is already routed. One service can be reachable at more than one
+     * address+port — a container on Vaier's own network that also publishes a host port has two spellings
+     * of the same thing — and *already published* is a question about the service, not about which
+     * spelling happened to be written into the route.
+     */
+    public static boolean hasRouteForAny(List<ReverseProxyRoute> existing,
+                                         List<DockerService.ServiceEndpoint> endpoints) {
+        return endpoints.stream().anyMatch(ep -> hasRouteFor(existing, ep.address(), ep.port()));
+    }
+
+    /**
      * True iff any route in {@code existing} shares both the FQDN and the (already-normalised)
      * pathPrefix — i.e. publishing on top of it would be a duplicate that Traefik couldn't
      * disambiguate. Null pathPrefix matches another null pathPrefix (two host-only routes

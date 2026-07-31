@@ -824,6 +824,29 @@ class ContainerServiceTest {
     }
 
     @Test
+    void getUnpublishedVaierServerServices_excludesTheDockerSocketProxy() {
+        // docker-proxy serves the Docker API on 2375. It was offered for publishing for as long as the
+        // catalogue went unrevised — one click from putting root on every container on a public hostname.
+        when(forGettingServerInfo.getServicesWithExposedPorts(any()))
+            .thenReturn(List.of(localContainer("docker-proxy", 2375, "tcp")));
+
+        assertThat(refreshThenGetUnpublished(List.of())).isEmpty();
+    }
+
+    @Test
+    void getUnpublishedVaierServerServices_stillOffersTheOperatorsOwnContainers() {
+        // The catalogue hides Vaier's stack, not the host. A container the operator runs alongside it is
+        // exactly what the publishable list is for.
+        when(forGettingServerInfo.getServicesWithExposedPorts(any()))
+            .thenReturn(List.of(localContainer("pihole", 80, "tcp")));
+
+        List<PublishableService> result = refreshThenGetUnpublished(List.of());
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).containerName()).isEqualTo("pihole");
+    }
+
+    @Test
     void getUnpublishedVaierServerServices_traefikOnPort8080_includedWithDashboardRedirect() {
         when(forGettingServerInfo.getServicesWithExposedPorts(any()))
             .thenReturn(List.of(localContainer(ServiceNames.TRAEFIK, 8080, "tcp")));
@@ -910,6 +933,19 @@ class ContainerServiceTest {
         assertThat(result.get(0).address()).isEqualTo(GATEWAY_IP);
         assertThat(result.get(0).port()).isEqualTo(3001);
         assertThat(result.get(0).containerName()).isEqualTo("uptime-kuma");
+    }
+
+    @Test
+    void getUnpublishedVaierServerServices_alreadyPublishedUnderItsOtherSpelling_excluded() {
+        // A container on Vaier's network that also publishes a host port can be addressed two ways. Routes
+        // published before Vaier could see it on its own network hold the gateway spelling — and offering
+        // it again as a candidate would tell the operator something plainly untrue about their own stack.
+        when(forGettingServerInfo.getServicesWithExposedPorts(any()))
+            .thenReturn(List.of(new DockerService("id", "pihole", "image:latest", "latest",
+                List.of(new PortMapping(80, 8053, "tcp", "0.0.0.0")),
+                List.of("vaier_vaier-network"), "running")));
+
+        assertThat(refreshThenGetUnpublished(List.of(route(GATEWAY_IP, 8053)))).isEmpty();
     }
 
     @Test

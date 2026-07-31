@@ -107,6 +107,9 @@ The primary workflow. Always use these terms — the UI is built around them.
 | **Icon** | A resolved service icon (`domain.Icon`): the image bytes plus the content-type the launchpad should report for them. |
 | **Icon cache** | Where a resolved icon is remembered so it's fetched online at most once. Two tiers behind the same key: an in-memory map and a filesystem store (`ForStoringIcons`, default `/icons`) that survives restarts. Positives are persisted to disk; a "no icon found" result is remembered only in memory so a once-dead host can recover. |
 | **Ignored service** | A publishable service the operator has chosen to hide from the discovered list. Persisted via `ForManagingIgnoredServices`. |
+| **Vaier's own stack** | The containers Vaier's `docker-compose.yml` starts on the **Vaier server** — Vaier, Traefik, WireGuard, oauth2-proxy, Dex, CrowdSec, the Docker socket proxy, the offline page and their sidecars. Distinct from the operator's own containers on the same host, which Vaier only discovers. |
+| **Hidden container** | A container of **Vaier's own stack** that is never offered as a **publishable service** — it is Vaier's own plumbing, not something to publish. Decided by `domain.VaierServerCatalogue`. |
+| **Offered container** | The carve-out: a container of **Vaier's own stack** that Vaier does offer for publishing, and only on the ports worth publishing. Today just Traefik's dashboard on 8080. |
 
 Avoid: "expose", "deploy", "route" (as a verb for the user-facing publish action), "site", "endpoint" (ambiguous with WireGuard's endpoint).
 

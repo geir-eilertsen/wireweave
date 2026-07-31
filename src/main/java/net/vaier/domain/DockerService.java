@@ -1,5 +1,6 @@
 package net.vaier.domain;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -96,9 +97,18 @@ public record DockerService(
     /**
      * Whether this container is attached to {@code networkName} — or to no network at all, in
      * which case it is assumed reachable by container name (some daemons report no network info).
+     *
+     * <p>Docker Compose names a network {@code <project>_<name>}, so the network Vaier's own stack
+     * declares as {@code vaier-network} reaches the daemon — and this scrape — as
+     * {@code vaier_vaier-network}. Matching the bare name alone made every container in the stack read
+     * as off-network, and an off-network container is only reachable if it publishes a host port: that
+     * is why Traefik's dashboard, which publishes nothing, could never be offered for publishing
+     * however plainly the catalogue offered it. The project prefix is matched as a whole segment, so
+     * {@code not-vaier-network} is still a different network.
      */
     public boolean isOnNetwork(String networkName) {
-        return networks.isEmpty() || networks.contains(networkName);
+        return networks.isEmpty()
+            || networks.stream().anyMatch(n -> n.equals(networkName) || n.endsWith("_" + networkName));
     }
 
     /**
@@ -115,6 +125,26 @@ public record DockerService(
             return Optional.of(new ServiceEndpoint(dockerGatewayIp, port.publicPort()));
         }
         return Optional.empty();
+    }
+
+    /**
+     * Every address+port at which {@code port} of this container can be reached, preferred spelling first
+     * — so {@code get(0)} is what {@link #reachableEndpoint} would pick and what a new route is written
+     * with. A container that is both on the Vaier network and publishing a host port has two spellings of
+     * the same service, and only asking about the preferred one makes an already-published service look
+     * unpublished: routes written before Vaier could see the container on its own network hold the gateway
+     * spelling, and would go on being offered as candidates forever.
+     */
+    public List<ServiceEndpoint> everyReachableEndpoint(PortMapping port, String vaierNetworkName,
+                                                        String dockerGatewayIp) {
+        List<ServiceEndpoint> endpoints = new ArrayList<>();
+        if (isOnNetwork(vaierNetworkName)) {
+            endpoints.add(new ServiceEndpoint(containerName, port.privatePort()));
+        }
+        if (port.publicPort() != null) {
+            endpoints.add(new ServiceEndpoint(dockerGatewayIp, port.publicPort()));
+        }
+        return List.copyOf(endpoints);
     }
 
     /** An address+port at which a container's service is reachable. */
