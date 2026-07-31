@@ -67,8 +67,9 @@ public record LockoutWarning(List<BlockDecision> decisions) {
         for (BlockDecision decision : decisions) {
             body.append("  • ").append(decision.label()).append("\n");
         }
-        body.append("\nThis is not an attack. The trusted networks allowlist — the VPN subnet, the Docker bridge,\n")
-            .append("every relay's LAN, and every address you have trusted — is supposed to make this impossible.\n")
+        body.append("\nThis is not an attack. The trusted networks allowlist — your VPN, the Docker bridge, the\n")
+            .append("networks behind your own machines, and every address you have trusted — is supposed to\n")
+            .append("make this impossible.\n")
             .append("Something of yours is now being turned away at the edge, and you may lose access to Vaier\n")
             .append("itself while it lasts.\n");
         body.append("\nIn the Security view you can lift the block now, or trust the address for good.\n");

@@ -24,7 +24,9 @@ public record MachineNudge(String machineName, Kind kind, String title, String e
         /** The machine is a reachable, credentialed host with nothing backed up. */
         BACK_UP,
         /** The fleet has no backup server yet and this machine could host one. */
-        DESIGNATE_BACKUP_SERVER
+        DESIGNATE_BACKUP_SERVER,
+        /** The machine's last backup lost files to permissions, and reading them as root would get them. */
+        BACK_UP_AS_ROOT
     }
 
     public MachineNudge {
@@ -91,5 +93,43 @@ public record MachineNudge(String machineName, Kind kind, String title, String e
             "Make " + machine.name() + " the backup server",
             "The fleet has no backup server yet, and this machine has storage to host one",
             "Set up borg on it so other machines can back up here"));
+    }
+
+    /**
+     * BACK_UP_AS_ROOT (#334) — suggest {@link BackupJob#backupAsRoot() backing up as root} once, and only
+     * once, Vaier has the evidence that not doing so is costing the operator data: the machine's latest
+     * {@link BackupRun} settled {@link BackupRunStatus#INCOMPLETE} and its {@link UnreadableFiles} name files
+     * borg was denied on. The archive has holes, and the files are the proof.
+     *
+     * <p>This exists because the same question used to be asked <em>in advance</em>, as a checkbox, of an
+     * operator with nothing to reason from — file ownership inside container volumes, and the security
+     * envelope of a sudoers rule. Here it is one decision at the moment it means something, so the three
+     * conditions are exactly the three that make it meaningful:
+     * <ul>
+     *   <li>there is a job — the nudge asks a job to change, so there must be one to change;</li>
+     *   <li>the job is <b>not</b> already backing up as root — root already reads everything, so whatever it
+     *       could not read, this nudge cannot fix;</li>
+     *   <li>the latest run lost files <b>to permissions</b>. Keying on {@link UnreadableFiles#any()} rather
+     *       than on the status word alone is what keeps an incomplete run that lost data some other way — or
+     *       a run that merely grumbled — from raising a suggestion that would not help it.</li>
+     * </ul>
+     * There is deliberately no "Vaier is already root here" guard: a root login is never denied, so it
+     * produces no denial line, so {@code any()} is false and this cannot fire there anyway.
+     */
+    public static Optional<MachineNudge> backUpAsRoot(String machineName, Optional<BackupRun> latestRun,
+                                                      Optional<BackupJob> job) {
+        if (job.isEmpty() || job.get().backupAsRoot() || latestRun.isEmpty()) {
+            return Optional.empty();
+        }
+        BackupRun run = latestRun.get();
+        UnreadableFiles lost = run.unreadableFiles();
+        if (run.status() != BackupRunStatus.INCOMPLETE || !lost.any()) {
+            return Optional.empty();
+        }
+        String plural = lost.total() == 1 ? "" : "s";
+        return Optional.of(new MachineNudge(machineName, Kind.BACK_UP_AS_ROOT,
+            "This backup is missing " + lost.total() + " file" + plural,
+            lost.inOneLine(),
+            "Vaier will read every file here, whoever owns them"));
     }
 }

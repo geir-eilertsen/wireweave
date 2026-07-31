@@ -5,10 +5,12 @@ import net.vaier.domain.Machine;
 import net.vaier.domain.MachineId;
 import net.vaier.domain.MachineType;
 import net.vaier.domain.TestMachineIds;
+import net.vaier.domain.BackupAsRootOutcome;
 import net.vaier.domain.BackupJob;
 import net.vaier.domain.BackupRepository;
 import net.vaier.domain.BackupRun;
 import net.vaier.domain.BackupServer;
+import net.vaier.domain.NotFoundException;
 import net.vaier.domain.Unprotection;
 import net.vaier.domain.port.ForPersistingBackupJobs;
 import net.vaier.domain.port.ForPersistingBackupRepositories;
@@ -167,6 +169,45 @@ class BackupServiceTest {
         runs.record(newer);
 
         assertThat(service.latestForMachine(TestMachineIds.of("Colina 27"))).contains(newer);
+    }
+
+    // --- accepting "back up as root" is one action: the grant and the flag (#334) ---
+
+    @Test
+    void enableBackupAsRoot_savesTheFlippedJobWhenTheMachineGrantsRootBorg() {
+        service.saveBackupRepository(repo());
+        service.saveBackupJob(job());
+        when(readier.canBackUpAsRoot(TestMachineIds.of("Colina 27"))).thenReturn(true);
+
+        BackupAsRootOutcome outcome = service.enableBackupAsRoot(TestMachineIds.of("Colina 27"));
+
+        assertThat(outcome.granted()).isTrue();
+        assertThat(outcome.job().backupAsRoot()).isTrue();
+        assertThat(service.getBackupJobs()).singleElement()
+            .satisfies(saved -> assertThat(saved.backupAsRoot()).isTrue());
+    }
+
+    @Test
+    void enableBackupAsRoot_savesNothingWhenTheGrantIsNotThereYet() {
+        // The install is detached; a stored flag would be a promise Vaier cannot keep tonight.
+        service.saveBackupRepository(repo());
+        service.saveBackupJob(job());
+        when(readier.canBackUpAsRoot(TestMachineIds.of("Colina 27"))).thenReturn(false);
+        when(readier.readyForBackup(TestMachineIds.of("Colina 27")))
+            .thenReturn(new ReadyingOutcome(true, false, null, "Preparing client on Colina 27"));
+
+        BackupAsRootOutcome outcome = service.enableBackupAsRoot(TestMachineIds.of("Colina 27"));
+
+        assertThat(outcome.granted()).isFalse();
+        assertThat(outcome.readying().started()).isTrue();
+        assertThat(service.getBackupJobs()).singleElement()
+            .satisfies(saved -> assertThat(saved.backupAsRoot()).isFalse());
+    }
+
+    @Test
+    void enableBackupAsRoot_onAMachineWithNoJobIsNotFound() {
+        assertThatThrownBy(() -> service.enableBackupAsRoot(TestMachineIds.of("Nowhere")))
+            .isInstanceOf(NotFoundException.class);
     }
 
     @Test

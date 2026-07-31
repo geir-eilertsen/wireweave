@@ -262,7 +262,7 @@ class LanServerRestControllerTest {
         // even match the handler, so the 409 ApiError was unreachable (406). Without the constraint
         // the conflict renders as the JSON envelope through the real dispatcher + handler.
         when(generateLanServerSetupScriptUseCase.generateSetupScript(NUC02))
-            .thenThrow(new ConflictException("Relay peer apalveien5 has no LAN address set"));
+            .thenThrow(new ConflictException("apalveien5 has no LAN address set"));
         MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
@@ -275,7 +275,7 @@ class LanServerRestControllerTest {
     @Test
     void downloadSetupScript_propagatesConflictWhenRelayHasNoLanAddress() {
         when(generateLanServerSetupScriptUseCase.generateSetupScript(NUC02))
-            .thenThrow(new ConflictException("Relay peer apalveien5 has no LAN address set"));
+            .thenThrow(new ConflictException("apalveien5 has no LAN address set"));
 
         assertThatThrownBy(() -> controller.downloadSetupScript(NUC02.value()))
             .isInstanceOf(ConflictException.class);

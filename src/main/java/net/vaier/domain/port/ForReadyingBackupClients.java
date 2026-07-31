@@ -24,6 +24,19 @@ public interface ForReadyingBackupClients {
     ReadyingOutcome readyForBackup(MachineId machineId);
 
     /**
+     * Whether {@code machineId} can <em>already</em> run borg as root — the sudoers grant is installed and
+     * borg is where sudo can find it. This is the half of readying that has to be known <b>before</b> a job
+     * is allowed to opt in to {@link net.vaier.domain.BackupJob#backupAsRoot()}: a job that asks for root on a
+     * machine that has not granted it does not back up badly, it does not back up at all — every run dies on
+     * {@code sudo -n}. It belongs on this port rather than on a new one because it asks the same question
+     * {@link #readyForBackup} answers by doing: is this backup client ready.
+     *
+     * <p>Never throws, and never optimistic: an unreachable host, a timed-out probe or a thrown SSH error all
+     * report {@code false}, because "we could not tell" and "yes" must never be the same answer here.
+     */
+    boolean canBackUpAsRoot(MachineId machineId);
+
+    /**
      * The outcome of readying a host (never a secret): {@code started} when the borg-client install launched
      * (detached); {@code scriptOnly} when Vaier could not run it itself and the operator must run the staged
      * script; {@code stagedScriptPath} the absolute on-host path for that case (else {@code null}); {@code

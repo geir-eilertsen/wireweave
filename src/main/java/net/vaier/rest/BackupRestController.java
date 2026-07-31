@@ -1,5 +1,6 @@
 package net.vaier.rest;
 
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.application.AuthorizeBackupClientUseCase;
 import net.vaier.application.AuthorizeBackupClientUseCase.AuthorizeResult;
@@ -10,6 +11,7 @@ import net.vaier.application.CheckBackupPrerequisitesUseCase.ServerBorgAuth;
 import net.vaier.application.DeleteBackupJobUseCase;
 import net.vaier.application.DeleteBackupRepositoryUseCase;
 import net.vaier.application.DeleteBackupServerUseCase;
+import net.vaier.application.EnableBackupAsRootUseCase;
 import net.vaier.application.GenerateBackupServerSetupScriptUseCase;
 import net.vaier.application.GetBackupJobsUseCase;
 import net.vaier.application.GetBackupRepositoriesUseCase;
@@ -34,6 +36,7 @@ import net.vaier.application.SaveBackupServerUseCase;
 import net.vaier.application.WriteSurvivalKitUseCase;
 import net.vaier.application.WriteSurvivalKitUseCase.SurvivalKitReport;
 import net.vaier.domain.Archive;
+import net.vaier.domain.BackupAsRootOutcome;
 import net.vaier.domain.BackupJob;
 import net.vaier.domain.BackupRepository;
 import net.vaier.domain.BackupStoreLabel;
@@ -82,6 +85,7 @@ import java.util.Optional;
  * {@code GET /backup-jobs/{machineId}/runs}. Archive listing and provisioning arrive in later slices.
  */
 @RestController
+@RequiredArgsConstructor
 @Slf4j
 public class BackupRestController {
 
@@ -107,52 +111,8 @@ public class BackupRestController {
     private final ProtectMachinePathsUseCase protectMachinePaths;
     private final ForSubscribingToEvents forSubscribingToEvents;
     private final WriteSurvivalKitUseCase writeSurvivalKit;
+    private final EnableBackupAsRootUseCase enableBackupAsRoot;
 
-    public BackupRestController(SaveBackupRepositoryUseCase saveBackupRepository,
-                               GetBackupRepositoriesUseCase getBackupRepositories,
-                               DeleteBackupRepositoryUseCase deleteBackupRepository,
-                               GetBackupServersUseCase getBackupServers,
-                               SaveBackupServerUseCase saveBackupServer,
-                               DeleteBackupServerUseCase deleteBackupServer,
-                               GenerateBackupServerSetupScriptUseCase generateBackupServerSetupScript,
-                               ProvisionBackupServerUseCase provisionBackupServer,
-                               SaveBackupJobUseCase saveBackupJob,
-                               GetBackupJobsUseCase getBackupJobs,
-                               DeleteBackupJobUseCase deleteBackupJob,
-                               GetBackupRunsUseCase getBackupRuns,
-                               RunBackupJobUseCase runBackupJob,
-                               ListArchivesUseCase listArchivesUseCase,
-                               CheckBackupPrerequisitesUseCase checkBackupPrerequisites,
-                               InitBackupRepositoryUseCase initBackupRepository,
-                               GetMachinesUseCase getMachines,
-                               AuthorizeBackupClientUseCase authorizeBackupClient,
-                               PrepareBackupClientUseCase prepareBackupClient,
-                               ProtectMachinePathsUseCase protectMachinePaths,
-                               ForSubscribingToEvents forSubscribingToEvents,
-                               WriteSurvivalKitUseCase writeSurvivalKit) {
-        this.saveBackupRepository = saveBackupRepository;
-        this.getBackupRepositories = getBackupRepositories;
-        this.deleteBackupRepository = deleteBackupRepository;
-        this.getBackupServers = getBackupServers;
-        this.saveBackupServer = saveBackupServer;
-        this.deleteBackupServer = deleteBackupServer;
-        this.generateBackupServerSetupScript = generateBackupServerSetupScript;
-        this.provisionBackupServer = provisionBackupServer;
-        this.saveBackupJob = saveBackupJob;
-        this.getBackupJobs = getBackupJobs;
-        this.deleteBackupJob = deleteBackupJob;
-        this.getBackupRuns = getBackupRuns;
-        this.runBackupJob = runBackupJob;
-        this.listArchivesUseCase = listArchivesUseCase;
-        this.checkBackupPrerequisites = checkBackupPrerequisites;
-        this.initBackupRepository = initBackupRepository;
-        this.getMachines = getMachines;
-        this.authorizeBackupClient = authorizeBackupClient;
-        this.prepareBackupClient = prepareBackupClient;
-        this.protectMachinePaths = protectMachinePaths;
-        this.forSubscribingToEvents = forSubscribingToEvents;
-        this.writeSurvivalKit = writeSurvivalKit;
-    }
 
     /**
      * The backup UI's SSE stream. The frontend <strong>never polls</strong>: it opens this stream and reacts
@@ -577,6 +537,40 @@ public class BackupRestController {
         PrepareResult result = prepareBackupClient.prepareClient(job.get().machineId());
         return ResponseEntity.ok(PrepareClientResponse.from(result));
     }
+
+    /**
+     * Accept <b>Back up as root</b> for a machine (#334) — the single action behind the machine's
+     * {@code BACK_UP_AS_ROOT} nudge and its Advanced checkbox.
+     *
+     * <p>It replaces a two-step dance nobody could discover: {@code PUT /backup-jobs/{machineId}} flipped the
+     * flag and {@code POST …/prepare-client} installed the sudoers grant, and doing only the first produced a
+     * job whose every run died on {@code sudo -n} before borg started. One call now does both, and the
+     * response is compound on purpose: {@code granted} says whether the machine really can run borg as root,
+     * {@code job} carries the flag as it now stands, and {@code provisioning} is non-null exactly when the
+     * grant had to be asked for — so "the call succeeded" is never mistaken for "root reads are on tonight".
+     *
+     * <p>The controller decides none of that. Whether the flag may move is
+     * {@link net.vaier.domain.BackupJob#enablingBackupAsRoot}'s call; this maps the outcome onto a response
+     * and lets {@link NotFoundException} (nothing on the machine is backed up) become a {@code 404}.
+     */
+    @PostMapping("/backup-jobs/{machineId}/back-up-as-root")
+    public ResponseEntity<BackUpAsRootResponse> backUpAsRoot(@PathVariable String machineId) {
+        log.info("Enabling back up as root for machine {}", LogSafe.forLog(machineId));
+        BackupAsRootOutcome outcome = enableBackupAsRoot.enableBackupAsRoot(MachineId.of(machineId));
+        return ResponseEntity.ok(new BackUpAsRootResponse(outcome.granted(),
+            JobResponse.from(outcome.job(), machineNameOf(outcome.job().machineId())),
+            outcome.readying() == null ? null : ProvisioningResponse.from(outcome.readying())));
+    }
+
+    /**
+     * The {@code POST /backup-jobs/{machineId}/back-up-as-root} response. {@code granted} is whether the
+     * machine can run borg as root right now (probed, never assumed); {@code job} is the job as it now
+     * stands, so the browser reads the flag rather than guessing it from a 200; {@code provisioning} carries
+     * the grant install Vaier launched or the script it staged, and is {@code null} when nothing needed
+     * installing. Three fields because there are three different things to say, and collapsing them would
+     * let a UI tell an operator their data is covered when it is not.
+     */
+    record BackUpAsRootResponse(boolean granted, JobResponse job, ProvisioningResponse provisioning) {}
 
     /**
      * Report the progress of a launched client-prepare. The install is detached (an apt/dnf install can

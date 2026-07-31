@@ -116,4 +116,54 @@ class UnreadableFilesTest {
         assertThat(report).contains("250 files could not be read");
         assertThat(report).contains("showing the first " + UnreadableFiles.SAMPLE_LIMIT);
     }
+
+    // --- the one-line account, for a place with room for one line (the machine's nudge) ---
+
+    @Test
+    void itRendersTheLossAsOneLineNamingTheFilesAndWhatItCost() {
+        // The nudge card has one line for the "why". It has to name the files (so the operator recognises
+        // the data) AND say what their absence means — a list of paths alone is not a reason to act.
+        String output = """
+            /home/mqtt/data/mosquitto.db: open: [Errno 13] Permission denied: 'mosquitto.db'
+            /home/pihole/gravity.db: open: [Errno 13] Permission denied: 'gravity.db'
+            """;
+
+        String line = UnreadableFiles.from(output).inOneLine();
+
+        assertThat(line).doesNotContain("\n");
+        assertThat(line).contains("/home/mqtt/data/mosquitto.db", "/home/pihole/gravity.db");
+        assertThat(line).contains("belong to other users");
+        assertThat(line).contains("holes");
+    }
+
+    @Test
+    void aSingleLostFileIsSpokenAboutInTheSingular() {
+        String output = "/home/mqtt/data/mosquitto.db: open: [Errno 13] Permission denied: 'mosquitto.db'\n";
+
+        String line = UnreadableFiles.from(output).inOneLine();
+
+        assertThat(line).contains("it belongs to another user");
+        assertThat(line).contains("a hole");
+    }
+
+    @Test
+    void theOneLineNamesOnlyAFewFilesAndCountsTheRest() {
+        // Ten paths on one line is not a line. It names a handful and is honest about the remainder — the
+        // exact total is still what decides whether the operator acts.
+        StringBuilder output = new StringBuilder();
+        for (int i = 0; i < 40; i++) {
+            output.append("/home/x/log-").append(i).append(".log: open: [Errno 13] Permission denied: 'x'\n");
+        }
+
+        String line = UnreadableFiles.from(output.toString()).inOneLine();
+
+        assertThat(line).contains("/home/x/log-0.log");
+        assertThat(line).doesNotContain("/home/x/log-" + UnreadableFiles.INLINE_LIMIT + ".log");
+        assertThat(line).contains("and " + (40 - UnreadableFiles.INLINE_LIMIT) + " more");
+    }
+
+    @Test
+    void aCleanRunHasNoOneLineToRender() {
+        assertThat(UnreadableFiles.from("all good").inOneLine()).isEmpty();
+    }
 }

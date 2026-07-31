@@ -39,6 +39,9 @@ public record UnreadableFiles(List<String> sample, int total) {
     /** How many paths are retained for display; the count is not capped. See the class note on why. */
     public static final int SAMPLE_LIMIT = 10;
 
+    /** How many paths {@link #inOneLine()} names before it falls back to counting the remainder. */
+    public static final int INLINE_LIMIT = 3;
+
     /** No file was denied — a run that got everything it asked for. */
     private static final UnreadableFiles NONE = new UnreadableFiles(List.of(), 0);
 
@@ -104,6 +107,33 @@ public record UnreadableFiles(List<String> sample, int total) {
             out.append("  ").append(path).append("\n");
         }
         out.append("\nTurn on Back up as root for this job so borg reads files owned by other users.\n");
+        return out.toString();
+    }
+
+    /**
+     * The same loss said in <b>one line</b>, for the places that have room for one — the machine's
+     * {@link MachineNudge} card. It names up to {@link #INLINE_LIMIT} of the files (so the operator
+     * recognises <em>which</em> data is gone), counts whatever is left over, and ends with what their absence
+     * costs, because a list of paths is evidence and not yet a reason to act.
+     *
+     * <p>How to describe the loss is this value's decision, not a view's or a factory's: {@link #report()}
+     * and this line are two lengths of the same statement, and keeping them together is what stops an inbox
+     * and a nudge card describing the same missing files in two different ways. Returns an empty string when
+     * nothing was denied.
+     */
+    public String inOneLine() {
+        if (!any()) {
+            return "";
+        }
+        List<String> named = sample.subList(0, Math.min(INLINE_LIMIT, sample.size()));
+        int rest = total - named.size();
+        StringBuilder out = new StringBuilder(String.join(", ", named));
+        if (rest > 0) {
+            out.append(" and ").append(rest).append(" more");
+        }
+        out.append(total == 1
+            ? " — it belongs to another user, so the archive has a hole."
+            : " — they belong to other users, so the archive has holes.");
         return out.toString();
     }
 }

@@ -51,7 +51,9 @@ public final class LanServerSetupScript {
             PeerConfiguration relay = anchor.get().relayPeer().orElseThrow();
             gateway = relay.lanAddress();
             if (gateway == null || gateway.isBlank()) {
-                throw new ConflictException("Relay peer " + relay.name()
+                // Operator-facing: this message is rendered verbatim as a toast, so it names the two
+                // machines and the fix. "Relay peer" is internal vocabulary (UBIQUITOUS_LANGUAGE.md §17).
+                throw new ConflictException(relay.name()
                     + " has no LAN address set — set it before generating a setup script for "
                     + server.name());
             }

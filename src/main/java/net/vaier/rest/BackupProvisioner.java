@@ -543,6 +543,16 @@ public class BackupProvisioner implements CheckBackupPrerequisitesUseCase, InitB
         }
     }
 
+    /**
+     * The driven-port half of the same question {@link #checkRootBorg} answers for the provisioning wizard:
+     * can this machine run borg as root right now? It delegates rather than re-probing, so the wizard's view
+     * and the domain's can never disagree about one host.
+     */
+    @Override
+    public boolean canBackUpAsRoot(MachineId machineId) {
+        return checkRootBorg(machineId).canRunAsRoot();
+    }
+
     /** The backup server a machine backs up to, via its job's repository — empty when none is resolvable yet. */
     private Optional<String> serverForMachine(MachineId machineId) {
         return jobs.getAll().stream()

@@ -1,6 +1,7 @@
 package net.vaier.application.service;
 
 import net.vaier.application.DeleteBackupJobUseCase;
+import net.vaier.application.EnableBackupAsRootUseCase;
 import net.vaier.application.DeleteBackupRepositoryUseCase;
 import net.vaier.application.DeleteBackupServerUseCase;
 import net.vaier.application.GetBackupJobsUseCase;
@@ -12,12 +13,14 @@ import net.vaier.application.ProtectMachinePathsUseCase;
 import net.vaier.application.SaveBackupJobUseCase;
 import net.vaier.application.SaveBackupRepositoryUseCase;
 import net.vaier.application.SaveBackupServerUseCase;
+import net.vaier.domain.BackupAsRootOutcome;
 import net.vaier.domain.BackupJob;
 import net.vaier.domain.BackupRepository;
 import net.vaier.domain.BackupRun;
 import net.vaier.domain.BackupServer;
 import net.vaier.domain.ConflictException;
 import net.vaier.domain.Machine;
+import net.vaier.domain.NotFoundException;
 import net.vaier.domain.MachineId;
 import net.vaier.domain.SourcePaths;
 import net.vaier.domain.Unprotection;
@@ -48,7 +51,7 @@ public class BackupService implements
     SaveBackupRepositoryUseCase, GetBackupRepositoriesUseCase, DeleteBackupRepositoryUseCase,
     SaveBackupServerUseCase, GetBackupServersUseCase, DeleteBackupServerUseCase,
     SaveBackupJobUseCase, GetBackupJobsUseCase, DeleteBackupJobUseCase, GetBackupRunsUseCase,
-    ProtectMachinePathsUseCase {
+    ProtectMachinePathsUseCase, EnableBackupAsRootUseCase {
 
     private final ForPersistingBackupRepositories repositories;
     private final ForPersistingBackupServers servers;
@@ -166,6 +169,30 @@ public class BackupService implements
         jobs.save(job);
         ReadyingOutcome readying = job.readyClientHostForFirstBackup(firstBackup, readier).orElse(null);
         return new ProtectionOutcome(job, readying);
+    }
+
+    /**
+     * Accepting <b>Back up as root</b> for a machine: load its job, ask the job what saying yes means
+     * ({@link BackupJob#enablingBackupAsRoot}, which is where both the grant probe and the flag decision
+     * live) and persist the answer only when the job actually changed.
+     *
+     * <p>The service supplies the {@link ForReadyingBackupClients} port and writes the result. It does not
+     * decide whether the flag may move — that turns on whether the machine grants root borg, which is a
+     * backup rule and belongs on the job. A machine with nothing backed up has no job to change, which is a
+     * 404 rather than a job invented on the spot: opting a machine into root reads is not a way to start
+     * backing it up.
+     *
+     * @throws NotFoundException when the machine has no backup job
+     */
+    @Override
+    public BackupAsRootOutcome enableBackupAsRoot(MachineId machineId) {
+        BackupJob job = jobs.getByMachine(machineId).stream().findFirst()
+            .orElseThrow(() -> new NotFoundException("Nothing on that machine is backed up: " + machineId));
+        BackupAsRootOutcome outcome = job.enablingBackupAsRoot(readier);
+        if (outcome.changed()) {
+            jobs.save(outcome.job());
+        }
+        return outcome;
     }
 
     /**

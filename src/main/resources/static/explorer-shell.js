@@ -150,6 +150,8 @@
         backupJobs: [],                  // GET /backup-jobs — the jobs, each backing one machine up to a repository
         jobRuns: new Map(),              // machine identity -> { state, run }: its last run, read on view and on the run-settled push
         preparing: new Set(),            // machine identities Vaier is readying to back up (first back-up), cleared on prepare-client-settled
+        rootAfterGrant: new Set(),       // machine identities whose "back up as root" is waiting on the sudoers grant to land;
+                                         //   the prepare-client-settled push asks once more, then drops them (never a loop)
         readying: new Map(),             // machine identity -> the one `sudo bash …` line Vaier staged where it could not gain root itself
         provisionWatch: null,            // { serverName, bodyEl } while a provision dialog awaits its provision-settled push
         settings: { state: 'idle', config: null, version: '' },   // the native Settings entry, read on view
@@ -287,6 +289,14 @@
     function repoLabel(repoName) {
         const repo = S.backupRepos.find((r) => r.name === repoName);
         return repo && repo.label ? repo.label : repoName;
+    }
+    // The same store named inside a sentence — a title, a confirm, a toast. When a machine claims it that is
+    // "Roon server’s backups"; when none does, the label falls back to the borg name, and "where a3f2…’s
+    // backups are kept" says less to a person than saying nothing does. So an unclaimed store is "these
+    // backups": the operator is standing on it, and the pane above already says nobody backs up here.
+    function repoPhrase(repoName) {
+        const label = repoLabel(repoName);
+        return label === repoName ? 'these backups' : label + '’s backups';
     }
     // The backup jobs that back a machine up. A job carries the identity of the machine it protects, so this
     // is how a machine learns it is backed up — and grows a `backup` entry even when it is not the server.
@@ -696,7 +706,9 @@
         const peer = S.peers.get(machineId);
         const caps = document.createElement('span');
         caps.className = 'ex-caps';
-        if (peer && peer.isRelay) caps.appendChild(capIcon('relay', 'Relay — routes a LAN behind it'));
+        if (peer && peer.isRelay) {
+            caps.appendChild(capIcon('relay', 'Machines on its network are reached through it'));
+        }
         if (m && m.runsDocker) caps.appendChild(capIcon('docker', 'Runs Docker'));
         if (S.backupServer && S.backupServer.machineId === machineId) {
             caps.appendChild(capIcon('backupserver', 'Backup server — the fleet’s archives are kept here'));
@@ -1406,6 +1418,10 @@
         PUBLISH:                 (m) => ({ icon: 'route',   label: 'Publish',          run: () => go(['fleet', m.id, 'services']) }),
         BACK_UP:                 (m) => ({ icon: 'archive', label: 'Choose folders',   run: () => go(['fleet', m.id, 'files']) }),
         DESIGNATE_BACKUP_SERVER: (m) => ({ icon: 'nas',     label: 'Set it up',        run: () => designateBackupServer(m) }),
+        // The only nudge whose answer changes what Vaier's login on that machine is allowed to do, so it is
+        // the only one that carries a `learn` slug: the operator can read what saying yes grants, on the
+        // Concepts page, before answering. `run` is the single grant-and-flag action, never a wizard step.
+        BACK_UP_AS_ROOT:         (m) => ({ icon: 'shield',  label: 'Back up everything', run: () => backUpAsRootNow(m.id), learn: 'back-up-as-root' }),
     };
 
     // One nudge, rendered as a quiet invitation: an accent glyph for its kind, the domain's title and the
@@ -1418,6 +1434,17 @@
         const title = el('div', 'ex-nudge-title'); title.textContent = n.title;
         const why = el('div', 'ex-nudge-why'); why.textContent = n.evidence;
         text.append(title, why);
+        // A nudge that changes what Vaier may do on a machine says where to read what that means. The shell
+        // has no deep-link routing and does not need any: the Concepts page already anchors every term by
+        // slug, so this is a plain link to it.
+        if (a.learn) {
+            const more = el('a', 'ex-nudge-more');
+            more.href = 'concepts.html#' + a.learn;
+            more.target = '_blank';
+            more.rel = 'noopener';
+            more.textContent = 'What that means \u203a';
+            text.appendChild(more);
+        }
         row.appendChild(text);
         const btn = el('button', 'ex-btn'); btn.textContent = a.label; btn.onclick = a.run;
         row.appendChild(btn);
@@ -1510,7 +1537,8 @@
             form.append(field('Name', null, name), field('Description', 'Optional.', desc));
             if (isServerPeer) {
                 form.append(field('LAN address', 'Where this server answers on its own network.', lanAddr),
-                    field('LAN behind it', 'The subnet it routes to, so the fleet can reach it.', lanCidr));
+                    field('LAN behind it', 'The address range of the network it sits on, so the fleet can '
+                        + 'reach the machines there too.', lanCidr));
             }
             form.append(field('Device category', 'Its shape in the tree and on the map. Auto-detect lets Vaier '
                 + 'choose from what it sees.', cat));
@@ -1618,8 +1646,8 @@
         setupScriptDialog({
             title: 'Setup command for ' + machineName,
             body: 'Run this on ' + machineName + ' itself (it needs sudo) to open its Docker engine API to Vaier '
-                + 'and install routes to the fleet via its relay peer. It’s idempotent — safe to run once at '
-                + 'onboarding or again later, e.g. after rebuilding the host. The link works once.',
+                + 'and install the routes that let it reach the rest of the fleet. It’s idempotent — safe to '
+                + 'run once at onboarding or again later, e.g. after rebuilding the host. The link works once.',
             curl: "curl -fsSL '" + runUrl + "' | sudo bash",
             downloadUrl: origin + '/lan-servers/' + encodeURIComponent(machineId) + '/setup.sh',
         });
@@ -1785,8 +1813,11 @@
                 });
                 content.appendChild(list);
             } else {
-                content.appendChild(note('No networks to scan yet — add a relay peer with a LAN behind it, or '
-                    + 'add a server by its address.', false));
+                // A zero state, so it has to name the thing to go and do — and the by-address path is not it:
+                // an address Vaier cannot route to is refused, and with no networks here there is none.
+                content.appendChild(note('No networks to scan yet. Add a peer on the network you want to '
+                    + 'reach and tell Vaier the network behind it — Vaier can only look where a machine of '
+                    + 'yours already is.', false));
             }
             content.appendChild(pickFoot());
         }
@@ -2273,11 +2304,16 @@
             sub.textContent = 'A peer connects through Vaier’s VPN — Vaier assigns its tunnel address and keys. '
                 + 'Answer what it is for, and it generates the rest.';
             const grid = el('div', 'ex-choice-grid');
+            // The two cards carry the whole of the difference between the intents, so they say what each one
+            // gets — how it is reachable, and where its traffic goes — rather than naming the two tunnel
+            // shapes that decide it.
             const server = choiceCard('server', 'A server',
-                'Runs around the clock and can host services. Gets a split-tunnel peer that can route its LAN.');
+                'Runs around the clock and can host services. Stays reachable from the fleet, and can open '
+                + 'up the network it sits on.');
             server.onclick = () => { peerIntent = 'SERVER'; screen('peerOs'); };
             const device = choiceCard('laptop', 'A personal device',
-                'A phone, laptop or desktop that just needs to reach the fleet. Gets a full-tunnel client.');
+                'A phone, laptop or desktop that just needs to reach the fleet. Its traffic goes through '
+                + 'Vaier while it’s connected.');
             device.onclick = () => { peerIntent = 'PERSONAL_DEVICE'; screen('peerOs'); };
             grid.append(server, device);
             content.append(sub, section('What is this?'), grid, peerFoot(() => screen('fork')));
@@ -2588,7 +2624,8 @@
                     credential: body.credential || null }),
             });
             if (res.status === 400) {
-                toast(body.lanAddress + ' isn’t on any relay’s LAN, so the fleet can’t reach it.');
+                toast(body.lanAddress + ' isn’t on a network Vaier can reach. Add the machine that sits on '
+                    + 'that network first.');
                 return false;
             }
             if (!res.ok) {
@@ -4029,8 +4066,8 @@
     async function removeBackupServer(s) {
         const ok = await confirmTyped('Remove the backup server?',
             'The fleet will have nowhere to back up to until you designate another. This does not delete the '
-            + 'borg server on ' + s.machineName + ' or its repositories — it forgets that this machine is the '
-            + 'backup server. Type the server name to confirm.', s.name, 'Remove designation');
+            + 'borg server on ' + s.machineName + ' or anything it holds — it forgets that this machine is '
+            + 'the backup server. Type the server name to confirm.', s.name, 'Remove designation');
         if (!ok) return;
         try {
             const res = await fetch('/backup-servers/' + encodeURIComponent(s.name), { method: 'DELETE' });
@@ -4099,7 +4136,7 @@
                 field('Reached at', 'The host the borg server’s SSH listens on.', host),
                 field('SSH port', null, sshPort),
                 field('Borg user', null, borgUser),
-                field('Base repo path', 'No leading slash — repositories derive under this.', baseRepoPath),
+                field('Base repo path', 'No leading slash — each machine’s backups sit under this.', baseRepoPath),
                 field('Server data path', 'The borg container’s host data directory. Optional; found at provision.', serverDataPath),
                 managedRow,
             );
@@ -4190,14 +4227,14 @@
         body.appendChild(section('Archives'));
         const held = S.repoArchives.get(name);
         if (!held || held.state === 'loading') {
-            body.appendChild(note('Reading the archives in this repository…', false));
+            body.appendChild(note('Reading the archives kept here…', false));
             loadRepoArchives(name);
         } else if (held.state === 'error') {
             body.appendChild(note(held.error, true));
         } else if (!held.list.length) {
-            body.appendChild(note('No archives to show. Nothing has been backed up into this repository yet, or '
-                + 'no job targets it — borg list runs on a job’s host, so without one Vaier has nowhere to read '
-                + 'it from.', false));
+            body.appendChild(note('No archives to show. Nothing has been backed up here yet, or no backup job '
+                + 'points here any more — Vaier reads the list from the machine a job backs up, so without '
+                + 'one there is nowhere to read it from.', false));
         } else {
             const list = el('div', 'ex-brepos');
             held.list.forEach((a) => {
@@ -4226,11 +4263,11 @@
             } else {
                 const b = await res.json().catch(() => ({}));
                 S.repoArchives.set(name, { state: 'error', list: [],
-                    error: b.message || 'Vaier could not read this repository’s archives.' });
+                    error: b.message || 'Vaier could not read the archives kept here.' });
             }
         } catch (e) {
             S.repoArchives.set(name, { state: 'error', list: [],
-                error: 'Vaier could not read this repository’s archives.' });
+                error: 'Vaier could not read the archives kept here.' });
         }
         render();
     }
@@ -4246,9 +4283,9 @@
     // API (PUT /backup-repositories/{name}); it is rare enough that it does not belong on this page.
     function editRepository(r) {
         repoForm({
-            title: 'Edit ' + r.name,
-            intro: 'The path override and append-only setting of this repository. Leave the passphrase blank to '
-                + 'keep the stored one.',
+            title: 'Where ' + repoPhrase(r.name) + ' are kept',
+            intro: 'Where these backups sit on the server, and whether the machine may prune them. Leave the '
+                + 'passphrase blank to keep the stored one.',
             existing: r,
             confirmLabel: 'Save',
         }).then((body) => {
@@ -4266,15 +4303,15 @@
             });
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
-                toast(err.message || 'Vaier could not save the repository.');
+                toast(err.message || 'Vaier could not save the storage details.');
                 return;
             }
             await loadBackup();
             S.repoArchives.delete(name);   // a re-saved repo re-reads its archives fresh
-            toast('Repository ' + verbedPast + '.');
+            toast('Storage details ' + verbedPast + '.');
             go(['fleet', S.path[1], 'backup', name]);
         } catch (e) {
-            toast('Vaier could not save the repository.');
+            toast('Vaier could not save the storage details.');
         }
     }
 
@@ -4282,25 +4319,29 @@
     // safe default (the archives on disk are the whole point of a backup), so it takes a plain confirm rather
     // than the typed-name gate a file delete does.
     async function deleteRepository(r) {
-        const ok = await confirmModal('Delete repository ' + r.name + '?',
-            'Vaier forgets this repository — it does not erase the borg store on ' + r.serverName + ' or the '
-            + 'archives in it. Any backup job pointing at it will have nowhere to write until you re-add it.',
-            'Delete');
+        // One flow, one verb. The button says Forget, so the confirm asks Forget and the toast says forgotten
+        // — the operator should never have to work out that "delete repository" was the thing they pressed.
+        const ok = await confirmModal('Forget ' + repoPhrase(r.name) + '?',
+            'Vaier stops tracking them — it does not erase the borg store on ' + r.serverName + ' or the '
+            + 'archives in it. Any backup job pointing here will have nowhere to write until you add them '
+            + 'back.',
+            'Forget');
         if (!ok) return;
+        const phrase = repoPhrase(r.name);   // read before the reload drops the store from the feed
         try {
             const res = await fetch('/backup-repositories/' + encodeURIComponent(r.name), { method: 'DELETE' });
             if (!res.ok && res.status !== 404) {
-                toast('Vaier could not delete the repository.');
+                toast('Vaier could not forget ' + phrase + '.');
                 return;
             }
         } catch (e) {
-            toast('Vaier could not delete the repository.');
+            toast('Vaier could not forget ' + phrase + '.');
             return;
         }
         const machineId = S.path[1];
         S.repoArchives.delete(r.name);
         await loadBackup();
-        toast('Repository deleted.');
+        toast('Vaier has forgotten ' + phrase + '.');
         go(['fleet', machineId, 'backup']);   // back up to the server
     }
 
@@ -4353,7 +4394,7 @@
                 field('Name', creating ? 'Letters, digits, dot, dash, underscore.' : null, name),
                 field('Path override', 'No leading slash. Blank derives ' + (existing ? existing.serverName
                     : (S.backupServer ? S.backupServer.name : 'the server')) + '’s base path + the name.', repoPath),
-                field('Passphrase', creating ? 'Save this — it unlocks the repository. Vaier also keeps it '
+                field('Passphrase', creating ? 'Save this — it unlocks these backups. Vaier also keeps it '
                     + 'encrypted in the vault.' : 'Blank keeps the stored one; type a new one to replace it.',
                     passphrase),
                 appendRow,
@@ -4492,17 +4533,23 @@
         // The one backup setting that decides whether a backup of a shared directory is real. Colina 27 ran
         // without it over /home for months and silently skipped every file another user owned. It is stated as
         // a consequence, not as "run borg as root": the operator's question is "will my data be in there?",
-        // not "which uid does borg run under". The flag lives on the job spec, so the toggle re-PUTs the job
-        // (see toggleBackupAsRoot) — the same route the job's other fields already travel.
-        body.appendChild(section('Reading the files'));
-        body.appendChild(checkRow('Back up files owned by other users', job.backupAsRoot,
+        // not "which uid does borg run under".
+        //
+        // Folded under Advanced since #334. Asked up front it is a question nobody can answer — it is really
+        // about file ownership inside container volumes and about what a passwordless `sudo borg` grants —
+        // put to someone with no evidence either way. The evidence-backed version of the same question is the
+        // machine's BACK_UP_AS_ROOT nudge, raised only once a run has actually lost files. This stays here so
+        // it is reachable and so the current state is visible; it is no longer the way the question is asked.
+        const rootAdv = disclosure('Advanced');
+        rootAdv.appendChild(checkRow('Back up files owned by other users', job.backupAsRoot,
             (on) => toggleBackupAsRoot(job, on)));
-        body.appendChild(note(job.backupAsRoot
+        rootAdv.appendChild(note(job.backupAsRoot
             ? 'On — Vaier reads every file in the protected paths, whoever owns them, so the archive holds '
               + 'all of it.'
             : 'Off — any file here that belongs to someone else is skipped, and the archive is missing it. '
               + 'Turn this on if the protected paths hold other people’s home directories, a container’s '
               + 'data, or a database file.', false));
+        body.appendChild(rootAdv);
 
         body.appendChild(section('Schedule'));
         const sched = el('div', 'ex-runline');
@@ -4642,7 +4689,7 @@
             const res = await fetch('/backup-jobs/' + encodeURIComponent(job.machineId) + '/runs', { method: 'POST' });
             if (!res.ok) {
                 toast(res.status === 404
-                    ? 'Cannot start the backup — its repository or the server is missing.'
+                    ? 'Cannot start the backup — Vaier can’t find where this machine’s backups are kept.'
                     : 'Vaier could not start the backup.');
                 return;
             }
@@ -4656,14 +4703,65 @@
         }
     }
 
-    // "Back up files owned by other users" rides on the whole job spec — the flag has no endpoint of its own,
-    // so a toggle re-saves the job with it flipped and carries every other field through unchanged (drop one
-    // and the job would silently lose its protected paths). Optimistic like the SSH-access toggle: the
-    // checkbox is already where the operator put it, so the local job is patched and repainted at once, and a
-    // save that fails puts it back rather than leaving the screen lying about what Vaier will do tonight.
+    // The two directions of "back up files owned by other users" are not mirror images, so they are not one
+    // call. Turning it OFF needs nothing installed anywhere — it is a job save. Turning it ON only means
+    // anything if the machine lets Vaier's login run borg as root, and that grant used to be a separate,
+    // undiscoverable step: a ticked box on a machine without it produced a job whose every run died on
+    // `sudo -n` before borg started. So ON goes through the one action that does both.
     async function toggleBackupAsRoot(job, on) {
+        if (on) return backUpAsRootNow(job.machineId);
+        return stopBackingUpAsRoot(job);
+    }
+
+    // Say yes to backing up as root, in ONE call: Vaier installs the sudoers grant where it is missing and
+    // turns the job's flag on where the machine actually grants it. The response is compound — granted / job
+    // / provisioning — and this reports it as it is. A 200 is NOT "done": a machine that has not granted root
+    // borg comes back granted:false with the flag still off, and telling the operator otherwise would leave
+    // them believing tonight's archive is whole when it has the same holes as last night's.
+    //
+    // When the grant had to be installed, that install is detached, so the answer arrives later on
+    // prepare-client-settled. The machine is remembered in S.rootAfterGrant and asked exactly once more when
+    // it lands — `retrying` is what stops that from ever becoming a loop on a host that will never grant it.
+    async function backUpAsRootNow(machineId, retrying) {
+        const name = nameOf(machineId);
+        try {
+            const res = await fetch('/backup-jobs/' + encodeURIComponent(machineId) + '/back-up-as-root',
+                { method: 'POST' });
+            if (!res.ok) {
+                toast(res.status === 404
+                    ? 'Nothing on ' + name + ' is backed up yet.'
+                    : 'Vaier could not turn that on for ' + name + '.');
+                return;
+            }
+            const out = await res.json();
+            const staged = out.provisioning && out.provisioning.scriptOnly;
+            if (out.granted) {
+                toast('Vaier will read every file on ' + name + ', whoever owns them, from the next run.');
+            } else if (staged) {
+                S.readying.set(machineId, 'sudo bash ' + out.provisioning.stagedScriptPath);
+                toast('Vaier cannot gain root on ' + name + ' by itself. Run the command on its Backup entry, '
+                    + 'then turn this on again.');
+            } else {
+                S.preparing.add(machineId);
+                if (!retrying) S.rootAfterGrant.add(machineId);
+                toast('Getting ' + name + ' ready to read every file — Vaier will finish this off itself.');
+            }
+            S.nudges.delete(machineId);     // the evidence just changed; the pane re-asks on the next paint
+            await loadBackup();
+            render();
+        } catch (e) {
+            toast('Vaier could not turn that on for ' + name + '.');
+        }
+    }
+
+    // Stop reading as root. This one really is just the job spec: the flag has no endpoint of its own, so the
+    // job is re-saved with it off and every other field carried through unchanged (drop one and the job would
+    // silently lose its protected paths). Optimistic like the SSH-access toggle — the checkbox is already
+    // where the operator put it — and a save that fails puts it back rather than leaving the screen lying
+    // about what Vaier will do tonight.
+    async function stopBackingUpAsRoot(job) {
         const was = job.backupAsRoot;
-        job.backupAsRoot = on;
+        job.backupAsRoot = false;
         render();
         try {
             const res = await fetch('/backup-jobs/' + encodeURIComponent(job.machineId), {
@@ -4672,7 +4770,7 @@
                 body: JSON.stringify({ repositoryName: job.repositoryName,
                     sourcePaths: job.sourcePaths, excludes: job.excludes, keepDaily: job.keepDaily,
                     keepWeekly: job.keepWeekly, keepMonthly: job.keepMonthly, compression: job.compression,
-                    enabled: job.enabled, backupAsRoot: on }),
+                    enabled: job.enabled, backupAsRoot: false }),
             });
             if (!res.ok) throw new Error('save failed');
         } catch (e) {
@@ -4682,8 +4780,8 @@
             return;
         }
         await loadBackup();
-        toast(on ? 'Vaier will back up files owned by other users on ' + job.machineName + ' from the next run.'
-                 : 'Vaier will skip files owned by other users on ' + job.machineName + '.');
+        S.nudges.delete(job.machineId);
+        toast('Vaier will skip files owned by other users on ' + job.machineName + '.');
         render();
     }
 
@@ -4714,6 +4812,12 @@
         events.addEventListener('run-settled', (e) => {
             const d = JSON.parse(e.data);
             if (S.backupJobs.some((j) => j.machineId === d.machineId)) loadJobRun(d.machineId);
+            // A settled run IS the evidence a nudge rests on — a run that lost files to permissions raises
+            // "this backup is missing N files". Nudges are read once per machine, so without dropping the
+            // cached answer here the card would not appear until the operator left the pane and came back:
+            // the moment the evidence arrives would be the moment it is invisible. Not a poll — we were told.
+            S.nudges.delete(d.machineId);
+            render();
         });
         // The other half of the readying we started under a first back-up: the detached borg install has
         // finished on the host. Clear the "getting ready" state and say how it went — no polling, we were told.
@@ -4724,6 +4828,13 @@
             S.preparing.delete(d.machineId);
             // The staged command was a standing instruction; a readying that landed on its own retires it.
             if (d.state === 'SUCCESS') S.readying.delete(d.machineId);
+            // The other half of "one action": an operator who said yes to backing up as root on a machine
+            // that had no grant is not asked to come back and say it again. The grant has landed, so Vaier
+            // finishes what they started — once. Dropped from the set either way, so a host that will never
+            // grant it (no visudo) gets one more try and then stops.
+            if (S.rootAfterGrant.delete(d.machineId) && d.state === 'SUCCESS') {
+                backUpAsRootNow(d.machineId, true);
+            }
             toast(d.state === 'SUCCESS'
                 ? d.machineName + ' is ready — its backup will run tonight, or now if you like.'
                 : 'Vaier could not finish getting ' + d.machineName + ' ready — try backing it up again.');
@@ -5088,7 +5199,7 @@
 
         if (r.fewerCopiesThanIntended && r.survivesLossOfVaier) {
             const short = el('div', 'ex-hint');
-            short.textContent = 'Vaier keeps three copies where it can, never two behind the same relay. This '
+            short.textContent = 'Vaier keeps three copies where it can, never two in the same place. This '
                 + 'fleet had room for ' + kept + '.';
             host.appendChild(short);
         }
@@ -5190,11 +5301,11 @@
         // typo here is invisible until the one day it matters.
         const kitForm = sectionForm('Reading your backups without Vaier');
         const kitWhy = el('div', 'ex-hint');
-        kitWhy.textContent = 'Every repository passphrase lives in Vaier, and Vaier’s own backup is encrypted '
-            + 'with one of them — so losing this server would leave you holding archives nothing can open. A '
-            + 'survival kit is that list, encrypted with a passphrase only you know and copied onto machines '
-            + 'Vaier does not run on. Each copy carries the one openssl command that opens it, printed in the '
-            + 'clear on the file itself.';
+        kitWhy.textContent = 'Every passphrase that unlocks a machine’s backups lives in Vaier, and Vaier’s '
+            + 'own backup is encrypted with one of them — so losing this server would leave you holding '
+            + 'archives nothing can open. A survival kit is that list, encrypted with a passphrase only you '
+            + 'know and copied onto machines Vaier does not run on. Each copy carries the one openssl '
+            + 'command that opens it, printed in the clear on the file itself.';
         kitForm.appendChild(kitWhy);
 
         const kitPass = input('', c.hasSurvivalKitPassphrase

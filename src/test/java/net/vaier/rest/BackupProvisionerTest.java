@@ -173,6 +173,29 @@ class BackupProvisionerTest {
         assertThat(provisioner.checkRootBorg(TestMachineIds.of("Colina 27")).canRunAsRoot()).isFalse();
     }
 
+    /**
+     * The same probe, offered on the driven port the domain holds (#334). {@link BackupJob} has to know
+     * whether a machine grants root borg <em>before</em> it lets a job opt in, and a domain entity reaches
+     * infrastructure only through a port — so the port answers with the one probe that already exists rather
+     * than a second, drift-prone one.
+     */
+    @Test
+    void canBackUpAsRoot_answersThePortWithTheSameProbeTheWizardUses() {
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Colina 27")));
+        hasCredential("Colina 27");
+        when(runner.run(eq(mid("Colina 27")), contains("sudo -n borg --version")))
+            .thenReturn(new CommandResult(0, "ROOT_BORG_OK\n", "", false, "SHA256:x"));
+
+        assertThat(provisioner.canBackUpAsRoot(TestMachineIds.of("Colina 27"))).isTrue();
+    }
+
+    @Test
+    void canBackUpAsRoot_isFalseWhenTheGrantIsMissingOrTheHostCannotBeAsked() {
+        when(machines.getAllMachines()).thenReturn(List.of());
+
+        assertThat(provisioner.canBackUpAsRoot(TestMachineIds.of("Nowhere"))).isFalse();
+    }
+
     @Test
     void checkBorgReportsNotInstalled() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("Apalveien 5")));

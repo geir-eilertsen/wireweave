@@ -162,7 +162,7 @@ class BackupRestControllerTest {
         controller = new BackupRestController(service, service, service, service, service, service,
             generateSetupScript, provisionBackupServer, service, service, service, service, runBackupJob,
             listArchives, checkPrerequisites, initBackupRepository, getMachines, authorizeBackupClient,
-            prepareBackupClient, service, forSubscribingToEvents, writeSurvivalKit);
+            prepareBackupClient, service, forSubscribingToEvents, writeSurvivalKit, service);
     }
 
     private Machine machine(String name) {
@@ -707,6 +707,56 @@ class BackupRestControllerTest {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         verify(prepareBackupClient, never()).prepareClient(any());
+    }
+
+    // --- accepting "back up as root": one call, one honest compound answer (#334) ---
+
+    @Test
+    void backUpAsRoot_flipsTheJobWhenTheMachineAlreadyGrantsRootBorg() {
+        repositories.save(repo());
+        backupServers.save(server());
+        jobs.save(job());
+        when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
+        when(readier.canBackUpAsRoot(COLINA)).thenReturn(true);
+
+        BackupRestController.BackUpAsRootResponse body = controller.backUpAsRoot(COLINA.value()).getBody();
+
+        assertThat(body).isNotNull();
+        assertThat(body.granted()).isTrue();
+        assertThat(body.job().backupAsRoot()).isTrue();
+        assertThat(body.provisioning()).as("nothing needed installing, so nothing is reported").isNull();
+        assertThat(jobs.getByMachine(COLINA).get(0).backupAsRoot()).isTrue();
+    }
+
+    @Test
+    void backUpAsRoot_reportsAnUninstalledGrantRatherThanClaimingTheToggleLanded() {
+        // The acceptance criterion the old two-step flow could not meet: the operator is TOLD when the grant
+        // did not go in, instead of being left with a ticked box and a job that dies on `sudo -n` tonight.
+        repositories.save(repo());
+        backupServers.save(server());
+        jobs.save(job());
+        when(getMachines.getAllMachines()).thenReturn(List.of(machine("Colina 27")));
+        when(readier.canBackUpAsRoot(COLINA)).thenReturn(false);
+        when(readier.readyForBackup(COLINA)).thenReturn(new ReadyingOutcome(false, true,
+            "/home/geir/.vaier-backup/prepare-client.sh", "Run it yourself with sudo"));
+
+        BackupRestController.BackUpAsRootResponse body = controller.backUpAsRoot(COLINA.value()).getBody();
+
+        assertThat(body).isNotNull();
+        assertThat(body.granted()).isFalse();
+        assertThat(body.job().backupAsRoot()).isFalse();
+        assertThat(body.provisioning()).isNotNull();
+        assertThat(body.provisioning().scriptOnly()).isTrue();
+        assertThat(body.provisioning().stagedScriptPath()).isEqualTo(
+            "/home/geir/.vaier-backup/prepare-client.sh");
+        assertThat(jobs.getByMachine(COLINA).get(0).backupAsRoot()).isFalse();
+    }
+
+    @Test
+    void backUpAsRoot_onAMachineWithNothingBackedUpIs404() {
+        assertThatThrownBy(() -> controller.backUpAsRoot(MachineId.generate().value()))
+            .isInstanceOf(NotFoundException.class);
+        verify(readier, never()).canBackUpAsRoot(any());
     }
 
     @Test

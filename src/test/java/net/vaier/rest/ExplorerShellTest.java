@@ -3,7 +3,9 @@ package net.vaier.rest;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
@@ -248,6 +250,65 @@ class ExplorerShellTest {
                                     "explorer-listing.js")) {
             assertThat(node.matcher(read(asset)).find()).as("\"node\" in %s", asset).isFalse();
         }
+    }
+
+    @Test
+    void theShell_speaksNoMechanismAtTheOperator() throws IOException {
+        // UBIQUITOUS_LANGUAGE.md §17: a handful of terms are internal vocabulary and never appear in the UI.
+        // They stay in the code — identifiers, icon keys and comments are where they belong — so this reads
+        // only the prose the operator can actually see: string literals with a space in them. A literal with
+        // no space ('relay' as an icon key, '/backup-repositories' as a path) is a key, not a sentence.
+        Map<String, String> banned = Map.of(
+            "\\brelays?\\b", "the machine a network is reached through, named",
+            "\\bCIDR\\b", "\"the network behind it\"",
+            "\\b(split|full)[ -]tunnel", "what the peer is for, in plain words",
+            "\\bVPN subnet\\b", "\"your VPN\"",
+            "\\bAllowedIPs\\b", "nothing — it is never shown",
+            "\\bmachine type\\b", "the intent fork in the add flow",
+            "\\b(machine|peer) id\\b", "nothing — a machine is named, not numbered",
+            "\\brepositor(y|ies)\\b", "whose backups these are (the store label)");
+
+        for (String prose : proseLiterals(read("explorer-shell.js"))) {
+            for (Map.Entry<String, String> term : banned.entrySet()) {
+                assertThat(Pattern.compile(term.getKey(), Pattern.CASE_INSENSITIVE).matcher(prose).find())
+                    .as("\"%s\" is mechanism — say %s. Found in: %s", term.getKey(), term.getValue(), prose)
+                    .isFalse();
+            }
+        }
+    }
+
+    /**
+     * Every multi-word single-quoted string literal in a JavaScript source — the shell's operator-facing
+     * prose. Comments (which are full of the mechanism words on purpose) and identifiers are skipped by
+     * walking the source one character at a time rather than pattern-matching it, since the shell's comments
+     * are dense with apostrophes that a quote-counting regex would read as string boundaries.
+     */
+    private static List<String> proseLiterals(String source) {
+        List<String> prose = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        boolean inString = false, inLineComment = false, inBlockComment = false;
+        char opener = 0;
+        for (int i = 0; i < source.length(); i++) {
+            char c = source.charAt(i);
+            char next = i + 1 < source.length() ? source.charAt(i + 1) : 0;
+            if (inLineComment) {
+                if (c == '\n') inLineComment = false;
+            } else if (inBlockComment) {
+                if (c == '*' && next == '/') { inBlockComment = false; i++; }
+            } else if (inString) {
+                if (c == '\\') { i++; }
+                else if (c == opener) {
+                    inString = false;
+                    if (current.indexOf(" ") >= 0) prose.add(current.toString());
+                    current.setLength(0);
+                } else {
+                    current.append(c);
+                }
+            } else if (c == '/' && next == '/') { inLineComment = true; i++; }
+            else if (c == '/' && next == '*') { inBlockComment = true; i++; }
+            else if (c == '\'' || c == '"' || c == '`') { inString = true; opener = c; }
+        }
+        return prose;
     }
 
     // --- 7. the listing is lifted, not rewritten --------------------------------------------------------
@@ -1147,10 +1208,12 @@ class ExplorerShellTest {
     }
 
     @Test
-    void backingUpAsRoot_isASettingTheOperatorCanSee_notOneBuriedInTheApi() throws IOException {
+    void backingUpAsRoot_isASettingTheOperatorCanSee_butNoLongerAQuestionAskedUpFront() throws IOException {
         // Colina 27 ran non-root over /home for months, skipping every file another user owned, because the
         // one setting that decides whether a backup of /home is real had no control anywhere in the shell.
-        // It has one now, on the machine's backup pane, using the same checkbox idiom as SSH access.
+        // It has one — but as of #334 it sits under Advanced, because asked up front it is a question about
+        // file ownership inside container volumes and the security envelope of a sudoers rule, put to
+        // someone with no evidence either way. The evidence-backed version is the machine's nudge.
         String js = read("explorer-shell.js");
         int from = js.indexOf("function renderOneJob(");
         assertThat(from).isPositive();
@@ -1160,22 +1223,86 @@ class ExplorerShellTest {
         assertThat(body).as("the shell's existing checkbox row, not a new widget").contains("checkRow(");
         assertThat(body).as("the consequence in the operator's words, not the mechanism")
             .contains("owned by other users");
+        assertThat(body).as("folded away, using the shell's one disclosure idiom — reachable, not asked")
+            .contains("disclosure('Advanced')");
+        int fold = body.indexOf("disclosure('Advanced')");
+        assertThat(body.indexOf("checkRow('Back up files owned by other users'")).as("inside the fold")
+            .isGreaterThan(fold);
     }
 
     @Test
-    void theBackupAsRootToggle_ridesTheJobEndpointThatAlreadyExists() throws IOException {
-        // No endpoint was opened for this: the flag lives on the job spec, so the toggle re-PUTs the whole
-        // job with it flipped — the same route the rest of the job's fields already travel.
+    void turningBackupAsRootOn_isTheOneActionThatAlsoInstallsTheGrant() throws IOException {
+        // #334's acceptance criterion. Flipping the flag alone produced a job whose every run died on
+        // `sudo -n` — the grant was a separate, undiscoverable step. Turning it ON now goes through the one
+        // endpoint that does both and reports back; turning it OFF is still a plain job save, because
+        // nothing has to be installed to stop reading as root.
         String js = read("explorer-shell.js");
         int from = js.indexOf("async function toggleBackupAsRoot(");
         assertThat(from).isPositive();
-        String body = js.substring(from, js.indexOf("\n    }", from));
+        String body = js.substring(from, js.indexOf("\n    }\n", from));
 
-        assertThat(body).as("addressed by the machine whose job it is, not by the job's label")
+        assertThat(body).as("turning it on routes through the grant-and-flag action")
+            .contains("backUpAsRootNow(job.machineId)");
+        assertThat(body).as("turning it off needs nothing installed").contains("stopBackingUpAsRoot(job)");
+
+        int off = js.indexOf("async function stopBackingUpAsRoot(");
+        assertThat(off).as("turning it off still rides the job endpoint that already exists").isPositive();
+        String offBody = js.substring(off, js.indexOf("\n    }\n", off));
+        assertThat(offBody).as("addressed by the machine whose job it is, not by the job's label")
             .contains("'/backup-jobs/' + encodeURIComponent(job.machineId)");
-        assertThat(body).contains("method: 'PUT'");
-        assertThat(body).as("every field is carried through, so a toggle never drops the job's paths")
-            .contains("backupAsRoot: on");
+        assertThat(offBody).contains("method: 'PUT'");
+        assertThat(offBody).as("every field is carried through, so a toggle never drops the job's paths")
+            .contains("backupAsRoot: false");
+    }
+
+    @Test
+    void acceptingBackUpAsRoot_isHonestWhenTheGrantDidNotLand() throws IOException {
+        // The response is compound on purpose — granted / job / provisioning — and the shell must not
+        // flatten it into "done". A 200 with granted:false means the machine still cannot read those files.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("async function backUpAsRootNow(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }\n", from));
+
+        assertThat(body).contains("'/back-up-as-root'");
+        assertThat(body).contains("method: 'POST'");
+        assertThat(body).as("the outcome decides what the operator is told, not the status code")
+            .contains("granted");
+    }
+
+    @Test
+    void theBackUpAsRootNudge_hasAnActionAndSaysWhereToReadWhatItMeans() throws IOException {
+        // The domain raises BACK_UP_AS_ROOT with the files it lost; the shell only routes it. And because
+        // saying yes makes Vaier's login on that machine as powerful as root, the card carries a way to read
+        // what that means before answering — the Concepts entry, where the long explanation belongs.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("const NUDGE_ACTION = {");
+        assertThat(from).isPositive();
+        String table = js.substring(from, js.indexOf("};", from));
+        assertThat(table).contains("BACK_UP_AS_ROOT:");
+        assertThat(table).as("the accept runs the one action, not a separate wizard step")
+            .contains("backUpAsRootNow(");
+        assertThat(table).contains("back-up-as-root");
+
+        int card = js.indexOf("function nudgeCard(");
+        String cardBody = js.substring(card, js.indexOf("\n    }\n", card));
+        assertThat(cardBody).as("the card renders the learn-more link when a nudge carries one")
+            .contains("concepts.html#");
+    }
+
+    @Test
+    void aSettledRun_reopensTheMachinesNudges() throws IOException {
+        // Nudges are read once per machine and never re-read, so without this the "this backup is missing 3
+        // files" card would not appear until the operator left the machine pane and came back — i.e. exactly
+        // when the evidence arrives is exactly when it would be invisible. No polling: the run-settled push
+        // already tells us, so it drops the cached answer and the next paint re-asks.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("events.addEventListener('run-settled'");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("});", from));
+
+        assertThat(body).contains("S.nudges.delete(d.machineId)");
+        assertThat(js).as("still no polling anywhere in the shell").doesNotContain("setInterval(");
     }
 
     @Test

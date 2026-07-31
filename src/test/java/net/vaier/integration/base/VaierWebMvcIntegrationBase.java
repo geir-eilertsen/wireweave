@@ -382,6 +382,9 @@ public abstract class VaierWebMvcIntegrationBase {
     protected PrepareBackupClientUseCase prepareBackupClientUseCase;
 
     @MockBean
+    protected EnableBackupAsRootUseCase enableBackupAsRootUseCase;
+
+    @MockBean
     protected SaveBackupJobUseCase saveBackupJobUseCase;
 
     @MockBean

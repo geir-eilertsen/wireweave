@@ -135,6 +135,39 @@ public final class OperatorGlossary {
                     "A host the LAN scanner found that you haven't registered yet.",
                     "It's a candidate you can promote into a LAN server with one step."))),
 
+            new ConceptGroup("Backups", List.of(
+                Concept.of("Backup job",
+                    "Vaier's standing instruction to back up one machine's chosen folders every night.",
+                    "It's what actually protects a machine — no job, no copies of anything."),
+                Concept.of("Backup run",
+                    "One execution of a backup job, with its outcome recorded.",
+                    "It's the record that tells you whether last night's copy really happened."),
+                Concept.of("Incomplete backup",
+                    "A run that finished and wrote an archive, but could not read some of the files it was "
+                        + "meant to copy — so those files are not in it.",
+                    "It's the failure that looks like success: green on screen, holes in the data, and you "
+                        + "only find out on the day you need the file."),
+                Concept.of("Back up as root",
+                    "Reading every file on a machine when Vaier copies it, including files that belong to "
+                        + "other users — container volumes, databases, other people's home folders. Vaier "
+                        + "normally reads as its own login there, which silently skips whatever that login "
+                        + "may not open.",
+                    "Turn it on when a backup came back incomplete: it's the one setting that decides "
+                        + "whether the archive holds all of your data or most of it. The price is real and "
+                        + "worth knowing — the machine has to let Vaier's login run the backup program as "
+                        + "root without a password, which makes that login as powerful as root there. Vaier "
+                        + "grants it for the backup program alone, and only when you say yes."),
+                Concept.of("Backup repository",
+                    "The store on the backup server that holds one machine's archives. Vaier makes exactly "
+                        + "one per machine, names it after the machine and generates the passphrase that "
+                        + "unlocks it — you never create or name one.",
+                    "You won't meet this word anywhere else in Vaier: every screen says whose backups a "
+                        + "store holds instead. It is here for the day you read it in a borg command or a "
+                        + "passphrase prompt and want to know what it is."),
+                Concept.of("Archive",
+                    "One dated snapshot of a machine's protected folders inside its backup store.",
+                    "It's what you actually restore from, and there's one per successful run."))),
+
             new ConceptGroup("Launchpad", List.of(
                 Concept.of("Launchpad",
                     "The dashboard page listing all your services as clickable tiles.",

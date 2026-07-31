@@ -81,6 +81,19 @@ class LockoutWarningTest {
     }
 
     @Test
+    void body_namesTheAllowlistsContents_inTheOperatorsWords() {
+        // This body lands in an inbox, so it is UI copy under a different name. UBIQUITOUS_LANGUAGE.md §17:
+        // "VPN subnet" and "relay" are internal vocabulary — the operator has a VPN and machines with
+        // networks behind them, and that is what the allowlist is made of.
+        String body = LockoutWarning.from(List.of(VPN_PEER), TRUSTED).body(null);
+
+        assertThat(body)
+            .contains("trusted networks allowlist")
+            .doesNotContain("VPN subnet")
+            .doesNotContain("relay");
+    }
+
+    @Test
     void body_tellsTheOperatorHowToGetBackIn() {
         String body = LockoutWarning.from(List.of(VPN_PEER), TRUSTED).body(null);
 

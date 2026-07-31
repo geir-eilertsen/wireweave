@@ -1,5 +1,6 @@
 package net.vaier.domain;
 
+import lombok.Builder;
 import net.vaier.domain.port.ForReadyingBackupClients;
 
 import java.time.Instant;
@@ -40,6 +41,7 @@ import java.util.Optional;
  * @param enabled      whether nightly scheduling should run this job
  * @param backupAsRoot whether this job's borg runs as root on the machine (see below)
  */
+@Builder(toBuilder = true)
 public record BackupJob(
     String name,
     MachineId machineId,
@@ -111,6 +113,35 @@ public record BackupJob(
     public BackupJob withSourcePaths(List<String> newSourcePaths) {
         return new BackupJob(name, machineId, repositoryName, newSourcePaths, excludes,
             keepDaily, keepWeekly, keepMonthly, compression, enabled, backupAsRoot);
+    }
+
+    /**
+     * Say yes to <b>Back up as root</b> for this job — one operator decision, and this entity's to make.
+     *
+     * <p>It is one decision because it used to be two, and the second was invisible: the toggle only works on a
+     * machine whose SSH user may run borg as root without a password, and nothing told the operator that the
+     * grant is a separate step. So this asks the driven {@link ForReadyingBackupClients} port whether the
+     * machine {@link ForReadyingBackupClients#canBackUpAsRoot grants it}, and:
+     * <ul>
+     *   <li><b>it does</b> — the flag goes on (or was already on), and tonight's run reads every file;</li>
+     *   <li><b>it does not</b> — the grant is requested through the same port, and the flag <em>stays where it
+     *       was</em>. The install is detached, so its success is not yet knowable; flipping the flag on that
+     *       hope would trade an archive with holes for no archive at all, since borg would never start.</li>
+     * </ul>
+     * The flag never moves on a machine that has not granted root, in either direction — which is also why a
+     * job that already asks for root on a machine that has stopped granting it keeps asking, and merely has
+     * the grant requested again.
+     *
+     * <p>The port is asked, and the answer acted on, right here: an infrastructure call a domain decision
+     * depends on is the domain's to make, with the port handed in by the orchestrating service.
+     */
+    public BackupAsRootOutcome enablingBackupAsRoot(ForReadyingBackupClients readier) {
+        if (!readier.canBackUpAsRoot(machineId)) {
+            return BackupAsRootOutcome.grantMissing(this, readier.readyForBackup(machineId));
+        }
+        return backupAsRoot
+            ? BackupAsRootOutcome.alreadyOn(this)
+            : BackupAsRootOutcome.enabled(toBuilder().backupAsRoot(true).build());
     }
 
     /** A copy of this job protecting {@code newSourcePaths} except for {@code newExcludes}. */

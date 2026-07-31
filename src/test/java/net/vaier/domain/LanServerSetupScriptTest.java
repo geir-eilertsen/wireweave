@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class LanServerSetupScriptTest {
 
@@ -212,10 +213,25 @@ class LanServerSetupScriptTest {
         LanServer server = new LanServer("nuc02", "192.168.3.50", false, null, null);
         List<PeerConfiguration> peers = List.of(relay("apalveien5", "192.168.3.0/24")); // lanAddress null
 
-        org.assertj.core.api.Assertions.assertThatThrownBy(
+        assertThatThrownBy(
                 () -> LanServerSetupScript.forHost(server, peers, "172.31.16.0/20", "10.13.13.0/24"))
             .isInstanceOf(ConflictException.class)
             .hasMessageContaining("apalveien5");
+    }
+
+    @Test
+    void forHost_relayMissingLanAddress_namesTheMachine_notItsMechanism() {
+        // This message reaches the operator verbatim as a toast (the shell renders ApiError.message), so it
+        // is UI copy. UBIQUITOUS_LANGUAGE.md §17: "relay peer" is internal vocabulary — the operator knows
+        // the machine by its name, and the sentence already carries both names and the fix.
+        LanServer server = new LanServer("nuc02", "192.168.3.50", false, null, null);
+        List<PeerConfiguration> peers = List.of(relay("apalveien5", "192.168.3.0/24"));
+
+        assertThatThrownBy(
+                () -> LanServerSetupScript.forHost(server, peers, "172.31.16.0/20", "10.13.13.0/24"))
+            .hasMessageContaining("apalveien5")
+            .hasMessageContaining("nuc02")
+            .hasMessageNotContainingAny("Relay peer", "relay peer");
     }
 
     private static PeerConfiguration relay(String id, String lanCidr) {

@@ -666,6 +666,14 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 .ex-nudge-text { flex: 1 1 auto; min-width: 0; }
 .ex-nudge-title { color: var(--text); font-weight: 600; }
 .ex-nudge-why { color: var(--text-muted); font-size: 13px; margin-top: 3px; line-height: 1.45; }
+/* "What that means ›" — the way out to the Concepts entry, on the one nudge whose answer changes what Vaier
+   may do on a machine. Deliberately a quiet muted link rather than a second button: the card has one action,
+   and a second thing shaped like an action is a second thing to weigh. */
+.ex-nudge-more {
+    display: inline-block; margin-top: 6px;
+    color: var(--text-muted); font-size: 12px; text-decoration: none;
+}
+.ex-nudge-more:hover, .ex-nudge-more:focus-visible { color: var(--accent); text-decoration: underline; }
 .ex-nudge .ex-btn { flex: 0 0 auto; align-self: center; white-space: nowrap; }
 @media (max-width: 560px) {
     .ex-nudge { flex-wrap: wrap; }
