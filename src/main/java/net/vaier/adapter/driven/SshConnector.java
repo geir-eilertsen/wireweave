@@ -135,14 +135,24 @@ final class SshConnector {
         }
     }
 
-    private static Collection<KeyPair> loadKeyPairs(SshTarget target) {
+    /**
+     * Parses the stored private-key text into the key pairs to authenticate with. Package-private so the
+     * key formats Vaier claims to accept can be tested directly — this is the single place a pasted or
+     * Vaier-generated key is read, and "which formats parse here" is exactly what regressed in #350.
+     */
+    static Collection<KeyPair> loadKeyPairs(SshTarget target) {
         FilePasswordProvider passwordProvider = (target.passphrase() == null || target.passphrase().isBlank())
             ? null : FilePasswordProvider.of(target.passphrase());
         try {
             Collection<KeyPair> keys = SecurityUtils.getKeyPairResourceParser()
                 .loadKeyPairs(null, NamedResource.ofName("credential"), passwordProvider, target.secret());
             if (keys == null || keys.isEmpty()) {
-                throw new SshAuthException("The stored private key could not be parsed");
+                // The parser found no private-key block at all — almost always a .pub public key or a
+                // PuTTY .ppk stored as the secret. Say so: this fires at connect time, far from the
+                // credential form, so the message is the only clue the operator gets (#350).
+                throw new SshAuthException("The stored private key could not be parsed — Vaier expects a "
+                    + "\"-----BEGIN ... PRIVATE KEY-----\" block (ed25519, ECDSA or RSA), not a .pub "
+                    + "public key or a PuTTY .ppk");
             }
             return keys;
         } catch (SshAuthException e) {
