@@ -1,4 +1,4 @@
-package net.vaier.application.service;
+package net.vaier.rest;
 
 import java.util.List;
 import java.util.Optional;
@@ -26,7 +26,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
-class LifecycleServiceTest {
+class StartupLifecycleRunnerTest {
 
     @Mock ForInitialisingVpnRouting forInitialisingVpnRouting;
     @Mock ForResolvingPublicHost publicHostResolver;
@@ -37,8 +37,8 @@ class LifecycleServiceTest {
     @Mock SyncLanRoutesUseCase syncLanRoutesUseCase;
     @Mock ApplicationReadyEvent event;
 
-    private LifecycleService service() {
-        return new LifecycleService(
+    private StartupLifecycleRunner runner() {
+        return new StartupLifecycleRunner(
             forInitialisingVpnRouting,
             publicHostResolver,
             dnsResolver,
@@ -58,7 +58,7 @@ class LifecycleServiceTest {
     void skipsLifecycleWhenUnconfigured() {
         when(setupStateHolder.isConfigured()).thenReturn(false);
 
-        service().handle(event);
+        runner().handle(event);
 
         verify(forInitialisingVpnRouting, never()).setupVpnRouting();
         verify(syncLanRoutesUseCase, never()).syncLanRoutes();
@@ -71,7 +71,7 @@ class LifecycleServiceTest {
         when(dnsResolver.resolveAddresses(any())).thenReturn(List.of("52.29.74.114"));
         when(publicHostResolver.resolvePublicIp()).thenReturn(Optional.of("52.29.74.114"));
 
-        service().handle(event);
+        runner().handle(event);
 
         verify(syncLanRoutesUseCase).syncLanRoutes();
     }
@@ -82,7 +82,7 @@ class LifecycleServiceTest {
         when(dnsResolver.resolveAddresses(any())).thenReturn(List.of());
         when(publicHostResolver.resolvePublicIp()).thenReturn(Optional.of("52.29.74.114"));
 
-        service().handle(event);
+        runner().handle(event);
 
         verify(wildcardDnsStatusHolder)
             .record(argThat(r -> r.status() == WildcardDnsStatus.NOT_RESOLVING));
@@ -99,7 +99,7 @@ class LifecycleServiceTest {
         when(dnsResolver.resolveAddresses(any())).thenReturn(List.of("52.29.74.114"));
         when(publicHostResolver.resolvePublicIp()).thenReturn(Optional.of("52.29.74.114"));
 
-        service().handle(event);
+        runner().handle(event);
 
         ArgumentCaptor<String> probed = ArgumentCaptor.forClass(String.class);
         verify(dnsResolver).resolveAddresses(probed.capture());

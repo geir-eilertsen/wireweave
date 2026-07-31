@@ -1,4 +1,4 @@
-package net.vaier.application.service;
+package net.vaier.rest;
 
 import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
@@ -15,9 +15,22 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
+/**
+ * Vaier's boot sequence, run once the Spring context is up: verify the wildcard DNS record, bring up
+ * VPN routing, and sync LAN routes.
+ *
+ * <p>This is a <em>driving adapter</em>, not an application service, and that distinction is why it
+ * lives here beside {@code StateRefreshScheduler} and {@code RemoteDiskWatcher} rather than in
+ * {@code application/service/}. The actor driving it is the application-ready event — an external
+ * trigger — exactly as a scheduler is driven by a clock and a controller by an HTTP request. Calling a
+ * {@code *UseCase} is what a driving adapter is <em>for</em>; the same call from a real {@code *Service}
+ * would be the service-to-service coupling the architecture forbids. It was named
+ * {@code LifecycleService} and filed with the application services for a while, which made a perfectly
+ * ordinary driving adapter read as a rule violation.
+ */
 @Component
 @Slf4j
-public class LifecycleService {
+public class StartupLifecycleRunner {
 
     /**
      * How many hex characters of a fresh UUID make the probe label — unguessable enough that no
@@ -33,7 +46,7 @@ public class LifecycleService {
     private final ConfigResolver configResolver;
     private final SyncLanRoutesUseCase syncLanRoutesUseCase;
 
-    public LifecycleService(
+    public StartupLifecycleRunner(
         ForInitialisingVpnRouting forInitialisingVpnRouting,
         ForResolvingPublicHost publicHostResolver,
         ForResolvingDns dnsResolver,
