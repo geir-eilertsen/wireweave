@@ -19,6 +19,7 @@ import net.vaier.domain.SshServerPresence;
 import net.vaier.domain.SshTarget;
 import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.port.ForCheckingSshServerPresence;
+import net.vaier.domain.port.ForGeneratingSshKeypairs;
 import net.vaier.domain.port.ForOpeningSshSessions;
 import net.vaier.domain.port.ForOpeningSshSessions.SshOutputListener;
 import net.vaier.domain.port.ForOpeningSshSessions.SshSession;
@@ -63,6 +64,7 @@ class TerminalServiceTest {
     @Mock ForTrackingHostKeys forTrackingHostKeys;
     @Mock ForVerifyingSshCredentials forVerifyingSshCredentials;
     @Mock ForCheckingSshServerPresence forCheckingSshServerPresence;
+    @Mock ForGeneratingSshKeypairs forGeneratingSshKeypairs;
 
     // There is no name->id crossing left to arrange: every path into this service is handed an identity,
     // and nothing it does resolves a name to find anything.
@@ -99,7 +101,78 @@ class TerminalServiceTest {
 
         Optional<HostCredentialView> view = service.getHostCredential(mid("nas"));
 
-        assertThat(view).contains(new HostCredentialView(mid("nas"), "admin", AuthMethod.PRIVATE_KEY, true));
+        assertThat(view).contains(new HostCredentialView(mid("nas"), "admin", AuthMethod.PRIVATE_KEY, true, false));
+    }
+
+    // --- managed keypairs (#309) ---
+
+    @Test
+    void generateManagedKeypair_storesTheGeneratedPrivateKeyAsAManagedCredential() {
+        when(forGeneratingSshKeypairs.generatePrivateKey(anyString())).thenReturn("PRIV");
+
+        service.generateManagedKeypair(mid("nas"), "admin");
+
+        verify(forPersistingHostCredentials).save(new HostCredential(
+            mid("nas"), "admin", AuthMethod.PRIVATE_KEY, "PRIV", null, true));
+    }
+
+    @Test
+    void generateManagedKeypair_returnsThePublicKeyToInstallOnTheHost() {
+        when(forGeneratingSshKeypairs.generatePrivateKey(anyString())).thenReturn("PRIV");
+        when(forGeneratingSshKeypairs.publicKeyFor(eq("PRIV"), eq(null), anyString()))
+            .thenReturn("ssh-ed25519 AAAA vaier");
+
+        assertThat(service.generateManagedKeypair(mid("nas"), "admin")).isEqualTo("ssh-ed25519 AAAA vaier");
+    }
+
+    @Test
+    void generateManagedKeypair_replacesWhateverCredentialWasHeld() {
+        // The vault holds one credential per machine, so this destroys the previous login. That is why the
+        // operator has to confirm it at the driving edge — the service does not second-guess a decision
+        // that has already been taken.
+        when(forGeneratingSshKeypairs.generatePrivateKey(anyString())).thenReturn("PRIV");
+
+        service.generateManagedKeypair(mid("nas"), "admin");
+
+        ArgumentCaptor<HostCredential> saved = ArgumentCaptor.forClass(HostCredential.class);
+        verify(forPersistingHostCredentials).save(saved.capture());
+        assertThat(saved.getValue().managed()).isTrue();
+        assertThat(saved.getValue().secret()).isEqualTo("PRIV");
+    }
+
+    @Test
+    void getHostPublicKey_derivesItFromTheStoredPrivateKey() {
+        when(forPersistingHostCredentials.getByMachine(mid("nas"))).thenReturn(Optional.of(
+            new HostCredential(mid("nas"), "admin", AuthMethod.PRIVATE_KEY, "PRIV", null, true)));
+        when(forGeneratingSshKeypairs.publicKeyFor(eq("PRIV"), eq(null), anyString()))
+            .thenReturn("ssh-ed25519 AAAA vaier");
+
+        assertThat(service.getHostPublicKey(mid("nas"))).contains("ssh-ed25519 AAAA vaier");
+    }
+
+    @Test
+    void getHostPublicKey_passwordCredential_isEmpty() {
+        when(forPersistingHostCredentials.getByMachine(mid("nas")))
+            .thenReturn(Optional.of(passwordCred("nas")));
+
+        assertThat(service.getHostPublicKey(mid("nas"))).isEmpty();
+    }
+
+    @Test
+    void getHostPublicKey_noCredential_isEmpty() {
+        when(forPersistingHostCredentials.getByMachine(mid("ghost"))).thenReturn(Optional.empty());
+
+        assertThat(service.getHostPublicKey(mid("ghost"))).isEmpty();
+    }
+
+    @Test
+    void getHostPublicKey_unreadableStoredKey_isEmpty_ratherThanFailingTheWholeDialog() {
+        when(forPersistingHostCredentials.getByMachine(mid("nas"))).thenReturn(Optional.of(
+            new HostCredential(mid("nas"), "admin", AuthMethod.PRIVATE_KEY, "junk", null, false)));
+        when(forGeneratingSshKeypairs.publicKeyFor(eq("junk"), eq(null), anyString()))
+            .thenThrow(new IllegalStateException("unreadable"));
+
+        assertThat(service.getHostPublicKey(mid("nas"))).isEmpty();
     }
 
     @Test

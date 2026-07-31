@@ -2812,21 +2812,52 @@
         const passF = field('Key passphrase', 'Optional.', passphrase);
         const pwF = field('Password', null, password);
         const keyF = field('Private key (PEM)', null, keyArea);
-        form.append(field('Username', null, username), field('Auth method', null, method), pwF, keyF, passF);
+
+        // The public half of whatever key Vaier holds — derived from the private key, never stored beside it.
+        // It is the one piece of a key credential that is safe to show, and the only piece that is any use to
+        // the operator: it has to end up in a file on the machine itself.
+        const pubWrap = el('div', 'ex-pubkey-wrap');
+        const pubKey = el('code', 'ex-pubkey');
+        const pubCopy = el('button', 'ex-btn ex-pubkey-copy'); pubCopy.type = 'button'; pubCopy.textContent = 'Copy';
+        pubWrap.append(pubKey, pubCopy);
+        const pubF = field('Public key', 'Add this line to ~/.ssh/authorized_keys on ' + machineName
+            + '. Vaier keeps the private half and never shows it.', pubWrap);
+        pubF.style.display = 'none';
+        pubCopy.onclick = () => {
+            navigator.clipboard.writeText(pubKey.textContent).then(() => toast('Copied.'))
+                .catch(() => toast('Could not copy. Select the key and copy it by hand.'));
+        };
+
+        form.append(field('Username', null, username), field('Auth method', null, method), pwF, keyF, passF, pubF);
+
+        // What Vaier currently holds, as far as this dialog knows. `managed` is the whole reason the dialog
+        // has two shapes: a keypair Vaier generated has no private half the operator could edit, so offering
+        // them the textarea would be a lie about what they can do.
+        let managed = false;
+        let hasCredential = false;
+
         const syncMethod = () => {
             const isKey = method.value === 'PRIVATE_KEY';
+            const isManagedKey = isKey && managed;
             pwF.style.display = isKey ? 'none' : '';
-            keyF.style.display = isKey ? '' : 'none';
-            passF.style.display = isKey ? '' : 'none';
+            keyF.style.display = isKey && !isManagedKey ? '' : 'none';
+            passF.style.display = isKey && !isManagedKey ? '' : 'none';
+            pubF.style.display = isKey && pubKey.textContent ? '' : 'none';
+            // Nothing to save for a managed keypair: to hand Vaier a key of your own, pick Password or
+            // delete this one first. A Save button with no editable secret behind it would do nothing.
+            ok.style.display = isManagedKey ? 'none' : '';
         };
-        method.onchange = syncMethod; syncMethod();
+        method.onchange = syncMethod;
 
         const actions = el('div', 'ex-dialog-actions');
         const del = el('button', 'ex-btn is-danger'); del.textContent = 'Delete';
-        del.style.display = 'none'; del.style.marginRight = 'auto';
+        del.style.display = 'none';
+        // Both are "act on the credential" verbs, so they group left, away from the dialog's Cancel/Save.
+        const gen = el('button', 'ex-btn'); gen.textContent = 'Generate keypair'; gen.style.marginRight = 'auto';
         const cancel = el('button', 'ex-btn'); cancel.textContent = 'Cancel';
         const ok = el('button', 'ex-btn is-accent'); ok.textContent = 'Save';
-        actions.append(del, cancel, ok);
+        actions.append(del, gen, cancel, ok);
+        syncMethod();
         dialog.append(h, status, form, actions);
         scrim.appendChild(dialog); document.body.appendChild(scrim);
 
@@ -2842,11 +2873,67 @@
             if (!r.ok) { status.textContent = 'Could not read the credential status.'; return; }
             const v = await r.json();
             username.value = v.username || '';
-            method.value = v.authMethod || 'PASSWORD'; syncMethod();
+            method.value = v.authMethod || 'PASSWORD';
+            managed = !!v.managed;
+            hasCredential = !!v.hasSecret;
+            syncMethod();
             del.style.display = v.hasSecret ? '' : 'none';
-            status.textContent = 'Stored for ' + (v.username || '') + ' · '
-                + (v.authMethod || '').toLowerCase().replace('_', ' ') + '. Enter the secret again to replace it.';
+            status.textContent = managed
+                ? 'Vaier generated this keypair for ' + (v.username || '') + ' and holds the private half.'
+                : 'Stored for ' + (v.username || '') + ' · '
+                    + (v.authMethod || '').toLowerCase().replace('_', ' ') + '. Enter the secret again to replace it.';
+            if (v.authMethod === 'PRIVATE_KEY' && v.hasSecret) loadPublicKey();
         }).catch(() => { status.textContent = 'Could not reach Vaier.'; });
+
+        // A pasted key has a public half too, and an operator checking "is this the key I installed?" needs
+        // it as much as a generated one does — so this is asked for any key credential, not only a managed one.
+        async function loadPublicKey() {
+            try {
+                const r = await fetch('/machines/' + encodeURIComponent(machineId) + '/ssh-credential/public-key');
+                if (!r.ok) return;
+                showPublicKey((await r.json()).publicKey);
+            } catch (e) { /* the key is unreadable or Vaier is unreachable; the panel simply stays away */ }
+        }
+
+        function showPublicKey(key) {
+            pubKey.textContent = key || '';
+            syncMethod();
+        }
+
+        gen.onclick = async () => {
+            const user = username.value.trim();
+            if (!user) { toast('Enter a username.'); return; }
+            if (hasCredential) {
+                const sure = await confirmModal('Generate a new keypair for ' + machineName + '?',
+                    'Vaier replaces the login it holds for ' + machineName + ' with a keypair it generates '
+                    + 'itself. The current login stops working immediately, and the new one does nothing until '
+                    + 'you add its public key to authorized_keys on ' + machineName + '. Its files, shell, disk '
+                    + 'and backups go dark in between.', 'Generate');
+                if (!sure) return;
+            }
+            gen.disabled = true;
+            try {
+                const r = await fetch('/machines/' + encodeURIComponent(machineId) + '/ssh-credential/generate', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: user }),
+                });
+                if (!r.ok) {
+                    const e = await r.json().catch(() => ({}));
+                    toast(e.message || 'Could not generate a keypair.'); gen.disabled = false; return;
+                }
+                managed = true; hasCredential = true;
+                method.value = 'PRIVATE_KEY';
+                del.style.display = '';
+                showPublicKey((await r.json()).publicKey);
+                status.textContent = 'Keypair generated for ' + user + '. It does not work until its public key '
+                    + 'is in authorized_keys on ' + machineName + '.';
+                gen.disabled = false;
+                // Deliberately left open: the operator has nowhere else to read the public key from, and
+                // closing the dialog on them would send them straight back into it.
+                toast('Keypair generated.');
+                await loadFleet(); render();
+            } catch (e) { toast('Could not generate a keypair.'); gen.disabled = false; }
+        };
 
         ok.onclick = async () => {
             const secret = method.value === 'PRIVATE_KEY' ? keyArea.value : password.value;

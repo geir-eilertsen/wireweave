@@ -194,7 +194,7 @@ class MachineRestControllerTest {
                 "192.168.3.0/24", "192.168.3.20", false, null, DeviceCategory.PRINTER, null)
         ));
         when(getHostCredentialUseCase.getHostCredential(mid("nas"))).thenReturn(
-            Optional.of(new HostCredentialView(mid("nas"), "root", AuthMethod.PASSWORD, true)));
+            Optional.of(new HostCredentialView(mid("nas"), "root", AuthMethod.PASSWORD, true, false)));
 
         var response = controller.list();
 
@@ -217,9 +217,9 @@ class MachineRestControllerTest {
                 null, null, false, null, DeviceCategory.SERVER, null)
         ));
         when(getHostCredentialUseCase.getHostCredential(mid("dietpi"))).thenReturn(
-            Optional.of(new HostCredentialView(mid("dietpi"), "root", AuthMethod.PASSWORD, true)));
+            Optional.of(new HostCredentialView(mid("dietpi"), "root", AuthMethod.PASSWORD, true, false)));
         when(getHostCredentialUseCase.getHostCredential(mid("ubuntu"))).thenReturn(
-            Optional.of(new HostCredentialView(mid("ubuntu"), "geir", AuthMethod.PRIVATE_KEY, true)));
+            Optional.of(new HostCredentialView(mid("ubuntu"), "geir", AuthMethod.PRIVATE_KEY, true, false)));
 
         var response = controller.list();
 
@@ -250,7 +250,7 @@ class MachineRestControllerTest {
                 "192.168.3.0/24", "192.168.3.50", true, 2375, DeviceCategory.NAS, null)
         ));
         when(getHostCredentialUseCase.getHostCredential(mid("nas"))).thenReturn(
-            Optional.of(new HostCredentialView(mid("nas"), "root", AuthMethod.PASSWORD, true)));
+            Optional.of(new HostCredentialView(mid("nas"), "root", AuthMethod.PASSWORD, true, false)));
 
         controller.list();
 
@@ -329,7 +329,7 @@ class MachineRestControllerTest {
         when(getVaierServerUseCase.getVaierServerMachine()).thenReturn(Machine.vaierServer(MachineId.generate(), null));
         when(getHostCredentialUseCase.getHostCredential(any(MachineId.class)))
             .thenReturn(Optional.of(new HostCredentialView(mid(LanAnchor.VAIER_SERVER_NAME), "root",
-                AuthMethod.PASSWORD, true)));
+                AuthMethod.PASSWORD, true, false)));
 
         var response = controller.vaierServer();
 
@@ -378,7 +378,7 @@ class MachineRestControllerTest {
             new PublishableService(PublishableSource.PEER, mid("alice").value(), "alice",
                 "10.13.13.2", "grafana", 3000, null, false)));
         when(getHostCredentialUseCase.getHostCredential(mid("alice"))).thenReturn(
-            Optional.of(new HostCredentialView(mid("alice"), "root", AuthMethod.PASSWORD, true)));
+            Optional.of(new HostCredentialView(mid("alice"), "root", AuthMethod.PASSWORD, true, false)));
         when(getBackupJobsUseCase.getBackupJobs()).thenReturn(List.of());
         when(getBackupServersUseCase.getBackupServers()).thenReturn(List.of());
 

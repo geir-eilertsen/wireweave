@@ -1,7 +1,9 @@
 package net.vaier.rest;
 
 import net.vaier.application.DeleteHostCredentialUseCase;
+import net.vaier.application.GenerateManagedKeypairUseCase;
 import net.vaier.application.GetHostCredentialUseCase;
+import net.vaier.application.GetHostPublicKeyUseCase;
 import net.vaier.application.SaveHostCredentialUseCase;
 import net.vaier.domain.AuthMethod;
 import net.vaier.domain.HostCredential;
@@ -22,12 +24,15 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -43,6 +48,8 @@ class HostCredentialRestControllerTest {
     @Mock SaveHostCredentialUseCase saveHostCredentialUseCase;
     @Mock GetHostCredentialUseCase getHostCredentialUseCase;
     @Mock DeleteHostCredentialUseCase deleteHostCredentialUseCase;
+    @Mock GenerateManagedKeypairUseCase generateManagedKeypairUseCase;
+    @Mock GetHostPublicKeyUseCase getHostPublicKeyUseCase;
 
     @InjectMocks HostCredentialRestController controller;
 
@@ -95,7 +102,7 @@ class HostCredentialRestControllerTest {
     @Test
     void get_present_returnsRedactedView() {
         when(getHostCredentialUseCase.getHostCredential(mid("nas")))
-            .thenReturn(Optional.of(new HostCredentialView(mid("nas"), "admin", AuthMethod.PASSWORD, true)));
+            .thenReturn(Optional.of(new HostCredentialView(mid("nas"), "admin", AuthMethod.PASSWORD, true, false)));
 
         ResponseEntity<HostCredentialRestController.CredentialResponse> response = controller.get(mid("nas").value());
 
@@ -119,6 +126,59 @@ class HostCredentialRestControllerTest {
         verify(deleteHostCredentialUseCase).deleteHostCredential(mid("nas"));
     }
 
+    // --- managed keypairs (#309) ---
+
+    @Test
+    void generate_mintsAManagedKeypair_andReturnsThePublicKeyToInstall() {
+        when(generateManagedKeypairUseCase.generateManagedKeypair(mid("nas"), "admin"))
+            .thenReturn("ssh-ed25519 AAAA vaier");
+
+        ResponseEntity<HostCredentialRestController.PublicKeyResponse> response = controller.generate(
+            mid("nas").value(), new HostCredentialRestController.GenerateKeypairRequest("admin"));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody().publicKey()).isEqualTo("ssh-ed25519 AAAA vaier");
+    }
+
+    @Test
+    void getPublicKey_present_returnsTheAuthorizedKeysLine() {
+        when(getHostPublicKeyUseCase.getHostPublicKey(mid("nas")))
+            .thenReturn(Optional.of("ssh-ed25519 AAAA vaier"));
+
+        assertThat(controller.publicKey(mid("nas").value()).getBody().publicKey())
+            .isEqualTo("ssh-ed25519 AAAA vaier");
+    }
+
+    @Test
+    void getPublicKey_absent_returns404() {
+        when(getHostPublicKeyUseCase.getHostPublicKey(mid("ghost"))).thenReturn(Optional.empty());
+
+        assertThat(controller.publicKey(mid("ghost").value()).getStatusCode())
+            .isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    @Test
+    void get_managedCredential_saysSo_soTheDialogCanHideThePrivateKeyField() {
+        when(getHostCredentialUseCase.getHostCredential(mid("nas"))).thenReturn(
+            Optional.of(new HostCredentialView(mid("nas"), "admin", AuthMethod.PRIVATE_KEY, true, true)));
+
+        assertThat(controller.get(mid("nas").value()).getBody().managed()).isTrue();
+    }
+
+    @Test
+    void generate_responseNeverCarriesThePrivateKey() throws Exception {
+        MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
+        when(generateManagedKeypairUseCase.generateManagedKeypair(mid("nas"), "admin"))
+            .thenReturn("ssh-ed25519 AAAA vaier");
+
+        mockMvc.perform(post("/machines/" + mid("nas") + "/ssh-credential/generate")
+                .contentType("application/json")
+                .content("{\"username\":\"admin\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.publicKey").value("ssh-ed25519 AAAA vaier"))
+            .andExpect(content().string(not(containsString("PRIVATE KEY"))));
+    }
+
     @Test
     void put_thenGet_responseBodyNeverCarriesSecretBytes() throws Exception {
         MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
@@ -127,7 +187,7 @@ class HostCredentialRestControllerTest {
                 .contentType("application/json")
                 .content("""
                     {"username":"admin","authMethod":"PRIVATE_KEY",
-                     "secret":"-----BEGIN KEY-----secret-body-----END KEY-----","passphrase":"topsecretphrase"}
+                     "secret":"-----BEGIN OPENSSH PRIVATE KEY-----secret-body-----END OPENSSH PRIVATE KEY-----","passphrase":"topsecretphrase"}
                     """))
             .andExpect(status().isOk())
             .andExpect(content().string(org.hamcrest.Matchers.not(
@@ -137,7 +197,7 @@ class HostCredentialRestControllerTest {
             .andExpect(jsonPath("$.hasSecret").value(true));
 
         when(getHostCredentialUseCase.getHostCredential(mid("nas")))
-            .thenReturn(Optional.of(new HostCredentialView(mid("nas"), "admin", AuthMethod.PRIVATE_KEY, true)));
+            .thenReturn(Optional.of(new HostCredentialView(mid("nas"), "admin", AuthMethod.PRIVATE_KEY, true, false)));
 
         mockMvc.perform(get("/machines/" + mid("nas") + "/ssh-credential"))
             .andExpect(status().isOk())

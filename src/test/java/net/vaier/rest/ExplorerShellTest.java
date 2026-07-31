@@ -2057,4 +2057,52 @@ class ExplorerShellTest {
             .contains("The host key changed and was refused. "
                 + "If you rebuilt this host, clear its pinned key and reconnect.");
     }
+
+    // --- #309: a keypair Vaier mints for itself ---------------------------------------------------------
+    //
+    // A managed keypair inverts the credential dialog. There is nothing for the operator to paste and
+    // nothing for them to read back except the public half — so the dialog must stop offering a private-key
+    // field, and start offering the one line they actually need to install.
+
+    @Test
+    void theCredentialDialog_offersToGenerateAKeypair() throws IOException {
+        String js = read("explorer-shell.js");
+
+        assertThat(js).contains("/ssh-credential/generate");
+        assertThat(js).contains("Generate keypair");
+    }
+
+    @Test
+    void generatingOverAnExistingCredential_saysWhatIsLostBeforeItHappens() throws IOException {
+        // Generating destroys the login Vaier currently holds, and the replacement does nothing until the
+        // operator installs it. That gap is the whole risk, so it is stated before the button acts — never
+        // discovered afterwards by a machine that has gone dark.
+        String js = read("explorer-shell.js");
+
+        assertThat(js).contains("confirmModal('Generate a new keypair for '");
+        assertThat(js).contains("stops working immediately");
+        assertThat(js).contains("authorized_keys");
+    }
+
+    @Test
+    void aManagedKeypair_showsThePublicKeyInsteadOfAnEditablePrivateKeyField() throws IOException {
+        // The operator can never usefully edit a key they do not have. Leaving the textarea on screen would
+        // say they can; the public key and a copy button say what they can actually do with it.
+        String js = read("explorer-shell.js");
+
+        assertThat(js).contains("/ssh-credential/public-key");
+        assertThat(js).contains("v.managed");
+        // The private-key textarea and its passphrase are both withdrawn for a managed keypair.
+        assertThat(js).contains("const isManagedKey = ");
+    }
+
+    @Test
+    void thePublicKeyCanBeCopied_becauseItHasToBePastedSomewhereElse() throws IOException {
+        // It is going into a file on another machine. Selecting 68 characters of base64 by hand is exactly
+        // the step where an operator loses a character and then debugs an auth failure for an hour.
+        String js = read("explorer-shell.js");
+
+        assertThat(js).contains("navigator.clipboard.writeText(pubKey.textContent)");
+        assertThat(js).contains("toast('Copied.')");
+    }
 }

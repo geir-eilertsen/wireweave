@@ -271,6 +271,12 @@ public abstract class VaierWebMvcIntegrationBase {
     @MockBean
     protected DeleteHostCredentialUseCase deleteHostCredentialUseCase;
 
+    @MockBean
+    protected GenerateManagedKeypairUseCase generateManagedKeypairUseCase;
+
+    @MockBean
+    protected GetHostPublicKeyUseCase getHostPublicKeyUseCase;
+
     // --- Explorer use cases ---
     @MockBean
     protected BrowseFilesUseCase browseFilesUseCase;

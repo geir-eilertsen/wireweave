@@ -5,7 +5,9 @@ import lombok.extern.slf4j.Slf4j;
 import net.vaier.application.ClearHostKeyUseCase;
 import net.vaier.application.DeleteHostCredentialUseCase;
 import net.vaier.application.EndTerminalSessionUseCase;
+import net.vaier.application.GenerateManagedKeypairUseCase;
 import net.vaier.application.GetHostCredentialUseCase;
+import net.vaier.application.GetHostPublicKeyUseCase;
 import net.vaier.application.GetSshServerPresenceUseCase;
 import net.vaier.application.OpenTerminalSessionUseCase;
 import net.vaier.application.OpenTerminalSessionUseCase.OpenedTerminal;
@@ -25,6 +27,7 @@ import net.vaier.domain.SshCredentialVerification;
 import net.vaier.domain.SshServerPresence;
 import net.vaier.domain.SshTarget;
 import net.vaier.domain.port.ForCheckingSshServerPresence;
+import net.vaier.domain.port.ForGeneratingSshKeypairs;
 import net.vaier.domain.port.ForOpeningSshSessions;
 import net.vaier.domain.port.ForOpeningSshSessions.SshOutputListener;
 import net.vaier.domain.port.ForOpeningSshSessions.SshSession;
@@ -57,7 +60,9 @@ public class TerminalService implements
     SendHostPasswordUseCase,
     VerifySshCredentialUseCase,
     ClearHostKeyUseCase,
-    GetSshServerPresenceUseCase {
+    GetSshServerPresenceUseCase,
+    GenerateManagedKeypairUseCase,
+    GetHostPublicKeyUseCase {
 
     private final ForPersistingHostCredentials forPersistingHostCredentials;
     private final ForResolvingSshTargets forResolvingSshTargets;
@@ -66,6 +71,7 @@ public class TerminalService implements
     private final ForTrackingHostKeys forTrackingHostKeys;
     private final ForVerifyingSshCredentials forVerifyingSshCredentials;
     private final ForCheckingSshServerPresence forCheckingSshServerPresence;
+    private final ForGeneratingSshKeypairs forGeneratingSshKeypairs;
 
     @Override
     public void saveHostCredential(MachineId machineId, SshCredentialDraft draft) {
@@ -85,6 +91,33 @@ public class TerminalService implements
     @Override
     public Optional<HostCredentialView> getHostCredential(MachineId machineId) {
         return forPersistingHostCredentials.getByMachine(machineId).map(HostCredential::toView);
+    }
+
+    @Override
+    public String generateManagedKeypair(MachineId machineId, String username) {
+        // Orchestration only: the domain mints the credential — it decides key auth, no passphrase and
+        // managed; which algorithm that is belongs to the port's adapter — and derives the public half.
+        // This stores it and hands the public key back.
+        HostCredential credential = HostCredential.generatedFor(machineId, username, forGeneratingSshKeypairs);
+        forPersistingHostCredentials.save(credential);
+        log.info("Generated a managed keypair for machine {} (user {})", machineId, username);
+        return credential.publicKey(forGeneratingSshKeypairs);
+    }
+
+    @Override
+    public Optional<String> getHostPublicKey(MachineId machineId) {
+        return forPersistingHostCredentials.getByMachine(machineId)
+            .map(credential -> {
+                try {
+                    return credential.publicKey(forGeneratingSshKeypairs);
+                } catch (RuntimeException e) {
+                    // A stored key Vaier cannot read has nothing to show, and this read exists only to
+                    // populate a panel. Failing the whole credential dialog over it would hide the very
+                    // controls the operator needs to replace that key.
+                    log.warn("Could not derive the public key for machine {}: {}", machineId, e.toString());
+                    return null;
+                }
+            });
     }
 
     @Override

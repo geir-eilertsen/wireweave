@@ -367,7 +367,8 @@ is delegated to an external **identity provider**; Vaier owns **authorization** 
 
 | Term | Definition |
 |------|------------|
-| **Host credential** | The single SSH login Vaier holds for a machine: a username, an **auth method** (password or private key), the secret material, and an optional key passphrase. Exactly one per machine. |
+| **Host credential** | The single SSH login Vaier holds for a machine: a username, an **auth method** (password or private key), the secret material, an optional key passphrase, and whether it is a **managed keypair**. Exactly one per machine. |
+| **Managed keypair** | A **host credential** whose key Vaier minted itself rather than one an operator pasted: an ed25519 keypair generated inside Vaier, whose private half stays in the **credential vault** and is shown to nobody, and whose public half — the `authorized_keys` line — is what the operator installs on the machine it logs into. A pasted credential is never managed, however it was pasted. |
 | **Effective user** | The user Vaier acts as on a machine: the login name in that machine's **host credential**. It is that machine's blast radius — every file Vaier lists, transfers, writes or deletes over SFTP, and every borg read a **backup run** takes, happens as this user and reaches exactly what this user can reach. A machine with no host credential has no effective user. |
 | **Privileged** | Said of an **effective user** that is `root`, and of the machine Vaier acts as `root` on. Judged from the login name alone: a second account with uid 0 under another name is not privileged here, and neither is a user holding passwordless `sudo`, because Vaier's own file operations never go through sudo. |
 | **Credential vault** | The encrypted-at-rest store for host credentials. Secret material is sealed with a symmetric cipher before it is written to disk and never leaves the process in the clear. |
@@ -482,3 +483,4 @@ The one place they may appear on screen is the **Concepts page**, which exists s
 | rendered config | "config" — the file handed over once, downloaded or scanned |
 | out-of-date config | nothing today: it is computed and served, but no surface reads it. Copy for it would be a new signal, not a rename |
 | backup repository | the **store label** — "‹machine›'s backups", or "these backups" where no machine claims the store |
+| managed keypair | "Vaier generated this keypair and holds the private half" — the operator meets the **Generate keypair** action and the public key to install, never the adjective |

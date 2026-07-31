@@ -103,7 +103,7 @@ class BackupRunnerTest {
 
     private void hasCredential(String name) {
         when(credentials.getHostCredential(mid(name))).thenReturn(
-            Optional.of(new HostCredentialView(mid(name), "root", AuthMethod.PASSWORD, true)));
+            Optional.of(new HostCredentialView(mid(name), "root", AuthMethod.PASSWORD, true, false)));
     }
 
     /**

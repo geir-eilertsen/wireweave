@@ -86,7 +86,7 @@ class BackupProvisionerTest {
 
     private void hasCredential(String name) {
         when(credentials.getHostCredential(mid(name))).thenReturn(
-            Optional.of(new HostCredentialView(mid(name), "root", AuthMethod.PASSWORD, true)));
+            Optional.of(new HostCredentialView(mid(name), "root", AuthMethod.PASSWORD, true, false)));
     }
 
     @BeforeEach
@@ -468,7 +468,7 @@ class BackupProvisionerTest {
         // Vaier SSHes to the NAS as the credential's user (e.g. geir, uid 1029) — the borg container must
         // chown its data to THAT user, so the generated script bakes it as the OWNER whose uid/gid it derives.
         when(credentials.getHostCredential(mid("NAS"))).thenReturn(
-            Optional.of(new HostCredentialView(mid("NAS"), "geir", AuthMethod.PASSWORD, true)));
+            Optional.of(new HostCredentialView(mid("NAS"), "geir", AuthMethod.PASSWORD, true, false)));
 
         Optional<String> script = provisioner.generateSetupScript("nas-borg");
 

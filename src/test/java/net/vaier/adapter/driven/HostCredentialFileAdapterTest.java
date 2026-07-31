@@ -70,6 +70,24 @@ class HostCredentialFileAdapterTest {
     }
 
     @Test
+    void save_managedKeypair_encryptsThePrivateKey_andRemembersItIsManaged() throws Exception {
+        // #309: the private half of a Vaier-generated keypair never leaves the server, and it does not sit
+        // in the clear on the server either. `managed` is not secret — the dialog needs it — so it stays
+        // readable alongside the machine and username.
+        HostCredential generated = HostCredential.generatedFor(mid("nas"), "admin", new SshdKeypairAdapter());
+
+        adapter.save(generated);
+
+        String contents = Files.readString(tempDir.resolve("host-credentials.yml"));
+        assertThat(contents)
+            .doesNotContain("BEGIN OPENSSH PRIVATE KEY")
+            .doesNotContain(generated.secret())
+            .contains("enc:v1:")
+            .contains("managed: true");
+        assertThat(adapter.getByMachine(mid("nas"))).contains(generated);
+    }
+
+    @Test
     void save_sameMachine_replacesEntry() {
         adapter.save(new HostCredential(mid("nas"), "admin", AuthMethod.PASSWORD, "old", null, false));
         adapter.save(new HostCredential(mid("nas"), "root", AuthMethod.PASSWORD, "new", null, false));
