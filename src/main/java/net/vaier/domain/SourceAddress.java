@@ -1,0 +1,101 @@
+package net.vaier.domain;
+
+import net.vaier.domain.port.ForLiftingBlocks;
+import net.vaier.domain.port.ForPersistingTrustedAddresses;
+
+/**
+ * One source address the operator can act on — the {@code sourceIp} of a {@link BlockDecision}, either
+ * unblocked once or trusted for good (#329 Slice 3c).
+ *
+ * <p><b>Why this is a type and not a {@code String}.</b> The address arrives from the browser, is
+ * attacker-influenced (it is whatever CrowdSec saw knocking), and ends up as an argument to a command run
+ * inside the crowdsec container and inside log lines. Validating it at construction, in the domain, means
+ * there is exactly one gate — and because {@link ForLiftingBlocks} and {@link ForPersistingTrustedAddresses}
+ * take this type rather than a string, no caller can route around it. The strictness is
+ * {@link Cidr#isIpv4(String)}'s, the same dotted-quad-only rule written to close #195: no IPv6, no
+ * hostnames, no leading zeros, and therefore no shell metacharacter, whitespace or newline anywhere.
+ *
+ * <p>A single host, always: {@code x.x.x.x/32} is accepted and normalised to the bare address, since that
+ * is what an operator copies back out of the whitelist file, but any wider prefix is refused. Vaier's two
+ * actions here are both per-host, and a range would either trust more than was meant or unblock nothing.
+ *
+ * <p>Whitespace is forgiven at the edges and never inside. Surrounding whitespace of any kind — the space
+ * a paste brings along, the tab or newline a copied line brings — leaves a clean dotted quad once trimmed,
+ * so refusing it would only be rude. Whitespace <em>within</em> the value means it was never one address,
+ * and the strict pattern refuses it.
+ */
+public record SourceAddress(String value) {
+
+    /** Every address the operator trusts is trusted as a single host, never a range. */
+    private static final String SINGLE_HOST_PREFIX = "/32";
+
+    /**
+     * The gate, not merely a convenience on {@link #of(String)}. A record's canonical constructor is as
+     * public as the record itself and cannot be narrowed, so validating only in {@code of} would leave
+     * {@code new SourceAddress("$(id)")} compiling and working — and the promise this whole type makes,
+     * that nothing but a dotted quad can reach a container exec argument, would be documentation rather
+     * than a property of the code. {@code of} stays the only <em>normalising</em> door (spaces,
+     * {@code /32}); this is the one nothing gets past.
+     */
+    public SourceAddress {
+        if (!Cidr.isIpv4(value)) {
+            throw new IllegalArgumentException("Not a valid IPv4 address");
+        }
+    }
+
+    public static SourceAddress of(String value) {
+        String address = withoutSingleHostPrefix(value == null ? null : value.trim());
+        if (!Cidr.isIpv4(address)) {
+            // Deliberately does not echo the rejected text: it is attacker-influenced, and this message is
+            // rendered straight back to the browser as a 400 by GlobalExceptionHandler. It is also why a
+            // value shaped like a command-line flag ("-i", "--all") never gets through: the strict
+            // dotted-quad rule rejects it here, long before it could be read as an option by cscli rather
+            // than as data — the one injection that survives passing arguments as an array.
+            throw new IllegalArgumentException("Not a valid IPv4 address");
+        }
+        return new SourceAddress(address);
+    }
+
+    /**
+     * Accepts the {@code x.x.x.x/32} form as the same single host as {@code x.x.x.x} — it is exactly what
+     * an operator copies back out of the whitelist file — and rejects anything wider.
+     *
+     * <p>A range is not a source address. Both of Vaier's actions are per-host: {@code cscli decisions
+     * delete -i} lifts the block on one address, and the trust store is a list of hosts. Silently accepting
+     * a prefix would either trust far more than the operator meant, or fail to unblock anything at all
+     * while looking like it had worked.
+     */
+    private static String withoutSingleHostPrefix(String value) {
+        if (value == null) return null;
+        int slash = value.indexOf('/');
+        if (slash < 0) return value;
+        if (!SINGLE_HOST_PREFIX.equals(value.substring(slash))) {
+            throw new IllegalArgumentException(
+                "Not a valid IPv4 address: name a single host, not a range");
+        }
+        return value.substring(0, slash);
+    }
+
+    /**
+     * This address as a CIDR, so it can join {@link TrustedNetworks}. Normalising a bare address to a
+     * single-host CIDR is the domain's call — a store or a controller that appended {@code "/32"} itself
+     * would be a second place the rule could drift from this one.
+     */
+    public String asCidr() {
+        return value + SINGLE_HOST_PREFIX;
+    }
+
+    /** Lets this address back in now. Throws {@link BlockNotLiftedException} if it could not be done. */
+    public void liftBlock(ForLiftingBlocks forLiftingBlocks) {
+        forLiftingBlocks.liftBlock(this);
+    }
+
+    /**
+     * Records this address as permanently trusted. On its own this does <em>not</em> let it back in:
+     * CrowdSec re-reads its whitelist parser only when it restarts (PRD §6.26), so trusting takes effect
+     * from the next restart and the block still has to be lifted separately.
+     */
+    public void trust(ForPersistingTrustedAddresses store) {
+        store.save(this);
+    }
+}

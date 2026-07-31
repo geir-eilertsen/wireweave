@@ -17,6 +17,7 @@ import net.vaier.domain.RemoteDiskForecastTracker;
 import net.vaier.domain.RemoteDiskPressureTracker;
 import net.vaier.domain.RemoteDiskUsage;
 import net.vaier.domain.SshServerPresence;
+import net.vaier.domain.port.ForPersistingDiskPressureState;
 import net.vaier.domain.port.ForPublishingEvents;
 import net.vaier.domain.port.ForRecordingSshServerPresence;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -31,9 +32,18 @@ import java.util.stream.Collectors;
  * emails admins when a watched one crosses its alert threshold. This covers the Vaier host itself (via
  * SSH-to-self) as well as every other machine, so there is a single disk-alert path for the whole fleet. It
  * runs a bounded {@code df} over SSH via {@link RunRemoteCommandUseCase} (never touching the SSH ports
- * directly), and a per-filesystem {@link RemoteDiskPressureTracker} makes it alert only on threshold
- * crossings — into pressure and back to normal — so nothing is re-alerted every poll and a restart never
- * produces noise.
+ * directly), and a per-filesystem {@link RemoteDiskPressureTracker} decides what admins hear: the first
+ * time a filesystem is ever seen in pressure, again each time it climbs into a higher
+ * {@link net.vaier.domain.DiskPressureBand}, and once more when it drops back to normal. Nothing is
+ * re-alerted every poll, and nothing is re-alerted on a timer either.
+ *
+ * <p><b>The silence this watcher was fixed for.</b> The Vaier server's own root filesystem reached 89%
+ * against an 80% threshold and not one email went out. The tracker's state was a boolean latch on a field
+ * of this very class: a redeploy — several a day here — wiped it, so every sweep was a "first observation",
+ * and a first observation was treated as a silent baseline. A filesystem that was already above its
+ * threshold could therefore never cross it, forever. The state now lives behind
+ * {@link ForPersistingDiskPressureState} and the first observation speaks. Suppression is logged, so a
+ * quiet disk is never again indistinguishable from an unwatched one.
  *
  * <p><b>#325.</b> It used to read {@code df -P /} — the root filesystem, and only the root filesystem. On the
  * NAS that is the fixed-size 2.3 GB DSM system partition, 88% by design and never moving, so the alert Vaier
@@ -78,7 +88,7 @@ public class RemoteDiskWatcher {
     private final Clock clock;
     private final ForRecordingSshServerPresence sshPresenceRecorder;
     private final ForPublishingEvents eventPublisher;
-    private final RemoteDiskPressureTracker tracker = new RemoteDiskPressureTracker();
+    private final RemoteDiskPressureTracker tracker;
     private final RemoteDiskForecastTracker forecastTracker = new RemoteDiskForecastTracker();
 
     // The stream the Explorer already holds open for fleet liveness (peers, LAN reachability) — piggybacking
@@ -95,7 +105,8 @@ public class RemoteDiskWatcher {
                              ConfigResolver configResolver,
                              Clock clock,
                              ForRecordingSshServerPresence sshPresenceRecorder,
-                             ForPublishingEvents eventPublisher) {
+                             ForPublishingEvents eventPublisher,
+                             ForPersistingDiskPressureState diskPressureState) {
         this.machines = machines;
         this.credentials = credentials;
         this.remoteCommand = remoteCommand;
@@ -106,6 +117,9 @@ public class RemoteDiskWatcher {
         this.clock = clock;
         this.sshPresenceRecorder = sshPresenceRecorder;
         this.eventPublisher = eventPublisher;
+        // The domain owns the port call; this watcher only hands it in. Its state is on disk precisely so
+        // that a redeploy — several a day here — no longer wipes what admins have already been told.
+        this.tracker = new RemoteDiskPressureTracker(diskPressureState);
     }
 
     @Scheduled(fixedDelay = 300000)
@@ -192,10 +206,19 @@ public class RemoteDiskWatcher {
         }
         int threshold = verdict.thresholdPercent();
 
-        switch (tracker.update(machine.name(), filesystem.mountPoint(), verdict.breaching())) {
-            case CROSSED_ABOVE -> notifier.notifyAdminsOfRemoteDiskPressure(filesystem, threshold);
-            case CROSSED_BELOW -> notifier.notifyAdminsOfRemoteDiskRecovery(filesystem, threshold);
-            case NONE -> { /* no boundary crossed; stay quiet */ }
+        RemoteDiskPressureTracker.Verdict pressure =
+            tracker.observe(machine.id(), filesystem, verdict.breaching());
+        switch (pressure.outcome()) {
+            case ALERT -> notifier.notifyAdminsOfRemoteDiskPressure(filesystem, threshold);
+            case RECOVERED -> notifier.notifyAdminsOfRemoteDiskRecovery(filesystem, threshold);
+            // Staying quiet has to be visible. The old no-op branch logged nothing at all, so a disk sitting
+            // at 89% in total silence looked exactly like a disk nobody was watching — and that is precisely
+            // what happened. An operator must be able to tell the two apart from the log alone.
+            case SUPPRESSED -> log.info(
+                "{} {} is at {}% — above its {}% threshold, already notified at band {}; staying quiet",
+                machine.name(), filesystem.mountPoint(), filesystem.usedPercent(), threshold,
+                pressure.notifiedBand().map(Object::toString).orElse("none"));
+            case QUIET -> { /* below its threshold and never alerted about; nothing to say */ }
         }
 
         // Feed the same reading to the trend/forecast consumer (no extra SSH round-trip). The tracker decides
@@ -204,7 +227,7 @@ public class RemoteDiskWatcher {
         // is this filesystem's own, so the forecast hands off at exactly the level the pressure alert fires
         // at.
         RemoteDiskForecastTracker.Observation forecast = forecastTracker.observe(
-            machine.name(), filesystem.mountPoint(), clock.instant(), filesystem.usedPercent(), threshold);
+            machine.id(), filesystem, clock.instant(), threshold);
         forecast.earlyWarning().ifPresent(forecastNotifier::notifyAdminsOfDiskFillForecast);
         forecast.cleared().ifPresent(forecastNotifier::notifyAdminsOfDiskFillForecastCleared);
     }

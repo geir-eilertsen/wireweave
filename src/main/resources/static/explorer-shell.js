@@ -83,9 +83,10 @@
     // pages (framed whole, via renderGlobalBridge) until they are ported. This is why the tree is a forest, not
     // one root. Fleet-level bridges are all gone: Infrastructure and Backups are native entries now (#323).
     const GLOBALS = [
-        { name: 'settings', label: 'Settings', icon: 'gear',  native: true },
-        { name: 'users',    label: 'Users',    icon: 'users', page: 'users.html' },
-        { name: 'concepts', label: 'Concepts', icon: 'book',  page: 'concepts.html' },
+        { name: 'settings', label: 'Settings', icon: 'gear',   native: true },
+        { name: 'users',    label: 'Users',    icon: 'users',  page: 'users.html' },
+        { name: 'security', label: 'Security', icon: 'shield', native: true },
+        { name: 'concepts', label: 'Concepts', icon: 'book',   page: 'concepts.html' },
     ];
 
     const MACHINE_TYPE = {
@@ -152,6 +153,9 @@
         readying: new Map(),             // machine identity -> the one `sudo bash …` line Vaier staged where it could not gain root itself
         provisionWatch: null,            // { serverName, bodyEl } while a provision dialog awaits its provision-settled push
         settings: { state: 'idle', config: null, version: '' },   // the native Settings entry, read on view
+        threats: [],                     // GET /security/decisions — who CrowdSec is keeping out right now
+        threatsRead: false,              // whether that read has landed once (an empty list is an answer, [] is not)
+        threatsError: '',                // why that read failed, when it did — never shown as "nothing blocked"
         palSel: 0,
     };
 
@@ -184,7 +188,10 @@
         if (path.length === 1) {
             if (path[0] === 'fleet') return 'fleet';
             const g = GLOBALS.find((x) => x.name === path[0]);
-            if (g) return g.native ? 'settings' : 'gbridge';
+            // A native global's kind IS its name — it renders itself. This used to answer 'settings' for
+            // every native entry, which was true only while Settings was the sole one; a second native
+            // global (Security) would have rendered the Settings pane under its own name.
+            if (g) return g.native ? g.name : 'gbridge';
             return 'fleet';
         }
         if (path.length === 2) {
@@ -744,7 +751,7 @@
         vlabel.textContent = 'Vaier';
         tree.appendChild(vlabel);
         GLOBALS.forEach((g) => tree.appendChild(
-            branch([g.name], g.native ? 'settings' : 'gbridge', g.label, 0)));
+            branch([g.name], g.native ? g.name : 'gbridge', g.label, 0)));
     }
 
     function branch(path, kind, label, depth) {
@@ -977,6 +984,7 @@
         if (kind === 'fleet') return renderFleet(pane);
         if (kind === 'map') return renderMap(pane);
         if (kind === 'settings') return renderSettings(pane);
+        if (kind === 'security') return renderSecurity(pane);
         if (kind === 'gbridge') return renderGlobalBridge(pane);
         if (kind === 'machine') return renderMachine(pane);
         if (kind === 'containers') return renderContainers(pane);
@@ -1036,6 +1044,7 @@
     // from and a firm one where its traffic surfaces (the Vaier server); LAN servers sit at their relay; the
     // Vaier server itself is the big marker in Frankfurt. Leaflet + markercluster load from explorer.html.
     let _map = null;
+    let _threatLayer = null;
     const MAP_STATUS = { OK: 'up', DEGRADED: 'degraded', DOWN: 'down', UNKNOWN: 'unknown' };
     const iconByCategory = (cat) => { const k = cat ? String(cat).toLowerCase() : ''; return ICON[k] ? k : 'generic'; };
 
@@ -1065,14 +1074,38 @@
         return box;
     }
 
+    // Threats are drawn on their own layer, never into the fleet's cluster, and never into `coords` — so
+    // they cannot drag fitBounds. A single scanner in Singapore would otherwise zoom the fleet out to the
+    // whole globe every time the Map is opened, which would cost the operator the view the Map exists for.
+    // They are also refreshed in place (paintThreatLayer) rather than by re-rendering, so a push arriving
+    // while the operator is panning does not yank the map out from under them.
+    function paintThreatLayer() {
+        if (!_map || !_threatLayer) return;
+        _threatLayer.clearLayers();
+        S.threats.filter((d) => d.locatable).forEach((d) => {
+            const m = L.marker([d.latitude, d.longitude], {
+                icon: L.divIcon({ html: '<div class="threat-ping"></div>', className: '',
+                    iconSize: [22, 22], iconAnchor: [11, 11] }),
+                riseOnHover: true,
+            });
+            m.bindPopup(mapPopup(d.sourceIp, [{ text: 'blocked at the edge', muted: true },
+                { text: d.scenario }, { text: d.origin },
+                { text: 'expires in ' + d.duration, muted: true }]));
+            _threatLayer.addLayer(m);
+        });
+    }
+
     function renderMap(pane) {
-        pane.appendChild(paneHead('Map', false, 'Where the fleet is'));
+        const seen = S.threats.filter((d) => d.locatable).length;
+        pane.appendChild(paneHead('Map', false,
+            seen ? 'Where the fleet is, and where ' + seen + (seen === 1 ? ' blocked address is' : ' blocked addresses are')
+                 : 'Where the fleet is'));
         const body = el('div', 'ex-pane-body ex-map-body');
         const holder = el('div', 'ex-map');
         body.appendChild(holder);
         pane.appendChild(body);
         if (typeof L === 'undefined') { body.appendChild(note('The map could not load its library.', true)); return; }
-        if (_map) { try { _map.remove(); } catch (e) { /* gone */ } _map = null; }
+        if (_map) { try { _map.remove(); } catch (e) { /* gone */ } _map = null; _threatLayer = null; }
 
         const map = L.map(holder, { worldCopyJump: true }).setView([20, 0], 1);
         _map = map;
@@ -1139,6 +1172,14 @@
                 { text: [loc.city, loc.country].filter(Boolean).join(', ') }]));
             add(m, [loc.latitude, loc.longitude]);
         }
+
+        _threatLayer = L.layerGroup().addTo(map);
+        paintThreatLayer();
+
+        // An unreadable threat list must not look like a quiet one. With no pings and no note, a map drawn
+        // during a CrowdSec outage reads as "nobody is probing us" — the same falsely reassuring silence the
+        // Security view says out loud, and worse here because the Map never claims a count to contradict.
+        if (S.threatsError) body.appendChild(note(S.threatsError, true));
 
         if (coords.length) map.fitBounds(L.latLngBounds(coords).pad(0.3), { maxZoom: 5 });
         else body.appendChild(note('No machine has a known location yet.', false));
@@ -4724,6 +4765,180 @@
     }
 
 
+    // --- Security (#329 Slice 3) -----------------------------------------------------------------------
+    //
+    // Who CrowdSec is keeping out of the fleet right now, and the two things an operator can do about it:
+    // lift one block, or trust an address for good. The list is read once at boot and thereafter pushed —
+    // the watcher's five-minute sweep publishes it, and an action publishes it again immediately, so the
+    // effect of a click is visible at once instead of up to five minutes later. The browser never polls.
+    //
+    // `locatable` and `enriched` arrive already decided by the domain and are never re-derived here. That
+    // is not ceremony: CrowdSec writes 0/0 for a source it could not place, 0 is falsy in JavaScript, and
+    // a plain truthiness check on the two coordinates would quietly drop every genuine location sitting on
+    // the equator or the prime meridian.
+    async function loadSecurity() {
+        try {
+            const res = await fetch('/security/decisions', { cache: 'no-store' });
+            if (!res.ok) {
+                // A failed read is a 502 carrying CrowdSec's own reason, never an empty list — which is
+                // why the empty state below can honestly say "nobody is blocked". Saying that when Vaier
+                // could not even ask is the one mistake this screen must never make.
+                const err = await res.json().catch(() => ({}));
+                S.threatsError = err.message || 'Vaier could not ask CrowdSec who is blocked.';
+                S.threatsRead = true;
+                return;
+            }
+            S.threats = await res.json();
+            S.threatsError = '';
+        } catch (e) {
+            S.threatsError = 'Vaier could not ask CrowdSec who is blocked.';
+        }
+        S.threatsRead = true;
+    }
+
+    function watchSecurity() {
+        const events = new EventSource('/security/events');
+        // SSE replays nothing missed while the stream was down, so re-read on every reconnect after the
+        // first — the same edge-triggered re-sync watchFleet does. Not polling: this fires on a reconnect,
+        // not on a clock.
+        let opened = false;
+        events.onopen = () => { if (opened) loadSecurity().then(repaintThreats); opened = true; };
+        events.addEventListener('block-decisions', (e) => {
+            try {
+                S.threats = JSON.parse(e.data);
+                S.threatsRead = true;
+                S.threatsError = '';
+            } catch (err) { return; }   // a malformed push is not a reason to blank a good list
+            repaintThreats();
+        });
+    }
+
+    // A push lands every five minutes whatever the operator is looking at, so repaint only what actually
+    // shows threats — and never re-render the Map, which would tear the whole thing down and throw away
+    // the pan and zoom mid-gesture. Its markers are refreshed in place instead, exactly as paintDots does
+    // for liveness.
+    function repaintThreats() {
+        const kind = kindOf(S.path);
+        if (kind === 'security') render();
+        else if (kind === 'map') paintThreatLayer();
+    }
+
+
+    function renderSecurity(pane) {
+        const blocked = S.threats.length;
+        pane.appendChild(paneHead('Security', false,
+            blocked ? blocked + (blocked === 1 ? ' address blocked' : ' addresses blocked') : 'Nothing blocked'));
+
+        const body = el('div', 'ex-pane-body');
+        if (!S.threatsRead) {
+            body.appendChild(note('Reading who CrowdSec is keeping out…', false));
+            pane.appendChild(body); return;
+        }
+        if (S.threatsError) {
+            body.appendChild(note(S.threatsError, true));
+            pane.appendChild(body); return;
+        }
+        if (!blocked) {
+            body.appendChild(note('Nobody is blocked right now. CrowdSec is watching the edge, and Vaier '
+                + 'emails you the moment it starts turning someone away.', false));
+            pane.appendChild(body); return;
+        }
+
+        const rows = el('div', 'ex-listing is-threats');
+        rows.appendChild(listHead(['Source', 'Scenario', 'Expires in', '']));
+        S.threats.forEach((d) => rows.appendChild(threatRow(d)));
+        body.appendChild(rows);
+        pane.appendChild(body);
+    }
+
+    // No navigation target — a block decision has no Inspector of its own — so the source is plain text,
+    // not a button that would promise somewhere to go.
+    function threatRow(d) {
+        const row = el('div', 'ex-lrow');
+
+        const src = el('span', 'ex-tsource');
+        const ip = el('span', 'ex-tip');
+        ip.textContent = d.sourceIp;
+        src.appendChild(ip);
+        // Both the verdict and the rendering come from the domain: `enriched` decides whether CrowdSec
+        // placed this source at all, `origin` is how that reads. Joining country and network here instead
+        // would be a second copy of a rule the breach mail already owns, and copies drift.
+        if (d.enriched) {
+            const from = el('span', 'ex-torigin');
+            from.textContent = d.origin;
+            src.appendChild(from);
+        }
+        row.appendChild(src);
+
+        [d.scenario, d.duration].forEach((value) => {
+            const cell = el('span', 'ex-lmeta');
+            const text = el('span');
+            text.textContent = value || '—';
+            cell.appendChild(text);
+            row.appendChild(cell);
+        });
+
+        const sub = el('span', 'ex-lsub');
+        const subText = el('span');
+        subText.textContent = [d.origin, d.scenario, d.duration].filter(Boolean).join(' · ');
+        sub.appendChild(subText);
+        row.appendChild(sub);
+
+        const acts = el('div', 'ex-lactions');
+        const lift = el('button', 'ex-btn');
+        lift.textContent = 'Lift the block';
+        lift.title = 'Let ' + d.sourceIp + ' back in now. CrowdSec may block it again the next time it '
+            + 'trips a scenario.';
+        lift.onclick = () => liftBlock(d);
+        acts.appendChild(lift);
+        const trust = el('button', 'ex-btn');
+        trust.textContent = 'Trust this address';
+        trust.title = 'Never block ' + d.sourceIp + ' again.';
+        trust.onclick = () => trustAddress(d);
+        acts.appendChild(trust);
+        row.appendChild(acts);
+        return row;
+    }
+
+    // One-off and self-healing — the address is let back in, and the next scenario it trips blocks it
+    // again — so this asks nothing first. Trusting an address is the lasting decision, and that one does.
+    async function liftBlock(d) {
+        if (!await securityAction('/security/decisions/' + encodeURIComponent(d.sourceIp), 'DELETE', null,
+            'Vaier could not lift the block on ' + d.sourceIp + '.')) return;
+        toast('Lifted the block on ' + d.sourceIp + '.');
+    }
+
+    async function trustAddress(d) {
+        const ok = await confirmModal('Trust ' + d.sourceIp + ' for good?',
+            'Vaier lifts the block now, and adds ' + d.sourceIp + ' to the networks it never blocks. The '
+            + 'trusted list itself reaches CrowdSec when CrowdSec next restarts — Vaier will not restart it '
+            + 'for you, because restarting the thing guarding the door is how an operator ends up locked out.',
+            'Trust this address');
+        if (!ok) return;
+        if (!await securityAction('/security/trusted-addresses', 'POST', { sourceIp: d.sourceIp },
+            'Vaier could not trust ' + d.sourceIp + '.')) return;
+        toast('Now trusting ' + d.sourceIp + '.');
+    }
+
+    // The server pushes the new list straight after a successful action, so this does not re-read — but a
+    // failure must never read as success, so anything but a 2xx toasts the server's own reason and stops.
+    async function securityAction(url, method, body, failMsg) {
+        try {
+            const res = await fetch(url, body
+                ? { method: method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+                : { method: method });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                toast(err.message || failMsg);
+                return false;
+            }
+            return true;
+        } catch (e) {
+            toast(failMsg);
+            return false;
+        }
+    }
+
     // A top-level global that is still bridged (Users, Concepts) — its page, framed whole, until it is ported.
     function renderGlobalBridge(pane) {
         const g = GLOBALS.find((x) => x.name === S.path[0]);
@@ -6702,7 +6917,11 @@
         watchServices();
         watchTransfers();
         watchBackups();
+        watchSecurity();
         loadTransfers();
+        // Not awaited, and read at boot rather than on view, because the Map draws threats too — an
+        // operator who opens the Map first would otherwise see an honest-looking map with nobody on it.
+        loadSecurity().then(repaintThreats);
         loadUser();
     }
 

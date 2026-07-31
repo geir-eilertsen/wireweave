@@ -167,10 +167,14 @@ class ExplorerShellTest {
         // make the tree look finished. (The download is an <a href>, not a fetch, so it does not appear here.)
         // /survival-kit joins it with the Settings section that writes the fleet's kits: the endpoint is the
         // one the API already had, and the section is a front for it rather than a reason for it to exist.
+        // /security is #329 Slice 3's addition, and it is the same shape of justification: CrowdSec has been
+        // blocking at the edge since Slice 1 and Vaier has been reading those decisions since Slice 2 — the
+        // Security view and the Map's threat layer are a front for an engine that already runs, not an
+        // endpoint invented so a view would have something to show.
         List<String> allowed = List.of("/machines", "/vpn/peers", "/lan-servers", "/users/me",
                                        "/docker-services", "/published-services", "/access/services",
                                        "/transfers", "/backup-servers", "/backup-repositories", "/backup-jobs",
-                                       "/settings", "/lan-scan", "/survival-kit");
+                                       "/settings", "/lan-scan", "/survival-kit", "/security");
         String js = read("explorer-shell.js");
         Matcher m = Pattern.compile("fetch\\([`']([^`']+)[`']").matcher(js);
         int found = 0;
@@ -613,16 +617,20 @@ class ExplorerShellTest {
     }
 
     @Test
-    void theShell_holdsFourStreams_theFleet_itsServices_itsTransfers_andItsBackups() throws IOException {
+    void theShell_holdsFiveStreams_theFleet_itsServices_itsTransfers_itsBackups_andItsThreats() throws IOException {
         // Slice A held one; slice C added `published-services` (a real, existing topic); slice 2 (Move) added
         // `transfers`, a copy's live progress. Moving jobs onto their machines adds the conscious fourth —
-        // `backups`, carrying run-settled so a launched backup's outcome arrives pushed, not polled. Each is a
-        // real backend topic listened to, never invented. Four is the ceiling now. And still no clock of the
+        // `backups`, carrying run-settled so a launched backup's outcome arrives pushed, not polled. #329
+        // Slice 3 adds the conscious fifth — `security`, carrying the active block decisions so the Security
+        // view and the Map's threat layer learn of a new ban when it happens. It earns its place the same way
+        // the others did: the alternative is a poll, and polling is the rule this test exists to hold. Each is
+        // a real backend topic listened to, never invented. Five is the ceiling now. And still no clock of the
         // shell's own — no setInterval, and no setTimeout (the toast lives out a CSS animation, not a JS timer).
         String js = read("explorer-shell.js");
-        assertThat(js.split("new EventSource\\(", -1).length - 1).isEqualTo(4);
+        assertThat(js.split("new EventSource\\(", -1).length - 1).isEqualTo(5);
         assertThat(js).contains("new EventSource('/transfers/events')");
         assertThat(js).contains("new EventSource('/backup-jobs/events')");
+        assertThat(js).contains("new EventSource('/security/events')");
         assertThat(js).doesNotContain("setInterval");
         assertThat(js).doesNotContain("setTimeout");
     }
@@ -1629,5 +1637,82 @@ class ExplorerShellTest {
         String body = js.substring(from, js.indexOf("\n    }", from));
         assertThat(body).as("Download is unconditional in the row's actions").contains("download(machineId, entry)");
         assertThat(body).doesNotContain("viewable");
+    }
+
+    // --- the Security view and the threats on the Map (#329 Slice 3) -----------------------------------
+
+    @Test
+    void aSecondNativeGlobal_rendersItselfRatherThanSettings() throws IOException {
+        // kindOf answered 'settings' for every native global, which was indistinguishable from correct
+        // while Settings was the only one. Security is the second, and under the old rule it would have
+        // drawn the Settings pane under its own name — a bug that could only appear once, here.
+        String js = read("explorer-shell.js");
+        assertThat(js).contains("g.native ? g.name : 'gbridge'");
+        assertThat(js).doesNotContain("g.native ? 'settings' : 'gbridge'");
+        assertThat(js).contains("if (kind === 'security') return renderSecurity(pane);");
+    }
+
+    @Test
+    void theMapNeverReDerivesWhetherAThreatCanBeDrawn() throws IOException {
+        // The domain already decided it: BlockDecision.locatable() rejects CrowdSec's 0/0 "could not place
+        // this" sentinel while deliberately keeping a genuine zero on ONE axis, which is a real place. In
+        // JavaScript 0 is falsy, so the obvious `d.latitude && d.longitude` would silently throw away every
+        // location on the equator or the prime meridian. The shell must consume the verdict, never re-take it.
+        String js = read("explorer-shell.js");
+        assertThat(js).contains("S.threats.filter((d) => d.locatable)");
+        assertThat(js).doesNotContain("d.latitude && d.longitude");
+        assertThat(js).doesNotContain("d.latitude != null && d.longitude != null");
+    }
+
+    @Test
+    void threatsNeverDragTheMapsFraming() throws IOException {
+        // The fleet's markers push their coordinates into `coords`, which fitBounds frames. A threat must
+        // not: one scanner in Singapore would zoom a European fleet out to the whole globe on every open,
+        // costing the operator the view the Map exists for. Threats live on their own layer instead.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function paintThreatLayer(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).as("a threat marker is never added to the framing coordinates")
+            .doesNotContain("coords");
+        assertThat(body).contains("_threatLayer.addLayer(m)");
+    }
+
+    @Test
+    void aThreatPushRepaintsInPlaceRatherThanRebuildingTheMap() throws IOException {
+        // A push lands every five minutes whatever is on screen. Re-rendering would tear the Leaflet map
+        // down and rebuild it, throwing away the operator's pan and zoom — possibly mid-drag. The shell
+        // already solved this shape for liveness with paintDots; threats follow it.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function repaintThreats(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).contains("else if (kind === 'map') paintThreatLayer();");
+        assertThat(body).doesNotContain("if (kind === 'map') render()");
+    }
+
+    @Test
+    void theSecurityViewIsPushedNotPolled() throws IOException {
+        // The same rule the rest of the shell lives by: the backend sweeps and publishes, the browser
+        // listens. A timer here would be the first one in the file.
+        String js = read("explorer-shell.js");
+        assertThat(js).contains("new EventSource('/security/events')");
+        assertThat(js).contains("events.addEventListener('block-decisions'");
+        assertThat(js).doesNotContain("setInterval");
+    }
+
+    @Test
+    void theBlockedListKeepsItsVerbsOnANarrowScreen() throws IOException {
+        // The file listing hides its row verbs on a phone because ticking a file raises the selection bar
+        // that carries them. Security has no such bar, so inheriting that rule would leave the view
+        // read-only on the device the operator is most likely holding when the alert arrives.
+        String css = read("explorer-shell.css");
+        assertThat(css).contains(".ex-listing.is-threats .ex-lactions {");
+        assertThat(css).contains("grid-area: acts;");
+        // And the ping is decoration, so it stops when the operator asked for less motion.
+        assertThat(css).contains("@keyframes ex-threat-ping");
+        assertThat(css.substring(css.indexOf("@keyframes ex-threat-ping")))
+            .as("the ping's animation is disabled under prefers-reduced-motion")
+            .contains("prefers-reduced-motion");
     }
 }

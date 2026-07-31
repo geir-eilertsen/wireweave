@@ -2,6 +2,8 @@ package net.vaier.rest;
 
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
+import net.vaier.domain.BlockDecisionsUnreadableException;
+import net.vaier.domain.BlockNotLiftedException;
 import net.vaier.domain.ConflictException;
 import net.vaier.domain.DiskUnreadableException;
 import net.vaier.domain.HostKeyMismatchException;
@@ -200,6 +202,35 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public ResponseEntity<ApiError> handleHostKeyMismatch(HostKeyMismatchException e) {
         return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
                 .body(ApiError.of("HOST_KEY_MISMATCH", e.getMessage()));
+    }
+
+    /**
+     * Vaier asked CrowdSec to let an address back in and could not tell that it had (#329 Slice 3c).
+     * {@code 502} like every other far-side refusal: the engine that owns the ban is on the other side of
+     * Vaier. Mapped explicitly, and carrying the domain's own sentence, because the generic {@code 500}
+     * would read as "Vaier is broken" to an operator whose real question is the far narrower "am I back
+     * in?" — and because the one thing this must never be is silence that looks like success.
+     */
+    @ExceptionHandler(BlockNotLiftedException.class)
+    public ResponseEntity<ApiError> handleBlockNotLifted(BlockNotLiftedException e) {
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                .body(ApiError.of("BLOCK_NOT_LIFTED", e.getMessage()));
+    }
+
+    /**
+     * Vaier could not find out who CrowdSec is currently keeping out (#329 Slice 3). {@code 502} like its
+     * sibling above: the engine that owns the bans is on the far side of Vaier.
+     *
+     * <p>What this replaces is worse than a wrong status code. The read used to swallow its failures and
+     * answer {@code 200 []}, which the security view renders as "Nobody is blocked right now" — so a Vaier
+     * that could not reach CrowdSec told the operator their fleet was unattacked. Found live: the first read
+     * after a container restart failed cold while {@code cscli} listed eleven active decisions. A security
+     * screen may say "I could not ask"; it may never say "all clear" on that evidence.
+     */
+    @ExceptionHandler(BlockDecisionsUnreadableException.class)
+    public ResponseEntity<ApiError> handleBlockDecisionsUnreadable(BlockDecisionsUnreadableException e) {
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                .body(ApiError.of("BLOCK_DECISIONS_UNREADABLE", e.getMessage()));
     }
 
     /**

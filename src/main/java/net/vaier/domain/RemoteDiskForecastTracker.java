@@ -17,6 +17,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * machine alone, the samples of every filesystem on a host would land in one history and the least-squares
  * slope would be fitted through a sawtooth of unrelated disks — a flat {@code /} at 88% interleaved with a
  * climbing {@code /volume1} projects nothing meaningful. A runway belongs to a filesystem, not to a host.
+ *
+ * <p><b>And keyed on the machine's {@link MachineId}, never its name.</b> {@code lan-servers.yml} really
+ * does hold two machines both called "Printer": keyed on the name their samples landed in one history and
+ * were fitted through each other, and renaming a machine silently discarded its whole trend. A name is a
+ * label; only the id is identity.
  */
 public class RemoteDiskForecastTracker {
 
@@ -24,7 +29,7 @@ public class RemoteDiskForecastTracker {
     private final Map<String, DiskPressureTracker> crossings = new ConcurrentHashMap<>();
 
     /**
-     * Record a reading for {@code mountPoint} on {@code machineName} and decide what admins should hear. All
+     * Record a reading of {@code filesystem} on {@code machineId} and decide what admins should hear. All
      * the decisions — slope, runway, the level-threshold gate, and crucially whether a cleared crossing is a
      * genuine recovery or a hand-off to the disk-pressure alert — live here in the domain; the watcher only
      * sends whichever payload comes back.
@@ -44,9 +49,12 @@ public class RemoteDiskForecastTracker {
      *       now speaks for it, so raising an all-clear at the same poll would contradict it.</li>
      * </ul>
      */
-    public Observation observe(String machineName, String mountPoint, Instant at, int usedPercent,
+    public Observation observe(MachineId machineId, RemoteDiskUsage filesystem, Instant at,
                                int levelThreshold) {
-        String key = machineName + '\0' + mountPoint;
+        String machineName = filesystem.machineName();
+        String mountPoint = filesystem.mountPoint();
+        int usedPercent = filesystem.usedPercent();
+        String key = machineId.value() + '\0' + mountPoint;
         DiskFillHistory history = histories.computeIfAbsent(key, k -> new DiskFillHistory());
         history.record(at, usedPercent);
         Optional<DiskFillForecast> forecast = history.forecast(machineName, mountPoint);

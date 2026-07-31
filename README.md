@@ -20,13 +20,13 @@ One box on the internet. Your machines at home, behind WireGuard. Every service 
 | Feature | Description |
 |---------|-------------|
 | **VPN mesh** | WireGuard peers and LAN servers (NAS, printers, extra Docker hosts) join one mesh, with cross-site routing between relays. See [`docs/NETWORKING.md`](docs/NETWORKING.md). |
-| **Reverse proxy & edge hardening** | Traefik terminates HTTPS with Let's Encrypt, enforces a security-header and TLS floor on every route, blocks malicious traffic at the edge with a CrowdSec Security Engine and bouncer, and shows a branded offline page when a backend is down. See [`docs/NETWORKING.md`](docs/NETWORKING.md). |
+| **Reverse proxy & edge hardening** | Traefik terminates HTTPS with Let's Encrypt, enforces a security-header and TLS floor on every route, blocks malicious traffic at the edge with a CrowdSec Security Engine and bouncer — every blocked address listed in the Explorer with where it came from, one click to let it back in or trust it for good — and shows a branded offline page when a backend is down. See [`docs/NETWORKING.md`](docs/NETWORKING.md). |
 | **Wildcard DNS** | One `*.yourdomain.com` record, made once, covers the console, sign-in, and every service you ever publish. See [`docs/NETWORKING.md`](docs/NETWORKING.md). |
 | **Service publishing & launchpad** | Publish any container in one click; a viewer-adaptive dashboard links to whatever each visitor is allowed to reach. See [`docs/NETWORKING.md`](docs/NETWORKING.md). |
 | **Access management** | Google or GitHub sign-in via oauth2-proxy and Dex, with roles (pending → user → admin) and per-service access groups. See [`docs/AUTH.md`](docs/AUTH.md). |
 | **Fleet backup & survival kit** | Automated borg backups to one designated backup server, plus a self-updating "survival kit" so your backups stay readable even if Vaier itself is gone. See [`docs/BACKUP.md`](docs/BACKUP.md). |
-| **Monitoring & alerts** | Disk-usage watching with a fill-rate forecast, container image-update detection, and the email alerts that tie them together. See [`docs/MONITORING.md`](docs/MONITORING.md). |
-| **Explorer** | One tree for the whole fleet — browse files, containers and services, select and transfer across machines, and step back in time through backup archives. See [`docs/EXPLORER.md`](docs/EXPLORER.md). |
+| **Monitoring & alerts** | Disk-usage watching with a fill-rate forecast — a disk already too full when Vaier starts is mailed about immediately, then again only when it gets five points worse, never on a timer — container image-update detection, and email that stays quiet — routine bans at the edge are listed in the Explorer, never mailed; only a credential attack, or CrowdSec blocking one of your own networks, reaches your inbox. See [`docs/MONITORING.md`](docs/MONITORING.md). |
+| **Explorer** | One tree for the whole fleet — browse files, containers and services, select and transfer across machines, step back in time through backup archives, and see live who's blocked at the edge. See [`docs/EXPLORER.md`](docs/EXPLORER.md). |
 | **Web terminal** | A real, persistent SSH shell to any machine, opened in its own window and reattached automatically across reconnects and redeploys. See [`docs/EXPLORER.md`](docs/EXPLORER.md). |
 | **Host credentials** | One encrypted vault holds the SSH login for every machine; the browser never sees a secret. See [`docs/EXPLORER.md`](docs/EXPLORER.md). |
 | **Suggested next steps** | Each machine's pane nudges you toward the next thing worth doing with it, with the evidence shown alongside. See [`docs/EXPLORER.md`](docs/EXPLORER.md). |
@@ -99,7 +99,7 @@ That single wildcard covers the console, the sign-in hosts, and every service yo
 
 ### 3. Configure `.env`
 
-Step 1 already created `.env` with two secrets generated for you. Open it and fill in your own values — **don't recreate the file**, or you'll wipe those secrets:
+Step 1 already created `.env` with three secrets generated for you. Open it and fill in your own values — **don't recreate the file**, or you'll wipe those secrets:
 
 ```ini
 VAIER_DOMAIN=yourdomain.com

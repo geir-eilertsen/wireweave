@@ -291,6 +291,16 @@ public abstract class VaierWebMvcIntegrationBase {
     @MockBean
     protected GetTransfersUseCase getTransfersUseCase;
 
+    // --- Fleet threat detection (#329) use cases ---
+    @MockBean
+    protected GetBlockDecisionsUseCase getBlockDecisionsUseCase;
+
+    @MockBean
+    protected LiftBlockUseCase liftBlockUseCase;
+
+    @MockBean
+    protected TrustAddressUseCase trustAddressUseCase;
+
     // --- Server location use case ---
     @MockBean
     protected GetServerLocationUseCase getServerLocationUseCase;

@@ -20,14 +20,25 @@ public final class TrustedNetworks {
         this.cidrs = this.cidrStrings.stream().map(Cidr::parse).toList();
     }
 
+    /** The operator's own networks alone, with nothing trusted by hand yet. */
+    public static TrustedNetworks of(String vpnSubnet, String dockerBridgeCidr, List<String> relayLanCidrs) {
+        return of(vpnSubnet, dockerBridgeCidr, relayLanCidrs, null);
+    }
+
     /**
      * @param vpnSubnet        the WireGuard VPN subnet (e.g. {@code 10.13.13.0/24}); required.
      * @param dockerBridgeCidr the {@code vaier-network} Docker bridge CIDR (e.g. {@code 172.20.0.0/16});
      *                         required.
      * @param relayLanCidrs    every relay peer's {@code lanCidr}, blank/null entries already
      *                         filtered out; may be null or empty when no relay is configured yet.
+     * @param trustedAddresses every address the operator has permanently trusted (#329 Slice 3c), each
+     *                         folded in as a single-host CIDR; may be null or empty. They belong here
+     *                         rather than being appended to the whitelist file directly, because that file
+     *                         is rewritten wholesale from {@link #allCidrs()} every five minutes — an
+     *                         address that is not in this list is erased from it within five minutes.
      */
-    public static TrustedNetworks of(String vpnSubnet, String dockerBridgeCidr, List<String> relayLanCidrs) {
+    public static TrustedNetworks of(String vpnSubnet, String dockerBridgeCidr, List<String> relayLanCidrs,
+                                     List<SourceAddress> trustedAddresses) {
         if (vpnSubnet == null || vpnSubnet.isBlank()) {
             throw new IllegalArgumentException("vpnSubnet must not be blank");
         }
@@ -41,6 +52,14 @@ public final class TrustedNetworks {
             for (String cidr : relayLanCidrs) {
                 if (cidr != null && !cidr.isBlank()) {
                     all.add(cidr.trim());
+                }
+            }
+        }
+        if (trustedAddresses != null) {
+            for (SourceAddress address : trustedAddresses) {
+                if (address != null) {
+                    // SourceAddress owns the bare-address-to-single-host-CIDR normalisation.
+                    all.add(address.asCidr());
                 }
             }
         }

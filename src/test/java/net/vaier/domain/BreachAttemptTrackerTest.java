@@ -9,7 +9,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 class BreachAttemptTrackerTest {
 
     private static BlockDecision decision(long id, String ip) {
-        return new BlockDecision(id, "crowdsecurity/http-probing", ip, "ban", "3h59m48s");
+        return BlockDecision.builder()
+            .id(id).scenario("crowdsecurity/http-probing").sourceIp(ip).type("ban").duration("3h59m48s")
+            .build();
     }
 
     @Test

@@ -336,7 +336,7 @@ Keep the operator aware when a container's image has an **update available**. Re
 - **Registry-generic, not Docker Hub-specific.** `RegistryV2ImageAdapter` (`ForResolvingRegistryDigest`) speaks the plain Registry v2 HEAD-manifest + anonymous bearer-token flow: HEAD → 401 challenge → pull-scoped token from the realm the challenge names → HEAD with the bearer. Docker Hub, `ghcr.io` and `lscr.io` differ only in host and realm, so all three work with no credentials configured. `ImageReference` parses Docker's implicit naming grammar (`redis` → `registry-1.docker.io/library/redis:latest`; `lscr.io/…` → that host) — the first segment is a registry host only if it has a dot or colon, or is `localhost`.
 - **Three verdicts, and UNKNOWN is the point.** `UPDATE_AVAILABLE`, `UP_TO_DATE`, `UNKNOWN`. An unreachable/rate-limited registry, a locally-built image with no registry digest, and a digest-pinned (`@sha256:…`) image all render UNKNOWN — never outdated, never up to date. Collapsing "cannot tell" into either answer makes the monitor lie (into up-to-date it hides the vaultwarden case; into update-available it cries wolf until admins filter the mail).
 - **Daily sweep, 24 h TTL cache.** `ImageUpdateWatcher` runs `@Scheduled(fixedDelay = 24 h, initialDelay = 2 min)`; `ImageUpdateSweep` asks **once per distinct image**, not once per container, because rate limits count requests (anonymous Docker Hub ≈ 100 manifest requests / 6 h). Successful answers are cached 24 h keyed by canonical image reference; **failures are deliberately not cached** — one blip must not blind the next sweep. The 30s container scrape never touches a registry. The sweep is total: a throwing/timing-out registry degrades that one image to UNKNOWN and the sweep carries on.
-- **Edge-transition rollup email.** `ImageUpdateTracker` reports only images that have *just* become out of date; `ImageUpdateRollup` renders one mail listing them (three stale images in one sweep = one email; nothing changed = no email) to every **admin**-role **access entry**, via the shared SMTP notifier. Two rules differ from `RemoteDiskPressureTracker` / `PeerConnectivityTracker`, both deliberately: it is **not baseline-quiet** (an image already stale at the first sweep *is* reported — that is the incident this feature exists for), and **UNKNOWN is not a change** (it leaves the last known verdict standing, so a rate-limited sweep can't re-mail about an image already reported).
+- **Edge-transition rollup email.** `ImageUpdateTracker` reports only images that have *just* become out of date; `ImageUpdateRollup` renders one mail listing them (three stale images in one sweep = one email; nothing changed = no email) to every **admin**-role **access entry**, via the shared SMTP notifier. Two rules differ from `PeerConnectivityTracker`, both deliberately: it is **not baseline-quiet** (an image already stale at the first sweep *is* reported — that is the incident this feature exists for; `RemoteDiskPressureTracker` has since made the same call, for the same reason), and **UNKNOWN is not a change** (it leaves the last known verdict standing, so a rate-limited sweep can't re-mail about an image already reported).
 - ✅ **Machine-aware tracking (#57 refinement).** The tracked unit is a **scoped image** — `domain.ScopedImage(machine, image)`, rendered `vaultwarden/server:latest on Apalveien 5` — not a bare image string, because an operator told only the image can't tell which host to SSH into. The sweep is fed containers grouped by machine (`ImageUpdateSweep.MachineContainers`; the Vaier server's own under `LanAnchor.VAIER_SERVER_NAME`, each peer's under `peer.peerName()`) and returns `Map<ScopedImage, UpdateAvailability>`; the tracker, rollup and `UpdateCheckOutcome` are all keyed by it, and the alert names the machine in subject and body. **The registry is still asked once per distinct image string, never once per (machine, image)** — the same tag resolves to the same digest everywhere, so the per-machine granularity comes only from comparing each container's *own* local digest against that one shared registry answer. This also fixed two latent bugs the image-only keying hid: the same tag on two machines with different local digests used to collapse to one last-wins verdict, and a tag going stale on a second machine after the first was already reported used to raise no new alert.
 - **No auto-upgrade, ever.** Read-only detection: Vaier never pulls and never restarts. The mail says so explicitly ("Vaier does not pull or restart anything — updating is your call").
 - **Coverage:** the Vaier server's own containers and VPN **server peer** containers (`ContainerService.sweepImageUpdates`, over the existing snapshots).
@@ -376,10 +376,18 @@ Vaier ships an SMTP notifier that carries Vaier's admin alert emails (machine up
   - **Disk watch** — `domain.DiskWatch(machineName, mountPoint, watched, thresholdPercent)` and the `domain.DiskWatches` collection: per machine, per filesystem, watched or **muted**, optionally at its own threshold. Keyed on machine **and** mount point (joined on NUL, a byte neither a machine name nor a POSIX path can hold), because `/` on the NAS and `/` on Apalveien 5 are two different disks with two different verdicts. **The default is watched, at the global threshold** (`DiskWatch.watchedByDefault`, `DiskWatches.forFilesystem` never returns empty) — deliberately not invertible: the failure this issue fixes is *silence about the disk that matters*, so an unconfigured filesystem nags rather than hides, and muting is a decision someone takes rather than inherits.
   - **The breach verdict is a domain decision**: `RemoteDiskUsage.breaches(DiskWatch, globalThreshold)` resolves mute → per-mount threshold → global fallback. The alert email and the Explorer both call it, so they cannot disagree about whether a disk is in trouble.
   - **Persistence** — new driven port `ForPersistingDiskWatches` (`getAll` / `save`) with `DiskWatchFileAdapter` writing `${VAIER_CONFIG_PATH}/disk-watches.yml` under a root `watches:` key. No secrets, so a plain tolerant SnakeYAML round-trip like the backup adapters. **Only the exceptions are stored**; an absent file is the healthy first-boot state. A malformed entry is skipped with a warning rather than aborting the load, and an absent `watched` key reads as *watched* — not even a truncated file can silently unwatch a disk.
-  - **Trackers are keyed on machine AND mount point.** `RemoteDiskPressureTracker` and `RemoteDiskForecastTracker` were machine-keyed, which was defensible only while a machine had one disk. It is not now: the NAS's `/` sits permanently above the threshold, so a machine-keyed tracker would already read "in pressure" and `/volume1` crossing would be swallowed as "no change" — the exact silence this issue is about. Likewise a machine-keyed `DiskFillHistory` would fit its least-squares slope through a sawtooth of unrelated disks. `DiskFillForecast` and `DiskFillForecastCleared` gained a `mountPoint`, and the forecast hands off to the pressure alert at *this filesystem's* resolved threshold.
+  - **Trackers are keyed on machine AND mount point.** `RemoteDiskPressureTracker` and `RemoteDiskForecastTracker` were machine-keyed, which was defensible only while a machine had one disk. It is not now: the NAS's `/` sits permanently above the threshold, so a machine-keyed tracker would already read "in pressure" and `/volume1` crossing would be swallowed as "no change" — the exact silence this issue is about. Likewise a machine-keyed `DiskFillHistory` would fit its least-squares slope through a sawtooth of unrelated disks. `DiskFillForecast` and `DiskFillForecastCleared` gained a `mountPoint`, and the forecast hands off to the pressure alert at *this filesystem's* resolved threshold. *(The machine half of that key was the machine **name** until the disk-pressure fix below re-keyed both trackers on **machine id** — two machines in this fleet are both called "Printer".)*
   - **Application + REST** — `GetMachineDiskUsageUseCase.getDiskUsage` returns `List<MachineFilesystemUco>` (device, mount point, raw `*Kb` block counts, human `size`/`available`, `usedPercent`, the **effective** `thresholdPercent`, `watched`, `aboveThreshold`), so `GET /machines/{machine}/disk` returns a **list**. New `SetDiskWatchUseCase` + `GetDiskWatchesUseCase`, both on the existing `MachineService` (one service per domain concept), behind `PUT /machines/{machine}/disk/watch` with `{mountPoint, watched, thresholdPercent}` — the **mount point travels in the body**, because a mount point is full of slashes and a path variable carrying them is a routing/encoding bug waiting to happen. Both endpoints are non-whitelisted paths under `/machines`, so they sit behind the admin auth chain; nothing anonymous. A `df` that yields no real filesystem is still a `DiskUnreadableException` → **502**, never an empty list ("this machine has nothing to watch" would be the same silence again).
   - **Explorer** — the `disk` Inspector lists every filesystem: mount point + device (mono, they're coordinates), size and free space, a usage meter with a **threshold tick**, and a watch control (mute switch + threshold input). A **muted filesystem** keeps its meter but loses its tick — nothing is being judged. Saving a watch re-reads the machine's disks rather than recomputing locally, because the verdict is the server's.
 - **Disk-fill forecast (early-warning alert)** ✅ — a second, forward-looking consumer of the same `df -P` readings the disk-pressure watcher already takes (no extra SSH round-trip). Per **filesystem** (per machine until #325), `RemoteDiskWatcher` feeds each `usedPercent` and `clock.instant()` into a `RemoteDiskForecastTracker` (sibling of `RemoteDiskPressureTracker`), which holds a `DiskFillHistory` ring buffer (K=12 samples) and a `DiskPressureTracker` keyed on the early-warning boolean. `DiskFillHistory.forecast(machineName, mountPoint)` fits a **least-squares** line through the retained samples and returns a `DiskFillForecast` (mount point, current %, fill rate %/h, **runway** as a `Duration`) — empty when there is too little signal (< 3 samples, span < 15 min, or slope ≤ 0 = flat/draining/infinite runway). `DiskFillForecast.warrantsEarlyWarning(levelThreshold)` is the gate: `runway < FORECAST_HORIZON (fixed 24h) && currentPercent <= levelThreshold` — where `levelThreshold` is the threshold *this filesystem* is judged against (its **disk watch**'s own, or the global one), already resolved by the caller, so the forecast hands off at exactly the level the pressure alert fires at. It only warns while below that threshold, pages once, and then hands off to the level alert (never both at once). The tracker reports `CROSSED_ABOVE`/`CROSSED_BELOW` on the gate boolean, and — keeping the decision in the domain — splits a `CROSSED_BELOW` by *why* it flipped: still `<= levelThreshold` (drained, or fill slowed so runway rose back over the horizon) is a **genuine recovery** and yields a runway-free `DiskFillForecastCleared` (machine + mount point + current percent, "no longer trending toward full, now at N%"); `> levelThreshold` is a **hand-off** to the disk-pressure alert and yields nothing, so admins never get a contradictory "cleared" and "is 86% full" at the same poll. The `Observation` carries `earlyWarning` and `cleared` payloads; the watcher just sends whichever is present. Notifies via a new `NotifyAdminsOfDiskFillForecastUseCase` (`notifyAdminsOfDiskFillForecast(DiskFillForecast)` / `notifyAdminsOfDiskFillForecastCleared(DiskFillForecastCleared)`) implemented on the existing `NotificationService`, reusing the `sendToAdmins` SMTP path. `Clock` is injected (bean `ClockConfig.systemClock()`, `Clock.systemUTC()`) so tests feed a stepped clock a rising series deterministically. Baseline-quiet on first observation, and the failed-/unparseable-`df` paths `return` before the forecast feed, so a transient failure records no sample. Distinct from **remote disk pressure**: **runway**/trend ("will be full") vs level ("is full"). Follows the strict-TDD, domain-owns-the-decisions discipline: slope, runway and the gate all live in the domain; the watcher only orchestrates.
+- **Disk pressure alerts on the first sighting, and escalate by band** ✅ (implemented 2026-07-31) — the Vaier server's own root filesystem reached **89% against an 80% threshold and never sent one email**. Two faults compounded, and neither fix works alone:
+  - `RemoteDiskPressureTracker` was a boolean latch whose *first* observation was always a silent baseline (borrowed from the machine up/down alerts, where a restart storm is the risk). A filesystem that was **already** above its threshold could therefore never produce a crossing.
+  - That latch was an in-memory field on the scheduled `RemoteDiskWatcher`, wiped by every redeploy — several a day here — so every sweep was that silent first observation, forever. Persisting the latch alone would have converted "never alerts" into "never alerts, permanently"; speaking on the first observation alone would re-mail on every deploy.
+  - **The first observation now speaks**, which is only safe because **the state is persisted**: new driven port `ForPersistingDiskPressureState` (`find` / `save` / `clear`) with `DiskPressureStateFileAdapter` writing `${VAIER_CONFIG_PATH}/disk-pressure.yml` under a root `pressure:` key. No secrets, so a plain tolerant SnakeYAML round-trip like `DiskWatchFileAdapter`. **Only filesystems currently in pressure have an entry**; an absent file is the healthy state. The tolerance errs the right way for a fix about silence: an unparseable entry is dropped, and a dropped entry means Vaier re-alerts about that filesystem rather than going quiet about it.
+  - **Escalation is by band, never by timer** — new `domain.DiskPressureBand` (five-point steps: 80/85/90/95/100, `of(usedPercent)`, `isHigherThan`). A filesystem in pressure is alerted about once per band and again only on climbing into a higher one: 86 → 89 is silence, 89 → 91 is an email. Re-sending every N hours was rejected outright — it pages on the passage of time, which is exactly the heartbeat noise this project refuses to produce. Five points is deliberately coarse: finer and a disk wobbling either side of an edge pages on every wobble. **Slipping back down a band is not a reset** (91 → 89 → 91 never left pressure); only a genuine recovery below the threshold clears the state, so a disk that recovers and re-fills climbs the ladder from the bottom again. The band's constructor rejects a non-multiple-of-5 floor, so a hand-edited `disk-pressure.yml` can't shift the ladder.
+  - **`domain.DiskPressureState`** — `(machineId, mountPoint, notifiedBand)`, the **notified band** for one filesystem, with the identity (`isFor`) and escalation (`isEscalatedBy`) predicates on the entity. The tracker reaches its state through the port (domain owns the port call); the watcher hands the port in and then only decides *whom to tell*. `update(...)` returning a crossing enum became `observe(machineId, filesystem, breaching)` returning a `Verdict(outcome, band, notifiedBand)` over `QUIET` / `ALERT` / `SUPPRESSED` / `RECOVERED`.
+  - **Suppression is logged at INFO** — `… is at 89% — above its 85% threshold, already notified at band 85%; staying quiet`. The old no-op branch logged nothing, so a disk sitting at 89% in total silence looked exactly like a disk nobody was watching; an operator must be able to tell the two apart from the log alone.
+  - **Both trackers are now keyed on `MachineId`, not the machine's name.** `lan-servers.yml` really does hold two machines both called "Printer": name-keyed, they shared one tracker slot and swallowed each other's transitions, and `RemoteDiskForecastTracker` fitted their samples through each other's — while a **rename** silently reset a disk's escalation state and discarded its whole trend. `RemoteDiskForecastTracker.observe` now takes `(MachineId, RemoteDiskUsage, Instant, int)`, keying on `machineId.value()` while still *naming* the machine from the reading. (Consistent with §6.22: a name is a label, only the id is identity.)
 - **New pending access-request alert** ✅ — when `UserService.verify()` sees a Google identity for the first time, it auto-creates a `PENDING` `AccessEntry` and, only in that new-pending branch, notifies admins via the `ForNotifyingAdmins` driven port (`notifyNewPendingIdentity(email)`), implemented by `NotificationService`. The email content is rendered by the `domain.PendingIdentity` value object (subject `[Vaier] New access request awaiting approval`; body names the email and links to `vaier.<domain>/admin.html#users`), mirroring `PeerSnapshot`. Recipients are the **admin**-role **access entries** (`accessStore.getEntries()` filtered by `AccessEntry::isAdmin`), reusing the same SMTP path as the other alerts, so it stays silent when SMTP is unconfigured or there are no admins. Because `verify()` runs on the Traefik forward-auth hot path for every request to a social-gated service, the send is non-blocking and exception-safe: the notifier method is `@Async` (`@EnableAsync` on `VaierApplication`) and the call site in `UserService` swallows/logs any failure, so a misbehaving notifier can never add latency to or throw into the access decision. It does not fire for existing entries, repeat sign-ins by the same pending user, or allowed decisions. The cross-service cycle (NotificationService reads admins via the access store, UserService notifies via `ForNotifyingAdmins`) is broken with `@Lazy` on the UserService dependency.
 
 **Known gotcha:** Gmail requires an **App Password** (not the account password) when 2FA is on. The pre-save verification catches this cleanly — save is rejected with the Gmail `534 5.7.9 Application-specific password required` message.
@@ -1006,10 +1014,12 @@ chain). Address selection (tunnel IP for peers, `lanAddress` for LAN servers) is
   - **#316 — Remote disk-pressure alert** (`df` over SSH) ✅. The first alert built on the exec keystone:
     a `RemoteDiskWatcher` (`@Scheduled`) runs `df -P` over SSH on every `Machine` that both has
     `effectiveSshAccess()` and a stored **host credential**, parses each row, and feeds a
-    per-filesystem `RemoteDiskPressureTracker` so it alerts only on threshold crossings (into pressure and
-    back), never per poll. (It shipped scoped to `df -P /` — the root filesystem and only the root
-    filesystem — and reading *every* filesystem, each with its own **disk watch** and its size, is
-    [#325](https://github.com/getvaier/vaier/issues/325) ✅; see §6.9.) Notifies via `NotifyAdminsOfRemoteDiskPressureUseCase` on `NotificationService`,
+    per-filesystem `RemoteDiskPressureTracker` so it never alerts per poll. (It shipped scoped to `df -P /` —
+    the root filesystem and only the root filesystem — and reading *every* filesystem, each with its own
+    **disk watch** and its size, is [#325](https://github.com/getvaier/vaier/issues/325) ✅; see §6.9. It also
+    shipped alerting only on a *boundary crossing*, with a silent baseline first observation held in memory —
+    the combination that let the Vaier host's own root filesystem reach 89% in silence. It now alerts on the
+    first observation in pressure and escalates by **pressure band** off persisted state; see §6.9.) Notifies via `NotifyAdminsOfRemoteDiskPressureUseCase` on `NotificationService`,
     reusing admin-recipient resolution + SMTP gating; skips silently when SMTP is unconfigured. The
     watcher depends only on the new `RunRemoteCommandUseCase` (implemented on `TerminalService`, reusing
     `openTerminal`'s address + credential + host-key-pin assembly), never on the SSH ports directly. Error
@@ -2433,11 +2443,14 @@ mounted whitelist file while `crowdsec` keeps running has no effect — a repeat
 whitelisted IP still gets banned. A `crowdsec` restart is required to pick up a changed allowlist
 (parsers are compiled into the node tree once, at that process's own boot — unlike Traefik's file
 provider, which explicitly watches for changes). Tracked as a real, accepted Slice-1 limitation;
-Slice 2 may want `SecurityService` to trigger the restart itself.
+a later slice may want `SecurityService` to trigger the restart itself. *(Answered in Slice 3: it
+does not, and deliberately — restarting the edge bouncer to apply an allowlist entry is the lockout
+risk this feature names first. The limitation is documented to the operator instead; see §6.28.)*
 
 **Break-glass — `docker exec crowdsec cscli decisions delete --all`, zero new code.** A real
-unban UI/port belongs to Slice 2 (`ForBlockingAddresses`/`CrowdSecLapiAdapter` per the issue's own
-architecture) — building a throwaway one-off now would be wasted work.
+unban UI/port belongs to a later slice (the issue's own architecture called it
+`ForBlockingAddresses`) — building a throwaway one-off now would be wasted work. *(Shipped in
+Slice 3 as `ForLiftingBlocks`/`CrowdSecCliAdapter`, running the very same `cscli` — see §6.28.)*
 
 **Verified end-to-end on the dev stack**, including a live attack simulation: a burst of known
 scanner-signature paths (`/.env`, `/wp-login.php`, `/.git/config`, …) against a published service
@@ -2449,7 +2462,8 @@ returned immediately. Separately, CrowdSec's community blocklist caught a genuin
 own VPN/Docker-bridge traffic was confirmed never blocked via direct `forwardAuth` checks from
 within those CIDRs.
 
-**Backlog (Slice 2/3).** `ForBlockingAddresses`/`CrowdSecLapiAdapter` for a real unban affordance;
+**Backlog (Slice 2/3).** A port for a real unban affordance (the issue called it
+`ForBlockingAddresses`; it shipped as `ForLiftingBlocks`, §6.28);
 threat-signal/breach-attempt notifications (the "notify only on trouble, predictive over reactive"
 convention already used for backups/certs); an Explorer surface for current decisions.
 
@@ -2466,8 +2480,11 @@ mints authenticates `GET /v1/decisions` fine (scenario, source IP, duration — 
 notification needs); the richer `/v1/alerts` endpoint (geo/ASN enrichment) demanded a separate
 JWT-based "machine" credential, exactly the kind of new-credential machinery Slice 1 already
 avoided once. Collapsed to a single `BlockDecision`, read via the credential Vaier already holds.
-`CrowdSecLapiAdapter` (`adapter/driven/`) implements `ForDetectingIntrusions`, JDK `HttpClient` +
+`CrowdSecLapiAdapter` (`adapter/driven/`) implemented `ForDetectingIntrusions`, JDK `HttpClient` +
 Jackson, modeled on `RegistryV2ImageAdapter` — every failure is an empty list, never a throw.
+*(Superseded in Slice 3: that adapter is deleted, and `CrowdSecCliAdapter` reads the same decisions
+through `cscli` — with the geo/ASN enrichment, and with no credential at all. The "needs a JWT-based
+machine credential" conclusion above was true of the HTTP path and false of the product: see §6.28.)*
 
 **`BreachAttemptTracker` — modeled on `ImageUpdateTracker`, not the level-crossing trackers.** A
 `Map<Long, Boolean>` of previously-seen decision ids, forgetting any id absent from the latest
@@ -2489,7 +2506,9 @@ use case) only sequences the send.
 directly, matching `RemoteDiskWatcher`/`BackupServerWatcher`'s existing idiom of a `rest/`
 scheduler composing driven ports/use-cases with no intermediate service — `BackupServerWatcher`
 already injects a raw driven port (`ForProbingTcp`) as its primary poll mechanism the same way.
-`SecurityService` stays exactly as Slice 1 left it (allowlist refresh only).
+`SecurityService` stays exactly as Slice 1 left it (allowlist refresh only). *(Slice 3 does grow it,
+with the operator's three use cases — see §6.28; the watcher still injects the port directly, and
+still takes the silent read.)*
 
 **A hex violation, caught and fixed along the way — not part of this slice, but surfaced by it.**
 While starting this slice, `VpnService.updateLanCidr()`/`deletePeer()` were found to be injecting
@@ -2509,8 +2528,194 @@ as newly-appeared (no restart-quiet baseline), batched into exactly **one** roll
 (`[Vaier] Breach attempt: 24 new block decisions`), actually delivered over the configured SMTP
 (Gmail) — not just logged.
 
-**Backlog (Slice 3).** A Security view in the Explorer: live decisions/alerts over SSE, one-click
-unban (`ForBlockingAddresses`/a real `CrowdSecLapiAdapter` write path), "trust this address".
+**Backlog (Slice 3).** A Security view in the Explorer: live decisions over SSE, one-click unban, and
+"trust this address". *(Built — §6.28. The write path landed on `cscli`, not on LAPI.)*
+
+### 6.28 Fleet threat detection — Slice 3 ✅ (implemented 2026-07-30, closes Slice 3 of [#329](https://github.com/getvaier/vaier/issues/329))
+
+**What.** The operator's side of the feature: **see** who CrowdSec is keeping out, and **act** on it.
+A **Security view** in the Explorer listing every active **block decision** — source address, where
+it came from, the scenario, how long the block lasts — with two verbs per row (**lift the block**,
+**trust this address**), the placeable ones drawn on the fleet **Map**, and the whole list pushed
+over SSE. With Slices 1–3 shipped, #329 is complete but for two deliberately parked follow-ups
+(below).
+
+**The headline: `cscli` replaces LAPI, and the "you'd need a machine credential" conclusion was
+wrong.** §6.27 recorded that geo/ASN enrichment lived behind `/v1/alerts`, which demands a separate
+JWT-based "machine" credential — and dropped the enrichment rather than mint one. That was true of
+the *HTTP* path only. `cscli decisions list -o json`, run **inside the crowdsec container over the
+`EXEC=1` socket-proxy path Vaier already has open** (`ForExecutingInContainer`, the same port
+`WireGuardVpnAdapter` uses), returns the full alerts: `source.cn`, `source.as_name`,
+`source.latitude`/`longitude`, each alert carrying a nested `decisions` array. So one alert yields
+*n* `BlockDecision`s, each with its alert's enrichment, and **Slice 3 ships with zero new
+credentials** — the third time in this feature that the "mint a credential" branch turned out to be
+avoidable. `CrowdSecLapiAdapter` and its test are **deleted**, replaced by `CrowdSecCliAdapter`
+(implementing both `ForDetectingIntrusions` and `ForLiftingBlocks` — one place in Vaier speaks
+`cscli`, and splitting the two directions would only duplicate the container name and the exec
+idiom). `CROWDSEC_LAPI_URL` and `VAIER_CROWDSEC_BOUNCER_KEY` are **removed from the `vaier` service**
+in `docker-compose.yml`; the bouncer's own `BOUNCER_KEY_vaier` is untouched, since the bouncer still
+authenticates to LAPI in its own right.
+
+**`ForLiftingBlocks`, not `ForBlockingAddresses` — a deliberate rename of the issue's own port.**
+Vaier never *adds* a ban: CrowdSec's scenarios decide who is blocked. A port called "for blocking
+addresses" would have been a lie about the threat model, reading as though Vaier held the block
+button. Only one direction of that decision is Vaier's to take, and the port is named for it. Its
+contract is also the deliberate opposite of the sweep's silent read: **unblocking must never swallow
+a failure** — an operator is standing there waiting to learn whether they are back in, so it throws
+`BlockNotLiftedException` → `502 BLOCK_NOT_LIFTED`, never a quiet success.
+
+**Two honest reads on one port — and the live defect that forced the split.**
+`ForDetectingIntrusions` now offers both `getActiveDecisionsOrEmpty()` (silent: any failure reads as
+no active decisions) and `getActiveDecisionsOrFail()` (loud: a failure throws
+`BlockDecisionsUnreadableException` → `502 BLOCK_DECISIONS_UNREADABLE`), and neither is named as the
+innocent default. The five-minute sweep wants the silent one — a throw would cost
+`BreachAttemptTracker` that sweep's diff, and an outage reported as bans would mail the operator a
+breach that never happened, so "no *new* bans, wait five minutes" is the only answer that neither
+lies nor alarms. The operator's screen wants the loud one, because it renders an empty list as
+*"Nobody is blocked right now"*. The collapsed single-read version shipped and was caught live: the
+security view told an operator nobody was blocked while `cscli` listed **eleven** active bans,
+because the first exec after a container restart failed cold and the silent read reported it as
+nothing. "I could not ask" and "nobody is attacking" are opposite facts about the fleet's safety and
+must never share a rendering — the inconsistency between the two methods is the point, not a wart to
+tidy away.
+
+**`SourceAddress` — a domain type because the value is attacker-influenced.** It arrives from the
+browser, originates with whoever knocked, and ends up as an argument to a command run inside a
+container and inside log lines. Validated in its **canonical constructor**, not merely in `of(...)`:
+a record's canonical constructor is as public as the record, so validating only in the factory would
+leave `new SourceAddress("$(id)")` compiling. The rule is `Cidr.isIpv4`'s — the dotted-quad-only gate
+written for #195: no IPv6, no hostnames, no leading zeros, and therefore no metacharacter, whitespace
+or newline. That is also why a value shaped like a flag (`-i`, `--all`) can never be read as an
+option by `cscli` rather than as data — the one injection that survives passing arguments as an
+array. `x.x.x.x/32` normalises to the bare address (it is what an operator copies out of the
+whitelist file); any wider prefix is refused, because both verbs are per-host and a range would
+either trust more than was meant or unblock nothing. `ForLiftingBlocks` and
+`ForPersistingTrustedAddresses` take the *type*, so no caller can route around the gate.
+
+**Trusting is two effects, and the second one is honest about its limit.** §6.26 established
+empirically that CrowdSec re-reads its whitelist parser **only on container restart**, and
+`TrustedNetworksScheduler` rewrites that file *wholesale* every five minutes — so an address appended
+to it out of band is erased within five minutes, and an address that is only in it is still blocked
+right now. `trustAddress` therefore (1) persists to `ForPersistingTrustedAddresses`
+(`TrustedAddressFileAdapter` → `${VAIER_CONFIG_PATH}/trusted-addresses.yml`, tolerant SnakeYAML like
+`DiskWatchFileAdapter`, no secrets), which `TrustedNetworks.of(...)` now folds in as `/32`s on every
+refresh, and (2) lifts the block, so the effect is immediate. Persist **first**: if the unblock then
+throws, the operator's decision is not lost to a transient exec failure. **Vaier deliberately does
+not restart CrowdSec** to make the whitelist entry live — bouncing the engine that guards the edge,
+to apply a rule about who may pass it, is precisely the operator-lockout risk #329 names as this
+feature's largest. The honest promise, said in those words in the confirmation dialog and the docs:
+*unblocked now, permanently trusted from the next restart.*
+
+**Two decisions kept in the domain that JavaScript would have got wrong.** `BlockDecision.locatable()`
+refuses null island: CrowdSec writes `0`/`0` for a source it could not place, and that point is
+Atlantic water off Ghana — a marker there is a lie, no marker is merely a gap — while a genuine zero
+on *one* axis is a real place and stays. `enriched()` treats `""` as no country, since CrowdSec sends
+empty strings rather than omitting fields and an operator must never read empty brackets in a breach
+mail. Both ride to the browser **as the domain decided them** (`BlockDecisionResponse.locatable`,
+`.enriched`), because `0` is falsy in JavaScript and the obvious `if (d.latitude && d.longitude)`
+would silently destroy the single-axis carve-out. The same enrichment now lands in the notification
+mail: `195.178.110.155 (BG · Techoff Srv Limited) — crowdsecurity/http-probing (ban, 3h0m40s)`.
+
+**REST + SSE.** The three new use cases — `GetBlockDecisionsUseCase`, `LiftBlockUseCase`,
+`TrustAddressUseCase` — land on the existing `SecurityService`: same domain concept, more use cases,
+no new service, and every decision they need (is this string an address at all, what CIDR does a
+bare address become) already belongs to `SourceAddress`. `SecurityRestController`:
+`GET /security/decisions`, `GET /security/events`,
+`DELETE /security/decisions/{sourceIp}`, `POST /security/trusted-addresses`. All non-whitelisted, so
+Traefik's tier-3 catch-all puts them behind the admin auth chain like every other fleet endpoint —
+**nothing was added to any anonymous allowlist**; who is blocked, and the power to unblock them, is
+never anonymous. `BreachAttemptWatcher` publishes its existing five-minute sweep to a new `security`
+topic as `block-decisions` (the sweep result is already in its hands, so a second reader of CrowdSec
+would have been pure waste) — inside its own try/catch, so a topic nobody listens on can never cost
+the operator the email the watcher exists to send. Each mutation republishes immediately, so a click
+shows at once rather than up to five minutes later. The payload is `BlockDecisionResponse` both
+times, built in one place, so the stream and the initial read can never disagree.
+
+**Frontend — a fifth EventSource, and a second *native* global.** `explorer-shell.js` grew a
+`security` global entry (`ExplorerShellTest` now asserts **five** streams, still no `setInterval`).
+It also fixed a latent bug on the way: `kindOf` answered `'settings'` for *every* native global,
+which was true only while Settings was the sole one — a second native global would have rendered the
+Settings pane under its own name. A native global's kind is now its own name. The Map's threats live
+on their own layer, excluded from `coords`/`fitBounds` (a lone scanner in Singapore would otherwise
+zoom the fleet view out to the globe every time the Map is opened) and repainted **in place** rather
+than by re-rendering, so a push arriving mid-pan does not yank the map away. The threat marker is
+deliberately its own visual vocabulary — a radar ping, not a machine chip — so a glance never reads
+"someone is probing us" as "my server is down"; it stops animating under
+`prefers-reduced-motion`. On a phone the row's verbs stay visible (unlike the file listing's, which
+hide behind the selection bar) — a phone is the screen you are most likely holding when the alert
+arrives, and hiding them would leave the view read-only there.
+
+**Parked follow-ups (all that remains of #329).** (1) **SSH acquisition** — pointing CrowdSec at the
+host's `/var/log/auth.log` so the box's *other* internet-facing surface is watched too; Slice 1 named
+Traefik and SSH as the only genuinely exposed surfaces and only Traefik is acquired today. (2) **A
+CTI signal-sharing toggle in Settings** — whether this fleet shares its threat signals with
+CrowdSec's community intelligence. That is a decision about the operator's own data, so it belongs
+in front of them in Settings rather than buried in a compose default.
+
+### 6.29 Fleet threat detection — Slice 2's mail, narrowed to what the operator can act on ✅ (implemented 2026-07-31, part of [#329](https://github.com/getvaier/vaier/issues/329))
+
+**What, and why it is a reversal.** Slice 2's headline promise was "notify the operator when someone
+tries to break in", and it delivered exactly that: every newly-appeared **block decision**, emailed.
+The operator's verdict after a day of it: *"i get too many breach mails and i cannot act on them so
+useless."* They are right, and it broke this project's own rule — **notify only on trouble, wrong or
+about to go wrong, and prefer predictive over reactive**. A scanner being banned is CrowdSec working
+correctly. Slice 2 shipped success noise wearing a trouble label: 24 mails on day one
+(§6.27 celebrates that number as proof the batching worked, which it was — the mail should simply
+never have been sent), then more every five-minute sweep, none of them actionable.
+
+**What changed the calculus.** When Slice 2 shipped, email was the only surface and had to carry
+everything. Slice 3 (§6.28) has since added the **Security view** and **threat pings** on the Map.
+Routine bans now have a much better home than an inbox, so the mail can narrow without anything
+becoming invisible. *Silence is not invisibility* — that is the whole trade, and it did not exist to
+be made until §6.28 shipped.
+
+**The rule now: mail only when a block decision actually threatens the operator.**
+
+- **Blind scanning sends nothing, indefinitely.** `crowdsecurity/http-probing`,
+  `http-wordpress-scan`, `http-backdoors-attempts`, bad user agents, crawlers — background radiation.
+  In normal operation the inbox is **completely empty** while the Security view still lists every one.
+- **A **credential attack** still mails.** Brute force, password spraying, authentication endpoints —
+  somebody has decided to spend time on *this* fleet specifically. Still one rollup per sweep, still
+  reported once.
+- **A blocked trusted network is its own alarm.** See below.
+
+**`ThreatKind` — a named classification, not a clever regex.** `domain.ThreatKind` is
+`BLIND_SCANNING` or `CREDENTIAL_ATTACK`, decided from the words in the CrowdSec scenario's own name
+(the author namespace stripped, split on separators, matched whole against `bf`, `brute`, `auth`,
+`login`, `password`, `cred`…). Word-matching rather than enumerating CrowdSec's hub, because the hub
+grows and third-party collections (`LePresidente/grafana-bf`, `firix/authentik-auth-bf`) follow the
+same convention; whole words rather than substrings, so a reader can predict the verdict without
+running it. The javadoc is deliberately honest that this is a **judgement about scenario families**
+and that an unrecognised scenario is treated as blind scanning and stays **silent** — the safe
+direction, because a missed mail costs a look at a view that is already open to the operator, while a
+wrong alarm costs the very noise this removes.
+
+**The lockout warning — the one genuinely predictive mail here.** If CrowdSec has an active ban whose
+source falls inside the **trusted networks**, nobody is attacking: the allowlist has stopped
+protecting the operator's own networks and they are about to lose the console they would fix it from.
+That is #329's top-named risk. It is a **separate notification** — `domain.LockoutWarning`, its own
+subject (`[Vaier] Lockout warning: your own 10.13.13.6 is blocked at the edge`) and its own body —
+and never a line inside something titled "Breach attempt", which would send the operator looking in
+exactly the wrong direction. The scenario gets no vote: blind scanning from inside the VPN subnet
+still means the allowlist failed.
+
+**Decisions in the domain, as always.** `BlockDecision.threatKind()` and
+`BlockDecision.locksOut(TrustedNetworks)` are the two predicates; `BreachAttemptRollup.from(...)` and
+`LockoutWarning.from(...)` own the membership rules (a lockout is filtered *out* of the breach rollup
+by the rollup itself). `BreachAttemptWatcher` only orchestrates. It reads the allowlist through a new
+narrow `GetTrustedNetworksUseCase` on the existing `SecurityService` — the same assembly the whitelist
+file is rendered from, so the two definitions cannot drift — and reads it **before** telling
+`BreachAttemptTracker` anything, so a sweep that cannot read the allowlist is *deferred* to the next
+one rather than silently swallowed. `NotifyAdminsOfLockoutWarningUseCase` is `NotificationService`'s
+8th `Notify*`.
+
+**Nothing repeats, and the view is untouched.** Both alarms derive from `BreachAttemptTracker`'s
+newly-appeared set, so a standing lockout mails once, not every five minutes. The Security view, the
+SSE payload, the Map and every frontend file are unchanged: they show every decision regardless.
+
+**Backlog.** If the silent default ever proves wrong for a scenario the operator cares about, the
+answer is a per-scenario override in Settings, not a looser word list — the word list is meant to be
+readable, and readability is the thing an accreting regex loses first.
 
 ---
 

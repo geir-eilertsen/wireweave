@@ -5,6 +5,9 @@ import net.vaier.config.ConfigResolver;
 import net.vaier.domain.BackupJob;
 import net.vaier.domain.BackupRun;
 import net.vaier.domain.BackupServer;
+import net.vaier.domain.BlockDecision;
+import net.vaier.domain.BreachAttemptRollup;
+import net.vaier.domain.LockoutWarning;
 import net.vaier.domain.MachineType;
 import net.vaier.domain.PeerSnapshot;
 import net.vaier.domain.TestMachineIds;
@@ -204,10 +207,27 @@ class NotificationServiceTest {
     }
 
     @Test
+    void notifyAdminsOfLockoutWarning_composesTheOperatorsOwnBlockedAddresses() {
+        when(configResolver.getDomain()).thenReturn("example.com");
+        LockoutWarning warning = new LockoutWarning(List.of(BlockDecision.builder()
+                .id(7L).scenario("crowdsecurity/http-probing").sourceIp("10.13.13.6").type("ban")
+                .duration("3h59m48s").build()));
+
+        service.notifyAdminsOfLockoutWarning(warning);
+
+        ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(adminNotifier).sendToAdmins(subject.capture(), body.capture(), any());
+        assertThat(subject.getValue()).isEqualTo(warning.subject());
+        assertThat(body.getValue()).contains("10.13.13.6").contains("vaier.example.com");
+    }
+
+    @Test
     void notifyAdminsOfBreachAttempt_composesOneRollup() {
         when(configResolver.getDomain()).thenReturn("example.com");
-        net.vaier.domain.BreachAttemptRollup rollup = new net.vaier.domain.BreachAttemptRollup(List.of(
-                new net.vaier.domain.BlockDecision(1L, "crowdsecurity/http-probing", "1.2.3.4", "ban", "3h59m48s")));
+        BreachAttemptRollup rollup = new BreachAttemptRollup(List.of(BlockDecision.builder()
+                .id(1L).scenario("crowdsecurity/ssh-bf").sourceIp("1.2.3.4").type("ban")
+                .duration("3h59m48s").build()));
 
         service.notifyAdminsOfBreachAttempt(rollup);
 

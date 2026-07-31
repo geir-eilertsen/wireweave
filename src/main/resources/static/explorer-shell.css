@@ -677,6 +677,24 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 .ex-listing.is-wide .ex-lmeta { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .ex-listing.is-wide .ex-lmeta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* The blocked list (#329). Its verbs get a column of their own instead of riding over the last one the way
+   the file listing's do: those are icon-sized and reveal on hover, these are two worded buttons, and at
+   that width they would sit permanently on top of the data they act on. */
+.ex-listing.is-threats .ex-lhead,
+.ex-listing.is-threats .ex-lrow { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr) 96px 210px; }
+.ex-listing.is-threats .ex-lmeta { display: flex; align-items: center; min-width: 0; }
+.ex-listing.is-threats .ex-lmeta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ex-listing.is-threats .ex-lactions {
+    position: static; opacity: 1; padding-left: 0; background: none; justify-content: flex-end;
+}
+/* The address is the coordinate, so it is mono; where it comes from is a human fact, so it is not. */
+.ex-tsource { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ex-tip { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ex-torigin {
+    font-size: .74rem; color: var(--text-muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
 /* The only destructive verb in the shell. It stays quiet until reached for — a control that shouts before
    it is needed teaches the operator to ignore it. */
 .ex-btn.is-danger:hover {
@@ -1197,6 +1215,31 @@ button.ex-brepo-name:focus-visible { outline: 2px solid var(--accent); outline-o
 .map-marker.unknown { background: var(--text-dim); }
 .map-marker.weak { opacity: 0.55; border-style: dashed; }
 .map-marker.large { width: 36px; height: 36px; border-width: 3px; }
+
+/* A blocked source is not a machine having a bad day, so it must not wear a machine's marker. The fleet's
+   markers are solid chips carrying an icon — a thing you own, with a state. A threat is a radar contact:
+   a small core and one ring going out. Keeping the two vocabularies apart is the whole point, so that a
+   glance at the Map never reads "someone is probing us" as "my server is down". */
+.threat-ping { position: relative; width: 22px; height: 22px; }
+.threat-ping::before {
+    content: ''; position: absolute; left: 50%; top: 50%; width: 7px; height: 7px;
+    margin: -3.5px 0 0 -3.5px; border-radius: 50%;
+    background: var(--red); box-shadow: 0 0 0 2px rgba(244, 135, 113, .28);
+}
+.threat-ping::after {
+    content: ''; position: absolute; inset: 0; border-radius: 50%;
+    border: 1px solid var(--red); opacity: 0; transform: scale(.35);
+    animation: ex-threat-ping 2.4s ease-out infinite;
+}
+@keyframes ex-threat-ping {
+    0%   { opacity: .7; transform: scale(.35); }
+    70%  { opacity: 0;  transform: scale(1); }
+    100% { opacity: 0;  transform: scale(1); }
+}
+/* The ring carries no information the core does not — it only draws the eye — so it simply stops. */
+@media (prefers-reduced-motion: reduce) {
+    .threat-ping::after { animation: none; opacity: .4; transform: scale(1); }
+}
 /* Cluster bubbles: markercluster's default light-green is near-invisible on the tiles. Recolour to the shell's
    dark palette with an accent ring so the count reads at a glance. */
 .ex-map .marker-cluster-small,
@@ -1417,6 +1460,21 @@ select.ex-input { cursor: pointer; }
        rises the moment anything is ticked. So on a phone the row is a thing and the bar is the verbs — the
        select-then-act model every touch file browser uses, instead of three icon buttons per row. */
     .ex-lrow .ex-lactions { display: none; }
+
+    /* …except the blocked list's, which have nowhere else to go. The file listing can hide its row verbs
+       because ticking a file raises the selection bar that carries them; there is no such bar here, so
+       hiding these would leave the Security view read-only on a phone — the one screen you are most
+       likely to be holding when an alert arrives. The row becomes three stacked bands instead. */
+    .ex-listing.is-threats .ex-lrow {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-areas: "src" "sub" "acts";
+        padding: 10px;
+    }
+    .ex-listing.is-threats .ex-tsource { grid-area: src; }
+    .ex-listing.is-threats .ex-lsub { grid-area: sub; display: flex; }
+    .ex-listing.is-threats .ex-lactions {
+        grid-area: acts; display: flex; justify-content: flex-start; gap: 6px; margin-top: 6px;
+    }
 
     /* A 14px filename is a thumb-hostile target, so a folder's whole row opens it: the name button's hit area
        is stretched over the row (it is the row that is positioned, so inset:0 resolves against it). The

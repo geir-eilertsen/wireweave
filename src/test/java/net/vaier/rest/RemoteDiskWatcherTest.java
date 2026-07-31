@@ -1,7 +1,13 @@
 package net.vaier.rest;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import net.vaier.adapter.driven.InMemoryDiskPressureStateAdapter;
 import net.vaier.domain.MachineId;
 import net.vaier.domain.TestMachineIds;
+import net.vaier.domain.port.ForPersistingDiskPressureState;
 import net.vaier.application.GetDiskWatchesUseCase;
 import net.vaier.application.GetHostCredentialUseCase;
 import net.vaier.application.GetMachinesUseCase;
@@ -27,6 +33,7 @@ import net.vaier.domain.port.ForRecordingSshServerPresence;
 import org.junit.jupiter.api.BeforeEach;
 import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -64,6 +71,7 @@ class RemoteDiskWatcherTest {
     ConfigResolver configResolver;
     ForRecordingSshServerPresence sshPresenceRecorder;
     ForPublishingEvents eventPublisher;
+    ForPersistingDiskPressureState pressureState;
     SteppableClock clock;
     RemoteDiskWatcher watcher;
 
@@ -89,12 +97,18 @@ class RemoteDiskWatcherTest {
         configResolver = mock(ConfigResolver.class);
         sshPresenceRecorder = mock(ForRecordingSshServerPresence.class);
         eventPublisher = mock(ForPublishingEvents.class);
+        pressureState = new InMemoryDiskPressureStateAdapter();
         clock = new SteppableClock();
         // Nothing configured: every filesystem is watched at the global threshold (#325).
         lenient().when(diskWatches.getDiskWatches()).thenReturn(new DiskWatches(List.of()));
         when(configResolver.getDiskMonitorThresholdPercent()).thenReturn(85);
-        watcher = new RemoteDiskWatcher(machines, credentials, runner, notifier, forecastNotifier,
-            diskWatches, configResolver, clock, sshPresenceRecorder, eventPublisher);
+        watcher = newWatcher();
+    }
+
+    /** A watcher over the shared mocks and the shared pressure store — a fresh one models a redeploy. */
+    private RemoteDiskWatcher newWatcher() {
+        return new RemoteDiskWatcher(machines, credentials, runner, notifier, forecastNotifier,
+            diskWatches, configResolver, clock, sshPresenceRecorder, eventPublisher, pressureState);
     }
 
     /** An SSH-capable server-type machine (effectiveSshAccess() true by default). */
@@ -425,13 +439,17 @@ class RemoteDiskWatcherTest {
         hasCredential("NAS");
         // No watches at all — /volume1 has never been configured. It is watched anyway, at the global 85%.
         when(runner.run(eq(mid("NAS")), any())).thenReturn(nasDf(39));
-        watcher.checkRemoteDiskUsage();                   // baseline
+        watcher.checkRemoteDiskUsage();
         when(runner.run(eq(mid("NAS")), any())).thenReturn(nasDf(91));
         watcher.checkRemoteDiskUsage();                   // /volume1 crosses
 
+        // Two alerts, and the first one is the point of the whole fix: the NAS's unconfigured / is already
+        // at 88% against the global 85% on the very first sweep. There is no "crossing" to wait for — it was
+        // over the line before Vaier ever looked — so it must speak the first time it is seen, not never.
         ArgumentCaptor<RemoteDiskUsage> alerted = ArgumentCaptor.forClass(RemoteDiskUsage.class);
-        verify(notifier).notifyAdminsOfRemoteDiskPressure(alerted.capture(), eq(85));
-        assertThat(alerted.getValue().mountPoint()).isEqualTo("/volume1");
+        verify(notifier, times(2)).notifyAdminsOfRemoteDiskPressure(alerted.capture(), eq(85));
+        assertThat(alerted.getAllValues()).extracting(RemoteDiskUsage::mountPoint)
+            .containsExactly("/", "/volume1");
     }
 
     @Test
@@ -639,5 +657,97 @@ class RemoteDiskWatcherTest {
         watcher.checkRemoteDiskUsage();
 
         verify(sshPresenceRecorder).retainOnly(Set.of(mid("kitchen")));
+    }
+
+    // --- the silence this fix is about: already-full at startup, and a latch wiped by every redeploy -------
+    //
+    // The Vaier server's own root filesystem reached 89% against an 80% threshold and NOT ONE email was
+    // ever sent. Two faults compounded: the tracker treated its first observation as a silent baseline, so
+    // a filesystem that was already above the threshold could never produce a crossing; and the latch was a
+    // plain field on this @Component, wiped by every redeploy — several a day — so every sweep was a first
+    // observation forever.
+
+    @Test
+    void aFilesystemAlreadyAboveThreshold_onTheVeryFirstSweep_alertsImmediately() {
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("vaier")));
+        hasCredential("vaier");
+        when(runner.run(eq(mid("vaier")), any())).thenReturn(df(89));
+
+        watcher.checkRemoteDiskUsage();
+
+        verify(notifier).notifyAdminsOfRemoteDiskPressure(any(RemoteDiskUsage.class), eq(85));
+    }
+
+    @Test
+    void aRedeploy_doesNotReAlertForAFilesystemAlreadyNotifiedAbout() {
+        // The other half of the fix. Alerting on the first observation is only safe because the state now
+        // outlives the process — otherwise every redeploy would page the operator about the same disk.
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("vaier")));
+        hasCredential("vaier");
+        when(runner.run(eq(mid("vaier")), any())).thenReturn(df(89));
+
+        watcher.checkRemoteDiskUsage();
+        newWatcher().checkRemoteDiskUsage();   // a redeploy: fresh watcher, same persisted state
+        newWatcher().checkRemoteDiskUsage();
+
+        verify(notifier, times(1)).notifyAdminsOfRemoteDiskPressure(any(), anyInt());
+    }
+
+    @Test
+    void aDiskClimbingIntoAHigherBand_alertsAgain() {
+        // Escalation by band, not by timer: 85 → 90 → 95 is the disk getting materially worse.
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("vaier")));
+        hasCredential("vaier");
+
+        for (int used : new int[]{86, 88, 91, 93, 96}) {
+            when(runner.run(eq(mid("vaier")), any())).thenReturn(df(used));
+            watcher.checkRemoteDiskUsage();
+        }
+
+        ArgumentCaptor<RemoteDiskUsage> alerted = ArgumentCaptor.forClass(RemoteDiskUsage.class);
+        verify(notifier, times(3)).notifyAdminsOfRemoteDiskPressure(alerted.capture(), anyInt());
+        assertThat(alerted.getAllValues()).extracting(RemoteDiskUsage::usedPercent)
+            .containsExactly(86, 91, 96);
+    }
+
+    @Test
+    void aRecoveredDiskThatRefills_alertsAgain() {
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("vaier")));
+        hasCredential("vaier");
+
+        when(runner.run(eq(mid("vaier")), any())).thenReturn(df(91));
+        watcher.checkRemoteDiskUsage();                       // alerts at band 90
+        when(runner.run(eq(mid("vaier")), any())).thenReturn(df(40));
+        watcher.checkRemoteDiskUsage();                       // recovers — the ladder resets
+        when(runner.run(eq(mid("vaier")), any())).thenReturn(df(86));
+        watcher.checkRemoteDiskUsage();                       // refills → must speak again
+
+        verify(notifier, times(2)).notifyAdminsOfRemoteDiskPressure(any(), anyInt());
+        verify(notifier, times(1)).notifyAdminsOfRemoteDiskRecovery(any(), anyInt());
+    }
+
+    @Test
+    void aSuppressedAlert_saysSoInTheLog_soALatchedSilentDiskIsDiagnosable() {
+        // The no-op branch used to log nothing at all, which is why a disk at 89% and total silence looked
+        // identical to a disk nobody was watching. An operator must be able to tell them apart from the log.
+        Logger watcherLog = (Logger) LoggerFactory.getLogger(RemoteDiskWatcher.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        watcherLog.addAppender(appender);
+        try {
+            when(machines.getAllMachines()).thenReturn(List.of(sshMachine("vaier")));
+            hasCredential("vaier");
+            when(runner.run(eq(mid("vaier")), any())).thenReturn(df(89));
+
+            watcher.checkRemoteDiskUsage();   // alerts
+            watcher.checkRemoteDiskUsage();   // suppressed — and must say so
+
+            assertThat(appender.list)
+                .filteredOn(event -> event.getLevel().isGreaterOrEqual(Level.INFO))
+                .anySatisfy(event -> assertThat(event.getFormattedMessage())
+                    .contains("/").contains("89").contains("85"));
+        } finally {
+            watcherLog.detachAppender(appender);
+        }
     }
 }

@@ -5,6 +5,7 @@ import net.vaier.application.NotifyAdminsOfBackupFailureUseCase;
 import net.vaier.application.NotifyAdminsOfBackupServerDownUseCase;
 import net.vaier.application.NotifyAdminsOfBreachAttemptUseCase;
 import net.vaier.application.NotifyAdminsOfDiskFillForecastUseCase;
+import net.vaier.application.NotifyAdminsOfLockoutWarningUseCase;
 import net.vaier.application.NotifyAdminsOfPeerTransitionUseCase;
 import net.vaier.application.NotifyAdminsOfRemoteDiskPressureUseCase;
 import net.vaier.application.NotifyAdminsOfUpdateAvailableUseCase;
@@ -15,6 +16,7 @@ import net.vaier.domain.BreachAttemptRollup;
 import net.vaier.domain.DiskFillForecast;
 import net.vaier.domain.DiskFillForecastCleared;
 import net.vaier.domain.ImageUpdateRollup;
+import net.vaier.domain.LockoutWarning;
 import net.vaier.domain.RemoteDiskUsage;
 import net.vaier.domain.PeerSnapshot;
 import net.vaier.domain.port.ForProbingTcp.ProbeResult;
@@ -30,7 +32,8 @@ public class NotificationService implements
         NotifyAdminsOfBackupFailureUseCase,
         NotifyAdminsOfBackupServerDownUseCase,
         NotifyAdminsOfUpdateAvailableUseCase,
-        NotifyAdminsOfBreachAttemptUseCase {
+        NotifyAdminsOfBreachAttemptUseCase,
+        NotifyAdminsOfLockoutWarningUseCase {
 
     private final ForSendingAdminNotification adminNotifier;
     private final ConfigResolver configResolver;
@@ -124,6 +127,17 @@ public class NotificationService implements
         adminNotifier.sendToAdmins(rollup.subject(),
                 rollup.body(configResolver.getDomain()),
                 "breach attempt: " + rollup.decisions().size() + " new block decision(s)");
+    }
+
+    /**
+     * One warning mail for the operator's own addresses that CrowdSec has started blocking. Its own
+     * subject and body come from the domain — this is not a breach attempt and must not read like one.
+     */
+    @Override
+    public void notifyAdminsOfLockoutWarning(LockoutWarning warning) {
+        adminNotifier.sendToAdmins(warning.subject(),
+                warning.body(configResolver.getDomain()),
+                "lockout warning: " + warning.decisions().size() + " trusted address(es) blocked");
     }
 
 }

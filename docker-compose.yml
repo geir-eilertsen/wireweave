@@ -374,7 +374,7 @@ services:
       # vaier" to "host root via docker run --privileged".
       - CONTAINERS=1     # /containers and /containers/{id}/json — Vaier discovery + Traefik provider
       - EVENTS=1         # /events — DockerEventListener + Traefik live updates
-      - EXEC=1           # /exec — WireGuardVpnAdapter exec into wireguard container
+      - EXEC=1           # /exec — WireGuardVpnAdapter into wireguard, CrowdSecCliAdapter into crowdsec
       - IMAGES=1         # /images — DockerServerAdapter image inspect
       - PING=1           # /_ping — health checks
       - POST=1           # global gate for POST methods (required by EXEC and ALLOW_RESTARTS)
@@ -670,11 +670,6 @@ services:
       WIREGUARD_CONTAINER_NAME: wireguard
       TRAEFIK_CONFIG_PATH: /traefik/config
       TRAEFIK_API_URL: http://traefik:8080
-      # #329 Slice 2: CrowdSecLapiAdapter reads active decisions from LAPI, authenticating with the
-      # same bouncer key crowdsec-bouncer already uses (BOUNCER_KEY_vaier above) — GET /v1/decisions
-      # authenticates fine with a bouncer key, no separate machine/JWT credential needed.
-      CROWDSEC_LAPI_URL: http://crowdsec:8080
-      VAIER_CROWDSEC_BOUNCER_KEY: ${VAIER_CROWDSEC_BOUNCER_KEY:-}
       VAIER_CONFIG_PATH: /vaier/config
       DOCKER_HOST: tcp://docker-proxy:2375
     depends_on:

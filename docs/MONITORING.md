@@ -2,19 +2,27 @@
 
 Back to [README](../README.md).
 
-Disk-pressure watching and its early-warning forecast, container image drift detection, and the email notifications that tie them together.
+Disk-pressure watching and its early-warning forecast, container image drift detection, what the edge blocks, and the email notifications that tie them together.
 
 ---
 
 ## Email notifications
 
-SMTP-powered admin alerts when any server-type machine (VPN server peers and LAN servers) goes up or down, when a filesystem on any SSH-reachable machine behind the VPN — including the Vaier host itself — fills past its threshold, when a container's image newly has an **update available**, when someone signs in for the first time and lands as a pending access request awaiting approval, or when the [edge's CrowdSec bouncer](NETWORKING.md#edge-hardening) blocks a new attempt to break in.
+SMTP-powered admin alerts when any server-type machine (VPN server peers and LAN servers) goes up or down, when a filesystem on any SSH-reachable machine behind the VPN — including the Vaier host itself — fills past its threshold, when a container's image newly has an **update available**, when someone signs in for the first time and lands as a pending access request awaiting approval, or when the [edge's CrowdSec bouncer](NETWORKING.md#edge-hardening) blocks either a **credential attack** or one of your **own networks**.
+
+It will *not* mail you about the routine bans, and that is deliberate — see [What the edge blocks](#what-the-edge-blocks) below.
 
 ---
 
 ## Host disk monitoring
 
-Vaier watches disk usage on every SSH-capable machine it holds a credential for — every machine behind the VPN, and the Vaier host itself, watched over SSH-to-self exactly like any other machine — running `df` over SSH on a periodic cadence and emailing every admin user when a **filesystem** fills past its threshold. A **recovery** email follows once it drops back below, and Vaier only emails on a boundary crossing (not on every poll), so a filesystem hovering just over the line won't spam you.
+Vaier watches disk usage on every SSH-capable machine it holds a credential for — every machine behind the VPN, and the Vaier host itself, watched over SSH-to-self exactly like any other machine — running `df` over SSH on a periodic cadence and emailing every admin user when a **filesystem** fills past its threshold. A **recovery** email follows once it drops back below, and Vaier never re-mails on every poll, so a filesystem hovering just over the line won't spam you.
+
+**The first sighting counts.** A filesystem that is *already* over its threshold the first time Vaier ever looks at it is alerted on immediately — there is no silent baseline observation. That baseline was a real bug: the Vaier host's own root filesystem sat at 89% against an 80% threshold and never sent a single mail, because the alert state lived only in memory and every redeploy made the next sweep look like a first sighting again. The state now lives in `vaier/config/disk-pressure.yml` and survives restarts and upgrades, so "first ever" means first ever.
+
+**Escalation happens in bands, not on a timer.** A filesystem in pressure goes on filling, and one mail at 86% is no use if it ends at 99%. So Vaier speaks again when the disk gets *materially* worse: pressure is graded in five-point **bands** — 80, 85, 90, 95, 100 — and you get one mail per band. 86% → 89% is silence; 89% → 91% is an email. It deliberately never re-sends "still full" every few hours: that pages you about the clock rather than about the disk. Sliding back down a band while still over the threshold is not a reset either, so a disk wobbling either side of a band edge won't page you on each wobble. Only a genuine recovery — back below the threshold — clears the state, which is what lets a disk that recovers and re-fills be alerted on again from the bottom.
+
+While a filesystem is over its threshold but inside a band you've already been told about, Vaier logs the fact it's staying quiet (`… is at 89% — above its 85% threshold, already notified at band 85%; staying quiet`), so a latched-silent disk is never indistinguishable from one nobody is watching.
 
 **Every filesystem, not just the root one.** A machine's disks are read whole: `df` reports each mounted filesystem and Vaier watches all of them. This matters more than it sounds — on a Synology NAS, `/` is a fixed-size ~2 GB DSM system partition that is 88% full by design and never moves, while `/volume1` is the 12 TB volume holding every backup. Watching only `/` means watching the one filesystem that can never tell you anything, while the one that matters fills to 100% in silence. Kernel and in-memory mounts (tmpfs, proc, sysfs, cgroup, squashfs, overlay…) and the bind-mount aliases a Docker storage driver leaves behind are skipped — they aren't disks, and reporting a volume nine times would let it raise nine alerts.
 
@@ -40,8 +48,24 @@ It's a trend alarm ("this filesystem *will be* full"), distinct from the level a
 
 Vaier tells you when a container runs an image its registry has since moved on from. Once a day it compares the digest the running container's image actually has against the digest that registry serves for the **very same tag** — a difference means an **update available**. Any Registry v2 host works: `ghcr.io` and `lscr.io` alongside Docker Hub, with no account, token or config to supply. **Vaier never pulls and never restarts anything** — detection is read-only, and updating stays your call.
 
-When an image *newly* goes out of date, every admin gets **one rollup email** listing what changed — each line names the image *and the machine it runs on* (e.g. `vaultwarden/server:latest on Apalveien 5`), so you know which host to act on rather than just which image (three images going stale in one sweep is one mail; nothing changed is no mail). The same tag on two machines is tracked separately: it can read out of date on one and up to date on another, and each is alerted on its own. Unlike the disk and machine alerts, an image already stale the first time Vaier looks *is* reported — that's the incident this exists for.
+When an image *newly* goes out of date, every admin gets **one rollup email** listing what changed — each line names the image *and the machine it runs on* (e.g. `vaultwarden/server:latest on Apalveien 5`), so you know which host to act on rather than just which image (three images going stale in one sweep is one mail; nothing changed is no mail). The same tag on two machines is tracked separately: it can read out of date on one and up to date on another, and each is alerted on its own. Unlike the machine up/down alerts, an image already stale the first time Vaier looks *is* reported — that's the incident this exists for. (The disk alerts report a first sighting too, for the same reason.)
 
 What Vaier can't tell, it says: an unreachable or rate-limited registry, a locally-built image, or an image pinned to an exact digest all read as **unknown** — never as up to date, never as out of date. In the **Explorer**, a container with an update available wears a small yellow mark, in the tree and in its machine's container list, so you spot it while scanning. The mark is advisory — red stays reserved for down. **Unknown draws no mark at all** (a grey smudge on every row would just teach you to ignore it), so no mark is *not* a promise that an image is current; where that matters, a container's Inspector names which of the three verdicts it is, in words, including "Vaier cannot tell".
 
 Pulled something and don't want to wait for tomorrow's sweep? **Check the registries now**, on a machine's container list, re-reads the containers and re-asks every registry, ignoring anything Vaier remembered — both halves matter, or the check could confirm the very mark you pressed it to clear. It's fleet-wide, still read-only, and if you just checked it says so rather than pretending to look again. Daily rather than continuous because manifest requests are rate-limited. Covers the Vaier server's own containers and those on your VPN **server peers**; LAN-server containers read as unknown for now.
+
+---
+
+## What the edge blocks
+
+Every few minutes Vaier reads which addresses [the edge's CrowdSec bouncer](NETWORKING.md#edge-hardening) is currently turning away, and pushes the whole list, live, to the Explorer's **Security** view — where you can see every current block and lift or permanently trust an address. See [`docs/EXPLORER.md`](EXPLORER.md#security). Each entry reads as a sentence: the address, where CrowdSec places it (`195.178.110.155 (BG · Techoff Srv Limited)`), the scenario that caught it, and how long the block lasts.
+
+**Almost none of it is emailed to you, on purpose.** The internet scans every address it can reach, all day: probing, WordPress scans, backdoor attempts, bad user agents, crawlers. CrowdSec blocking them is CrowdSec working correctly, and a notification is meant to mean something is wrong or about to go wrong. Mailing each one buried the alerts that matter under alerts nobody can act on, so Vaier stopped. In normal operation the edge is busy and your inbox stays **empty** — the Security view still lists every single block.
+
+Two things do reach you.
+
+**A credential attack.** Brute force, password spraying, an authentication endpoint being ground at — somebody has decided to spend time on *your* fleet rather than scanning the whole internet. One rollup per sweep, naming each source the same way the view does, and each one reported only once. Vaier decides this from the scenario's own name, and errs towards silence: a scenario it doesn't recognise is treated as routine scanning, because the cost of guessing wrong in the other direction is exactly the inbox noise this removed.
+
+**One of your own networks being blocked.** If CrowdSec bans an address inside your **trusted networks** — the VPN subnet, the Docker bridge, a relay's LAN, or an address you trusted by hand — nobody is attacking you: the allowlist that is supposed to make that impossible has stopped protecting you, and your own access to Vaier is what goes next. That gets its own mail, with its own subject (`[Vaier] Lockout warning: your own 10.13.13.6 is blocked at the edge`), and it is never folded into anything titled "breach attempt" — it would point you in exactly the wrong direction. It's the one alert here that reaches you *before* the damage, while you can still lift the block from the Security view.
+
+Unlike the machine up/down alerts, a block that was already active the first time Vaier looks *is* reported, restart included — someone working on your logins is news whenever you learn of it. And there is deliberately **no all-clear**: a block quietly expiring on its own timer isn't good news the way a disk draining is. A standing lockout mails once, not every five minutes.
