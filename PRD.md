@@ -1828,6 +1828,54 @@ Three things this buys that a set of pages structurally cannot:
   shows the mesh facts. `Last seen` (LAN server) and `Latest handshake` (peer) are both raw Unix epoch seconds
   off the wire and are now rendered as a human "… ago" (`agoFromEpochSeconds`). Part of epic
   [#323](https://github.com/getvaier/vaier/issues/323).
+- [x] **The Explorer has an address, and the tree stops being the way around ✅.** Five changes that only make
+  sense together, all frontend (`explorer.html`, `explorer-shell.js`, `explorer-shell.css`) — no endpoint, no
+  port, no Java.
+  - **Where you are is the URL.** The location lived in a JS variable, so a reload dumped the operator back at
+    the fleet root and no folder, machine or archive could be linked to at all — in a tool whose whole premise
+    is that everything in the fleet has one coordinate. The **Explorer address** is now the only place the
+    location lives: `#/fleet/<machineId>/files/home/ubuntu`, with the **stop** being read carried as
+    `?at=<archiveId>`, and `S.path`/`S.at` are read back out of it rather than set behind its back. Reload,
+    Back, Forward, bookmark and open-in-new-tab all work. Arriving deep — a pasted link, a reload three folders
+    down — opens the branches above you and reads the path chain before the first paint, so the link paints
+    where it says instead of landing on the fleet and jumping. A **hash**, deliberately, and not the History
+    API: the shell is a static file, so `/explorer/fleet/<id>/files/home` would 404 unless Vaier grew a
+    catch-all forward — new backend surface inside the forward-auth chain, bought for nothing the hash does not
+    already give. Segments are percent-encoded, so a file called `report Q1?.pdf` survives the round trip.
+    Navigating to the address you are already on repaints and leaves history alone (a Back that walks through
+    the same folder five times is a Back that is broken), and a visitor who arrives with no address at all has
+    a normalised one written into the bar on arrival, so the first Back is not a step out of the app.
+  - **The rail is optional on a desktop and gone on a phone.** The tree was a slide-over **drawer** behind a
+    hamburger on narrow screens; the drawer, its scrim and the hamburger are **deleted**. Every row in it named
+    something the pane behind it already listed, with less room for a thumb. On a wide screen the **rail** now
+    folds away from a topbar toggle and stays folded — a private preference in `localStorage`
+    (`vaier.explorer.tree`), shown by default, and deliberately **not** in the address: a link says where to
+    stand, not how someone likes their own window arranged. Navigation is now the pane's cards and listings to
+    drill down, the **address bar**'s crumbs to go back up, and ⌘K to go sideways.
+  - **The tree's ambience was rehomed first — that is what made folding it away cost nothing.** What the rail
+    alone carried was the state of machines nobody is looking at, so the fleet listing's machine cards grew
+    **machine marks**: the **capability strip**, the last **backup run**'s outcome, and a count of that
+    machine's containers that are **update available**. The backup outcome is a **tinted archive glyph, not a
+    second dot** — the rail could hang a bare coloured dot off a `backup` child row because the row said
+    "backup" beside it, but on a card that same dot would sit next to the liveness dot with nothing to tell
+    them apart, and a green dot that might mean either is worse than none. The marks stand down in the past,
+    like the liveness dots, since a registry verdict and a tunnel are about now. The **Map** also moved into
+    the fleet's own listing, in a section of its own (it is a different way of looking at the same machines,
+    not another machine); it had been reachable only from the rail.
+  - **Vaier's own entries left the tree for a topbar Vaier menu.** **Settings**, **Users**, **Security** and
+    **Concepts** were a second root in the rail, which made it a forest and made its "Fleet" label a half-truth.
+    They are now the **Vaier menu** in the chrome — the one surface that survives the rail being folded away or
+    absent — alongside a **Fleet** entry back to the fleet root, which the menu has to carry: a global's crumb
+    bar is one segment long ("Settings" is not inside anything), so without it, standing on Settings with no
+    rail left no way back to the fleet at all. The rail is now exactly what it is labelled.
+  - **⌘K matched identities, not names ✅ (a live defect).** The palette's index kept only the address path, so
+    it matched and displayed `/fleet/7a6d0e35-…/files` and typing a machine's **name** found *nothing* — the
+    §6.22 machine-id refactor's shadow, invisible while the rail was there to carry you. The index now holds
+    both the addressed path and the **human-readable** one (they differ at exactly one segment: a machine is
+    addressed by identity and read by name) and matches and displays the readable one. It also indexes the
+    **Vaier menu**'s entries, which matters more now they are behind a menu, and reads each row's icon off the
+    last path segment rather than `path[1]`, which had given every Vaier entry the fallback file glyph.
+  Part of epic [#323](https://github.com/getvaier/vaier/issues/323).
 - [ ] **E — The rest.** DNS, access (Users), Concepts. `admin.html` and the last iframes are deleted, and the
   bridge with them.
 
@@ -1851,6 +1899,19 @@ Three things this buys that a set of pages structurally cannot:
   discovered-candidate → publish flow are all native in the tree, and `vpn-peers.html` is deleted. Shipped in
   the "Infrastructure ported, and the page deleted ✅" slice. (The remaining bridges are **Backups**, **Users**
   and **Concepts** — slice E.)
+- **Retiring the desktop rail as well** (raised when the phone drawer was deleted). The phone has no **rail**
+  and lost nothing, because its ambience moved onto the **machine marks**; the same argument, followed all the
+  way, deletes the wide-screen rail too and leaves the fleet listing, the **address bar** and ⌘K as the whole
+  of navigation. Not done yet, deliberately: the fold is remembered per browser, so how often it is folded away
+  is the evidence — and the one thing the rail still does that nothing else does is show *several* machines'
+  entries expanded at once, which is how a directory is compared across two machines. Retire it when that turns
+  out not to be missed, not before.
+- **The rest of the tree's ambience on a card.** The **machine marks** carry capabilities, the last **backup
+  run** and the **update available** count. A machine's **disk** is the gap: **remote disk pressure** is the
+  thing an operator most wants to see without opening anything, and it is absent from both the rail and the
+  card for the same reason — `RemoteDiskWatcher` discards its readings, and a per-machine `df` at paint time
+  would be N SSH round trips. Needs the fleet-wide disk read model; folds together with the item above and with
+  the host-monitoring backlog in §6.9.
 
 **Decided up front — where the tree does not fit:**
 - **Wizards.** Fleet backup is a guided flow; a tree cannot teach. It stays a flow, rendered as the Inspector

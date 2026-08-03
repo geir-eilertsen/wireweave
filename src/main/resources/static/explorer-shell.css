@@ -107,24 +107,88 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 .ex-kbd-ico { display: none; }
 .ex-kbd-chip { color: var(--text-dim); }
 
-/* The drawer toggle. It only exists on a phone (revealed in the width query below); on a wide screen the
-   tree is a permanent column and there is nothing to open. */
-.ex-menu {
-    display: none;
+/* Folds the tree away and back. Wide screens only — a phone has no tree to fold (see the width query
+   below), and a control for something that does not exist is worse than no control. The glyph is the panel
+   itself with its rail drawn in, so what the button acts on is legible before it is pressed. */
+.ex-treetoggle {
+    display: inline-flex;
     flex: none;
     align-items: center; justify-content: center;
-    width: 34px; height: 34px;
+    width: 32px; height: 32px;
     margin-right: 2px;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: var(--radius-1);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: color .12s, border-color .12s;
+}
+.ex-treetoggle:hover { color: var(--text); border-color: var(--border-hi); }
+.ex-treetoggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Folded away, the button dims to match every other resting glyph in the chrome — the rail in the icon is
+   what carries the state, so the button does not also need to shout it. */
+.ex-app.tree-hidden .ex-treetoggle svg line { opacity: .25; }
+
+/* --- the Vaier menu -------------------------------------------------------------------------------- */
+/* Settings, Users, Security, Concepts: Vaier's own, siblings of the fleet rather than things inside it, so
+   they live in the chrome and are one reach from any depth on any screen. */
+
+.ex-vmenu-wrap { position: relative; flex: none; }
+.ex-vmenu-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 30px;
+    padding: 0 10px;
     background: none;
     border: 1px solid var(--border);
     border-radius: var(--radius-1);
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 12px;
+    cursor: pointer;
+    transition: color .12s, border-color .12s;
+}
+.ex-vmenu-btn:hover,
+.ex-vmenu-btn[aria-expanded='true'] { color: var(--text-muted); border-color: var(--border-hi); }
+.ex-vmenu-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ex-vmenu-ico { flex: none; }
+
+.ex-vmenu {
+    display: none;
+    position: absolute;
+    top: calc(100% + 6px); right: 0;
+    z-index: 70;
+    min-width: 178px;
+    padding: 5px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-hi);
+    border-radius: var(--radius-2);
+    box-shadow: 0 12px 34px rgba(0, 0, 0, .5);
+}
+.ex-vmenu.is-open { display: block; }
+.ex-vmenu-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    padding: 7px 9px;
+    background: none;
+    border: 0;
+    border-radius: var(--radius-1);
+    text-align: left;
+    font-family: inherit;
+    font-size: 13px;
     color: var(--text-muted);
     cursor: pointer;
 }
-.ex-menu:hover { color: var(--text); border-color: var(--border-hi); }
-
-/* The scrim behind the drawer — inert until the width query gives it a body. */
-.ex-tree-scrim { display: none; }
+.ex-vmenu-item:hover { background: var(--bg-hover); color: var(--text); }
+.ex-vmenu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ex-vmenu-item .ex-ico { flex: none; color: var(--text-dim); }
+.ex-vmenu-item:hover .ex-ico { color: var(--text-muted); }
+/* Separates the two roots — the fleet above, Vaier's own below. The tree said the same thing with two column
+   headings; a menu this short says it with one line. */
+.ex-vmenu-rule { height: 1px; margin: 5px 9px; background: var(--border); }
 
 /* --- main ------------------------------------------------------------------------------------------ */
 
@@ -133,6 +197,11 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
     grid-template-columns: 258px minmax(0, 1fr);
     min-height: 0;
 }
+/* The tree is optional and the choice is remembered (localStorage), so the pane simply takes the whole
+   width. Nothing is lost by folding it: the fleet pane lists every machine with the same marks the rail
+   carried, and the crumb bar and ⌘K do the moving. */
+.ex-app.tree-hidden .ex-main { grid-template-columns: minmax(0, 1fr); }
+.ex-app.tree-hidden .ex-tree { display: none; }
 
 /* --- the tree -------------------------------------------------------------------------------------- */
 
@@ -612,6 +681,24 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 }
 .ex-card-name.is-word { font-family: inherit; }
 .ex-card-note { font-size: 13px; color: var(--text-dim); }
+
+/* What a machine says without being opened: its capabilities, how its last backup went, and whether anything
+   on it wants a newer image. This is the ambience the tree used to carry on rows for machines you were not
+   looking at — rehomed here, which is what let the tree become optional.
+
+   The backup outcome is a tinted archive glyph and NOT a second dot: beside the liveness dot, one bare
+   coloured dot that might mean either is worse than none. The glyph says which fact it is; the colour says
+   how that fact is going; the title says it in words. */
+.ex-card-marks { display: inline-flex; align-items: center; gap: 7px; flex: none; }
+.ex-mark { display: inline-flex; align-items: center; gap: 2px; color: var(--text-dim); }
+.ex-mark.is-up { color: var(--green); }
+.ex-mark.is-degraded { color: var(--yellow); }
+.ex-mark.is-down { color: var(--red); }
+.ex-mark.is-update { color: var(--yellow); }
+.ex-mark-n { font-family: var(--mono); font-size: 10.5px; line-height: 1; }
+/* An archive is how things stood then; a registry verdict and a tunnel are about now. Both stand down in the
+   past, the same way the liveness dots already do. */
+[data-past='1'] .ex-pane .ex-card-marks { display: none; }
 /* "Vaier is root here" (#346), on the fleet card so the question "where am I root?" is answered without
    opening every machine. Amber rather than red: it is a consequence to know about, not a fault. */
 .ex-card-root {
@@ -1424,48 +1511,27 @@ select.ex-input { cursor: pointer; }
 }
 
 @media (max-width: 760px) {
-    .ex-menu { display: inline-flex; }
-
-    /* The chrome loses its words but not its actions: the address bar keeps the room, search falls back to
-       its glyph. */
+    /* The chrome loses its words but not its actions: the address bar keeps the room, search and the Vaier
+       menu fall back to their glyphs. */
     .ex-addressbar { margin: 0 6px; }
     .ex-kbd-lbl, .ex-kbd-chip { display: none; }
     .ex-kbd-ico { display: block; }
     .ex-kbd { padding: 0 9px; }
+    .ex-vmenu-lbl { display: none; }
+    .ex-vmenu-btn { width: 32px; height: 32px; padding: 0; justify-content: center; }
 
-    /* The tree stops being a column and becomes a drawer that slides over the pane. The pane takes the full
-       width; the tree is lifted out of the grid, parked off the left edge, and brought in only when the app
-       is in .tree-open. Selecting anything (go() in the shell) drops .tree-open, so the drawer closes the
-       moment you have navigated — the same reflex a phone's own file apps have. */
+    /* No tree on a phone, and no control for one. It was a drawer over the pane, and every row in it named
+       something the pane behind it already listed with room for a thumb — the fleet's machines, a machine's
+       entries, a folder's folders. What the drawer alone used to carry (a machine's capabilities, its last
+       backup's outcome, containers wanting a pull) is on the fleet pane's cards now, so this deletes a
+       surface rather than the information on it. Drilling in is the pane; getting back is the crumb bar;
+       going sideways is ⌘K, which finally matches on names. */
+    .ex-treetoggle { display: none; }
     .ex-main { grid-template-columns: minmax(0, 1fr); }
-    .ex-tree {
-        position: fixed;
-        top: 48px; left: 0; bottom: 0;
-        width: min(84vw, 300px);
-        z-index: 60;
-        box-shadow: 6px 0 32px rgba(0, 0, 0, .5);
-        transform: translateX(-100%);
-        transition: transform .22s ease, background .5s ease, border-color .5s ease;
-    }
-    .ex-app.tree-open .ex-tree { transform: translateX(0); }
+    .ex-tree { display: none; }
 
-    .ex-tree-scrim {
-        display: block;
-        position: fixed;
-        inset: 48px 0 0 0;
-        z-index: 55;
-        background: rgba(0, 0, 0, .5);
-        opacity: 0;
-        pointer-events: none;
-        transition: opacity .22s ease;
-    }
-    .ex-app.tree-open .ex-tree-scrim { opacity: 1; pointer-events: auto; }
-    /* The drawer is the whole of a phone's navigation, so its rows are thumb targets like the listing's. A
-       3px-padded tree row is about 26px — a pointer's target, and a coin-flip for a thumb. */
-    .ex-tree .ex-row { padding: 10px 10px 10px 0; }
-
-    /* The address bar is the other thing every navigation goes through, and its crumbs were 2px-padded text.
-       It gets the same treatment: a taller bar, and crumbs a thumb can actually land on. */
+    /* The address bar is now the thing every navigation back goes through, and its crumbs were 2px-padded
+       text. A taller bar, and crumbs a thumb can actually land on. */
     .ex-addressbar { height: 34px; }
     .ex-crumb, .ex-crumb-here { padding: 6px 5px; }
 
@@ -1599,4 +1665,13 @@ select.ex-input { cursor: pointer; }
         box-shadow: 0 8px 28px rgba(0, 0, 0, .5);
     }
     .ex-app.has-sel .ex-pane-body { padding-bottom: 148px; }
+}
+
+/* The narrowest phones. The topbar now carries one control more than it used to (the Vaier menu, which is
+   where Settings, Users, Security and Concepts went when the tree left), and at this width the wordmark is
+   the only thing on the bar that is decoration rather than a destination. The mark stays — it is still the
+   link — but the letters give their room to the address bar, which is what actually says where you are. */
+@media (max-width: 480px) {
+    .topbar-brand span { display: none; }
+    .topbar-brand { margin-right: .35rem; }
 }

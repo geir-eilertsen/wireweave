@@ -179,11 +179,35 @@
 
     const app = document.querySelector('.ex-app');
 
-    // The tree drawer, on a phone. Off-screen until opened; a scrim sits over the pane while it is. On a wide
-    // screen .tree-open styles nothing, so this is harmless there — go() calls it on every navigation.
-    function setTree(open) {
-        app.classList.toggle('tree-open', open);
-        $('exMenuBtn').setAttribute('aria-expanded', open ? 'true' : 'false');
+    // The tree is a second view of what the fleet pane already lists — every machine, every entry inside one,
+    // every folder read so far — so it is optional, and folding it away is remembered across visits. It is a
+    // wide-screen thing only: on a phone it was a drawer nobody opened twice, when the pane behind it said the
+    // same and said it with room for a thumb.
+    //
+    // What the tree carries and the pane does not is ambience: the marks on machines you are NOT looking at.
+    // Those moved onto the fleet pane's machine cards (see renderFleet), which is why folding this away now
+    // costs nothing but the outline.
+    const TREE_PREF = 'vaier.explorer.tree';
+
+    function setTree(shown) {
+        app.classList.toggle('tree-hidden', !shown);
+        const btn = $('exTreeToggle');
+        btn.setAttribute('aria-expanded', shown ? 'true' : 'false');
+        btn.setAttribute('aria-label', shown ? 'Hide the fleet tree' : 'Show the fleet tree');
+        // A private preference, not fleet state — localStorage, never the address. A link you send someone
+        // says where to stand, not how you like your own window arranged.
+        try { localStorage.setItem(TREE_PREF, shown ? 'shown' : 'hidden'); } catch (e) { /* private mode */ }
+    }
+
+    function restoreTreePref() {
+        let pref = null;
+        try { pref = localStorage.getItem(TREE_PREF); } catch (e) { /* private mode */ }
+        // Shown is the default: an operator who has never touched the toggle gets the outline, and the ones
+        // who folded it away are the only ones who kept a choice.
+        app.classList.toggle('tree-hidden', pref === 'hidden');
+        const btn = $('exTreeToggle');
+        btn.setAttribute('aria-expanded', pref === 'hidden' ? 'false' : 'true');
+        btn.setAttribute('aria-label', pref === 'hidden' ? 'Show the fleet tree' : 'Hide the fleet tree');
     }
 
     // --- what an entry IS, read off its own path -------------------------------------------------------
@@ -753,6 +777,48 @@
         return s;
     }
 
+    /**
+     * What a machine is telling you without being opened — its capabilities, how its last backup went, and
+     * whether anything on it wants a newer image. This is the ambience the tree used to carry on rows for
+     * machines you were not looking at, and it is the whole reason the tree could be made optional: fold the
+     * outline away and the fleet pane still shows you the machine that is in trouble.
+     *
+     * Deliberately not a second liveness dot. The tree could hang a bare coloured dot off a machine's `backup`
+     * child row because that row said "backup" beside it; on a card the same dot would sit next to the
+     * liveness dot with nothing to tell them apart, and a green dot that might mean either is worse than no
+     * dot at all. So the backup outcome is the archive glyph, tinted, and the words are on its title.
+     */
+    function machineMarks(machineId) {
+        const marks = el('span', 'ex-card-marks');
+        const caps = machineCaps(machineId);
+        if (caps.childNodes.length) marks.appendChild(caps);
+
+        const job = jobsOn(machineId)[0];
+        if (job) {
+            const b = el('span', 'ex-mark ' + (RUN_DOT[job.lastRunStatus] || 'is-idle'));
+            b.innerHTML = svg('archive', 'ex-cap-ico');
+            b.title = RUN_WORD[job.lastRunStatus] || 'No backup has run yet';
+            marks.appendChild(b);
+        }
+
+        // The registry verdict is about now, and an archive is about then — the same reason updateMark and the
+        // liveness dots stand down in the past.
+        const stale = S.at ? 0
+            : containersOn(machineId).filter((c) => c.updateAvailable === 'UPDATE_AVAILABLE').length;
+        if (stale) {
+            const u = el('span', 'ex-mark is-update');
+            u.innerHTML = svg('arrowup', 'ex-cap-ico');
+            const n = el('span', 'ex-mark-n');
+            n.textContent = String(stale);
+            u.appendChild(n);
+            u.title = stale === 1
+                ? 'One container here has a newer image available'
+                : stale + ' containers here have a newer image available';
+            marks.appendChild(u);
+        }
+        return marks;
+    }
+
     // --- the tree ---------------------------------------------------------------------------------------
 
     function renderTree() {
@@ -765,13 +831,10 @@
         tree.appendChild(label);
         tree.appendChild(branch(['fleet'], 'fleet', 'fleet', 0));
 
-        // The Vaier-wide entries, at the top level, outside the fleet.
-        const vlabel = document.createElement('div');
-        vlabel.className = 'ex-col-label';
-        vlabel.textContent = 'Vaier';
-        tree.appendChild(vlabel);
-        GLOBALS.forEach((g) => tree.appendChild(
-            branch([g.name], g.native ? g.name : 'gbridge', g.label, 0)));
+        // Vaier's own entries used to hang here as a second root, which made this a forest. They are in the
+        // topbar menu now — the one surface that survives the tree being folded away or absent — and a second
+        // home for them here would be two roads to one place. So the rail is exactly what it is labelled: the
+        // fleet, and nothing else.
     }
 
     function branch(path, kind, label, depth) {
@@ -1051,6 +1114,12 @@
                 const c = card(machineIcon(m.id), m.name, true,
                     MACHINE_TYPE[m.type] + (address ? ' · ' + address : ''),
                     () => { S.open.add(key(['fleet', m.id])); go(['fleet', m.id]); }, m.id);
+                // What the machine is saying without being opened — capabilities, its last backup's outcome,
+                // containers wanting a newer image. Inserted before the liveness dot so the dot stays the
+                // right-hand anchor every card lines up on. This is the tree's ambience, rehomed: it is what
+                // made folding the outline away cost nothing.
+                const top = c.querySelector('.ex-card-top');
+                top.insertBefore(machineMarks(m.id), top.querySelector('.ex-dot'));
                 // Where Vaier is root, said on the card itself — the fleet is readable for it without
                 // opening every machine. The backend decided it (domain.EffectiveUser); nothing here
                 // re-judges a username.
@@ -1061,11 +1130,21 @@
             });
             body.appendChild(grid);
         }
+
         // Adding a machine is a fleet-level act — it belongs on the fleet, not floating in the topbar over every
         // path you happen to be standing in. So the button lives here, below the machine list.
         const addBar = el('div', 'ex-lactions is-static');
         addBar.appendChild(selVerb('server', 'Add machine', 'ex-btn is-accent', () => addMachine()));
         body.appendChild(addBar);
+
+        // The fleet seen as one picture rather than a list — a child of the fleet exactly as each machine is,
+        // and until now reachable only from the tree. Its own section: it is a different way of looking at the
+        // same machines, not another machine, and dropping it into the grid above would have said it was one.
+        body.appendChild(section('The fleet, seen whole'));
+        const views = el('div', 'ex-grid');
+        views.appendChild(card('map', 'Map', false, 'Where the machines physically are',
+            () => go(['fleet', 'map'])));
+        body.appendChild(views);
 
         // Discovery lives in the Add-a-machine flow and nowhere else. It used to have a second home here, but
         // scanning is a step on the way to adding something, not a standing report about the fleet — a fleet
@@ -6876,20 +6955,31 @@
     // ever reads the cache. That is the whole trick: the palette can see every directory the operator has
     // already opened, and is structurally incapable of touching one they have not. A palette that crawled the
     // fleet over SFTP to build an index would hang the moment it met a sleeping machine.
+    // Every entry twice over: the path Vaier addresses it by, and the path a person reads it as. They differ at
+    // exactly one segment — a machine is addressed by identity and read by name — and that one segment was the
+    // whole bug. The index used to keep only the address, so the palette matched (and displayed)
+    // /fleet/7a6d0e35-25d9-420c-b7bc-1815ce7e0dc1/files, and typing a machine's name found nothing at all.
+    // Nobody noticed while the tree was there to carry you; with the tree optional this is the way across.
     function index() {
         const out = [];
-        (function walk(path) {
-            out.push({ path: path, kind: kindOf(path) });
-            childrenOf(path).forEach((kid) => walk(path.concat([kid.name])));
-        })(['fleet']);
+        (function walk(path, words) {
+            out.push({ path: path, kind: kindOf(path), label: '/' + words.join('/') });
+            childrenOf(path).forEach((kid) =>
+                walk(path.concat([kid.name]), words.concat([kid.label || kid.name])));
+        })(['fleet'], ['fleet']);
+        // Vaier's own entries are not of the fleet, so the walk above cannot reach them — and they are now
+        // behind a menu rather than standing in the tree, which makes finding them here matter more, not less.
+        GLOBALS.forEach((g) => out.push({ path: [g.name], kind: kindOf([g.name]), label: '/' + g.label }));
         return out;
     }
 
     function matches(query) {
         const needle = query.trim().toLowerCase();
-        const all = index().filter((e) => e.path.length > 1);
+        // Everything except the fleet root itself — "/fleet" is where the crumb bar's first segment already
+        // goes, and an entry for the place you can always reach in one click is a wasted row.
+        const all = index().filter((e) => e.label !== '/fleet');
         if (!needle) return all.filter((e) => e.kind === 'machine').slice(0, 9);
-        return all.filter((e) => key(e.path).toLowerCase().includes(needle)).slice(0, 40);
+        return all.filter((e) => e.label.toLowerCase().includes(needle)).slice(0, 40);
     }
 
     function paintPalette(query) {
@@ -6906,11 +6996,14 @@
         found.forEach((entry, i) => {
             const item = document.createElement('button');
             item.className = 'ex-pal-item' + (i === S.palSel ? ' is-on' : '');
-            item.innerHTML = svg(iconFor(entry.kind, entry.path[1]), 'ex-ico');
+            // The last segment, exactly as the tree's rows do it — a machine's icon reads off its identity and
+            // a global's off its own name, and both of those are the tail of the path. Reading path[1] instead
+            // gave every Vaier entry the fallback file glyph.
+            item.innerHTML = svg(iconFor(entry.kind, entry.path[entry.path.length - 1]), 'ex-ico');
 
             const pth = document.createElement('span');
             pth.className = 'ex-pth';
-            highlight(pth, key(entry.path), query.trim());
+            highlight(pth, entry.label, query.trim());
             item.appendChild(pth);
 
             const kind = document.createElement('span');
@@ -6952,6 +7045,40 @@
         go(path);
     }
 
+    // --- the address ------------------------------------------------------------------------------------
+    //
+    // Where you are IS the URL. Reload, Back, Forward, bookmark and open-in-new-tab all work because the
+    // address is the only place the location lives: S.path and S.at are read back out of it and never set
+    // behind its back. Before this the whole location was a variable, so every reload dumped you at the
+    // fleet root and there was no way to hand anyone a link to a folder.
+    //
+    // A hash, deliberately, and not the History API: the shell is a static file, so a real path like
+    // /explorer/fleet/<id>/files/home would 404 unless Vaier grew a catch-all forward — new backend surface
+    // inside the forward-auth chain, bought for nothing the hash does not already give.
+    //
+    // Segments are percent-encoded, so a file called "report Q1?.pdf" survives the round trip: the only bare
+    // "/" is a separator and the only bare "?" opens the query.
+    const ROUTE_DEFAULT = ['fleet'];
+
+    function hrefFor(path, at) {
+        return '#/' + path.map(encodeURIComponent).join('/')
+            + (at ? '?at=' + encodeURIComponent(at) : '');
+    }
+
+    function parseHash() {
+        const raw = location.hash.replace(/^#\/?/, '');
+        const cut = raw.indexOf('?');
+        const body = cut < 0 ? raw : raw.slice(0, cut);
+        const at = cut < 0 ? null : new URLSearchParams(raw.slice(cut + 1)).get('at');
+        const path = body.split('/').filter((s) => s !== '').map(decodeURIComponent);
+        return { path: path.length ? path : ROUTE_DEFAULT.slice(), at: at || null };
+    }
+
+    // The address this shell last applied, normalised through hrefFor. Compared against rather than
+    // location.hash itself, because the browser is free to re-encode what it was handed — and a raw string
+    // comparison against a re-encoded hash would make every Back look like a new place.
+    let _route = null;
+
     // --- navigation --------------------------------------------------------------------------------------
 
     // Selecting an entry is the only thing that opens a shell. The dock's open is deliberately not
@@ -6965,7 +7092,32 @@
         // would be a claim about it. Descending deeper into the same files keeps the archive you are in.
         const stillInPast = S.at && path[1] === S.path[1]
             && (kindOf(path) === 'files' || kindOf(path) === 'dir');
-        if (!stillInPast) S.at = null;
+        navigate(path, stillInPast ? S.at : null);
+    }
+
+    function navigate(path, at) {
+        const href = hrefFor(path, at);
+        // The same address again is not a move — it is the tree folding a branch, or a card for the entry you
+        // are already standing on. Repaint, and leave the history alone: a Back that walks through the same
+        // folder five times is a Back that is broken.
+        if (href === _route) return render();
+        _route = href;
+        location.hash = href;
+        // Applied here rather than waiting for hashchange, which fires on the next turn — a click should not
+        // paint a frame late. The listener below skips what this already applied.
+        applyRoute(path, at);
+    }
+
+    // Back, Forward, a pasted link, an edited address. Whatever the browser hands us is the truth.
+    window.addEventListener('hashchange', () => {
+        const r = parseHash();
+        const href = hrefFor(r.path, r.at);
+        if (href === _route) return;   // our own write, already painted
+        _route = href;
+        applyRoute(r.path, r.at);
+    });
+
+    function applyRoute(path, at) {
         // The selection deliberately survives navigation (#323): each ticked item carries its own coordinate
         // (machine, path, archive), so you can gather files from different folders — and different machines —
         // before downloading, copying or deleting them together. It is cleared only by acting on it or by the
@@ -6974,29 +7126,19 @@
         // fleet, so it does not follow the operator around — left on screen it would quietly become a lie,
         // which is the one thing this feature cannot afford. The verdicts it settled are on the rows already.
         if (key(path) !== key(S.path)) _updateCheck = null;
+        const timeChanged = (at || null) !== (S.at || null);
         S.path = path;
-        setTree(false);   // navigating closes the phone drawer; a no-op on a wide screen
+        S.at = at || null;
+        // Scrubbing the rail — including arriving on a link that already names an archive. Setting the time
+        // re-reads exactly the directory you are standing on and every directory above it at that archive, so
+        // the pane and any open tree branches relight together instead of flashing empty. A bounded walk down
+        // one path, never a crawl across the fleet.
+        if (timeChanged && S.path.length > 1) readPathChain(S.path[1]);
         render();
     }
 
-    // Scrubbing the rail. Setting the time re-reads exactly the directory you are standing on — and every
-    // directory above it — at that archive, so the tree and the Inspector relight together instead of the
-    // open branches beneath you flashing empty. It is a bounded walk down one path (the very directories that
-    // were opened to get here), never a crawl across the fleet — the same discipline the rest of the tree
-    // keeps. Then the shell crossfades to the new light, once, in render.
-    function toArchive(machine, id) {
-        if (S.at === id) return;
-        S.at = id;
-        readPathChain(machine);
-        render();
-    }
-
-    function toPresent() {
-        if (!S.at) return;
-        S.at = null;
-        readPathChain(S.path[1]);
-        render();
-    }
+    const toArchive = (machine, id) => navigate(S.path, id);
+    const toPresent = () => navigate(S.path, null);
 
     // Read the files subtree from its root down to where you are standing, at the current time. Only the
     // directories that are still unread in this light are fetched; the rest are already cached. remotePath
@@ -7368,11 +7510,50 @@
 
     $('exPalBtn').onclick = openPalette;
 
-    // The tree drawer (phone only — on a wide screen the tree is always in view and this class does nothing).
-    // go() drops .tree-open on every navigation, so selecting a machine closes the drawer behind you.
-    $('exMenuBtn').onclick = () => setTree(!app.classList.contains('tree-open'));
-    $('exTreeScrim').onclick = () => setTree(false);
+    $('exTreeToggle').onclick = () => setTree(app.classList.contains('tree-hidden'));
     $('exScrim').onclick = (e) => { if (e.target === $('exScrim')) closePalette(); };
+
+    // --- the Vaier menu ---------------------------------------------------------------------------------
+    //
+    // Settings, Users, Security and Concepts are Vaier's, not the fleet's — siblings of the fleet root rather
+    // than things inside it. Listing them in the fleet pane would say they are part of the fleet, so they sit
+    // in the chrome, where they are one reach away from any depth on any screen.
+
+    function setVMenu(open) {
+        $('exVMenuBtn').setAttribute('aria-expanded', open ? 'true' : 'false');
+        $('exVMenu').classList.toggle('is-open', open);
+    }
+
+    function vMenuItem(icon, label, path) {
+        const item = el('button', 'ex-vmenu-item');
+        item.setAttribute('role', 'menuitem');
+        item.innerHTML = svg(icon, 'ex-ico');
+        const lbl = el('span');
+        lbl.textContent = label;
+        item.appendChild(lbl);
+        item.onclick = () => { setVMenu(false); go(path); };
+        return item;
+    }
+
+    function renderVMenu() {
+        const menu = $('exVMenu');
+        menu.textContent = '';
+        // The two roots, in one place. The tree was a forest — Fleet and Vaier side by side — and that is
+        // exactly what this menu is now. Fleet has to be here: a global's crumb bar is one segment long
+        // ("Settings" is not inside anything), so without this, standing on Settings with the tree folded
+        // away left no way back to the fleet at all.
+        menu.appendChild(vMenuItem('fleet', 'Fleet', ROUTE_DEFAULT.slice()));
+        menu.appendChild(el('div', 'ex-vmenu-rule'));
+        GLOBALS.forEach((g) => menu.appendChild(vMenuItem(g.icon, g.label, [g.name])));
+    }
+
+    $('exVMenuBtn').onclick = (e) => {
+        e.stopPropagation();
+        setVMenu($('exVMenu').className.indexOf('is-open') < 0);
+    };
+    // A click anywhere else closes it — the reflex every menu has.
+    document.addEventListener('click', () => setVMenu(false));
+    $('exVMenu').onclick = (e) => e.stopPropagation();
     $('exPalInput').oninput = () => { S.palSel = 0; paintPalette($('exPalInput').value); };
     $('exPalInput').onkeydown = (e) => {
         const found = matches($('exPalInput').value);
@@ -7393,7 +7574,7 @@
     };
     document.addEventListener('keydown', (e) => {
         if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); openPalette(); }
-        if (e.key === 'Escape' && app.classList.contains('tree-open')) setTree(false);
+        if (e.key === 'Escape') setVMenu(false);
     });
 
     // On a phone the soft keyboard shrinks the visual viewport but not the layout viewport, which would leave
@@ -7408,10 +7589,29 @@
     }
 
     async function init() {
+        restoreTreePref();
+        renderVMenu();
+        // Where the address says we are, before anything is fetched — so a reload or a pasted link paints the
+        // right place on the first frame rather than landing on the fleet and jumping.
+        const start = parseHash();
+        _route = hrefFor(start.path, start.at);
+        S.path = start.path;
+        S.at = start.at;
+        // Arriving deep — a bookmark, a pasted link, a reload three folders down — opens the branches above
+        // you, so the tree shows where you are standing instead of a collapsed root that disagrees with the
+        // pane. Exactly what ⌘K's jump does when it lands you somewhere you never walked to.
+        for (let i = 1; i < S.path.length; i++) S.open.add(key(S.path.slice(0, i + 1)));
+        // The address is normalised into the bar even when the visitor arrived with none, so the very first
+        // thing in history is a real location and the first Back is not a step out of the app.
+        location.replace(location.pathname + location.search + _route);
+
         // The services are awaited because the tree cannot be honest without them: a `services` entry exists
         // only on a machine that actually publishes something, and a tree that grew one a moment later would
         // have been lying for that moment.
         await Promise.all([loadFleet(), loadServices(), loadBackup()]);
+        // A link into a folder needs the chain above it read before remotePath can resolve where the machine's
+        // tree begins. Standing anywhere else this is a no-op.
+        if (S.path.length > 3) readPathChain(S.path[1]);
         render();
 
         // The containers are not awaited. The fleet-wide Docker scrape can take seconds against a sleeping
