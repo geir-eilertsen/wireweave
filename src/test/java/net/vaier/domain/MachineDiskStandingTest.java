@@ -1,9 +1,14 @@
 package net.vaier.domain;
 
+import net.vaier.domain.port.ForHoldingMachineDiskStandings;
+import net.vaier.domain.port.ForPublishingEvents;
 import org.junit.jupiter.api.Test;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -127,5 +132,96 @@ class MachineDiskStandingTest {
 
         assertThat(same.differsFrom(before)).isFalse();
         assertThat(moved.differsFrom(before)).isTrue();
+    }
+
+    // --- retaining a reading (whoever took it) --------------------------------------------------------
+    //
+    // Both the five-minute sweep and a live look at a machine's disk pane take the same judged reading, so
+    // "commit it and wake the fleet only if it moved" is one decision and belongs here — not once in the
+    // watcher and once in the service, free to drift.
+
+    /** Records what it is handed and hands back what it replaced, like the real in-memory hold. */
+    private static final class HeldStandings implements ForHoldingMachineDiskStandings {
+        private final Map<MachineId, MachineDiskStanding> held = new HashMap<>();
+
+        @Override
+        public Optional<MachineDiskStanding> record(MachineDiskStanding standing) {
+            return Optional.ofNullable(held.put(standing.machineId(), standing));
+        }
+
+        @Override
+        public Optional<MachineDiskStanding> forget(MachineId machineId) {
+            return Optional.ofNullable(held.remove(machineId));
+        }
+
+        @Override
+        public List<MachineDiskStanding> getAll() {
+            return List.copyOf(held.values());
+        }
+
+        @Override
+        public void retainOnly(Set<MachineId> machineIds) {
+            held.keySet().retainAll(machineIds);
+        }
+    }
+
+    /** Counts what the fleet was told, which is the only thing these tests care about. */
+    private static final class CountingPublisher implements ForPublishingEvents {
+        private int published;
+
+        @Override
+        public void publish(String topic, String eventName, String data) {
+            published++;
+        }
+    }
+
+    @Test
+    void retain_commitsTheReading_andWakesTheFleetOnce() {
+        HeldStandings held = new HeldStandings();
+        CountingPublisher publisher = new CountingPublisher();
+
+        MachineDiskStanding.retain(NAS, List.of(fs("/", 90)), watches(), GLOBAL_THRESHOLD, held, publisher);
+
+        assertThat(held.getAll()).singleElement()
+            .satisfies(standing -> assertThat(standing.worstMountPoint()).isEqualTo("/"));
+        assertThat(publisher.published).isEqualTo(1);
+    }
+
+    @Test
+    void retain_readingTheSameDisksAgain_tellsTheFleetNothing() {
+        HeldStandings held = new HeldStandings();
+        CountingPublisher publisher = new CountingPublisher();
+        MachineDiskStanding.retain(NAS, List.of(fs("/", 90)), watches(), GLOBAL_THRESHOLD, held, publisher);
+
+        MachineDiskStanding.retain(NAS, List.of(fs("/", 90)), watches(), GLOBAL_THRESHOLD, held, publisher);
+
+        assertThat(publisher.published).isEqualTo(1);
+    }
+
+    @Test
+    void retain_whenEveryFilesystemIsNowMuted_forgetsTheStandingAndSaysSo() {
+        // The bug the operator hit, at the seam that fixes it: muting the last watched filesystem must
+        // remove the machine's mark, not leave it frozen on the verdict nobody is making any more.
+        HeldStandings held = new HeldStandings();
+        CountingPublisher publisher = new CountingPublisher();
+        MachineDiskStanding.retain(NAS, List.of(fs("/", 90)), watches(), GLOBAL_THRESHOLD, held, publisher);
+
+        MachineDiskStanding.retain(NAS, List.of(fs("/", 90)),
+            watches(new DiskWatch(NAS, "/", false, null)), GLOBAL_THRESHOLD, held, publisher);
+
+        assertThat(held.getAll()).isEmpty();
+        assertThat(publisher.published).isEqualTo(2);
+    }
+
+    @Test
+    void retain_withNothingToJudgeAndNothingHeld_wakesNobody() {
+        HeldStandings held = new HeldStandings();
+        CountingPublisher publisher = new CountingPublisher();
+
+        MachineDiskStanding.retain(NAS, List.of(fs("/", 90)),
+            watches(new DiskWatch(NAS, "/", false, null)), GLOBAL_THRESHOLD, held, publisher);
+
+        assertThat(held.getAll()).isEmpty();
+        assertThat(publisher.published).isZero();
     }
 }

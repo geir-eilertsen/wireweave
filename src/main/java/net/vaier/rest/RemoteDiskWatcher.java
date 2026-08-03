@@ -30,7 +30,6 @@ import org.springframework.stereotype.Component;
 
 import java.time.Clock;
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -118,7 +117,6 @@ public class RemoteDiskWatcher {
     // here costs no new connection and no timer.
     private static final String SSE_TOPIC = "vpn-peers";
     private static final String SSH_SERVER_PRESENCE_SSE_EVENT = "ssh-server-presence-changed";
-    private static final String DISK_STANDING_SSE_EVENT = "disk-standing-changed";
 
     public RemoteDiskWatcher(GetMachinesUseCase machines,
                              GetHostCredentialUseCase credentials,
@@ -240,11 +238,12 @@ public class RemoteDiskWatcher {
      * any without a fleet-wide {@code df} on page load, waking every sleeping machine to answer a question
      * nobody asked.
      *
-     * <p>The watcher decides nothing here either: {@link MachineDiskStanding#of} picks the worst filesystem
-     * and resolves mute through the same {@code RemoteDiskUsage.judge} the alert email above just used, and
-     * {@link MachineDiskStanding#differsFrom} decides whether anything moved. A machine with nothing left to
-     * judge — every filesystem muted — has its standing <em>forgotten</em> rather than left standing on a
-     * card as a verdict nobody is making any more.
+     * <p>The watcher decides nothing here — it hands the reading and the two ports to
+     * {@link MachineDiskStanding#retain}, which picks the worst filesystem through the same
+     * {@code RemoteDiskUsage.judge} the alert email above just used, forgets a machine with nothing left to
+     * judge, and wakes an open Explorer only when something actually moved. The disk pane hands its own live
+     * reading to that very same method, which is what makes a mute land on the card at once instead of
+     * waiting for the next sweep.
      *
      * <p>Published only on a change, and on the {@code vpn-peers} stream the fleet page already holds open —
      * the same shape as the SSH-server presence above, for the same reason: no second connection, no timer,
@@ -252,14 +251,8 @@ public class RemoteDiskWatcher {
      */
     private void recordDiskStanding(Machine machine, List<RemoteDiskUsage> filesystems, DiskWatches watches,
                                     int globalThreshold) {
-        Optional<MachineDiskStanding> standing =
-            MachineDiskStanding.of(machine.id(), filesystems, watches, globalThreshold);
-        boolean changed = standing
-            .map(current -> current.differsFrom(diskStandings.record(current).orElse(null)))
-            .orElseGet(() -> diskStandings.forget(machine.id()).isPresent());
-        if (changed) {
-            eventPublisher.publish(SSE_TOPIC, DISK_STANDING_SSE_EVENT, "");
-        }
+        MachineDiskStanding.retain(machine.id(), filesystems, watches, globalThreshold, diskStandings,
+            eventPublisher);
     }
 
     /** Records that the SSH server is gone and, only on the boundary crossing, wakes the Explorer. */

@@ -1,6 +1,8 @@
 package net.vaier.domain;
 
 import lombok.Builder;
+import net.vaier.domain.port.ForHoldingMachineDiskStandings;
+import net.vaier.domain.port.ForPublishingEvents;
 
 import java.util.Comparator;
 import java.util.List;
@@ -78,6 +80,54 @@ public record MachineDiskStanding(MachineId machineId, String worstMountPoint, i
             .watchedFilesystems(judged.size())
             .build());
     }
+
+    /**
+     * <b>Keep this reading as the machine's standing</b>, and wake an open Explorer only if it says something
+     * the last one did not. Every caller that takes a judged {@code df} — the five-minute sweep, and a live
+     * look at a machine's disk pane — hands it here, so there is exactly one place that decides what a fresh
+     * reading does to a card.
+     *
+     * <p><b>Why the pane matters as much as the sweep.</b> An operator muted {@code /} on the NAS and the
+     * card went on naming {@code /} as that machine's worst filesystem until the next sweep happened to run:
+     * up to five minutes of a card asserting a verdict about a disk nobody is judging any more. The same
+     * staleness applied to un-muting one and to moving a threshold. The fix costs no connection at all,
+     * because the reading was already being taken — the disk pane re-reads the machine the moment a watch is
+     * written, and that reading used to be rendered and dropped. Retaining it also means the mark self-heals
+     * the moment anyone looks at a machine.
+     *
+     * <p>A machine with nothing left to judge is <em>forgotten</em>, not recorded as clear — {@link #of}
+     * returns empty for that, and a card must draw nothing rather than freeze on its last verdict.
+     *
+     * <p>The publish is gated on {@link #differsFrom} for a reason worth stating: the pane is re-read on
+     * every view, so an ungated publish would repaint every card in every open Explorer each time somebody
+     * merely looked at a machine.
+     *
+     * <p><b>A reading that failed never reaches here</b>, and that is deliberate: an unreachable machine, a
+     * missing credential or a refused SSH tells you nothing new about its disks, only that Vaier could not
+     * look. Both callers bail before this point on failure, so the last known standing stands. Treating a
+     * failure as "nothing to judge" would silently erase a machine's mark every time it went to sleep, which
+     * is the #325 silence — absence read as health — in a new costume.
+     */
+    public static void retain(MachineId machineId, List<RemoteDiskUsage> filesystems, DiskWatches watches,
+                              int globalThresholdPercent, ForHoldingMachineDiskStandings standings,
+                              ForPublishingEvents events) {
+        Optional<MachineDiskStanding> standing = of(machineId, filesystems, watches, globalThresholdPercent);
+        boolean changed = standing
+            .map(current -> current.differsFrom(standings.record(current).orElse(null)))
+            .orElseGet(() -> standings.forget(machineId).isPresent());
+        if (changed) {
+            events.publish(SSE_TOPIC, SSE_EVENT, "");
+        }
+    }
+
+    /**
+     * Where a changed standing is announced: the stream the fleet page already holds open for peer liveness.
+     * It lives here rather than in each caller because the sweep and the disk pane must announce the very
+     * same thing on the very same stream — two copies of these two strings is one rename away from a card
+     * that never refreshes and nobody noticing.
+     */
+    private static final String SSE_TOPIC = "vpn-peers";
+    private static final String SSE_EVENT = "disk-standing-changed";
 
     /** How this machine's disks stand — the severity the fleet listing tints its mark by. */
     public DiskStandingLevel level() {

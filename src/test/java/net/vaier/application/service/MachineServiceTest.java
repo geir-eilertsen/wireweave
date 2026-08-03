@@ -26,6 +26,7 @@ import net.vaier.domain.port.ForReadingMachineNetworks;
 import net.vaier.domain.port.ForPersistingAppConfiguration;
 import net.vaier.domain.port.ForPersistingDiskWatches;
 import net.vaier.domain.port.ForPersistingLanServers;
+import net.vaier.domain.port.ForPublishingEvents;
 import net.vaier.domain.port.ForResolvingVaierServerIdentity;
 import net.vaier.domain.port.ForResolvingServerLanCidr;
 import net.vaier.domain.port.ForResolvingSshTargets;
@@ -84,6 +85,7 @@ class MachineServiceTest {
     @Mock ForReadingMachineNetworks forReadingMachineNetworks;
     @Mock ForCachingMachineNetworks forCachingMachineNetworks;
     @Mock ForHoldingMachineDiskStandings forHoldingMachineDiskStandings;
+    @Mock ForPublishingEvents forPublishingEvents;
 
     MachineService service;
 
@@ -99,7 +101,7 @@ class MachineServiceTest {
             forPersistingAppConfiguration, forResolvingSshTargets, forRunningSshCommands,
             forTrackingHostKeys, forPersistingDiskWatches,
             forResolvingVaierServerIdentity, forReadingMachineNetworks, forCachingMachineNetworks,
-            forHoldingMachineDiskStandings, configResolver);
+            forHoldingMachineDiskStandings, forPublishingEvents, configResolver);
         lenient().when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of());
         lenient().when(forGettingVpnClients.getClients()).thenReturn(List.of());
         lenient().when(forGettingLanServers.getAll()).thenReturn(List.of());
@@ -591,6 +593,94 @@ class MachineServiceTest {
         when(forHoldingMachineDiskStandings.getAll()).thenReturn(List.of());
 
         assertThat(service.getMachineDiskStandings()).isEmpty();
+    }
+
+    // --- a live reading refreshes the standing (the mute that took five minutes to land) ---------------
+    //
+    // The operator muted / on the NAS and the card went on naming / as the machine's worst filesystem until
+    // the next five-minute sweep happened to run — a card asserting a verdict about a disk nobody was
+    // judging any more. The mute itself was always right; what was missing is that the *fresh* reading this
+    // very method takes right after the watch write was judged, rendered, and then dropped. Retaining it
+    // costs no connection at all: the df already ran.
+
+    @Test
+    void diskUsage_retainsWhatItJustRead_soAMuteStopsNamingTheFilesystemAtOnce() {
+        // The regression. / is the NAS's worst filesystem at 88% against the global 85 — until it is muted,
+        // and then the machine's standing must name /volume1 without waiting for a sweep.
+        when(forResolvingSshTargets.resolve(mid("NAS"))).thenReturn(UNPINNED);
+        when(forRunningSshCommands.run(any(), anyString()))
+            .thenReturn(new CommandResult(0, NAS_DF, "", false, null));
+        when(configResolver.getDiskMonitorThresholdPercent()).thenReturn(85);
+        when(forPersistingDiskWatches.getAll())
+            .thenReturn(List.of(new DiskWatch(mid("NAS"), "/", false, null)));
+
+        service.getDiskUsage(mid("NAS"));
+
+        var recorded = ArgumentCaptor.forClass(MachineDiskStanding.class);
+        verify(forHoldingMachineDiskStandings).record(recorded.capture());
+        assertThat(recorded.getValue().worstMountPoint()).isEqualTo("/volume1");
+        assertThat(recorded.getValue().watchedFilesystems()).isEqualTo(2);
+        verify(forPublishingEvents).publish(eq("vpn-peers"), eq("disk-standing-changed"), anyString());
+    }
+
+    @Test
+    void diskUsage_withEveryFilesystemMuted_forgetsTheStanding_ratherThanFreezingTheCardsMark() {
+        when(forResolvingSshTargets.resolve(mid("NAS"))).thenReturn(UNPINNED);
+        when(forRunningSshCommands.run(any(), anyString()))
+            .thenReturn(new CommandResult(0, NAS_DF, "", false, null));
+        when(configResolver.getDiskMonitorThresholdPercent()).thenReturn(85);
+        when(forPersistingDiskWatches.getAll()).thenReturn(List.of(
+            new DiskWatch(mid("NAS"), "/", false, null),
+            new DiskWatch(mid("NAS"), "/volume1", false, null),
+            new DiskWatch(mid("NAS"), "/volume2", false, null)));
+        when(forHoldingMachineDiskStandings.forget(mid("NAS")))
+            .thenReturn(Optional.of(MachineDiskStanding.builder()
+                .machineId(mid("NAS")).worstMountPoint("/").worstUsedPercent(88)
+                .worstThresholdPercent(85).breachingFilesystems(1).watchedFilesystems(3)
+                .build()));
+
+        service.getDiskUsage(mid("NAS"));
+
+        verify(forHoldingMachineDiskStandings).forget(mid("NAS"));
+        verify(forHoldingMachineDiskStandings, never()).record(any());
+        verify(forPublishingEvents).publish(eq("vpn-peers"), eq("disk-standing-changed"), anyString());
+    }
+
+    @Test
+    void diskUsage_thatFindsTheDisksExactlyAsTheyWere_doesNotWakeTheFleet() {
+        // The disk pane is re-read on every view. If each view published, every open Explorer would repaint
+        // every card for nothing — the same only-on-a-change discipline the sweep has always kept.
+        when(forResolvingSshTargets.resolve(mid("NAS"))).thenReturn(UNPINNED);
+        when(forRunningSshCommands.run(any(), anyString()))
+            .thenReturn(new CommandResult(0, NAS_DF, "", false, null));
+        when(configResolver.getDiskMonitorThresholdPercent()).thenReturn(85);
+        when(forPersistingDiskWatches.getAll()).thenReturn(List.of());
+        when(forHoldingMachineDiskStandings.record(any()))
+            .thenReturn(Optional.of(MachineDiskStanding.builder()
+                .machineId(mid("NAS")).worstMountPoint("/").worstUsedPercent(88)
+                .worstThresholdPercent(85).breachingFilesystems(1).watchedFilesystems(3)
+                .build()));
+
+        service.getDiskUsage(mid("NAS"));
+
+        verify(forPublishingEvents, never()).publish(any(), any(), any());
+    }
+
+    @Test
+    void diskUsage_thatCouldNotBeRead_leavesTheLastKnownStandingStanding() {
+        // A failed df says nothing about the disks — only that Vaier could not reach them. Erasing the
+        // standing would turn "asleep" into "nothing to watch here", which is the #325 silence again.
+        fleetHas("nas", "10.13.13.9");
+        when(forResolvingSshTargets.resolve(mid("nas"))).thenReturn(UNPINNED);
+        when(forRunningSshCommands.run(any(), anyString()))
+            .thenReturn(new CommandResult(1, "", "ssh: connect to host port 22: No route to host", false, null));
+
+        assertThatThrownBy(() -> service.getDiskUsage(mid("nas")))
+            .isInstanceOf(DiskUnreadableException.class);
+
+        verify(forHoldingMachineDiskStandings, never()).record(any());
+        verify(forHoldingMachineDiskStandings, never()).forget(any());
+        verify(forPublishingEvents, never()).publish(any(), any(), any());
     }
 
     // --- detected machine networks (#333) -------------------------------------------------------------

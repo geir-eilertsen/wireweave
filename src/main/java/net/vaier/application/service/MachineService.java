@@ -38,6 +38,7 @@ import net.vaier.domain.port.ForHoldingMachineDiskStandings;
 import net.vaier.domain.port.ForResolvingVaierServerIdentity;
 import net.vaier.domain.port.ForPersistingDiskWatches;
 import net.vaier.domain.port.ForPersistingLanServers;
+import net.vaier.domain.port.ForPublishingEvents;
 import net.vaier.domain.port.ForReadingMachineNetworks;
 import net.vaier.domain.port.ForResolvingServerLanCidr;
 import net.vaier.domain.port.ForResolvingSshTargets;
@@ -75,6 +76,7 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
     private final ForReadingMachineNetworks forReadingMachineNetworks;
     private final ForCachingMachineNetworks forCachingMachineNetworks;
     private final ForHoldingMachineDiskStandings forHoldingMachineDiskStandings;
+    private final ForPublishingEvents forPublishingEvents;
     private final ConfigResolver configResolver;
 
     public MachineService(ForGettingPeerConfigurations forGettingPeerConfigurations,
@@ -92,6 +94,7 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
                           ForReadingMachineNetworks forReadingMachineNetworks,
                           ForCachingMachineNetworks forCachingMachineNetworks,
                           ForHoldingMachineDiskStandings forHoldingMachineDiskStandings,
+                          ForPublishingEvents forPublishingEvents,
                           ConfigResolver configResolver) {
         this.forGettingPeerConfigurations = forGettingPeerConfigurations;
         this.forGettingVpnClients = forGettingVpnClients;
@@ -108,6 +111,7 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
         this.forReadingMachineNetworks = forReadingMachineNetworks;
         this.forCachingMachineNetworks = forCachingMachineNetworks;
         this.forHoldingMachineDiskStandings = forHoldingMachineDiskStandings;
+        this.forPublishingEvents = forPublishingEvents;
         this.configResolver = configResolver;
     }
 
@@ -127,6 +131,11 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
      * <p>A {@code df} that failed, timed out, or yielded no real filesystem at all throws
      * {@link DiskUnreadableException}. It never returns an empty list: a machine whose disks Vaier could not
      * read is not a machine with nothing to watch.
+     *
+     * <p>A successful reading is also <b>retained</b> as this machine's {@link MachineDiskStanding}, so the
+     * fleet card's disk mark is refreshed by anybody looking at a machine and not only by the five-minute
+     * sweep — which is what a mute, an un-mute or a moved threshold needs, since the pane re-reads the disks
+     * the moment a watch is written. No extra connection: this is the very reading that was taken anyway.
      */
     @Override
     public List<MachineFilesystemUco> getDiskUsage(MachineId machineId) {
@@ -148,6 +157,17 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
 
         int globalThreshold = configResolver.getDiskMonitorThresholdPercent();
         DiskWatches watches = getDiskWatches();
+
+        // Keep what was just read as this machine's standing (the domain owns both the decision and the two
+        // port calls). The reading is already in hand, so no machine is woken for it — and it is what makes
+        // muting a filesystem land on the fleet card immediately: the pane re-reads the disks the moment a
+        // watch is written, and that reading used to be rendered and thrown away, leaving the card naming a
+        // filesystem nobody was judging any more until the next five-minute sweep. Deliberately after the
+        // two DiskUnreadableException throws above: a df that failed says nothing about the disks, so the
+        // last known standing must stand rather than be erased.
+        MachineDiskStanding.retain(machineId, filesystems, watches, globalThreshold,
+            forHoldingMachineDiskStandings, forPublishingEvents);
+
         return filesystems.stream()
             .map(fs -> {
                 // One call, one verdict — the same RemoteDiskUsage.judge the scheduled watcher asks before it
