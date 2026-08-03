@@ -1146,12 +1146,36 @@ class ExplorerShellTest {
         // fleet, so navigating away drops it — otherwise it sits there going quietly stale on a pane the
         // operator never checked, which is precisely the class of lie this whole feature exists to stop
         // telling. The verdicts the check settled are on the container rows themselves and do persist.
+        //
+        // Asserted on applyRoute rather than go(), because go() is no longer where navigation lands. Now that
+        // the location lives in the browser's address, an operator also arrives by Back, Forward, a bookmark
+        // and a pasted link — none of which go() ever sees. applyRoute is the one place every arrival passes
+        // through, so dropping the receipt there is what makes the rule hold for all of them rather than only
+        // for a click inside the page.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function applyRoute(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).as("applying a route drops the receipt, as it already drops the selection")
+            .contains("_updateCheck = null");
+    }
+
+    @Test
+    void everyNavigation_goesThroughTheAddress_soNothingCanSkipWhatArrivingCosts() throws IOException {
+        // The guarantee the test above depends on. go() must not set the location itself: if it did, a click
+        // could land somewhere without the address knowing, and the receipt-drop (plus the archive reads a new
+        // route triggers) would apply to browser-driven arrivals only. go() decides one thing — whether the
+        // archive survives this move — and hands the rest to navigate, which is what writes the address and
+        // calls applyRoute.
         String js = read("explorer-shell.js");
         int from = js.indexOf("function go(");
         assertThat(from).isPositive();
         String body = js.substring(from, js.indexOf("\n    }", from));
-        assertThat(body).as("go() drops the receipt, as it already drops the selection")
-            .contains("_updateCheck = null");
+
+        assertThat(body).as("go() delegates to navigate rather than moving the shell itself")
+            .contains("navigate(path,");
+        assertThat(body).as("go() never assigns S.path — the route applier owns that").doesNotContain("S.path =");
+        assertThat(body).as("go() never assigns S.at either").doesNotContain("S.at =");
     }
 
     @Test
