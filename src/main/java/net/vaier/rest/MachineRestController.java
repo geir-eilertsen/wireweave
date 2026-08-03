@@ -8,6 +8,7 @@ import net.vaier.application.GetBackupRunsUseCase;
 import net.vaier.application.GetBackupServersUseCase;
 import net.vaier.application.GetHostCredentialUseCase;
 import net.vaier.application.GetLanServerReachabilityUseCase;
+import net.vaier.application.GetMachineDiskStandingsUseCase;
 import net.vaier.application.GetMachineDiskUsageUseCase;
 import net.vaier.application.GetMachineNetworksUseCase;
 import net.vaier.application.GetMachinesUseCase;
@@ -56,6 +57,7 @@ public class MachineRestController {
     private final GetHostCredentialUseCase getHostCredentialUseCase;
     private final ClearHostKeyUseCase clearHostKeyUseCase;
     private final GetMachineDiskUsageUseCase getMachineDiskUsageUseCase;
+    private final GetMachineDiskStandingsUseCase getMachineDiskStandingsUseCase;
     private final SetDiskWatchUseCase setDiskWatchUseCase;
     private final GetPublishableServicesUseCase getPublishableServicesUseCase;
     private final GetBackupJobsUseCase getBackupJobsUseCase;
@@ -264,6 +266,53 @@ public class MachineRestController {
                 fs.usedPercent(), fs.thresholdPercent(), fs.watched(), fs.aboveThreshold()))
             .toList();
     }
+
+    /**
+     * <b>The whole fleet's disk pressure, in one request</b> — what the Explorer's fleet listing marks each
+     * machine card with.
+     *
+     * <p>It reaches no machine. The standings are what {@code RemoteDiskWatcher}'s existing 5-minute sweep
+     * already read and now retains in memory, so this is cheap enough to call on page load, which is exactly
+     * what {@code /machines/{machineId}/disk} is not: that one runs {@code df} over SSH, and a fleet-wide
+     * page-load version of it would wake every sleeping machine to answer a question nobody asked. Per-machine
+     * standings would have been N requests for one row of glyphs, so this is deliberately one.
+     *
+     * <p>A machine the sweep has not reached — a cold start, no SSH access, no stored credential — is simply
+     * <b>absent</b> from the list rather than present with a healthy-looking zero. Absence read as health is
+     * how a disk at 89% once sat in silence for weeks, and the client's contract is to draw nothing for a
+     * machine that is not here.
+     *
+     * <p>A literal path segment under {@code /machines}, so it is admin-gated with the rest of them. There is
+     * no {@code GET /machines/{machineId}} mapping for it to be ambiguous with, and Spring prefers a literal
+     * segment over a template regardless.
+     */
+    @GetMapping("/disk-standings")
+    public List<DiskStandingResponse> diskStandings() {
+        return getMachineDiskStandingsUseCase.getMachineDiskStandings().stream()
+            .map(standing -> new DiskStandingResponse(standing.machineId().value(),
+                standing.worstMountPoint(), standing.worstUsedPercent(), standing.worstThresholdPercent(),
+                standing.breachingFilesystems(), standing.watchedFilesystems(), standing.level().name()))
+            .toList();
+    }
+
+    /**
+     * One machine's <b>machine disk standing</b>: the worst thing true about its disks right now.
+     *
+     * <p>{@code level} is the domain's own {@code DiskStandingLevel}, travelling as a name rather than being
+     * recomputed in the browser from the percentage and the threshold — the same reason
+     * {@link FilesystemResponse#aboveThreshold} travels. Two surfaces deciding when a disk is in trouble is
+     * how they come to disagree about it.
+     *
+     * @param machineId            the machine's identity, never its name
+     * @param mountPoint           the mount point of the watched filesystem closest to trouble
+     * @param usedPercent          how full that filesystem is
+     * @param thresholdPercent     what it is judged against — its own threshold, or the global one
+     * @param breachingFilesystems how many of this machine's watched filesystems are over their threshold
+     * @param watchedFilesystems   how many filesystems were read and judged (muted ones are neither)
+     * @param level                {@code CLEAR}, {@code CLOSING} or {@code BREACHING}
+     */
+    record DiskStandingResponse(String machineId, String mountPoint, int usedPercent, int thresholdPercent,
+                                int breachingFilesystems, int watchedFilesystems, String level) {}
 
     /**
      * Watch or mute one filesystem on one machine, optionally at its own threshold (#325).

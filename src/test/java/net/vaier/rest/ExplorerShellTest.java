@@ -756,6 +756,139 @@ class ExplorerShellTest {
         assertThat(body).doesNotContain("filesystems: []");   // never "this machine has no disks"
     }
 
+    // --- disk pressure on the fleet's machine cards ----------------------------------------------------
+    //
+    // The ambience the fleet listing was missing. It is deliberately NOT the /machines/{id}/disk read: that
+    // one runs df over SSH, and doing it for the whole fleet on page load would wake every sleeping machine
+    // to answer a question nobody asked. RemoteDiskWatcher has taken this reading every five minutes for as
+    // long as the disk alerts have existed and thrown it away; the card is fed from that, over the stream
+    // the page already holds open.
+
+    @Test
+    void theFleetsDiskPressure_isReadOnceFromWhatTheSweepAlreadyTook_neverAFleetWideDfOnPageLoad() throws IOException {
+        String js = read("explorer-shell.js");
+        assertThat(js).contains("'/machines/disk-standings'");
+
+        int from = js.indexOf("async function loadDiskStandings(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        // One request for the whole fleet. A per-machine loop here would be the fleet-wide df in disguise.
+        assertThat(body.split("fetch\\(", -1).length - 1).as("exactly one request").isEqualTo(1);
+        assertThat(body).doesNotContain("S.machines").doesNotContain("loadDisk(");
+
+        // Read at boot, alongside the other fleet loads — never from render().
+        int init = js.indexOf("async function init(");
+        assertThat(js.substring(init)).contains("loadDiskStandings()");
+        int render = js.indexOf("\n    function render(");
+        assertThat(js.substring(render, js.indexOf("\n    function", render + 10)))
+            .as("render() must never fetch").doesNotContain("loadDiskStandings(");
+    }
+
+    @Test
+    void aChangedDiskStanding_arrivesOnTheStreamTheFleetPageAlreadyHoldsOpen() throws IOException {
+        // Same shape as ssh-server-presence-changed: the backend publishes on the `vpn-peers` topic only when
+        // a machine's standing actually moved, with an empty body, and the browser re-reads the endpoint.
+        // No second connection, no timer, and nothing pushed every five minutes for disks sitting still.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function watchFleet(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    // The fleet's second stream", from));
+        assertThat(body).contains("'disk-standing-changed'");
+        assertThat(body).contains("loadDiskStandings()");
+        assertThat(js).doesNotContain("setInterval");
+    }
+
+    @Test
+    void aMachineCard_wearsItsDiskPressure_tintedByTheLevelTheDomainDecided() throws IOException {
+        // The mark sits in the same visual vocabulary as the backup mark beside it: the existing `disk` glyph
+        // and the existing .ex-mark tints. The level is the server's own DiskStandingLevel — the browser must
+        // not be a second place deciding when a disk is in trouble.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function machineMarks(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    // --- the tree", from));
+
+        assertThat(body).contains("svg('disk'");
+        assertThat(body).contains("DISK_DOT[");
+        assertThat(body).contains("standing.level");
+        assertThat(body).contains("standing.mountPoint");
+        assertThat(body).contains("standing.usedPercent");
+        // Never recomputed here — no percentage compared against a threshold anywhere in the marks.
+        assertThat(body).doesNotContain("thresholdPercent >").doesNotContain("usedPercent >");
+
+        String css = read("explorer-shell.css");
+        assertThat(css).contains(".ex-mark.is-up").contains(".ex-mark.is-degraded").contains(".ex-mark.is-down");
+    }
+
+    @Test
+    void aMachineTheSweepHasNotReachedYet_drawsNoDiskMarkAtAll_becauseAbsenceIsNotHealth() throws IOException {
+        // The failure this project has already been bitten by: a disk at 89% sat silent for weeks because
+        // missing state read as fine. A cold start (up to five minutes), a machine with no SSH, a machine
+        // with no credential — none of them may draw a green disk. They draw nothing.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function machineMarks(");
+        String body = js.substring(from, js.indexOf("\n    // --- the tree", from));
+
+        assertThat(body).contains("if (!S.at && standing)");
+        // No default, no fallback level, nothing that could turn "not read" into "clear".
+        assertThat(body).doesNotContain("|| 'CLEAR'").doesNotContain("'is-up'");
+
+        int loader = js.indexOf("async function loadDiskStandings(");
+        String loaderBody = js.substring(loader, js.indexOf("\n    }", loader));
+        // A failed read empties the map rather than leaving yesterday's verdicts on the cards.
+        assertThat(loaderBody).contains("new Map()");
+    }
+
+    // --- what a machine card says it is -----------------------------------------------------------------
+
+    @Test
+    void aMachineCard_saysWhatTheMachineIsFor_ratherThanWhereItAnswers() throws IOException {
+        // The note used to read "Ubuntu server · 10.13.13.6". An address is Vaier's own plumbing — an
+        // operator standing on the fleet can do nothing with it, while the description is the one line that
+        // says which machine this is. So the card carries the description, and a machine that has none says
+        // just its type rather than a dangling separator.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function renderFleet(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    // The fleet on a map", from));
+
+        assertThat(body).contains("machineDescription(m)");
+        assertThat(body).as("the address is off the card").doesNotContain("tunnelAddress(");
+
+        // Resolved the one way the edit form already resolves it — the peer record, or the LAN server's.
+        // A second way to find a description is a second way to get it wrong.
+        int resolver = js.indexOf("function machineDescription(");
+        assertThat(resolver).isPositive();
+        String resolverBody = js.substring(resolver, js.indexOf("\n    }", resolver));
+        assertThat(resolverBody).contains("S.peers.get(m.id) || S.lan.get(m.id)");
+        assertThat(resolverBody).as("blank or whitespace-only falls back to the type alone").contains("trim()");
+    }
+
+    @Test
+    void theTunnelAddress_isStillOnTheMachineItself_onlyOffTheCard() throws IOException {
+        // Moved, not hidden. renderMachine still lists it under the machine's details, which is where an
+        // address belongs — this guard exists so nobody "restores" it to the card later.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function renderMachine(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    function", from));
+        assertThat(body).contains("'Tunnel address'").contains("tunnelAddress(m)");
+    }
+
+    @Test
+    void aLongDescription_cannotBlowOutTheFleetGrid() throws IOException {
+        // Cards sit in a repeat(auto-fill, minmax(210px, 1fr)) grid, so an unbounded note would make one card
+        // several rows taller than its neighbours. Clamped to two lines, with the whole description on hover
+        // and the "root" tag still flowing inline beside it.
+        String css = read("explorer-shell.css");
+        int from = css.indexOf(".ex-card-note {");
+        assertThat(from).isPositive();
+        String rule = css.substring(from, css.indexOf("}", from));
+        assertThat(rule).contains("line-clamp");
+        assertThat(rule).contains("overflow: hidden");
+        assertThat(rule).contains("overflow-wrap");
+    }
+
     @Test
     void thePalette_findsContainersAndServices_becauseTheyAreEntriesNow() throws IOException {
         // ⌘K walks childrenOf, so anything that is an entry is findable by its path. Containers and services

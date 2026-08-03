@@ -680,7 +680,16 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
     color: var(--text);
 }
 .ex-card-name.is-word { font-family: inherit; }
-.ex-card-note { font-size: 13px; color: var(--text-dim); }
+/* The note carries the machine's own description now, not its tunnel address — free text, so it has to be
+   bounded. Two lines, clamped, with the whole of it on hover: cards sit in an auto-fill grid, and one card
+   growing to five lines drags a whole row with it. `overflow-wrap: anywhere` keeps a long unbroken word (a
+   path, a hostname) inside the card rather than widening it, and the box still flows the inline "root" tag
+   after the text. */
+.ex-card-note {
+    font-size: 13px; color: var(--text-dim);
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+    overflow: hidden; overflow-wrap: anywhere;
+}
 
 /* What a machine says without being opened: its capabilities, how its last backup went, and whether anything
    on it wants a newer image. This is the ambience the tree used to carry on rows for machines you were not

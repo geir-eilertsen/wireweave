@@ -135,6 +135,9 @@
         containers: new Map(),           // machine identity -> its containers, as Vaier last scraped them
         containersRead: false,           // whether the fleet-wide Docker scrape has landed at least once
         disks: new Map(),                // machine identity -> its filesystems: state, the list, the failure's words
+        diskStandings: new Map(),        // machine identity -> how its disks stand, as the backend's 5-minute sweep
+                                         //   last read them. A machine that is absent has NOT been read — never
+                                         //   a machine whose disks are fine (GET /machines/disk-standings)
         roots: new Map(),                // (machine identity, at) -> where a file tree begins (its SFTP root, #326)
         at: null,                        // the archive being browsed, or null for the present — the live filesystem
         archives: new Map(),             // machine identity -> { state, list, error }: its archives, the rail's stops
@@ -540,6 +543,26 @@
         }
     }
 
+    // The whole fleet's disk pressure, in ONE request — the disk mark on every machine card.
+    //
+    // This is the exception the note above earns rather than breaks. A fleet-wide df on page load would wake
+    // every sleeping machine; this wakes nothing, because it is not a df at all. RemoteDiskWatcher has swept
+    // every reachable machine every five minutes for as long as the disk alerts have existed, judged every
+    // filesystem, and then thrown the readings away — this is that reading, retained in memory and served
+    // back. One request for the fleet, not one per machine, and the backend pushes `disk-standing-changed`
+    // when a machine's standing actually moves.
+    async function loadDiskStandings() {
+        const next = new Map();
+        try {
+            const res = await fetch('/machines/disk-standings', { cache: 'no-store' });
+            if (res.ok) for (const standing of await res.json()) next.set(standing.machineId, standing);
+        } catch (e) {
+            // A read that failed leaves the cards bare rather than showing yesterday's verdicts as though
+            // they were current. Nothing about a disk is better said late than not at all.
+        }
+        S.diskStandings = next;
+    }
+
     // One machine's filesystems, read when they are looked at (#323 slice C, every filesystem since #325).
     // Vaier has computed this on a schedule since the disk alerts shipped and only ever emailed about it;
     // this is the same reading, looked at.
@@ -788,6 +811,13 @@
      * liveness dot with nothing to tell them apart, and a green dot that might mean either is worse than no
      * dot at all. So the backup outcome is the archive glyph, tinted, and the words are on its title.
      */
+    // How a machine's disks stand, tinted. The level is the server's own DiskStandingLevel — the browser is
+    // never a second place deciding when a disk is in trouble, exactly as it never recomputes a filesystem's
+    // aboveThreshold in the disk pane. There is deliberately no entry for "not read": a machine the sweep has
+    // not reached has no standing at all, and a standing that does not exist draws nothing.
+    const DISK_DOT = { CLEAR: 'is-up', CLOSING: 'is-degraded', BREACHING: 'is-down' };
+    const DISK_WORD = { CLEAR: 'well under', CLOSING: 'closing on', BREACHING: 'over' };
+
     function machineMarks(machineId) {
         const marks = el('span', 'ex-card-marks');
         const caps = machineCaps(machineId);
@@ -799,6 +829,32 @@
             b.innerHTML = svg('archive', 'ex-cap-ico');
             b.title = RUN_WORD[job.lastRunStatus] || 'No backup has run yet';
             marks.appendChild(b);
+        }
+
+        // Disk pressure, from the sweep the backend already runs — no machine is asked anything to draw this.
+        //
+        // Absence is not health. A machine the sweep has not reached (a cold start, up to five minutes; no
+        // SSH access; no stored credential) has no standing, and gets NO mark rather than a green one — a
+        // disk at 89% once sat silent for weeks here precisely because missing state read as fine. And like
+        // the update mark, how full a disk is is a fact about now, so it stands down in the past.
+        const standing = S.diskStandings.get(machineId);
+        if (!S.at && standing) {
+            const d = el('span', 'ex-mark ' + DISK_DOT[standing.level]);
+            d.innerHTML = svg('disk', 'ex-cap-ico');
+            // The number is shown only where it is worth an eye. A percentage on every card would be a row
+            // of digits nobody reads; on the two that are filling it is the thing you were looking for.
+            if (standing.level !== 'CLEAR') {
+                const n = el('span', 'ex-mark-n');
+                n.textContent = standing.usedPercent + '%';
+                d.appendChild(n);
+            }
+            d.title = standing.mountPoint + ' is ' + standing.usedPercent + '% full — '
+                + DISK_WORD[standing.level] + ' its ' + standing.thresholdPercent + '% threshold'
+                + (standing.breachingFilesystems > 1
+                    ? ' (' + standing.breachingFilesystems + ' of its ' + standing.watchedFilesystems
+                      + ' watched filesystems are over theirs)'
+                    : '');
+            marks.appendChild(d);
         }
 
         // The registry verdict is about now, and an archive is about then — the same reason updateMark and the
@@ -1110,9 +1166,14 @@
             const grid = document.createElement('div');
             grid.className = 'ex-grid';
             sortedMachines().forEach((m) => {
-                const address = tunnelAddress(m);
+                // The card says what the machine is FOR, not where it answers. A tunnel address is Vaier's own
+                // plumbing: standing on the fleet an operator can do nothing with 10.13.13.6, while the
+                // description is the one line that tells them which machine this is. The address has not been
+                // hidden, only put where an address belongs — renderMachine still lists it under the machine's
+                // details, so this is a move, not a removal. A machine nobody has described says just its type.
+                const purpose = machineDescription(m);
                 const c = card(machineIcon(m.id), m.name, true,
-                    MACHINE_TYPE[m.type] + (address ? ' · ' + address : ''),
+                    MACHINE_TYPE[m.type] + (purpose ? ' · ' + purpose : ''),
                     () => { S.open.add(key(['fleet', m.id])); go(['fleet', m.id]); }, m.id);
                 // What the machine is saying without being opened — capabilities, its last backup's outcome,
                 // containers wanting a newer image. Inserted before the liveness dot so the dot stays the
@@ -1126,6 +1187,9 @@
                 if (m.effectiveUserPrivileged) {
                     c.querySelector('.ex-card-note').appendChild(rootTag(m.effectiveUsername));
                 }
+                // A long description is clamped to two lines so one card cannot stand taller than its
+                // neighbours in the grid; the whole of it is a hover away rather than lost.
+                if (purpose) c.querySelector('.ex-card-note').title = purpose;
                 grid.appendChild(c);
             });
             body.appendChild(grid);
@@ -1311,6 +1375,17 @@
         const peer = S.peers.get(m.id);
         if (peer && peer.tunnelIp) return peer.tunnelIp;
         return m.lanAddress || '';
+    }
+
+    // What a machine is FOR, in the operator's own words. It rides on the peer record — or, for a LAN server,
+    // on its own — and not on /machines, so this is the exact lookup the edit form writes it back through.
+    // One way to resolve a description; a second would be a second way to get it wrong.
+    //
+    // Blank and whitespace-only are the same thing here: a description nobody wrote. Callers say just the
+    // machine's type rather than trailing a separator with nothing after it.
+    function machineDescription(m) {
+        const rec = S.peers.get(m.id) || S.lan.get(m.id) || {};
+        return (rec.description || '').trim();
     }
 
     function renderMachine(pane) {
@@ -7399,7 +7474,7 @@
         // only on a reconnect edge, not on a timer.
         let opened = false;
         events.onopen = () => {
-            if (opened) Promise.all([loadFleet(), loadLanServers()]).then(render);
+            if (opened) Promise.all([loadFleet(), loadLanServers(), loadDiskStandings()]).then(render);
             opened = true;
         };
         // A peer was added, renamed or removed — the tree's own shape changed.
@@ -7432,6 +7507,10 @@
         // reload picks it up; re-rendering greys or lifts the SSH-access checkbox, Open shell, and the
         // Files/Disk tree entries without the operator needing to reload the page.
         events.addEventListener('ssh-server-presence-changed', () => loadFleet().then(render));
+        // A machine's disk standing moved on that same 5-minute sweep — published only on the change, with an
+        // empty body, so this re-reads the one memory-backed endpoint and repaints the marks. A machine that
+        // stopped being readable is not corrected here by guesswork: the sweep says so, or it says nothing.
+        events.addEventListener('disk-standing-changed', () => loadDiskStandings().then(render));
     }
 
     // The fleet's second stream, and the last one. `published-services` is a different topic on a different
@@ -7619,6 +7698,10 @@
         // /machines' runsDocker, not by what the scrape finds. It fills itself in when it lands, which is
         // also what lets ⌘K find a container the operator never went looking for.
         loadContainers();
+        // The fleet's disk pressure, read once here rather than on view — a machine card carries its disk
+        // mark whether or not anyone opens that machine, and render() must never fetch. Not awaited: it is a
+        // memory-backed read that wakes nothing, and no part of the first paint depends on it.
+        loadDiskStandings().then(render);
 
         watchFleet();
         watchServices();

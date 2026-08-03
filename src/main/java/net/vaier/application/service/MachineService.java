@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import net.vaier.application.DetectMachineNetworksUseCase;
 import net.vaier.application.ForgetMachineNetworksUseCase;
 import net.vaier.application.GetDiskWatchesUseCase;
+import net.vaier.application.GetMachineDiskStandingsUseCase;
 import net.vaier.application.GetMachineDiskUsageUseCase;
 import net.vaier.application.GetMachineNetworksUseCase;
 import net.vaier.application.GetMachinesUseCase;
@@ -18,6 +19,7 @@ import net.vaier.domain.DiskWatches;
 import net.vaier.domain.LanAnchor;
 import net.vaier.domain.LanServer;
 import net.vaier.domain.Machine;
+import net.vaier.domain.MachineDiskStanding;
 import net.vaier.domain.MachineId;
 import net.vaier.domain.MachineNetworks;
 import net.vaier.domain.NotFoundException;
@@ -32,6 +34,7 @@ import net.vaier.domain.port.ForGettingPeerConfigurations;
 import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
 import net.vaier.domain.port.ForGettingVpnClients;
 import net.vaier.domain.port.ForPersistingAppConfiguration;
+import net.vaier.domain.port.ForHoldingMachineDiskStandings;
 import net.vaier.domain.port.ForResolvingVaierServerIdentity;
 import net.vaier.domain.port.ForPersistingDiskWatches;
 import net.vaier.domain.port.ForPersistingLanServers;
@@ -53,8 +56,8 @@ import java.util.stream.Collectors;
 @Service
 @Slf4j
 public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase,
-    SetMachineSshAccessUseCase, GetMachineDiskUsageUseCase, GetDiskWatchesUseCase,
-    SetDiskWatchUseCase, DetectMachineNetworksUseCase, GetMachineNetworksUseCase,
+    SetMachineSshAccessUseCase, GetMachineDiskUsageUseCase, GetMachineDiskStandingsUseCase,
+    GetDiskWatchesUseCase, SetDiskWatchUseCase, DetectMachineNetworksUseCase, GetMachineNetworksUseCase,
     ForgetMachineNetworksUseCase {
 
     private final ForGettingPeerConfigurations forGettingPeerConfigurations;
@@ -71,6 +74,7 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
     private final ForPersistingDiskWatches forPersistingDiskWatches;
     private final ForReadingMachineNetworks forReadingMachineNetworks;
     private final ForCachingMachineNetworks forCachingMachineNetworks;
+    private final ForHoldingMachineDiskStandings forHoldingMachineDiskStandings;
     private final ConfigResolver configResolver;
 
     public MachineService(ForGettingPeerConfigurations forGettingPeerConfigurations,
@@ -87,6 +91,7 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
                           ForResolvingVaierServerIdentity forResolvingVaierServerIdentity,
                           ForReadingMachineNetworks forReadingMachineNetworks,
                           ForCachingMachineNetworks forCachingMachineNetworks,
+                          ForHoldingMachineDiskStandings forHoldingMachineDiskStandings,
                           ConfigResolver configResolver) {
         this.forGettingPeerConfigurations = forGettingPeerConfigurations;
         this.forGettingVpnClients = forGettingVpnClients;
@@ -102,6 +107,7 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
         this.forResolvingVaierServerIdentity = forResolvingVaierServerIdentity;
         this.forReadingMachineNetworks = forReadingMachineNetworks;
         this.forCachingMachineNetworks = forCachingMachineNetworks;
+        this.forHoldingMachineDiskStandings = forHoldingMachineDiskStandings;
         this.configResolver = configResolver;
     }
 
@@ -153,6 +159,19 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
                     fs.usedPercent(), verdict.thresholdPercent(), verdict.watched(), verdict.breaching());
             })
             .toList();
+    }
+
+    /**
+     * The fleet's <b>machine disk standing</b>s — the disk half of the Explorer's machine marks.
+     *
+     * <p>A pure read of what {@code RemoteDiskWatcher}'s existing 5-minute sweep already found and now
+     * retains. No SSH, no {@code df}, nothing woken: the reading was taken anyway and used to be thrown
+     * away. A machine the sweep has not reached is simply absent from the list — the caller must draw
+     * nothing for it, because an unread disk is not a disk with room on it.
+     */
+    @Override
+    public List<MachineDiskStanding> getMachineDiskStandings() {
+        return forHoldingMachineDiskStandings.getAll();
     }
 
     /**

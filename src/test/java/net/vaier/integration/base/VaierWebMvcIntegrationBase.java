@@ -250,6 +250,9 @@ public abstract class VaierWebMvcIntegrationBase {
     protected GetMachineDiskUsageUseCase getMachineDiskUsageUseCase;
 
     @MockBean
+    protected GetMachineDiskStandingsUseCase getMachineDiskStandingsUseCase;
+
+    @MockBean
     protected SetDiskWatchUseCase setDiskWatchUseCase;
 
     @MockBean

@@ -14,12 +14,14 @@ import net.vaier.domain.CommandResult;
 import net.vaier.domain.DiskWatch;
 import net.vaier.domain.DiskWatches;
 import net.vaier.domain.Machine;
+import net.vaier.domain.MachineDiskStanding;
 import net.vaier.domain.MachineId;
 import net.vaier.domain.NoSshServerException;
 import net.vaier.domain.RemoteDiskForecastTracker;
 import net.vaier.domain.RemoteDiskPressureTracker;
 import net.vaier.domain.RemoteDiskUsage;
 import net.vaier.domain.SshServerPresence;
+import net.vaier.domain.port.ForHoldingMachineDiskStandings;
 import net.vaier.domain.port.ForPersistingDiskPressureState;
 import net.vaier.domain.port.ForPublishingEvents;
 import net.vaier.domain.port.ForRecordingSshServerPresence;
@@ -28,6 +30,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Clock;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -107,6 +110,7 @@ public class RemoteDiskWatcher {
     private final ForPublishingEvents eventPublisher;
     private final DetectMachineNetworksUseCase detectMachineNetworks;
     private final ForgetMachineNetworksUseCase forgetMachineNetworks;
+    private final ForHoldingMachineDiskStandings diskStandings;
     private final RemoteDiskPressureTracker tracker;
     private final RemoteDiskForecastTracker forecastTracker = new RemoteDiskForecastTracker();
 
@@ -114,6 +118,7 @@ public class RemoteDiskWatcher {
     // here costs no new connection and no timer.
     private static final String SSE_TOPIC = "vpn-peers";
     private static final String SSH_SERVER_PRESENCE_SSE_EVENT = "ssh-server-presence-changed";
+    private static final String DISK_STANDING_SSE_EVENT = "disk-standing-changed";
 
     public RemoteDiskWatcher(GetMachinesUseCase machines,
                              GetHostCredentialUseCase credentials,
@@ -127,7 +132,8 @@ public class RemoteDiskWatcher {
                              ForPublishingEvents eventPublisher,
                              ForPersistingDiskPressureState diskPressureState,
                              DetectMachineNetworksUseCase detectMachineNetworks,
-                             ForgetMachineNetworksUseCase forgetMachineNetworks) {
+                             ForgetMachineNetworksUseCase forgetMachineNetworks,
+                             ForHoldingMachineDiskStandings diskStandings) {
         this.machines = machines;
         this.credentials = credentials;
         this.remoteCommand = remoteCommand;
@@ -140,6 +146,7 @@ public class RemoteDiskWatcher {
         this.eventPublisher = eventPublisher;
         this.detectMachineNetworks = detectMachineNetworks;
         this.forgetMachineNetworks = forgetMachineNetworks;
+        this.diskStandings = diskStandings;
         // The domain owns the port call; this watcher only hands it in. Its state is on disk precisely so
         // that a redeploy — several a day here — no longer wipes what admins have already been told.
         this.tracker = new RemoteDiskPressureTracker(diskPressureState);
@@ -157,6 +164,7 @@ public class RemoteDiskWatcher {
         // it was last seen on — behind forever.
         Set<MachineId> fleet = allMachines.stream().map(Machine::id).collect(Collectors.toSet());
         sshPresenceRecorder.retainOnly(fleet);
+        diskStandings.retainOnly(fleet);
         forgetMachineNetworks.forgetMachineNetworksExcept(fleet);
     }
 
@@ -212,6 +220,7 @@ public class RemoteDiskWatcher {
             for (RemoteDiskUsage filesystem : filesystems) {
                 checkFilesystem(machine, filesystem, watches, globalThreshold);
             }
+            recordDiskStanding(machine, filesystems, watches, globalThreshold);
         } catch (NoSshServerException e) {
             // The one failure narrow enough to record with confidence — see NoSshServerException.
             recordSshServerAbsent(machine);
@@ -220,6 +229,36 @@ public class RemoteDiskWatcher {
             // it could just as easily mean the machine is asleep — so it must never move the tracker either
             // way.
             log.debug("Remote disk check failed for {}: {}", machine.name(), e.getMessage());
+        }
+    }
+
+    /**
+     * <b>Retains what this sweep already read</b> as the machine's {@link MachineDiskStanding}, so the
+     * Explorer's fleet listing can mark every card with its disk pressure without asking a single machine
+     * anything. Until now these readings were judged, emailed about where they warranted it, and then
+     * dropped on the floor — which is why the fleet listing had no disk ambience and could not have grown
+     * any without a fleet-wide {@code df} on page load, waking every sleeping machine to answer a question
+     * nobody asked.
+     *
+     * <p>The watcher decides nothing here either: {@link MachineDiskStanding#of} picks the worst filesystem
+     * and resolves mute through the same {@code RemoteDiskUsage.judge} the alert email above just used, and
+     * {@link MachineDiskStanding#differsFrom} decides whether anything moved. A machine with nothing left to
+     * judge — every filesystem muted — has its standing <em>forgotten</em> rather than left standing on a
+     * card as a verdict nobody is making any more.
+     *
+     * <p>Published only on a change, and on the {@code vpn-peers} stream the fleet page already holds open —
+     * the same shape as the SSH-server presence above, for the same reason: no second connection, no timer,
+     * and no five-minute drumbeat for disks that are sitting still.
+     */
+    private void recordDiskStanding(Machine machine, List<RemoteDiskUsage> filesystems, DiskWatches watches,
+                                    int globalThreshold) {
+        Optional<MachineDiskStanding> standing =
+            MachineDiskStanding.of(machine.id(), filesystems, watches, globalThreshold);
+        boolean changed = standing
+            .map(current -> current.differsFrom(diskStandings.record(current).orElse(null)))
+            .orElseGet(() -> diskStandings.forget(machine.id()).isPresent());
+        if (changed) {
+            eventPublisher.publish(SSE_TOPIC, DISK_STANDING_SSE_EVENT, "");
         }
     }
 

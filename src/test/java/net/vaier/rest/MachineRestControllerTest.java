@@ -8,6 +8,7 @@ import net.vaier.application.GetBackupRunsUseCase;
 import net.vaier.application.GetBackupServersUseCase;
 import net.vaier.application.GetHostCredentialUseCase;
 import net.vaier.application.GetLanServerReachabilityUseCase;
+import net.vaier.application.GetMachineDiskStandingsUseCase;
 import net.vaier.application.GetMachineDiskUsageUseCase;
 import net.vaier.application.GetMachineDiskUsageUseCase.MachineFilesystemUco;
 import net.vaier.application.GetMachineNetworksUseCase;
@@ -25,6 +26,7 @@ import net.vaier.domain.DeviceCategory;
 import net.vaier.domain.HostCredentialView;
 import net.vaier.domain.LanAnchor;
 import net.vaier.domain.Machine;
+import net.vaier.domain.MachineDiskStanding;
 import net.vaier.domain.MachineNetworks;
 import net.vaier.domain.MachineNudge;
 import net.vaier.domain.MachineType;
@@ -68,6 +70,7 @@ class MachineRestControllerTest {
     @Mock GetHostCredentialUseCase getHostCredentialUseCase;
     @Mock ClearHostKeyUseCase clearHostKeyUseCase;
     @Mock GetMachineDiskUsageUseCase getMachineDiskUsageUseCase;
+    @Mock GetMachineDiskStandingsUseCase getMachineDiskStandingsUseCase;
     @Mock SetDiskWatchUseCase setDiskWatchUseCase;
     @Mock GetPublishableServicesUseCase getPublishableServicesUseCase;
     @Mock GetBackupJobsUseCase getBackupJobsUseCase;
@@ -533,6 +536,62 @@ class MachineRestControllerTest {
             filesystem("Colina 27", "/", 91, 80, true, true)));
 
         assertThat(controller.disk(mid("Colina 27").value()).get(0).aboveThreshold()).isTrue();
+    }
+
+    // --- the fleet's disk standings, in one request ---
+
+    @Test
+    void diskStandings_answerForTheWholeFleetInOneRequest_fromWhatTheSweepAlreadyRead() {
+        // One request, memory-backed, nothing woken. Per-machine it would be N requests for the fleet
+        // listing's ambience, and the on-demand /machines/{id}/disk read behind each of them would df every
+        // sleeping machine in the house on page load.
+        when(getMachineDiskStandingsUseCase.getMachineDiskStandings()).thenReturn(List.of(
+            standing(mid("NAS"), "/volume1", 91, 85, 1, 3),
+            standing(mid("Colina 27"), "/", 62, 85, 0, 1)));
+
+        var standings = controller.diskStandings();
+
+        assertThat(standings).extracting(MachineRestController.DiskStandingResponse::machineId,
+                MachineRestController.DiskStandingResponse::mountPoint,
+                MachineRestController.DiskStandingResponse::usedPercent,
+                MachineRestController.DiskStandingResponse::level)
+            .containsExactly(
+                tuple(mid("NAS").value(), "/volume1", 91, "BREACHING"),
+                tuple(mid("Colina 27").value(), "/", 62, "CLEAR"));
+    }
+
+    @Test
+    void diskStandings_carryTheDomainsOwnLevel_theBrowserNeverRecomputesIt() {
+        // 84% against an 85% threshold is not breaching, and it is not "fine" either. The browser must not
+        // be the thing deciding which — DiskStandingLevel is, once, for every surface.
+        when(getMachineDiskStandingsUseCase.getMachineDiskStandings())
+            .thenReturn(List.of(standing(mid("NAS"), "/volume1", 84, 85, 0, 2)));
+
+        assertThat(controller.diskStandings()).singleElement().satisfies(response -> {
+            assertThat(response.level()).isEqualTo("CLOSING");
+            assertThat(response.thresholdPercent()).isEqualTo(85);
+            assertThat(response.breachingFilesystems()).isZero();
+            assertThat(response.watchedFilesystems()).isEqualTo(2);
+        });
+    }
+
+    @Test
+    void diskStandings_beforeTheFirstSweep_areEmpty_soNoCardDrawsAMarkItDidNotEarn() {
+        when(getMachineDiskStandingsUseCase.getMachineDiskStandings()).thenReturn(List.of());
+
+        assertThat(controller.diskStandings()).isEmpty();
+    }
+
+    private static MachineDiskStanding standing(MachineId machineId, String mountPoint, int usedPercent,
+                                                int thresholdPercent, int breaching, int watched) {
+        return MachineDiskStanding.builder()
+            .machineId(machineId)
+            .worstMountPoint(mountPoint)
+            .worstUsedPercent(usedPercent)
+            .worstThresholdPercent(thresholdPercent)
+            .breachingFilesystems(breaching)
+            .watchedFilesystems(watched)
+            .build();
     }
 
     // --- setting one filesystem's watch (#325) ---

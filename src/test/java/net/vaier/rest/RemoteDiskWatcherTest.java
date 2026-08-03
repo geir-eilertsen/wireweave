@@ -5,6 +5,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import net.vaier.adapter.driven.InMemoryDiskPressureStateAdapter;
+import net.vaier.adapter.driven.InMemoryMachineDiskStandingCache;
 import net.vaier.domain.MachineId;
 import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.port.ForPersistingDiskPressureState;
@@ -60,6 +61,10 @@ import static org.mockito.Mockito.when;
 
 class RemoteDiskWatcherTest {
 
+    /** The two SSE events this watcher publishes on the fleet stream, named so assertions can tell them apart. */
+    private static final String SSH_PRESENCE_EVENT = "ssh-server-presence-changed";
+    private static final String DISK_STANDING_EVENT = "disk-standing-changed";
+
     private static MachineId mid(String name) {
         return TestMachineIds.of(name);
     }
@@ -76,6 +81,7 @@ class RemoteDiskWatcherTest {
     ForgetMachineNetworksUseCase forgetMachineNetworks;
     ForPublishingEvents eventPublisher;
     ForPersistingDiskPressureState pressureState;
+    InMemoryMachineDiskStandingCache standings;
     SteppableClock clock;
     RemoteDiskWatcher watcher;
 
@@ -104,6 +110,7 @@ class RemoteDiskWatcherTest {
         forgetMachineNetworks = mock(ForgetMachineNetworksUseCase.class);
         eventPublisher = mock(ForPublishingEvents.class);
         pressureState = new InMemoryDiskPressureStateAdapter();
+        standings = new InMemoryMachineDiskStandingCache();
         clock = new SteppableClock();
         // Nothing configured: every filesystem is watched at the global threshold (#325).
         lenient().when(diskWatches.getDiskWatches()).thenReturn(new DiskWatches(List.of()));
@@ -115,7 +122,7 @@ class RemoteDiskWatcherTest {
     private RemoteDiskWatcher newWatcher() {
         return new RemoteDiskWatcher(machines, credentials, runner, notifier, forecastNotifier,
             diskWatches, configResolver, clock, sshPresenceRecorder, eventPublisher, pressureState,
-            detectMachineNetworks, forgetMachineNetworks);
+            detectMachineNetworks, forgetMachineNetworks, standings);
     }
 
     /** An SSH-capable server-type machine (effectiveSshAccess() true by default). */
@@ -572,7 +579,7 @@ class RemoteDiskWatcherTest {
 
         watcher.checkRemoteDiskUsage();
 
-        verify(eventPublisher).publish(eq("vpn-peers"), anyString(), anyString());
+        verify(eventPublisher).publish(eq("vpn-peers"), eq(SSH_PRESENCE_EVENT), anyString());
     }
 
     @Test
@@ -585,7 +592,7 @@ class RemoteDiskWatcherTest {
 
         watcher.checkRemoteDiskUsage();
 
-        verify(eventPublisher, never()).publish(any(), any(), any());
+        verify(eventPublisher, never()).publish(any(), eq(SSH_PRESENCE_EVENT), any());
     }
 
     @Test
@@ -612,7 +619,7 @@ class RemoteDiskWatcherTest {
 
         watcher.checkRemoteDiskUsage();
 
-        verify(eventPublisher).publish(eq("vpn-peers"), anyString(), anyString());
+        verify(eventPublisher).publish(eq("vpn-peers"), eq(SSH_PRESENCE_EVENT), anyString());
     }
 
     @Test
@@ -625,7 +632,7 @@ class RemoteDiskWatcherTest {
 
         watcher.checkRemoteDiskUsage();
 
-        verify(eventPublisher, never()).publish(any(), any(), any());
+        verify(eventPublisher, never()).publish(any(), eq(SSH_PRESENCE_EVENT), any());
     }
 
     @Test
@@ -640,6 +647,109 @@ class RemoteDiskWatcherTest {
 
         verify(sshPresenceRecorder, never()).record(any(), any());
         verify(eventPublisher, never()).publish(any(), any(), any());
+    }
+
+    // --- the fleet's disk standings, retained from the sweep already taken -----------------------------
+    //
+    // The sweep has judged every filesystem on every reachable machine for as long as the disk alerts have
+    // existed, and then dropped the readings on the floor. These pin that it keeps them — and that it keeps
+    // them without a second SSH round trip, without speaking every five minutes, and without ever inventing
+    // a standing for a machine it could not read.
+
+    @Test
+    void theSweep_retainsWhatItAlreadyRead_soAFleetListingNeverHasToAskAMachineAnything() {
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("kitchen")));
+        hasCredential("kitchen");
+        when(runner.run(eq(mid("kitchen")), any())).thenReturn(df(40));
+
+        watcher.checkRemoteDiskUsage();
+
+        assertThat(standings.getAll()).singleElement().satisfies(standing -> {
+            assertThat(standing.machineId()).isEqualTo(mid("kitchen"));
+            assertThat(standing.worstMountPoint()).isEqualTo("/");
+            assertThat(standing.worstUsedPercent()).isEqualTo(40);
+            assertThat(standing.worstThresholdPercent()).isEqualTo(85);
+            assertThat(standing.breachingFilesystems()).isZero();
+            assertThat(standing.watchedFilesystems()).isEqualTo(1);
+        });
+        // One df, for everything this sweep learns. A standing that cost a second command would be the very
+        // thing the fleet-wide-df-on-page-load note exists to refuse.
+        verify(runner, times(1)).run(eq(mid("kitchen")), anyString());
+    }
+
+    @Test
+    void aStandingThatMoved_wakesTheExplorerOnTheStreamItAlreadyHolds() {
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("kitchen")));
+        hasCredential("kitchen");
+        when(runner.run(eq(mid("kitchen")), any())).thenReturn(df(40), df(91));
+
+        watcher.checkRemoteDiskUsage();
+        watcher.checkRemoteDiskUsage();
+
+        verify(eventPublisher, times(2)).publish(eq("vpn-peers"), eq(DISK_STANDING_EVENT), anyString());
+        assertThat(standings.getAll()).singleElement()
+            .satisfies(standing -> assertThat(standing.breachingFilesystems()).isEqualTo(1));
+    }
+
+    @Test
+    void aStandingThatDidNotMove_wakesNobody_soThisIsNotAFiveMinuteDrumbeat() {
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("kitchen")));
+        hasCredential("kitchen");
+        when(runner.run(eq(mid("kitchen")), any())).thenReturn(df(40));
+
+        watcher.checkRemoteDiskUsage();
+        watcher.checkRemoteDiskUsage();
+        watcher.checkRemoteDiskUsage();
+
+        verify(eventPublisher, times(1)).publish(eq("vpn-peers"), eq(DISK_STANDING_EVENT), anyString());
+    }
+
+    @Test
+    void aDiskItCouldNotRead_leavesNoStanding_becauseAbsenceIsNotHealth() {
+        // A df that failed, a machine asleep, a machine with no credential — every one of them must leave
+        // the card blank rather than green. This fleet has already been bitten once by absence reading as
+        // fine.
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("kitchen")));
+        hasCredential("kitchen");
+        when(runner.run(eq(mid("kitchen")), any()))
+            .thenReturn(new CommandResult(127, "", "df: not found", false, "SHA256:abc"));
+
+        watcher.checkRemoteDiskUsage();
+
+        assertThat(standings.getAll()).isEmpty();
+        verify(eventPublisher, never()).publish(any(), eq(DISK_STANDING_EVENT), any());
+    }
+
+    @Test
+    void aMachineWithNothingLeftToJudge_hasItsStandingForgotten_notLeftStandingOnTheCard() {
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("kitchen")));
+        hasCredential("kitchen");
+        when(runner.run(eq(mid("kitchen")), any())).thenReturn(df(91));
+        watcher.checkRemoteDiskUsage();
+        assertThat(standings.getAll()).hasSize(1);
+
+        // The operator mutes the only filesystem there is. Vaier is no longer judging anything on this
+        // machine, so it must stop saying anything about it.
+        when(diskWatches.getDiskWatches())
+            .thenReturn(new DiskWatches(List.of(new DiskWatch(mid("kitchen"), "/", false, null))));
+
+        watcher.checkRemoteDiskUsage();
+
+        assertThat(standings.getAll()).isEmpty();
+        verify(eventPublisher, times(2)).publish(eq("vpn-peers"), eq(DISK_STANDING_EVENT), anyString());
+    }
+
+    @Test
+    void aMachineThatLeftTheFleet_doesNotKeepItsStanding() {
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("kitchen")));
+        hasCredential("kitchen");
+        when(runner.run(eq(mid("kitchen")), any())).thenReturn(df(91));
+        watcher.checkRemoteDiskUsage();
+
+        when(machines.getAllMachines()).thenReturn(List.of());
+        watcher.checkRemoteDiskUsage();
+
+        assertThat(standings.getAll()).isEmpty();
     }
 
     @Test

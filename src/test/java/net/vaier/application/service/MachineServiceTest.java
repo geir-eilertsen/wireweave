@@ -8,6 +8,7 @@ import net.vaier.domain.DiskUnreadableException;
 import net.vaier.domain.DiskWatch;
 import net.vaier.domain.LanServer;
 import net.vaier.domain.Machine;
+import net.vaier.domain.MachineDiskStanding;
 import net.vaier.domain.MachineId;
 import net.vaier.domain.MachineNetworks;
 import net.vaier.domain.MachineType;
@@ -20,6 +21,7 @@ import net.vaier.domain.port.ForGettingPeerConfigurations;
 import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
 import net.vaier.domain.port.ForCachingMachineNetworks;
 import net.vaier.domain.port.ForGettingVpnClients;
+import net.vaier.domain.port.ForHoldingMachineDiskStandings;
 import net.vaier.domain.port.ForReadingMachineNetworks;
 import net.vaier.domain.port.ForPersistingAppConfiguration;
 import net.vaier.domain.port.ForPersistingDiskWatches;
@@ -81,6 +83,7 @@ class MachineServiceTest {
     @Mock ForResolvingVaierServerIdentity forResolvingVaierServerIdentity;
     @Mock ForReadingMachineNetworks forReadingMachineNetworks;
     @Mock ForCachingMachineNetworks forCachingMachineNetworks;
+    @Mock ForHoldingMachineDiskStandings forHoldingMachineDiskStandings;
 
     MachineService service;
 
@@ -96,7 +99,7 @@ class MachineServiceTest {
             forPersistingAppConfiguration, forResolvingSshTargets, forRunningSshCommands,
             forTrackingHostKeys, forPersistingDiskWatches,
             forResolvingVaierServerIdentity, forReadingMachineNetworks, forCachingMachineNetworks,
-            configResolver);
+            forHoldingMachineDiskStandings, configResolver);
         lenient().when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of());
         lenient().when(forGettingVpnClients.getClients()).thenReturn(List.of());
         lenient().when(forGettingLanServers.getAll()).thenReturn(List.of());
@@ -565,6 +568,29 @@ class MachineServiceTest {
 
         assertThat(watches.forFilesystem(mid("NAS"), "/").watched()).isFalse();
         assertThat(watches.forFilesystem(mid("NAS"), "/volume1").watched()).isTrue();
+    }
+
+    // --- the fleet's disk standings -------------------------------------------------------------------
+
+    @Test
+    void machineDiskStandings_areServedFromWhatTheSweepAlreadyRead_withoutTouchingAMachine() {
+        // The whole point: the fleet listing asks one memory-backed question and no machine is woken. If this
+        // ever grew an SSH round trip, opening the Explorer would df every sleeping host in the house.
+        MachineDiskStanding nas = MachineDiskStanding.builder()
+            .machineId(mid("NAS")).worstMountPoint("/volume1").worstUsedPercent(91)
+            .worstThresholdPercent(85).breachingFilesystems(1).watchedFilesystems(3)
+            .build();
+        when(forHoldingMachineDiskStandings.getAll()).thenReturn(List.of(nas));
+
+        assertThat(service.getMachineDiskStandings()).containsExactly(nas);
+        verify(forRunningSshCommands, never()).run(any(), anyString());
+    }
+
+    @Test
+    void machineDiskStandings_beforeTheFirstSweep_areEmpty_neverAFleetOfHealthyDisks() {
+        when(forHoldingMachineDiskStandings.getAll()).thenReturn(List.of());
+
+        assertThat(service.getMachineDiskStandings()).isEmpty();
     }
 
     // --- detected machine networks (#333) -------------------------------------------------------------
