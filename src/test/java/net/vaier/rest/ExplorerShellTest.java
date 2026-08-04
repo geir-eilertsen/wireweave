@@ -1517,6 +1517,21 @@ class ExplorerShellTest {
     }
 
     @Test
+    void ignoringOrPublishingAService_reopensTheMachinesNudges() throws IOException {
+        // The publish nudge counts what is still unanswered on the machine, so dismissing a port answers it —
+        // and the count on the card is stale the instant the operator clicks Ignore. Nudges are read once per
+        // machine, so without dropping the cached answer here the card keeps asking about a service the
+        // operator just said no to, for the rest of the session. Same reflex as the settled-run push.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("async function reloadServices(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }\n", from));
+
+        assertThat(body).contains("S.nudges.delete(machineId)");
+        assertThat(js).as("still no polling anywhere in the shell").doesNotContain("setInterval(");
+    }
+
+    @Test
     void anIncompleteRun_readsAsTroubleAndPointsAtTheSettingThatWouldFixIt() throws IOException {
         // INCOMPLETE is a real outcome now (the archive exists but is missing files borg could not read), so
         // the shell must colour it like the trouble it is and say what to do — not leave it as an unstyled

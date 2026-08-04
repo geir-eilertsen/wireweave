@@ -53,6 +53,20 @@ public record PublishableService(
     }
 
     /**
+     * Whether this service is still an <em>open question</em> on the machine with {@code candidate}'s
+     * identity: it sits there, and the operator has not already dismissed it.
+     *
+     * <p>Ownership alone is not enough, which is what the publish nudge used to ask. The discovered feed
+     * deliberately keeps ignored services in it — the Explorer folds them behind "Show ignored" rather than
+     * dropping them, so dismissing stays undoable — and a count taken straight off that feed therefore
+     * counted the operator's own "no" as a reason to ask again. Ignoring a service <b>is</b> the answer to
+     * this nudge; re-asking it is how a nudge rail teaches you to stop reading it.
+     */
+    public boolean awaitsPublishingOn(MachineId candidate) {
+        return !ignored && belongsTo(candidate);
+    }
+
+    /**
      * The subdomain the publish modal pre-fills. Vaier-server services get the container name
      * alone; peer- and LAN-hosted services get {@code containerName.peerId} so multiple peers
      * publishing the same container don't collide on one DNS label.

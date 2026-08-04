@@ -394,6 +394,51 @@ class MachineRestControllerTest {
     }
 
     @Test
+    void nudges_doesNotCountServicesTheOperatorHasIgnored() {
+        // The publishable feed carries dismissed services too — the Explorer folds them behind "Show
+        // ignored" rather than dropping them, so the operator can undo. Counting them into the nudge asks
+        // a question that was already answered: the Vaier server kept offering to publish mosquitto's 1883
+        // and borg's 8022 long after they were dismissed.
+        String freshHandshake = String.valueOf(System.currentTimeMillis() / 1000);
+        Machine alice = new Machine(mid("alice"), "alice", MachineType.UBUNTU_SERVER, "pk", "10.13.13.2/32",
+            "1.2.3.4", "51820", freshHandshake, "1", "1", null, null, true, null, DeviceCategory.SERVER, null);
+        when(getMachinesUseCase.getAllMachines()).thenReturn(List.of(alice));
+        when(getPublishableServicesUseCase.getPublishableServices()).thenReturn(List.of(
+            new PublishableService(PublishableSource.PEER, mid("alice").value(), "alice",
+                "10.13.13.2", "mosquitto-broker", 1883, null, true),
+            new PublishableService(PublishableSource.PEER, mid("alice").value(), "alice",
+                "10.13.13.2", "grafana", 3000, null, false)));
+        when(getBackupJobsUseCase.getBackupJobs()).thenReturn(List.of());
+        when(getBackupServersUseCase.getBackupServers()).thenReturn(List.of(
+            new BackupServer("nas-borg", mid("nas"), "192.168.3.50", 8022, "borg", null, "/vol", true)));
+
+        var response = controller.nudges(mid("alice").value());
+
+        assertThat(response).extracting(MachineRestController.NudgeResponse::kind)
+            .contains(MachineNudge.Kind.PUBLISH.name());
+        assertThat(response.get(0).title()).isEqualTo("Publish 1 service");
+    }
+
+    @Test
+    void nudges_everyServiceOnTheMachineIgnored_raisesNoPublishNudge() {
+        String freshHandshake = String.valueOf(System.currentTimeMillis() / 1000);
+        Machine alice = new Machine(mid("alice"), "alice", MachineType.UBUNTU_SERVER, "pk", "10.13.13.2/32",
+            "1.2.3.4", "51820", freshHandshake, "1", "1", null, null, true, null, DeviceCategory.SERVER, null);
+        when(getMachinesUseCase.getAllMachines()).thenReturn(List.of(alice));
+        when(getPublishableServicesUseCase.getPublishableServices()).thenReturn(List.of(
+            new PublishableService(PublishableSource.PEER, mid("alice").value(), "alice",
+                "10.13.13.2", "mosquitto-broker", 1883, null, true)));
+        when(getBackupJobsUseCase.getBackupJobs()).thenReturn(List.of());
+        when(getBackupServersUseCase.getBackupServers()).thenReturn(List.of(
+            new BackupServer("nas-borg", mid("nas"), "192.168.3.50", 8022, "borg", null, "/vol", true)));
+
+        var response = controller.nudges(mid("alice").value());
+
+        assertThat(response).extracting(MachineRestController.NudgeResponse::kind)
+            .doesNotContain(MachineNudge.Kind.PUBLISH.name());
+    }
+
+    @Test
     void nudges_backUpAsRoot_isRaisedFromTheMachinesLastRun() {
         // #334: the signal the nudge rests on is a run, so the controller has to gather runs too. It still
         // decides nothing — it hands the job and the run to MachineNudges and renders what comes back.

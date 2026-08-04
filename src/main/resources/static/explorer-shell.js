@@ -3296,6 +3296,11 @@
 
     async function reloadServices(machineId) {
         await loadServices();
+        // Publishing a port answers the publish nudge, and so does dismissing one — the nudge counts what is
+        // still unanswered on the machine. Nudges are read once per machine, so without dropping the cached
+        // answer the card would go on offering a service the operator just ignored until the pane was left
+        // and reopened. No polling: the operator's own action is the signal, exactly as with run-settled.
+        S.nudges.delete(machineId);
         go(['fleet', machineId, 'services']);   // stay on the entry; it repaints from the fresh data
     }
 

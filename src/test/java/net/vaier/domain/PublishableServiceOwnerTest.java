@@ -8,8 +8,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 class PublishableServiceOwnerTest {
 
     private static PublishableService on(MachineId machineId) {
+        return on(machineId, false);
+    }
+
+    private static PublishableService on(MachineId machineId, boolean ignored) {
         return new PublishableService(PublishableSource.PEER, machineId == null ? null : machineId.value(),
-            "alice", "10.13.13.2", "grafana", 3000, null, false);
+            "alice", "10.13.13.2", "grafana", 3000, null, ignored);
     }
 
     @Test
@@ -35,5 +39,28 @@ class PublishableServiceOwnerTest {
     @Test
     void nothingBelongsToANullMachine() {
         assertThat(on(MachineId.generate()).belongsTo(null)).isFalse();
+    }
+
+    // --- awaiting publishing: ownership AND an unanswered question ---
+
+    @Test
+    void anUnignoredServiceOnTheMachine_awaitsPublishing() {
+        MachineId alice = MachineId.generate();
+
+        assertThat(on(alice).awaitsPublishingOn(alice)).isTrue();
+    }
+
+    @Test
+    void anIgnoredService_awaitsNothing() {
+        // Ignoring a service is the operator answering "no, not this one". A nudge is a question, and a
+        // question already answered must not be asked again — otherwise the whole nudge rail becomes noise.
+        MachineId alice = MachineId.generate();
+
+        assertThat(on(alice, true).awaitsPublishingOn(alice)).isFalse();
+    }
+
+    @Test
+    void aServiceOnADifferentMachine_awaitsNothingHere() {
+        assertThat(on(MachineId.generate()).awaitsPublishingOn(MachineId.generate())).isFalse();
     }
 }

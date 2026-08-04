@@ -3111,6 +3111,18 @@ contract, not an extension of this one. `docs/ADVANCED.md`'s description of the 
 
 ---
 
+### 6.39 A nudge stops asking a question the operator has answered ✅ (implemented 2026-08-04)
+
+**What the operator saw.** The Vaier server's pane kept offering *"Publish 2 services"* — and the two were `mosquitto-broker:1883` and `borg-borg-1:8022`, both **ignored services** the operator had already dismissed. Ignoring is how you say *no, not this one*; a nudge that counts your own "no" as a reason to ask again is the thing that teaches an operator to stop reading the nudge rail, and the rail is only worth having while it is read.
+
+**The count was taken off a feed that deliberately keeps the dismissed ones in it.** `getPublishableServices` returns every discovered candidate with an `ignored` flag rather than dropping the dismissed ones, because dismissing has to stay undoable from the same screen that did it — the Explorer folds them behind **Show ignored**. The nudge's count filtered that feed by ownership alone (`belongsTo`), so it counted exactly what the list below it was hiding. The two surfaces disagreed about the same machine, in the same pane.
+
+**The decision moved onto the entity.** `PublishableService.awaitsPublishingOn(MachineId)` answers *is this still an open question on this machine?* — it sits there **and** has not been dismissed — and the driving edge only counts what the domain judged. Ownership stays a separate predicate; joining the two in the controller would have put the rule in a driving adapter, which is where it was not.
+
+**One nudge, one cached answer, invalidated by the action that changes it.** Nudges are read once per machine and never polled ([[feedback_frontend_never_polls]]), so the card would have kept its stale count for the rest of the session even with the backend right — the operator would click **Ignore**, watch the row fold away, and see the card above it still asking. `reloadServices` now drops the machine's cached nudges, exactly as the settled-run push does: the operator's own action is the signal.
+
+---
+
 ## 7. End-to-End Workflows
 
 ### 7.1 New service on a peer (primary workflow)

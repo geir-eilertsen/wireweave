@@ -175,13 +175,17 @@ public class MachineRestController {
             .findFirst()
             .orElseThrow(() -> new NotFoundException("Machine not found: " + machineId));
 
-        // Which discovered services sit on THIS machine. It used to be resolved by name — the owner's
-        // name matched against the machine's — which needed a Vaier-server name and an
+        // Which discovered services sit on THIS machine and are still unanswered. It used to be resolved by
+        // name — the owner's name matched against the machine's — which needed a Vaier-server name and an
         // address-to-name map just to do the matching, and answered "a machine called that" where the
         // question was "this machine". The feed carries the owner's identity now, so the domain answers
         // it directly and the two-map scaffolding is gone with the last Machine.hasSameName call.
+        //
+        // It asks awaitsPublishingOn, not belongsTo: the feed keeps ignored services in it so the Explorer
+        // can offer them back under "Show ignored", and counting those re-asked a question the operator had
+        // already answered. The domain decides what "still awaiting" means; the edge only counts.
         int publishableCount = (int) getPublishableServicesUseCase.getPublishableServices().stream()
-            .filter(s -> s.belongsTo(target.id()))
+            .filter(s -> s.awaitsPublishingOn(target.id()))
             .count();
         boolean hasCredential = hasStoredCredential(target.id());
         // The machine's job, not a boolean derived from it: "already protected" is one reading of a job, and
