@@ -19,7 +19,7 @@ import java.util.Optional;
  *                        registry, which only the update sweep asks.
  * @param composeCoordinates how Docker Compose started this container, read from its own labels. Null when
  *                        it carries no compose labels Vaier will act on — a plain {@code docker run}.
- * @param upgradeEligibility whether Vaier may offer to upgrade this container's image, and why not when it
+ * @param updateEligibility whether Vaier may offer to update this container's image, and why not when it
  *                        may not. Null on a container nobody has judged yet: the verdict needs to know which
  *                        machine the container runs on, which only the scrape of that machine knows. Null is
  *                        read as "no action offered" — never as permission.
@@ -36,7 +36,7 @@ public record DockerService(
         String imageDigest,
         UpdateAvailability updateAvailable,
         ComposeCoordinates composeCoordinates,
-        UpgradeEligibility upgradeEligibility
+        ContainerUpdateEligibility updateEligibility
 ) {
 
     /**
@@ -69,11 +69,11 @@ public record DockerService(
     }
 
     /**
-     * This container carrying Vaier's verdict on whether its image may be upgraded. Everything the host
+     * This container carrying Vaier's verdict on whether its image may be updated. Everything the host
      * reported, and every other verdict, stays as it was.
      */
-    public DockerService withUpgradeEligibility(UpgradeEligibility eligibility) {
-        return toBuilder().upgradeEligibility(eligibility).build();
+    public DockerService withUpdateEligibility(ContainerUpdateEligibility eligibility) {
+        return toBuilder().updateEligibility(eligibility).build();
     }
 
     /**

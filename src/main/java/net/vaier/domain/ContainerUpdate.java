@@ -10,14 +10,14 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * One container's <b>upgrade</b>: recreating it on the newer image its registry now serves, from the
+ * One container's <b>update</b>: recreating it on the newer image its registry now serves, from the
  * {@link ComposeCoordinates compose coordinates} it carries about itself. Everything the act decides lives
  * here — whether it may happen at all, what compose is asked to do, how long each run may take, and how the
  * result reads.
  *
  * <p><b>Two runs, not one.</b> {@code pull} and {@code up -d} are issued separately so the outcome can tell
  * a failed pull from a failed recreate. A recreate that fails leaves the old container running, which is the
- * good outcome of a bad upgrade, and Vaier says so instead of reporting a generic error.
+ * good outcome of a bad update, and Vaier says so instead of reporting a generic error.
  *
  * <p><b>Over SSH, never through the Docker API.</b> Recreating a container through the daemon would mean
  * granting create and remove on the socket proxy whose whole job is to be narrow, and rebuilding a container
@@ -30,13 +30,13 @@ import java.util.Optional;
  * syntax, and this builds only quoted words on top of that. A value that still carries a single quote — which
  * can only mean coordinates built without that validation — is refused outright rather than emitted.
  */
-public record ContainerUpgrade(MachineId machineId, String containerName, String image,
-                               ComposeCoordinates coordinates) {
+public record ContainerUpdate(MachineId machineId, String containerName, String image,
+                              ComposeCoordinates coordinates) {
 
     /**
      * How long a {@code compose pull} may take. Minutes, not seconds: an image is hundreds of megabytes and
      * the fleet's peers are on home connections. The 20-second default every other remote command runs under
-     * would abandon an ordinary pull mid-flight and report a timeout for a working upgrade.
+     * would abandon an ordinary pull mid-flight and report a timeout for a working update.
      */
     public static final Duration PULL_TIMEOUT = Duration.ofMinutes(15);
 
@@ -44,25 +44,25 @@ public record ContainerUpgrade(MachineId machineId, String containerName, String
     public static final Duration RECREATE_TIMEOUT = Duration.ofMinutes(5);
 
     /**
-     * Where a settled upgrade is announced: the fleet stream the Explorer already holds open for peer
+     * Where a settled update is announced: the fleet stream the Explorer already holds open for peer
      * liveness and disk standings. A second connection for one event would be a second thing to keep alive.
      */
     private static final String SSE_TOPIC = "vpn-peers";
-    private static final String SSE_EVENT = "container-upgrade-settled";
+    private static final String SSE_EVENT = "container-update-settled";
 
     /**
-     * The upgrade of the container named {@code containerName} among {@code containersOnMachine} — the
+     * The update of the container named {@code containerName} among {@code containersOnMachine} — the
      * containers scraped from the machine {@code machineId}.
      *
      * @throws NotFoundException when that machine has no container of that name
-     * @throws ConflictException when it has one Vaier will not upgrade, carrying the plain reason
+     * @throws ConflictException when it has one Vaier will not update, carrying the plain reason
      */
-    public static ContainerUpgrade of(MachineId machineId, String containerName,
-                                      List<DockerService> containersOnMachine) {
+    public static ContainerUpdate of(MachineId machineId, String containerName,
+                                     List<DockerService> containersOnMachine) {
         // A request with no container in it is unreadable, not a container that is missing: the two answers
         // send an operator looking in different places.
         if (containerName == null || containerName.isBlank()) {
-            throw new IllegalArgumentException("An upgrade must name the container to upgrade");
+            throw new IllegalArgumentException("An update must name the container to update");
         }
         DockerService container = containersOnMachine.stream()
             .filter(c -> containerName.equals(c.containerName()))
@@ -70,28 +70,28 @@ public record ContainerUpgrade(MachineId machineId, String containerName, String
             .orElseThrow(() -> new NotFoundException(
                 "No container named " + containerName + " on that machine"));
 
-        UpgradeEligibility verdict = verdictFor(container);
-        if (!verdict.upgradable()) {
+        ContainerUpdateEligibility verdict = verdictFor(container);
+        if (!verdict.updatable()) {
             throw new ConflictException(verdict.refusal(containerName));
         }
         // The image is taken from the container the scrape reported, never re-derived from anywhere else:
-        // it is the key half of the ScopedImage whose verdict an upgrade retires, and a re-derived one
+        // it is the key half of the ScopedImage whose verdict an update retires, and a re-derived one
         // that spelled the tag differently would retire nothing while looking as if it had.
-        return new ContainerUpgrade(machineId, containerName, container.image(),
+        return new ContainerUpdate(machineId, containerName, container.image(),
             container.composeCoordinates());
     }
 
     /**
      * The verdict this container carries, read conservatively. A container nobody has judged reads as
-     * refused — <b>no verdict is never permission</b> — and so does one judged upgradable that turns out to
+     * refused — <b>no verdict is never permission</b> — and so does one judged updatable that turns out to
      * carry no coordinates, because there is then nothing to recreate it from. Both come out as
-     * {@link UpgradeEligibility#NOT_COMPOSE_MANAGED}: Vaier holds no compose coordinates for the container,
+     * {@link ContainerUpdateEligibility#NOT_COMPOSE_MANAGED}: Vaier holds no compose coordinates for the container,
      * which is exactly what that verdict says.
      */
-    private static UpgradeEligibility verdictFor(DockerService container) {
-        UpgradeEligibility verdict = container.upgradeEligibility();
-        if (verdict == null || (verdict.upgradable() && container.composeCoordinates() == null)) {
-            return UpgradeEligibility.NOT_COMPOSE_MANAGED;
+    private static ContainerUpdateEligibility verdictFor(DockerService container) {
+        ContainerUpdateEligibility verdict = container.updateEligibility();
+        if (verdict == null || (verdict.updatable() && container.composeCoordinates() == null)) {
+            return ContainerUpdateEligibility.NOT_COMPOSE_MANAGED;
         }
         return verdict;
     }
@@ -138,11 +138,11 @@ public record ContainerUpgrade(MachineId machineId, String containerName, String
     }
 
     /**
-     * Carry the upgrade out on {@code target} and rule how it ended — <b>always</b>, including when the
-     * attempt itself failed. An SSH port that throws is a way for an upgrade to end like any other, so it
-     * is read here into an {@link UpgradeOutcome#UNREACHABLE} settlement rather than escaping to whoever
+     * Carry the update out on {@code target} and rule how it ended — <b>always</b>, including when the
+     * attempt itself failed. An SSH port that throws is a way for an update to end like any other, so it
+     * is read here into an {@link ContainerUpdateOutcome#UNREACHABLE} settlement rather than escaping to whoever
      * orchestrated the run and being classified there. This is the only way in: nothing a caller can reach
-     * throws, so an accepted upgrade cannot fail to settle.
+     * throws, so an accepted update cannot fail to settle.
      *
      * <p>{@code Exception} is caught deliberately widely. The anticipated failures are the domain SSH
      * exceptions, but the guarantee this method makes is about the ones nobody anticipated: a settled event
@@ -161,23 +161,23 @@ public record ContainerUpgrade(MachineId machineId, String containerName, String
     }
 
     /**
-     * How an upgrade ended once it was carried out: its {@link UpgradeOutcome}, and — whenever it did not
+     * How an update ended once it was carried out: its {@link ContainerUpdateOutcome}, and — whenever it did not
      * end well — <b>the host's own words about why</b>, kept so the reason reaches both the operator and
      * Vaier's log without the domain doing the logging.
      *
      * <p>Carrying the words was not the original rule. A non-zero exit was ruled "an answer, not a failed
      * attempt" and given no diagnostic at all, which read as principled and was wrong in practice: compose
-     * writes its reason to stderr and Vaier captured it and threw it away, so a real failed upgrade said
+     * writes its reason to stderr and Vaier captured it and threw it away, so a real failed update said
      * {@code PULL_FAILED} and nothing else, in the browser and in the log alike. The operator could not tell
      * a docker-group problem from an unreadable compose file from a registry they cannot reach. <b>Compose's
      * stderr is the answer</b>, and #352 asks for the truth on failure.
      *
      * @param outcome    what the operator is told, and what the settled event carries
      * @param diagnostic why it ended that way, in the host's words — or null when there is nothing to
-     *                   explain (an upgrade that worked) or nothing was said (a command that failed
+     *                   explain (an update that worked) or nothing was said (a command that failed
      *                   silently). Already reduced to one bounded line: see {@link #summarise}.
      */
-    public record Settlement(UpgradeOutcome outcome, String diagnostic) {
+    public record Settlement(ContainerUpdateOutcome outcome, String diagnostic) {
 
         /**
          * How much of the host's words the operator is shown. A toast is not a log viewer, and the captured
@@ -187,14 +187,14 @@ public record ContainerUpgrade(MachineId machineId, String containerName, String
         public static final int MAX_DIAGNOSTIC = 240;
 
         /** How a finished command run settles: its outcome, plus its own words when it did not go well. */
-        static Settlement of(UpgradeOutcome outcome, CommandResult result) {
-            return new Settlement(outcome, outcome.upgraded() ? null : summarise(result));
+        static Settlement of(ContainerUpdateOutcome outcome, CommandResult result) {
+            return new Settlement(outcome, outcome.updated() ? null : summarise(result));
         }
 
         /** An attempt that threw, read as unreachable and carrying what threw, named. */
         static Settlement failedAttempt(Exception failure) {
             String message = failure.getMessage();
-            return new Settlement(UpgradeOutcome.UNREACHABLE, failure.getClass().getSimpleName()
+            return new Settlement(ContainerUpdateOutcome.UNREACHABLE, failure.getClass().getSimpleName()
                 + (message == null ? "" : ": " + message));
         }
 
@@ -260,7 +260,7 @@ public record ContainerUpgrade(MachineId machineId, String containerName, String
     }
 
     /**
-     * The upgrade proper: pull, then — only if the pull succeeded — recreate. The ports are handed in and
+     * The update proper: pull, then — only if the pull succeeded — recreate. The ports are handed in and
      * called here, so the ordering, the deadlines and the reading of each result stay in one place rather
      * than being re-decided by whoever orchestrates the run.
      *
@@ -268,28 +268,28 @@ public record ContainerUpgrade(MachineId machineId, String containerName, String
      * exception it has to classify for itself.
      *
      * <p>The host key is pinned on first use from the pull's result, exactly as every other path that reaches
-     * a machine over SSH does: a machine only ever upgraded from would otherwise never gain a pinned key, and
+     * a machine over SSH does: a machine only ever updated from would otherwise never gain a pinned key, and
      * could never have one detected changing.
      */
     private Settlement run(SshTarget target, ForRunningSshCommands ssh, ForTrackingHostKeys hostKeys) {
         CommandResult pull = ssh.run(target, pullCommand(), PULL_TIMEOUT);
         target.pinOnFirstUse(pull.hostKeyFingerprint(), hostKeys);
 
-        Optional<UpgradeOutcome> pullFailure = UpgradeOutcome.ofPull(pull);
+        Optional<ContainerUpdateOutcome> pullFailure = ContainerUpdateOutcome.ofPull(pull);
         if (pullFailure.isPresent()) {
             return Settlement.of(pullFailure.get(), pull);
         }
         CommandResult recreate = ssh.run(target, recreateCommand(), RECREATE_TIMEOUT);
-        return Settlement.of(UpgradeOutcome.ofRecreate(recreate), recreate);
+        return Settlement.of(ContainerUpdateOutcome.ofRecreate(recreate), recreate);
     }
 
     /**
      * Retire what the last <b>update sweep</b> remembered about this container's image — but only when the
-     * upgrade actually happened.
+     * update actually happened.
      *
      * <p>The sweep files its verdict under a {@link ScopedImage}: the machine, and the image <em>tag</em>.
-     * An upgrade recreates the container on a new digest and leaves the tag exactly as it was, so nothing
-     * about the remembered verdict changes on its own and the mark outlives the upgrade that resolved it —
+     * An update recreates the container on a new digest and leaves the tag exactly as it was, so nothing
+     * about the remembered verdict changes on its own and the mark outlives the update that resolved it —
      * indefinitely, since re-scraping re-reads the same tag and re-applies the same remembered answer.
      *
      * <p><b>Forgotten, never stamped up to date.</b> Vaier pulled and recreated; it did not ask the registry
@@ -297,18 +297,18 @@ public record ContainerUpgrade(MachineId machineId, String containerName, String
      * {@link UpdateAvailability#UNKNOWN} — "no sweep has judged this" — which is exactly what happened.
      * Claiming up to date would be asserting a verdict Vaier never took.
      *
-     * <p><b>Only an upgrade forgets.</b> After a failed pull, a failed recreate, a timeout or an unreachable
+     * <p><b>Only an update forgets.</b> After a failed pull, a failed recreate, a timeout or an unreachable
      * host the container is still running the image it had, so the mark is still true; clearing it would be
      * the same lie pointing the other way, and the operator would stop being told about work still to do.
      */
-    public void forgetOutdatedVerdict(UpgradeOutcome outcome, ForStoringContainerSnapshots snapshots) {
-        if (outcome.upgraded()) {
+    public void forgetOutdatedVerdict(ContainerUpdateOutcome outcome, ForStoringContainerSnapshots snapshots) {
+        if (outcome.updated()) {
             snapshots.forgetImageUpdateVerdict(new ScopedImage(machineId.value(), image));
         }
     }
 
     /**
-     * Announce the settled upgrade on the fleet stream: which machine, which container, how it ended, and
+     * Announce the settled update on the fleet stream: which machine, which container, how it ended, and
      * the sentence to show. The browser is handed the words rather than a code to invent words from, so the
      * "the old container is still running" reassurance cannot be lost in translation.
      */

@@ -37,7 +37,7 @@ public class VaierServerIdentityAdapter implements ForResolvingVaierServerIdenti
             if (config.getVaierServerMachineId() != null && !config.getVaierServerMachineId().isBlank()) {
                 // Stored but unusable. Loud, because everything keyed to whatever the old value was meant is
                 // now orphaned — and unlike every other machine, refusing to load is not an option here: the
-                // Vaier server would become unreachable to its own backups, disks and self-upgrade.
+                // Vaier server would become unreachable to its own backups, disks and self-update.
                 log.error("vaierServerMachineId in the Vaier config is not a usable machine id ({});"
                     + " assigning a new one. Anything keyed to the old id will need re-pointing.",
                     config.getVaierServerMachineId());

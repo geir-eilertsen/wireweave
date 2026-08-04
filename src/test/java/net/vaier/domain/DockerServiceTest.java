@@ -66,20 +66,20 @@ class DockerServiceTest {
             .networks(List.of("bridge")).state("running")
             .composeCoordinates(new ComposeCoordinates("apps", "vaultwarden",
                 List.of("/srv/apps/docker-compose.yml"), "/srv/apps"))
-            .upgradeEligibility(UpgradeEligibility.UPGRADABLE)
+            .updateEligibility(ContainerUpdateEligibility.UPDATABLE)
             .build();
 
         DockerService swept = judged.withUpdateAvailability(UpdateAvailability.UPDATE_AVAILABLE);
 
         assertThat(swept.composeCoordinates()).isEqualTo(judged.composeCoordinates());
-        assertThat(swept.upgradeEligibility()).isEqualTo(UpgradeEligibility.UPGRADABLE);
+        assertThat(swept.updateEligibility()).isEqualTo(ContainerUpdateEligibility.UPDATABLE);
         assertThat(swept.updateAvailable()).isEqualTo(UpdateAvailability.UPDATE_AVAILABLE);
     }
 
     @Test
     void aScrapedContainerCarriesNoCoordinatesAndNoEligibilityUntilSomethingSuppliesThem() {
         assertThat(container(List.of("bridge")).composeCoordinates()).isNull();
-        assertThat(container(List.of("bridge")).upgradeEligibility()).isNull();
+        assertThat(container(List.of("bridge")).updateEligibility()).isNull();
     }
 
     @Test

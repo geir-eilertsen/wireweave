@@ -13,7 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * In-memory state for {@link DockerCommandAccess}, the sibling of {@link InMemorySshServerPresenceCache}:
  * the five-minute sweep writes what its existing trip already observes, and the container scrapes read it
- * to judge <b>upgrade eligibility</b>. Keyed by {@link MachineId}, never by name, so a rename never loses
+ * to judge <b>update eligibility</b>. Keyed by {@link MachineId}, never by name, so a rename never loses
  * or crosses what Vaier knows about a machine.
  *
  * <p>Not persisted, and deliberately so — it is what Vaier <em>last saw</em>, not a setting. A restart

@@ -212,75 +212,75 @@ class DockerServiceRestControllerIT extends VaierWebMvcIntegrationBase {
                .andExpect(status().isMethodNotAllowed());
     }
 
-    // --- Upgrading a container's image (#352) ---
+    // --- Updating a container's image (#352) ---
 
     private static final String MACHINE_ID = TestMachineIds.of("apalveien5").value();
 
-    private static String upgradeBody(String machineId, String containerName) {
+    private static String updateBody(String machineId, String containerName) {
         return "{\"machineId\":\"" + machineId + "\",\"containerName\":\"" + containerName + "\"}";
     }
 
     @Test
-    void upgrade_isAccepted_andSaysSoRatherThanWaitingForThePull() throws Exception {
-        mockMvc.perform(post("/docker-services/upgrade")
+    void update_isAccepted_andSaysSoRatherThanWaitingForThePull() throws Exception {
+        mockMvc.perform(post("/docker-services/update")
                    .contentType(MediaType.APPLICATION_JSON)
-                   .content(upgradeBody(MACHINE_ID, "vaultwarden")))
+                   .content(updateBody(MACHINE_ID, "vaultwarden")))
                .andExpect(status().isAccepted())
                .andExpect(jsonPath("$.machineId").value(MACHINE_ID))
                .andExpect(jsonPath("$.containerName").value("vaultwarden"));
 
-        verify(upgradeContainerImageUseCase)
-            .upgradeContainerImage(new MachineId(MACHINE_ID), "vaultwarden");
+        verify(updateContainerImageUseCase)
+            .updateContainerImage(new MachineId(MACHINE_ID), "vaultwarden");
     }
 
     @Test
-    void upgrade_ofAContainerVaierWillNotRecreate_is409WithTheReason() throws Exception {
+    void update_ofAContainerVaierWillNotRecreate_is409WithTheReason() throws Exception {
         doThrow(new ConflictException("Vaier holds no compose coordinates for pihole, so it does not know"
             + " how it was started and will not recreate it."))
-            .when(upgradeContainerImageUseCase).upgradeContainerImage(any(), any());
+            .when(updateContainerImageUseCase).updateContainerImage(any(), any());
 
-        mockMvc.perform(post("/docker-services/upgrade")
+        mockMvc.perform(post("/docker-services/update")
                    .contentType(MediaType.APPLICATION_JSON)
-                   .content(upgradeBody(MACHINE_ID, "pihole")))
+                   .content(updateBody(MACHINE_ID, "pihole")))
                .andExpect(status().isConflict())
                .andExpect(jsonPath("$.message").value(containsString("how it was started")));
     }
 
     @Test
-    void upgrade_ofAnUnknownContainer_is404() throws Exception {
+    void update_ofAnUnknownContainer_is404() throws Exception {
         doThrow(new NotFoundException("No container named ghost on that machine"))
-            .when(upgradeContainerImageUseCase).upgradeContainerImage(any(), any());
+            .when(updateContainerImageUseCase).updateContainerImage(any(), any());
 
-        mockMvc.perform(post("/docker-services/upgrade")
+        mockMvc.perform(post("/docker-services/update")
                    .contentType(MediaType.APPLICATION_JSON)
-                   .content(upgradeBody(MACHINE_ID, "ghost")))
+                   .content(updateBody(MACHINE_ID, "ghost")))
                .andExpect(status().isNotFound());
     }
 
     @Test
-    void upgrade_ofAMachineWithNoCredential_is424_soTheOperatorKnowsWhatToAdd() throws Exception {
+    void update_ofAMachineWithNoCredential_is424_soTheOperatorKnowsWhatToAdd() throws Exception {
         doThrow(new NoHostCredentialException("apalveien5"))
-            .when(upgradeContainerImageUseCase).upgradeContainerImage(any(), any());
+            .when(updateContainerImageUseCase).updateContainerImage(any(), any());
 
-        mockMvc.perform(post("/docker-services/upgrade")
+        mockMvc.perform(post("/docker-services/update")
                    .contentType(MediaType.APPLICATION_JSON)
-                   .content(upgradeBody(MACHINE_ID, "vaultwarden")))
+                   .content(updateBody(MACHINE_ID, "vaultwarden")))
                .andExpect(status().isFailedDependency());
     }
 
     @Test
-    void upgrade_withAMalformedMachineId_is400_andNeverReachesTheUseCase() throws Exception {
-        mockMvc.perform(post("/docker-services/upgrade")
+    void update_withAMalformedMachineId_is400_andNeverReachesTheUseCase() throws Exception {
+        mockMvc.perform(post("/docker-services/update")
                    .contentType(MediaType.APPLICATION_JSON)
-                   .content(upgradeBody("not-a-machine-id", "vaultwarden")))
+                   .content(updateBody("not-a-machine-id", "vaultwarden")))
                .andExpect(status().isBadRequest());
 
-        verify(upgradeContainerImageUseCase, never()).upgradeContainerImage(any(), any());
+        verify(updateContainerImageUseCase, never()).updateContainerImage(any(), any());
     }
 
     @Test
-    void upgrade_isNotAGet_becauseItChangesWhatRunsOnAHost() throws Exception {
-        mockMvc.perform(get("/docker-services/upgrade"))
+    void update_isNotAGet_becauseItChangesWhatRunsOnAHost() throws Exception {
+        mockMvc.perform(get("/docker-services/update"))
                .andExpect(status().isMethodNotAllowed());
     }
 }

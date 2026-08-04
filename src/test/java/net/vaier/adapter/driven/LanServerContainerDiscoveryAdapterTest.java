@@ -6,7 +6,7 @@ import net.vaier.domain.DockerService;
 import net.vaier.domain.LanServer;
 import net.vaier.domain.DockerService.PortMapping;
 import net.vaier.domain.UpdateAvailability;
-import net.vaier.domain.UpgradeEligibility;
+import net.vaier.domain.ContainerUpdateEligibility;
 import net.vaier.domain.port.ForDiscoveringLanServerContainers.LanServerContainers;
 import net.vaier.domain.port.ForGettingLanServers;
 import net.vaier.domain.port.ForGettingLanServers.LanServerView;
@@ -113,14 +113,14 @@ class LanServerContainerDiscoveryAdapterTest {
             .thenReturn(List.of(composeManaged("traefik"), container("hand-started")));
 
         assertThat(adapter.discoverAllLanServerContainers().get(0).containers())
-            .extracting(DockerService::containerName, DockerService::upgradeEligibility)
+            .extracting(DockerService::containerName, DockerService::updateEligibility)
             .containsExactly(
-                tuple("traefik", UpgradeEligibility.UPGRADABLE),
-                tuple("hand-started", UpgradeEligibility.NOT_COMPOSE_MANAGED));
+                tuple("traefik", ContainerUpdateEligibility.UPDATABLE),
+                tuple("hand-started", ContainerUpdateEligibility.NOT_COMPOSE_MANAGED));
     }
 
     @Test
-    void scrape_withholdsTheUpgradeOnALanServerWhoseDockerVaierCannotDrive() {
+    void scrape_withholdsTheUpdateOnALanServerWhoseDockerVaierCannotDrive() {
         // The scrape itself goes over the Docker API and works perfectly — which is exactly why the
         // verdict has to carry the machine's SSH-side Docker access, learned elsewhere and handed in.
         when(forGettingLanServers.getAll()).thenReturn(List.of(dockerHost("nas", "apalveien5")));
@@ -129,20 +129,20 @@ class LanServerContainerDiscoveryAdapterTest {
             .thenReturn(List.of(composeManaged("plex")));
 
         assertThat(adapter.discoverAllLanServerContainers().get(0).containers())
-            .extracting(DockerService::containerName, DockerService::upgradeEligibility)
-            .containsExactly(tuple("plex", UpgradeEligibility.NO_DOCKER_ACCESS));
+            .extracting(DockerService::containerName, DockerService::updateEligibility)
+            .containsExactly(tuple("plex", ContainerUpdateEligibility.NO_DOCKER_ACCESS));
     }
 
     @Test
-    void scrape_ofAMachineNobodyHasSweptYet_stillOffersTheUpgrade() {
+    void scrape_ofAMachineNobodyHasSweptYet_stillOffersTheUpdate() {
         when(forGettingLanServers.getAll()).thenReturn(List.of(dockerHost("nas", "apalveien5")));
         when(dockerAccess.accessFor(any())).thenReturn(DockerCommandAccess.UNKNOWN);
         when(forGettingServerInfo.getServicesWithExposedPorts(any()))
             .thenReturn(List.of(composeManaged("plex")));
 
         assertThat(adapter.discoverAllLanServerContainers().get(0).containers())
-            .extracting(DockerService::upgradeEligibility)
-            .containsExactly(UpgradeEligibility.UPGRADABLE);
+            .extracting(DockerService::updateEligibility)
+            .containsExactly(ContainerUpdateEligibility.UPDATABLE);
     }
 
     /** A compose-managed container, as a scrape of a real LAN server reports one. */

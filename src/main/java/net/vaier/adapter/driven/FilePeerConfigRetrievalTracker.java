@@ -20,7 +20,7 @@ import java.nio.file.Paths;
  * config is once-again retrievable.
  *
  * Pre-existing peers (created before this change) have no marker file and are therefore
- * "not yet viewed" — the first GET after upgrade is allowed, then the peer is locked.
+ * "not yet viewed" — the first GET after update is allowed, then the peer is locked.
  */
 @Component
 @Slf4j

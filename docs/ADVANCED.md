@@ -36,7 +36,7 @@ On EC2, the public address is detected from instance metadata. On other hosts, s
 
 ## Secrets on disk
 
-Vaier writes new secret files at mode `600` (`rw-------`). For an upgraded deployment you should also tighten the existing files and the surrounding directories on the host:
+Vaier writes new secret files at mode `600` (`rw-------`). For an updated deployment you should also tighten the existing files and the surrounding directories on the host:
 
 ```bash
 chmod 600 .env production.env 2>/dev/null

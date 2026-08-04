@@ -10,9 +10,9 @@ import net.vaier.domain.PublishableService;
 import net.vaier.application.CheckForImageUpdatesUseCase;
 import net.vaier.application.RefreshContainerStateUseCase;
 import net.vaier.application.SweepImageUpdatesUseCase;
-import net.vaier.application.UpgradeContainerImageUseCase;
-import net.vaier.domain.ContainerUpgrade;
-import net.vaier.domain.ContainerUpgrade.Settlement;
+import net.vaier.application.UpdateContainerImageUseCase;
+import net.vaier.domain.ContainerUpdate;
+import net.vaier.domain.ContainerUpdate.Settlement;
 import net.vaier.domain.DockerCommandAccess;
 import net.vaier.domain.DockerService;
 import net.vaier.domain.ImageUpdateSweep;
@@ -26,7 +26,7 @@ import net.vaier.domain.SshTarget;
 import net.vaier.domain.UpdateAvailability;
 import net.vaier.domain.UpdateCheckFloor;
 import net.vaier.domain.UpdateCheckOutcome;
-import net.vaier.domain.UpgradeEligibility;
+import net.vaier.domain.ContainerUpdateEligibility;
 import net.vaier.domain.VaierServerCatalogue;
 import net.vaier.domain.ReverseProxyRoute;
 import net.vaier.domain.Server;
@@ -71,7 +71,7 @@ public class ContainerService implements
     GetVaierServerDockerServicesUseCase,
     RefreshContainerStateUseCase,
     SweepImageUpdatesUseCase,
-    UpgradeContainerImageUseCase,
+    UpdateContainerImageUseCase,
     CheckForImageUpdatesUseCase {
 
     private final ForGettingServerInfo forGettingServerInfo;
@@ -94,18 +94,18 @@ public class ContainerService implements
     // The Vaier server's own identity — the one machine that appears in no store, so its containers have
     // no other way to be scoped to a host.
     private final ForResolvingVaierServerIdentity vaierServerIdentity;
-    // The debounced LAN-server scrape, read rather than re-scraped: an upgrade must be judged against
+    // The debounced LAN-server scrape, read rather than re-scraped: an update must be judged against
     // what Vaier already knows, not by going and asking every LAN server while a request thread waits.
     private final ForGettingLanServerScrape lanServerScrape;
-    // The SSH path an upgrade travels. Deliberately SSH and not the Docker API: recreating a container
+    // The SSH path an update travels. Deliberately SSH and not the Docker API: recreating a container
     // through the daemon would mean widening docker-socket-proxy to create and remove.
     private final ForResolvingSshTargets sshTargets;
     private final ForRunningSshCommands sshCommands;
     private final ForTrackingHostKeys hostKeys;
-    /** Where an accepted upgrade is carried out, off whatever thread asked for it. */
-    private final Executor upgradeExecutor;
+    /** Where an accepted update is carried out, off whatever thread asked for it. */
+    private final Executor updateExecutor;
     // What the disk sweep last saw of each machine's Docker access — read at scrape time, so a container
-    // on a machine Vaier cannot drive Docker on is never offered an upgrade that would die on it.
+    // on a machine Vaier cannot drive Docker on is never offered an update that would die on it.
     private final ForCheckingDockerCommandAccess dockerAccess;
 
     /**
@@ -138,14 +138,14 @@ public class ContainerService implements
                             ForRunningSshCommands sshCommands,
                             ForTrackingHostKeys hostKeys,
                             ForCheckingDockerCommandAccess dockerAccess) {
-        // A single thread: upgrades on one Vaier are serialised rather than piling several multi-minute
+        // A single thread: updates on one Vaier are serialised rather than piling several multi-minute
         // pulls onto a fleet's bandwidth at once, and no request thread ever waits on one.
         this(forGettingServerInfo, forGettingVpnClients, forResolvingPeerIds, forGettingPeerConfigurations,
             forResolvingRegistryDigest, forPublishingEvents, imageUpdateTracker, clock, snapshotStore,
             vaierServerContainers, peerContainers, vaierServerDockerServices, lanServerContainers,
             vaierServerIdentity, lanServerScrape, sshTargets, sshCommands, hostKeys, dockerAccess,
             Executors.newSingleThreadExecutor(r -> {
-                Thread thread = new Thread(r, "container-upgrade");
+                Thread thread = new Thread(r, "container-update");
                 thread.setDaemon(true);
                 return thread;
             }));
@@ -170,7 +170,7 @@ public class ContainerService implements
                      ForRunningSshCommands sshCommands,
                      ForTrackingHostKeys hostKeys,
                      ForCheckingDockerCommandAccess dockerAccess,
-                     Executor upgradeExecutor) {
+                     Executor updateExecutor) {
         this.forGettingServerInfo = forGettingServerInfo;
         this.forGettingVpnClients = forGettingVpnClients;
         this.forResolvingPeerIds = forResolvingPeerIds;
@@ -197,7 +197,7 @@ public class ContainerService implements
         this.sshCommands = sshCommands;
         this.hostKeys = hostKeys;
         this.dockerAccess = dockerAccess;
-        this.upgradeExecutor = upgradeExecutor;
+        this.updateExecutor = updateExecutor;
     }
 
     /** Cache read — backed by {@link #refresh()}; the launchpad never scrapes Docker on-thread. */
@@ -291,12 +291,12 @@ public class ContainerService implements
 
     /**
      * The Vaier server's own containers, each carrying the domain's verdict on whether Vaier may offer to
-     * upgrade its image. Judged here, at the one point that knows WHICH machine was scraped: the same
+     * update its image. Judged here, at the one point that knows WHICH machine was scraped: the same
      * container name means Vaier's own stack on this host and the operator's container on any other, and
      * a browser handed an unjudged container would have to work that out for itself.
      */
     List<DockerService> scrapeVaierServerContainers() {
-        return UpgradeEligibility.judgeVaierServerContainers(
+        return ContainerUpdateEligibility.judgeVaierServerContainers(
             forGettingServerInfo.getServicesWithExposedPorts(Server.vaierServer()),
             dockerAccess.accessFor(vaierServerIdentity.identity()));
     }
@@ -363,8 +363,8 @@ public class ContainerService implements
             try {
                 Server server = new Server(vpnIp, 2375, false);
                 // A peer's containers are the operator's own, whatever they are named — nothing here is
-                // Vaier's own stack, so a peer's traefik stays the operator's to upgrade.
-                List<DockerService> containers = UpgradeEligibility.judgeOperatorContainers(
+                // Vaier's own stack, so a peer's traefik stays the operator's to update.
+                List<DockerService> containers = ContainerUpdateEligibility.judgeOperatorContainers(
                     forGettingServerInfo.getServicesWithExposedPorts(server),
                     // A live peer with no stored config has no identity, so nothing is known about its
                     // Docker access — which reads UNKNOWN, and UNKNOWN keeps the button.
@@ -393,10 +393,10 @@ public class ContainerService implements
     }
 
     /**
-     * Upgrade one container to the image its registry now serves (#352).
+     * Update one container to the image its registry now serves (#352).
      *
      * <p>The service decides nothing: it gathers the containers Vaier has scraped from that machine, hands
-     * them to {@link ContainerUpgrade}, which rules whether the upgrade may happen at all and what compose
+     * them to {@link ContainerUpdate}, which rules whether the update may happen at all and what compose
      * will be asked to do, resolves the machine's SSH target, and hands the run off.
      *
      * <p><b>Everything that can refuse, refuses before the hand-off.</b> An unknown container, a container
@@ -405,53 +405,53 @@ public class ContainerService implements
      * arrives. Only what genuinely takes minutes — the pull and the recreate — crosses onto the executor.
      */
     @Override
-    public void upgradeContainerImage(MachineId machineId, String containerName) {
-        ContainerUpgrade upgrade =
-            ContainerUpgrade.of(machineId, containerName, containersOn(machineId));
+    public void updateContainerImage(MachineId machineId, String containerName) {
+        ContainerUpdate update =
+            ContainerUpdate.of(machineId, containerName, containersOn(machineId));
         SshTarget target = sshTargets.resolve(machineId);
-        upgradeExecutor.execute(() -> settle(upgrade, target));
+        updateExecutor.execute(() -> settle(update, target));
     }
 
     /**
-     * Carry an accepted upgrade out and announce how it ended — always, whatever happened. The domain rules
+     * Carry an accepted update out and announce how it ended — always, whatever happened. The domain rules
      * how a failed attempt reads and hands the reason back as data; this only writes that reason to the log,
-     * so an operator debugging a failed upgrade can still find the cause, and pushes the settled outcome.
+     * so an operator debugging a failed update can still find the cause, and pushes the settled outcome.
      * Announcing is unconditional on purpose: an event that never comes leaves the Explorer waiting forever.
      */
-    private void settle(ContainerUpgrade upgrade, SshTarget target) {
-        Settlement settlement = upgrade.carryOut(target, sshCommands, hostKeys);
-        logSettled(upgrade, settlement);
+    private void settle(ContainerUpdate update, SshTarget target) {
+        Settlement settlement = update.carryOut(target, sshCommands, hostKeys);
+        logSettled(update, settlement);
         // Retire the stale verdict BEFORE announcing: the Explorer re-reads its containers when the settled
-        // event arrives, so announcing first would hand it the mark this upgrade just resolved.
-        upgrade.forgetOutdatedVerdict(settlement.outcome(), snapshotStore);
-        upgrade.announce(settlement, forPublishingEvents);
+        // event arrives, so announcing first would hand it the mark this update just resolved.
+        update.forgetOutdatedVerdict(settlement.outcome(), snapshotStore);
+        update.announce(settlement, forPublishingEvents);
     }
 
     /**
-     * One line per settled upgrade, naming the machine, the container and the outcome — and the host's own
+     * One line per settled update, naming the machine, the container and the outcome — and the host's own
      * words when there are any.
      *
-     * <p>An upgrade recreates a running container on somebody's machine. It is the most destructive thing
+     * <p>An update recreates a running container on somebody's machine. It is the most destructive thing
      * Vaier does to one, and it left no trace at all: an operator asking their Vaier's log whether an
-     * upgrade had even been attempted found nothing, and a failed one said nothing about why. That is the
-     * audit trail, not chatter. The level follows the outcome, so a fleet's failed upgrades can be found
+     * update had even been attempted found nothing, and a failed one said nothing about why. That is the
+     * audit trail, not chatter. The level follows the outcome, so a fleet's failed updates can be found
      * without reading its successful ones.
      */
-    private void logSettled(ContainerUpgrade upgrade, Settlement settlement) {
+    private void logSettled(ContainerUpdate update, Settlement settlement) {
         String reason = settlement.diagnostic() == null ? "" : " — " + settlement.diagnostic();
-        if (settlement.outcome().upgraded()) {
-            log.info("Upgrade of container {} on machine {} settled {}{}", upgrade.containerName(),
-                upgrade.machineId().value(), settlement.outcome(), reason);
+        if (settlement.outcome().updated()) {
+            log.info("Update of container {} on machine {} settled {}{}", update.containerName(),
+                update.machineId().value(), settlement.outcome(), reason);
         } else {
-            log.warn("Upgrade of container {} on machine {} settled {}{}", upgrade.containerName(),
-                upgrade.machineId().value(), settlement.outcome(), reason);
+            log.warn("Update of container {} on machine {} settled {}{}", update.containerName(),
+                update.machineId().value(), settlement.outcome(), reason);
         }
     }
 
     /**
      * Every container Vaier has scraped from the machine {@code machineId} — the Vaier server's own, a
      * server peer's, or a LAN server's. Read from what Vaier already knows rather than scraped afresh: the
-     * scheduler refreshes all three every 30 seconds, and an upgrade is not worth making an operator wait
+     * scheduler refreshes all three every 30 seconds, and an update is not worth making an operator wait
      * on a fleet-wide scrape. A machine Vaier knows nothing about simply has no containers, and the
      * domain's "no container of that name" refusal covers it.
      */

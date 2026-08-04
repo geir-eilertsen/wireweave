@@ -12,8 +12,8 @@ import java.util.regex.Pattern;
  * <p><b>Why Vaier cannot infer it from anything it already knows.</b> The container scrape reads Docker's
  * API over the tunnel and needs no Unix group at all, so a machine whose SSH user is not in its
  * {@code docker} group scrapes perfectly and looks entirely healthy — while every command Vaier would run
- * over SSH to <b>upgrade</b> one of those containers dies on {@code permission denied while trying to
- * connect to the Docker API}. Colina 27 offered Upgrade on all five of its containers and every one was
+ * over SSH to <b>update</b> one of those containers dies on {@code permission denied while trying to
+ * connect to the Docker API}. Colina 27 offered Update on all five of its containers and every one was
  * doomed. Catching that early is the point: a good error message is the backstop, never the plan.
  *
  * <p><b>Learned on a trip Vaier already makes.</b> The five-minute disk sweep signs in to every credentialed

@@ -11,7 +11,7 @@ import net.vaier.adapter.driven.LanServerContainerDiscoveryAdapter;
 import net.vaier.domain.AuthMethod;
 import net.vaier.domain.CommandResult;
 import net.vaier.domain.ConflictException;
-import net.vaier.domain.ContainerUpgrade;
+import net.vaier.domain.ContainerUpdate;
 import net.vaier.domain.DockerCommandAccess;
 import net.vaier.domain.MachineId;
 import net.vaier.domain.NoHostCredentialException;
@@ -49,7 +49,7 @@ import net.vaier.domain.ImageUpdateTracker;
 import net.vaier.domain.ScopedImage;
 import net.vaier.domain.ComposeCoordinates;
 import net.vaier.domain.UpdateAvailability;
-import net.vaier.domain.UpgradeEligibility;
+import net.vaier.domain.ContainerUpdateEligibility;
 import net.vaier.domain.UpdateCheckOutcome;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -112,11 +112,11 @@ class ContainerServiceTest {
     InMemoryContainerSnapshotStore snapshotStore;
     ImageUpdateTracker tracker;
     MutableClock clock;
-    DeferredExecutor upgradeExecutor;
+    DeferredExecutor updateExecutor;
 
     /**
      * Holds what the service hands off instead of running it, so a test can prove the request thread was
-     * released before the upgrade ran — and then run it deterministically.
+     * released before the update ran — and then run it deterministically.
      */
     private static class DeferredExecutor implements Executor {
         private final List<Runnable> queued = new ArrayList<>();
@@ -154,14 +154,14 @@ class ContainerServiceTest {
         dockerAccessCache = new InMemoryDockerCommandAccessCache();
         var lanServerDiscovery =
             new LanServerContainerDiscoveryAdapter(forGettingLanServers, forGettingServerInfo, dockerAccessCache);
-        upgradeExecutor = new DeferredExecutor();
+        updateExecutor = new DeferredExecutor();
         service = new ContainerService(forGettingServerInfo, forGettingVpnClients,
             forResolvingPeerIds, forGettingPeerConfigurations,
             forResolvingRegistryDigest, forPublishingEvents, tracker, clock,
             snapshotStore, snapshotStore, snapshotStore, snapshotStore, lanServerDiscovery,
             () -> TestMachineIds.of("Vaier server"), forGettingLanServerScrape,
             forResolvingSshTargets, forRunningSshCommands, forTrackingHostKeys, dockerAccessCache,
-            upgradeExecutor);
+            updateExecutor);
     }
 
     // --- Update available (#57) ---
@@ -490,7 +490,7 @@ class ContainerServiceTest {
 
     @Test
     void scrapeVaierServerContainers_judgesEachContainerAgainstVaiersOwnStack() {
-        // The verdict has to reach the Explorer stamped on the container: whether an Upgrade may be
+        // The verdict has to reach the Explorer stamped on the container: whether an Update may be
         // offered is a business decision, and the browser decides nothing.
         when(forGettingServerInfo.getServicesWithExposedPorts(
             argThat(s -> s.dockerHostUrl().equals("unix:///var/run/docker.sock"))
@@ -498,11 +498,11 @@ class ContainerServiceTest {
             dockerService("hand-started", 9000)));
 
         assertThat(service.scrapeVaierServerContainers())
-            .extracting(DockerService::containerName, DockerService::upgradeEligibility)
+            .extracting(DockerService::containerName, DockerService::updateEligibility)
             .containsExactly(
-                tuple("traefik", UpgradeEligibility.VAIER_OWN_STACK),
-                tuple("vaultwarden", UpgradeEligibility.UPGRADABLE),
-                tuple("hand-started", UpgradeEligibility.NOT_COMPOSE_MANAGED));
+                tuple("traefik", ContainerUpdateEligibility.VAIER_OWN_STACK),
+                tuple("vaultwarden", ContainerUpdateEligibility.UPDATABLE),
+                tuple("hand-started", ContainerUpdateEligibility.NOT_COMPOSE_MANAGED));
     }
 
     @Test
@@ -596,7 +596,7 @@ class ContainerServiceTest {
     @Test
     void discoverAll_judgesAPeersContainersAsTheOperatorsOwn() {
         // VaierServerCatalogue is about the Vaier server alone. A peer running its own traefik is the
-        // operator's container, and theirs to upgrade — the name says nothing about whose it is.
+        // operator's container, and theirs to update — the name says nothing about whose it is.
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client("10.13.13.2/32")));
         when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice");
         when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.2"))
@@ -607,10 +607,10 @@ class ContainerServiceTest {
         List<PeerContainers> result = service.scrapePeerContainers();
 
         assertThat(result.get(0).containers())
-            .extracting(DockerService::containerName, DockerService::upgradeEligibility)
+            .extracting(DockerService::containerName, DockerService::updateEligibility)
             .containsExactly(
-                tuple("traefik", UpgradeEligibility.UPGRADABLE),
-                tuple("hand-started", UpgradeEligibility.NOT_COMPOSE_MANAGED));
+                tuple("traefik", ContainerUpdateEligibility.UPDATABLE),
+                tuple("hand-started", ContainerUpdateEligibility.NOT_COMPOSE_MANAGED));
     }
 
     @Test
@@ -1322,13 +1322,13 @@ class ContainerServiceTest {
             UpdateAvailability.UPDATE_AVAILABLE);
     }
 
-    // --- Upgrading a container's image (#352) ---
+    // --- Updating a container's image (#352) ---
 
     private static final MachineId ALICE = TestMachineIds.of("alice");
     private static final SshTarget ALICE_TARGET = new SshTarget("10.13.13.2", 22, "ubuntu",
         AuthMethod.PASSWORD, "pw", null, "SHA256:pinned", ALICE);
 
-    /** Scrape a peer called alice carrying {@code containers}, so the fleet has something to upgrade. */
+    /** Scrape a peer called alice carrying {@code containers}, so the fleet has something to update. */
     private void fleetWithPeerContainers(List<DockerService> containers) {
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client("10.13.13.2/32")));
         when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice");
@@ -1343,105 +1343,105 @@ class ContainerServiceTest {
     }
 
     @Test
-    void upgrade_acceptsAndReturnsAtOnce_soNoRequestThreadEverWaitsOnAPull() {
+    void update_acceptsAndReturnsAtOnce_soNoRequestThreadEverWaitsOnAPull() {
         fleetWithPeerContainers(List.of(composeManaged("vaultwarden")));
         when(forResolvingSshTargets.resolve(ALICE)).thenReturn(ALICE_TARGET);
 
-        service.upgradeContainerImage(ALICE, "vaultwarden");
+        service.updateContainerImage(ALICE, "vaultwarden");
 
         // Nothing has been run yet: the slow work is queued, not done on the caller's thread.
         verifyNoInteractions(forRunningSshCommands);
-        assertThat(upgradeExecutor.pending()).isEqualTo(1);
+        assertThat(updateExecutor.pending()).isEqualTo(1);
     }
 
     @Test
-    void theQueuedUpgrade_pullsThenRecreates_andPushesTheSettledOutcome() {
+    void theQueuedUpdate_pullsThenRecreates_andPushesTheSettledOutcome() {
         fleetWithPeerContainers(List.of(composeManaged("vaultwarden")));
         when(forResolvingSshTargets.resolve(ALICE)).thenReturn(ALICE_TARGET);
         when(forRunningSshCommands.run(any(), anyString(), any())).thenReturn(succeeded());
 
-        service.upgradeContainerImage(ALICE, "vaultwarden");
-        upgradeExecutor.runPending();
+        service.updateContainerImage(ALICE, "vaultwarden");
+        updateExecutor.runPending();
 
         verify(forRunningSshCommands).run(eq(ALICE_TARGET),
             argThat(c -> c.startsWith("docker compose") && c.endsWith("pull 'vaultwarden'")),
-            eq(ContainerUpgrade.PULL_TIMEOUT));
+            eq(ContainerUpdate.PULL_TIMEOUT));
         verify(forRunningSshCommands).run(eq(ALICE_TARGET),
-            argThat(c -> c.endsWith("up -d 'vaultwarden'")), eq(ContainerUpgrade.RECREATE_TIMEOUT));
-        verify(forPublishingEvents).publish(eq("vpn-peers"), eq("container-upgrade-settled"),
-            argThat(data -> data.contains("\"outcome\":\"UPGRADED\"")
+            argThat(c -> c.endsWith("up -d 'vaultwarden'")), eq(ContainerUpdate.RECREATE_TIMEOUT));
+        verify(forPublishingEvents).publish(eq("vpn-peers"), eq("container-update-settled"),
+            argThat(data -> data.contains("\"outcome\":\"UPDATED\"")
                 && data.contains(ALICE.value()) && data.contains("vaultwarden")));
     }
 
     @Test
-    void upgrade_ofAContainerThatMachineDoesNotHave_isNotFound_andQueuesNothing() {
+    void update_ofAContainerThatMachineDoesNotHave_isNotFound_andQueuesNothing() {
         fleetWithPeerContainers(List.of(composeManaged("vaultwarden")));
 
-        assertThatThrownBy(() -> service.upgradeContainerImage(ALICE, "paperless"))
+        assertThatThrownBy(() -> service.updateContainerImage(ALICE, "paperless"))
             .isInstanceOf(NotFoundException.class);
 
-        assertThat(upgradeExecutor.pending()).isZero();
+        assertThat(updateExecutor.pending()).isZero();
         verifyNoInteractions(forResolvingSshTargets);
     }
 
     @Test
-    void upgrade_ofAContainerVaierCannotRecreate_isRefusedWithTheReason() {
+    void update_ofAContainerVaierCannotRecreate_isRefusedWithTheReason() {
         fleetWithPeerContainers(List.of(dockerService("hand-started", 9000)));
 
-        assertThatThrownBy(() -> service.upgradeContainerImage(ALICE, "hand-started"))
+        assertThatThrownBy(() -> service.updateContainerImage(ALICE, "hand-started"))
             .isInstanceOf(ConflictException.class)
             .hasMessageContaining("how it was started");
 
-        assertThat(upgradeExecutor.pending()).isZero();
+        assertThat(updateExecutor.pending()).isZero();
     }
 
     @Test
-    void upgrade_ofVaiersOwnStackOnTheVaierServer_isRefused() {
+    void update_ofVaiersOwnStackOnTheVaierServer_isRefused() {
         when(forGettingServerInfo.getServicesWithExposedPorts(any(Server.class)))
             .thenReturn(List.of(composeManaged("traefik")));
         service.refresh();
 
         assertThatThrownBy(() ->
-            service.upgradeContainerImage(TestMachineIds.of("Vaier server"), "traefik"))
+            service.updateContainerImage(TestMachineIds.of("Vaier server"), "traefik"))
             .isInstanceOf(ConflictException.class)
             .hasMessageContaining("Vaier release");
     }
 
     @Test
-    void upgrade_ofTheVaierServersOwnOperatorContainer_isAccepted() {
+    void update_ofTheVaierServersOwnOperatorContainer_isAccepted() {
         when(forGettingServerInfo.getServicesWithExposedPorts(any(Server.class)))
             .thenReturn(List.of(composeManaged("vaultwarden")));
         service.refresh();
         MachineId vaierServer = TestMachineIds.of("Vaier server");
         when(forResolvingSshTargets.resolve(vaierServer)).thenReturn(ALICE_TARGET);
 
-        service.upgradeContainerImage(vaierServer, "vaultwarden");
+        service.updateContainerImage(vaierServer, "vaultwarden");
 
-        assertThat(upgradeExecutor.pending()).isEqualTo(1);
+        assertThat(updateExecutor.pending()).isEqualTo(1);
     }
 
     @Test
-    void upgrade_ofALanServersContainer_readsTheCachedLanScrape() {
+    void update_ofALanServersContainer_readsTheCachedLanScrape() {
         MachineId nas = TestMachineIds.of("nas");
         when(forGettingLanServerScrape.getLanServerContainers()).thenReturn(List.of(
             new LanServerContainers(nas.value(), "nas", "192.168.3.50", 2375, "colina27", "OK",
-                UpgradeEligibility.judgeOperatorContainers(List.of(composeManaged("plex")), DockerCommandAccess.GRANTED))));
+                ContainerUpdateEligibility.judgeOperatorContainers(List.of(composeManaged("plex")), DockerCommandAccess.GRANTED))));
         when(forResolvingSshTargets.resolve(nas)).thenReturn(ALICE_TARGET);
 
-        service.upgradeContainerImage(nas, "plex");
+        service.updateContainerImage(nas, "plex");
 
-        assertThat(upgradeExecutor.pending()).isEqualTo(1);
+        assertThat(updateExecutor.pending()).isEqualTo(1);
     }
 
     @Test
-    void upgrade_ofAMachineWithNoStoredCredential_failsBeforeAnythingIsQueued() {
+    void update_ofAMachineWithNoStoredCredential_failsBeforeAnythingIsQueued() {
         fleetWithPeerContainers(List.of(composeManaged("vaultwarden")));
         when(forResolvingSshTargets.resolve(ALICE)).thenThrow(new NoHostCredentialException("alice"));
 
-        assertThatThrownBy(() -> service.upgradeContainerImage(ALICE, "vaultwarden"))
+        assertThatThrownBy(() -> service.updateContainerImage(ALICE, "vaultwarden"))
             .isInstanceOf(NoHostCredentialException.class);
 
-        assertThat(upgradeExecutor.pending()).isZero();
+        assertThat(updateExecutor.pending()).isZero();
     }
 
     /** A compose-managed container carrying a local digest, so a sweep has two digests to compare. */
@@ -1467,16 +1467,16 @@ class ContainerServiceTest {
     }
 
     @Test
-    void anUpgradedContainerStopsBeingMarkedOutOfDate_withoutWaitingForTheNextSweep() {
-        // The live bug: the sweep remembers its verdict per (machine, image TAG), and an upgrade changes
+    void anUpdatedContainerStopsBeingMarkedOutOfDate_withoutWaitingForTheNextSweep() {
+        // The live bug: the sweep remembers its verdict per (machine, image TAG), and an update changes
         // the digest and not the tag — so re-scraping re-applied the same remembered UPDATE_AVAILABLE and
-        // the yellow mark outlived the upgrade that resolved it, indefinitely.
+        // the yellow mark outlived the update that resolved it, indefinitely.
         markedOutOfDate("vaultwarden");
         when(forResolvingSshTargets.resolve(ALICE)).thenReturn(ALICE_TARGET);
         when(forRunningSshCommands.run(any(), anyString(), any())).thenReturn(succeeded());
 
-        service.upgradeContainerImage(ALICE, "vaultwarden");
-        upgradeExecutor.runPending();
+        service.updateContainerImage(ALICE, "vaultwarden");
+        updateExecutor.runPending();
 
         // Forgotten, not stamped up to date: Vaier pulled and recreated, it never re-compared the digests.
         assertThat(peerContainerNamed("vaultwarden").updateAvailable())
@@ -1484,14 +1484,14 @@ class ContainerServiceTest {
     }
 
     @Test
-    void anUpgradeThatFailed_leavesTheMarkStanding_becauseTheOldImageIsStillWhatRuns() {
+    void anUpdateThatFailed_leavesTheMarkStanding_becauseTheOldImageIsStillWhatRuns() {
         markedOutOfDate("vaultwarden");
         when(forResolvingSshTargets.resolve(ALICE)).thenReturn(ALICE_TARGET);
         when(forRunningSshCommands.run(any(), anyString(), any()))
             .thenReturn(new CommandResult(1, "", "manifest unknown", false, "SHA256:pinned"));
 
-        service.upgradeContainerImage(ALICE, "vaultwarden");
-        upgradeExecutor.runPending();
+        service.updateContainerImage(ALICE, "vaultwarden");
+        updateExecutor.runPending();
 
         assertThat(peerContainerNamed("vaultwarden").updateAvailable())
             .isEqualTo(UpdateAvailability.UPDATE_AVAILABLE);
@@ -1508,10 +1508,10 @@ class ContainerServiceTest {
         doAnswer(invocation -> {
             asTheBrowserWouldSeeIt.set(peerContainerNamed("vaultwarden").updateAvailable());
             return null;
-        }).when(forPublishingEvents).publish(any(), eq("container-upgrade-settled"), any());
+        }).when(forPublishingEvents).publish(any(), eq("container-update-settled"), any());
 
-        service.upgradeContainerImage(ALICE, "vaultwarden");
-        upgradeExecutor.runPending();
+        service.updateContainerImage(ALICE, "vaultwarden");
+        updateExecutor.runPending();
 
         assertThat(asTheBrowserWouldSeeIt.get()).isEqualTo(UpdateAvailability.UNKNOWN);
     }
@@ -1531,16 +1531,16 @@ class ContainerServiceTest {
     }
 
     @Test
-    void everySettledUpgradeIsLogged_becauseRecreatingSomeonesContainerIsWorthAnAuditTrail() {
-        // Nothing about an upgrade reached the log at all, so there was no way to tell from a host's
-        // Vaier logs whether an upgrade had even been attempted.
+    void everySettledUpdateIsLogged_becauseRecreatingSomeonesContainerIsWorthAnAuditTrail() {
+        // Nothing about an update reached the log at all, so there was no way to tell from a host's
+        // Vaier logs whether an update had even been attempted.
         fleetWithPeerContainers(List.of(composeManaged("vaultwarden")));
         when(forResolvingSshTargets.resolve(ALICE)).thenReturn(ALICE_TARGET);
         when(forRunningSshCommands.run(any(), anyString(), any())).thenReturn(succeeded());
 
         List<ILoggingEvent> logged = whileCapturingTheLog(() -> {
-            service.upgradeContainerImage(ALICE, "vaultwarden");
-            upgradeExecutor.runPending();
+            service.updateContainerImage(ALICE, "vaultwarden");
+            updateExecutor.runPending();
         });
 
         assertThat(logged).anySatisfy(event -> {
@@ -1548,12 +1548,12 @@ class ContainerServiceTest {
             assertThat(event.getFormattedMessage())
                 .contains("vaultwarden")
                 .contains(ALICE.value())
-                .contains("UPGRADED");
+                .contains("UPDATED");
         });
     }
 
     @Test
-    void aFailedUpgradesReasonReachesTheLog_soTheOperatorCanBeToldWhy() {
+    void aFailedUpdatesReasonReachesTheLog_soTheOperatorCanBeToldWhy() {
         // The live complaint: PULL_FAILED in the browser and absolutely nothing in `docker logs vaier`.
         fleetWithPeerContainers(List.of(composeManaged("netdata")));
         when(forResolvingSshTargets.resolve(ALICE)).thenReturn(ALICE_TARGET);
@@ -1561,8 +1561,8 @@ class ContainerServiceTest {
             "Error response from daemon: pull access denied for netdata", false, "SHA256:pinned"));
 
         List<ILoggingEvent> logged = whileCapturingTheLog(() -> {
-            service.upgradeContainerImage(ALICE, "netdata");
-            upgradeExecutor.runPending();
+            service.updateContainerImage(ALICE, "netdata");
+            updateExecutor.runPending();
         });
 
         assertThat(logged).anySatisfy(event -> {
@@ -1581,16 +1581,16 @@ class ContainerServiceTest {
         when(forRunningSshCommands.run(any(), anyString(), any())).thenReturn(new CommandResult(1, "",
             "Error response from daemon: pull access denied for netdata", false, "SHA256:pinned"));
 
-        service.upgradeContainerImage(ALICE, "netdata");
-        upgradeExecutor.runPending();
+        service.updateContainerImage(ALICE, "netdata");
+        updateExecutor.runPending();
 
-        verify(forPublishingEvents).publish(eq("vpn-peers"), eq("container-upgrade-settled"),
+        verify(forPublishingEvents).publish(eq("vpn-peers"), eq("container-update-settled"),
             argThat(data -> data.contains("pull access denied for netdata")
                 && data.contains("still running")));
     }
 
     @Test
-    void anUpgradeThatCouldNotBeCarriedOut_isAnnouncedAnyway_soTheExplorerNeverWaitsForever() {
+    void anUpdateThatCouldNotBeCarriedOut_isAnnouncedAnyway_soTheExplorerNeverWaitsForever() {
         // The hardest case for the async boundary: a failure nobody anticipated, on the far side of the
         // hand-off, where nothing is left to turn it into a 4xx. The domain rules what it means; what is
         // proven here is the service's own half — that a settled outcome is always pushed.
@@ -1599,10 +1599,10 @@ class ContainerServiceTest {
         when(forRunningSshCommands.run(any(), anyString(), any()))
             .thenThrow(new IllegalStateException("a bug nobody saw coming"));
 
-        service.upgradeContainerImage(ALICE, "vaultwarden");
-        upgradeExecutor.runPending();
+        service.updateContainerImage(ALICE, "vaultwarden");
+        updateExecutor.runPending();
 
-        verify(forPublishingEvents).publish(eq("vpn-peers"), eq("container-upgrade-settled"),
+        verify(forPublishingEvents).publish(eq("vpn-peers"), eq("container-update-settled"),
             argThat(data -> data.contains("\"outcome\":\"UNREACHABLE\"")));
     }
 

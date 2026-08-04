@@ -5,7 +5,7 @@ import net.vaier.domain.MachineId;
 
 /**
  * Driven port for reading what Vaier last saw of a machine's {@link DockerCommandAccess} — the read half,
- * consulted wherever a machine's containers are judged for <b>upgrade eligibility</b>.
+ * consulted wherever a machine's containers are judged for <b>update eligibility</b>.
  *
  * <p>Always answers: a machine nobody has swept yet reads {@link DockerCommandAccess#UNKNOWN}, which is not
  * a refusal and must never be read as one.

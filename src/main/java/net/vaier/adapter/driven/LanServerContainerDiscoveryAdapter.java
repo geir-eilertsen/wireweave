@@ -3,7 +3,7 @@ package net.vaier.adapter.driven;
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.domain.DockerService;
 import net.vaier.domain.Server;
-import net.vaier.domain.UpgradeEligibility;
+import net.vaier.domain.ContainerUpdateEligibility;
 import net.vaier.domain.port.ForDiscoveringLanServerContainers;
 import net.vaier.domain.port.ForGettingLanServers;
 import net.vaier.domain.port.ForGettingLanServers.LanServerView;
@@ -28,7 +28,7 @@ public class LanServerContainerDiscoveryAdapter implements ForDiscoveringLanServ
     private final ForGettingLanServers forGettingLanServers;
     private final ForGettingServerInfo forGettingServerInfo;
     // What Vaier last saw of each machine's Docker access, so a container's verdict can say that this
-    // machine's Docker is out of reach rather than offering an upgrade that cannot run.
+    // machine's Docker is out of reach rather than offering an update that cannot run.
     private final ForCheckingDockerCommandAccess dockerAccess;
 
     public LanServerContainerDiscoveryAdapter(ForGettingLanServers forGettingLanServers,
@@ -73,9 +73,9 @@ public class LanServerContainerDiscoveryAdapter implements ForDiscoveringLanServ
         // address is in the Vaier server's own subnet). The Docker socket target is the same.
         try {
             Server target = new Server(server.lanAddress(), server.dockerPort(), false);
-            // A LAN server is the operator's machine: its containers are theirs to upgrade, whatever they
+            // A LAN server is the operator's machine: its containers are theirs to update, whatever they
             // are named. The verdict is the domain's — this adapter only says which machine was scraped.
-            List<DockerService> containers = UpgradeEligibility.judgeOperatorContainers(
+            List<DockerService> containers = ContainerUpdateEligibility.judgeOperatorContainers(
                 forGettingServerInfo.getServicesWithExposedPorts(target),
                 dockerAccess.accessFor(server.machineId()));
             log.info("Discovered {} containers on LAN server {} ({}) via {}",

@@ -104,7 +104,7 @@ class InMemoryContainerSnapshotStoreTest {
 
     @Test
     void forgettingOneVerdict_leavesEveryOtherMachinesVerdictStanding() {
-        // The narrow operation exists precisely so the upgrade path never rewrites the whole map and
+        // The narrow operation exists precisely so the update path never rewrites the whole map and
         // clobbers a sweep that landed between the pull and the settle.
         ScopedImage mine = new ScopedImage(VAIER_SERVER.value(), "vaultwarden/server:latest");
         ScopedImage theirs = new ScopedImage(TestMachineIds.of("apalveien5").value(), "some/app:latest");

@@ -1092,12 +1092,12 @@ class ExplorerShellTest {
         // Vaier is read-only for containers: there is no endpoint to pull an image or restart a container, and
         // shipping a mark that reads like a promise would be the same lie as shipping a dead button. The
         // tooltip names the operator's own action, and the canonical term is used exactly
-        // (UBIQUITOUS_LANGUAGE.md) — not "outdated", not "stale", not "needs upgrade".
+        // (UBIQUITOUS_LANGUAGE.md) — not "outdated", not "stale", not "needs update".
         String js = read("explorer-shell.js");
         String body = updateMarkBody(js);
         assertThat(body).contains("Update available");
         assertThat(body).contains("title");
-        for (String banned : List.of("outdated", "stale", "drift", "needs upgrade", "Outdated", "Stale")) {
+        for (String banned : List.of("outdated", "stale", "drift", "needs update", "Outdated", "Stale")) {
             assertThat(body).as("a near-synonym of \"Update available\" (%s)", banned).doesNotContain(banned);
         }
         // and the slice opened no verb: still only the three mutating methods, none of them aimed at a container
@@ -1780,29 +1780,29 @@ class ExplorerShellTest {
         assertThat(body).as("and never fetched").doesNotContain("fetch(");
     }
 
-    // --- Vaier upgrading itself ---------------------------------------------------------------------------
+    // --- Vaier updating itself ---------------------------------------------------------------------------
 
     @Test
-    void upgradingVaier_isOfferedOnSettings_onlyWhenThereIsSomethingToUpgradeTo() throws IOException {
-        // The button is the whole trigger — nothing upgrades on a schedule. And it appears only when the
+    void updatingVaier_isOfferedOnSettings_onlyWhenThereIsSomethingToUpdateTo() throws IOException {
+        // The button is the whole trigger — nothing updates on a schedule. And it appears only when the
         // registry really serves something newer, so it is never a button that would do nothing.
         String js = read("explorer-shell.js");
-        int from = js.indexOf("async function upgradeVaier(");
-        assertThat(from).as("the shell can ask for an upgrade").isPositive();
+        int from = js.indexOf("async function updateVaier(");
+        assertThat(from).as("the shell can ask for an update").isPositive();
         String body = js.substring(from, js.indexOf("\n    }", from));
 
-        assertThat(body).contains("'/settings/upgrade'");
+        assertThat(body).contains("'/settings/update'");
         assertThat(body).contains("method: 'POST'");
         assertThat(js).as("offered against the domain's verdict, not a version string compare")
-            .contains("upg.available");
+            .contains("upd.available");
     }
 
     @Test
-    void theUpgradeToast_saysWhatIsAboutToHappen_becauseNoAnswerIsComing() throws IOException {
+    void theUpdateToast_saysWhatIsAboutToHappen_becauseNoAnswerIsComing() throws IOException {
         // The container serving the request is the one being replaced, so there is no outcome to wait for.
         // A dropped connection is the expected shape of success and must not be reported as a failure.
         String js = read("explorer-shell.js");
-        int from = js.indexOf("async function upgradeVaier(");
+        int from = js.indexOf("async function updateVaier(");
         String body = js.substring(from, js.indexOf("\n    }", from));
 
         assertThat(body.indexOf("toast(")).as("it says so before it asks").isLessThan(body.indexOf("fetch("));
@@ -1810,9 +1810,9 @@ class ExplorerShellTest {
     }
 
     @Test
-    void aRolledBackUpgrade_isSaidOutLoudOnSettings() throws IOException {
+    void aRolledBackUpdate_isSaidOutLoudOnSettings() throws IOException {
         // The one outcome nothing else would reveal: Vaier is up, so it looks healthy — it is just running
-        // the build from before. Silence would mean an upgrade reverting every time and nobody knowing.
+        // the build from before. Silence would mean an update reverting every time and nobody knowing.
         assertThat(read("explorer-shell.js")).contains("'ROLLED_BACK'");
     }
 
@@ -2301,26 +2301,26 @@ class ExplorerShellTest {
         assertThat(js).contains("toast('Copied.')");
     }
 
-    // --- the Upgrade action (#352) ----------------------------------------------------------------------
+    // --- the Update action (#352) ----------------------------------------------------------------------
     //
     // The update-available mark spent its whole life as advice with no verb attached, and the Inspector said
     // so in as many words. Giving it a verb means those words are now false, and it means the one control
     // the Explorer offers over a container has to be offered on exactly the terms the domain set.
 
     @Test
-    void theUpgradeAction_isOfferedOnlyOnTheDomainsOwnVerdict() throws IOException {
-        // Whether a container may be upgraded is a decision, and it was taken on the machine the container
+    void theUpdateAction_isOfferedOnlyOnTheDomainsOwnVerdict() throws IOException {
+        // Whether a container may be updated is a decision, and it was taken on the machine the container
         // was scraped from — the same container name means Vaier's own stack on this host and the operator's
         // container on any other. A browser re-deriving it from the compose labels would be a second, quieter
         // copy of that decision, and the two would disagree the first time either moved.
         String js = read("explorer-shell.js");
 
-        assertThat(js).contains("upgradeEligibility === 'UPGRADABLE'");
+        assertThat(js).contains("updateEligibility === 'UPDATABLE'");
         assertThat(js).doesNotContain("composeCoordinates &&");
     }
 
     @Test
-    void aContainerVaierWillNotUpgrade_saysWhyRatherThanShowingNothing() throws IOException {
+    void aContainerVaierWillNotUpdate_saysWhyRatherThanShowingNothing() throws IOException {
         // A withheld button with no reason reads as a bug. Both refusals have a plain cause the operator can
         // act on — or decide not to — so each is spoken.
         String js = read("explorer-shell.js");
@@ -2346,28 +2346,28 @@ class ExplorerShellTest {
         // shell shows what it was handed; it does not translate an enum back into English of its own.
         String js = read("explorer-shell.js");
 
-        assertThat(js).contains("container-upgrade-settled");
+        assertThat(js).contains("container-update-settled");
         assertThat(js).contains(".message");
     }
 
     @Test
-    void anUpgradeInFlight_isReportedWithoutPolling() throws IOException {
+    void anUpdateInFlight_isReportedWithoutPolling() throws IOException {
         // A pull is minutes. The request returns 202 immediately and the outcome arrives on the fleet stream
         // the shell already holds open — so there is no second connection, and above all no timer asking
         // "are we there yet", which is the rule this frontend does not break.
         String js = read("explorer-shell.js");
 
-        int from = js.indexOf("async function upgradeContainer(");
+        int from = js.indexOf("async function updateContainer(");
         assertThat(from).isPositive();
         String body = js.substring(from, js.indexOf("\n    }", from));
-        assertThat(body).contains("/docker-services/upgrade");
+        assertThat(body).contains("/docker-services/update");
         assertThat(body).doesNotContain("setInterval");
         assertThat(body).doesNotContain("setTimeout");
     }
 
     @Test
     void aMachineVaierCannotRunDockerOn_namesTheRemedy_notJustTheFault() throws IOException {
-        // Colina 27 offered Upgrade on five containers and every one was doomed: Vaier's SSH user was not in
+        // Colina 27 offered Update on five containers and every one was doomed: Vaier's SSH user was not in
         // that host's docker group. The scrape reads Docker over the tunnel and needs no group at all, so the
         // machine looked perfectly healthy while offering a control it could never honour. Withholding the
         // button is only half the fix — a withheld button with no remedy is a dead end.
@@ -2381,7 +2381,7 @@ class ExplorerShellTest {
     void vaiersOwnContainers_sayTheyMoveWithVaier_ratherThanReportingAVerdictNobodyCanAct() throws IOException {
         // #353. Vaier's own stack is no longer swept at all, so its containers carry no verdict — and
         // "Vaier cannot tell" would be technically true and useless. What is actually true is that these
-        // images move with a Vaier release, which is the same fact the withheld Upgrade already states.
+        // images move with a Vaier release, which is the same fact the withheld Update already states.
         String js = read("explorer-shell.js");
 
         assertThat(js).contains("VAIER_OWN_STACK");
@@ -2389,12 +2389,12 @@ class ExplorerShellTest {
     }
 
     @Test
-    void theUpgradeAction_standsDownInThePast() throws IOException {
+    void theUpdateAction_standsDownInThePast() throws IOException {
         // An archive is how a machine stood then. Acting on it now would be acting on the present through a
         // window into the past — the same reason the update mark and the liveness dot hide back there.
         String js = read("explorer-shell.js");
 
-        int from = js.indexOf("function upgradeAction(");
+        int from = js.indexOf("function updateAction(");
         assertThat(from).isPositive();
         assertThat(js.substring(from, js.indexOf("\n    }", from))).contains("S.at");
     }

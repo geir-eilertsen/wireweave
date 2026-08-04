@@ -53,7 +53,7 @@ class VaierServerCatalogueTest {
 
     @Test
     void isExcluded_stillHidesTheDecommissionedAutheliaStack() {
-        // Removed from the stack in #305, but an upgraded host can still be carrying the containers.
+        // Removed from the stack in #305, but an updated host can still be carrying the containers.
         assertThat(VaierServerCatalogue.isExcluded("authelia")).isTrue();
         assertThat(VaierServerCatalogue.isExcluded("redis")).isTrue();
     }

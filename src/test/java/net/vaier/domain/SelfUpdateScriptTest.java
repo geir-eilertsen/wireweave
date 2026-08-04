@@ -6,16 +6,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * The script Vaier runs on its own host to replace itself.
  *
- * <p>Everything here exists because of one fact: the process asking for the upgrade dies in the middle of it.
+ * <p>Everything here exists because of one fact: the process asking for the update dies in the middle of it.
  * A container cannot recreate itself — the moment {@code docker compose up -d} replaces it, whatever was
- * driving the upgrade is gone. So the work is handed to the host, detached, and it has to be able to finish,
+ * driving the update is gone. So the work is handed to the host, detached, and it has to be able to finish,
  * judge itself and undo itself with nobody watching.
  *
  * <p>Which makes the rollback the feature, not a nicety. If a bad image comes up, the thing that is down is
  * the thing an operator would use to fix it. The script therefore records what was running before it touched
  * anything, and puts it back if the new one does not answer.
  */
-class SelfUpgradeScriptTest {
+class SelfUpdateScriptTest {
 
     private static final String DIR = "/home/ubuntu/vaier";
 
@@ -24,7 +24,7 @@ class SelfUpgradeScriptTest {
         // Rollback is only possible if the previous image was pinned by digest first. A tag is not enough:
         // `getvaier/vaier:latest` means something different after the pull, so rolling "back" to it would
         // roll forward to the broken image again.
-        String script = SelfUpgradeScript.generate(DIR, "vaier", "run-1", 90);
+        String script = SelfUpdateScript.generate(DIR, "vaier", "run-1", 90);
 
         int record = script.indexOf("PREVIOUS_IMAGE=");
         int pull = script.indexOf("compose pull");
@@ -35,7 +35,7 @@ class SelfUpgradeScriptTest {
 
     @Test
     void itHealthChecksItself_andRollsBackWhenTheNewImageDoesNotAnswer() {
-        String script = SelfUpgradeScript.generate(DIR, "vaier", "run-1", 90);
+        String script = SelfUpdateScript.generate(DIR, "vaier", "run-1", 90);
 
         // Not a TCP probe: the endpoint that answers is the one that reports the version, so "it came up" and
         // "it is the build we asked for" are the same check.
@@ -51,9 +51,9 @@ class SelfUpgradeScriptTest {
         // Vaier is restarting while this runs, so there is no in-memory state to settle against and no open
         // connection to report to: the result has to outlive both processes. Vaier reads this file when it
         // comes back up.
-        String script = SelfUpgradeScript.generate(DIR, "vaier", "run-1", 90);
+        String script = SelfUpdateScript.generate(DIR, "vaier", "run-1", 90);
 
-        assertThat(script).contains(SelfUpgradeScript.RESULT_FILE);
+        assertThat(script).contains(SelfUpdateScript.RESULT_FILE);
         assertThat(script).as("the outcome is written for every path out").contains("UPGRADED");
         assertThat(script).contains("FAILED");
     }
@@ -61,8 +61,8 @@ class SelfUpgradeScriptTest {
     @Test
     void itRunsDetached_soItSurvivesTheContainerItIsReplacing() {
         // Launched over SSH from inside the container being replaced. Without detaching, killing the
-        // container kills the upgrade halfway — the worst possible moment.
-        String launch = SelfUpgradeScript.launch(DIR, "run-1");
+        // container kills the update halfway — the worst possible moment.
+        String launch = SelfUpdateScript.launch(DIR, "run-1");
 
         assertThat(launch).contains("nohup");
         assertThat(launch).contains("setsid");
@@ -73,7 +73,7 @@ class SelfUpgradeScriptTest {
     void theComposeProjectDirectoryIsQuoted() {
         // The directory is operator-configurable and lands in a shell command. Vaier quotes every path it
         // hands to a shell (see BorgCommand); this is no different.
-        assertThat(SelfUpgradeScript.generate("/home/my server/vaier", "vaier", "run-1", 90))
+        assertThat(SelfUpdateScript.generate("/home/my server/vaier", "vaier", "run-1", 90))
             .contains("'/home/my server/vaier'");
     }
 }

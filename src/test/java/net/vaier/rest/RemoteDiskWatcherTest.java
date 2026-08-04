@@ -964,7 +964,7 @@ class RemoteDiskWatcherTest {
 
     @Test
     void aMachineWhoseSshUserCannotDriveDocker_isRecordedAsRefused() {
-        // Colina 27: geir is not in that host's docker group, so every compose command an upgrade would
+        // Colina 27: geir is not in that host's docker group, so every compose command an update would
         // run there dies on permission denied — while the container scrape, which uses the Docker API over
         // the tunnel, shows the machine as perfectly healthy.
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("colina27")));

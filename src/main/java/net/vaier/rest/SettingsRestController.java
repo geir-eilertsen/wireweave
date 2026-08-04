@@ -1,7 +1,7 @@
 package net.vaier.rest;
 
 import net.vaier.application.GetAppSettingsUseCase;
-import net.vaier.application.GetSelfUpgradeStatusUseCase;
+import net.vaier.application.GetSelfUpdateStatusUseCase;
 import net.vaier.application.GetAppSettingsUseCase.AppSettingsResult;
 import net.vaier.application.GetAppVersionUseCase;
 import net.vaier.application.SetSurvivalKitPassphraseUseCase;
@@ -9,8 +9,8 @@ import net.vaier.application.TestSmtpCredentialsUseCase;
 import net.vaier.application.UpdateBackupSettingsUseCase;
 import net.vaier.application.UpdateDiskMonitorSettingsUseCase;
 import net.vaier.application.UpdateSmtpSettingsUseCase;
-import net.vaier.application.UpgradeVaierUseCase;
-import net.vaier.domain.SelfUpgradeStatus;
+import net.vaier.application.UpdateVaierUseCase;
+import net.vaier.domain.SelfUpdateStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -30,8 +30,8 @@ public class SettingsRestController {
     private final UpdateDiskMonitorSettingsUseCase updateDiskMonitorSettingsUseCase;
     private final UpdateBackupSettingsUseCase updateBackupSettingsUseCase;
     private final SetSurvivalKitPassphraseUseCase setSurvivalKitPassphraseUseCase;
-    private final GetSelfUpgradeStatusUseCase getSelfUpgradeStatusUseCase;
-    private final UpgradeVaierUseCase upgradeVaierUseCase;
+    private final GetSelfUpdateStatusUseCase getSelfUpdateStatusUseCase;
+    private final UpdateVaierUseCase updateVaierUseCase;
 
     public SettingsRestController(GetAppSettingsUseCase getAppSettingsUseCase,
                                   GetAppVersionUseCase getAppVersionUseCase,
@@ -40,8 +40,8 @@ public class SettingsRestController {
                                   UpdateDiskMonitorSettingsUseCase updateDiskMonitorSettingsUseCase,
                                   UpdateBackupSettingsUseCase updateBackupSettingsUseCase,
                                   SetSurvivalKitPassphraseUseCase setSurvivalKitPassphraseUseCase,
-                                  GetSelfUpgradeStatusUseCase getSelfUpgradeStatusUseCase,
-                                  UpgradeVaierUseCase upgradeVaierUseCase) {
+                                  GetSelfUpdateStatusUseCase getSelfUpdateStatusUseCase,
+                                  UpdateVaierUseCase updateVaierUseCase) {
         this.getAppSettingsUseCase = getAppSettingsUseCase;
         this.getAppVersionUseCase = getAppVersionUseCase;
         this.updateSmtpSettingsUseCase = updateSmtpSettingsUseCase;
@@ -49,8 +49,8 @@ public class SettingsRestController {
         this.updateDiskMonitorSettingsUseCase = updateDiskMonitorSettingsUseCase;
         this.updateBackupSettingsUseCase = updateBackupSettingsUseCase;
         this.setSurvivalKitPassphraseUseCase = setSurvivalKitPassphraseUseCase;
-        this.getSelfUpgradeStatusUseCase = getSelfUpgradeStatusUseCase;
-        this.upgradeVaierUseCase = upgradeVaierUseCase;
+        this.getSelfUpdateStatusUseCase = getSelfUpdateStatusUseCase;
+        this.updateVaierUseCase = updateVaierUseCase;
     }
 
     @GetMapping("/config")
@@ -60,8 +60,8 @@ public class SettingsRestController {
 
     /**
      * The deployed Vaier version, surfaced so the operator always sees which build is running. It doubles as
-     * the self-upgrade's liveness probe: the replacement container answering here proves both that it booted
-     * and that it is the build we asked for (see {@code SelfUpgradeScript}).
+     * the self-update's liveness probe: the replacement container answering here proves both that it booted
+     * and that it is the build we asked for (see {@code SelfUpdateScript}).
      */
     @GetMapping("/version")
     public ResponseEntity<VersionResponse> getVersion() {
@@ -69,13 +69,13 @@ public class SettingsRestController {
     }
 
     /**
-     * Whether a newer Vaier image is being served, and how the last self-upgrade went. Both are reads: the
-     * upgrade itself only ever happens because someone pressed the button below.
+     * Whether a newer Vaier image is being served, and how the last self-update went. Both are reads: the
+     * update itself only ever happens because someone pressed the button below.
      */
-    @GetMapping("/upgrade")
-    public ResponseEntity<UpgradeResponse> getUpgrade() {
-        return ResponseEntity.ok(UpgradeResponse.from(
-            getSelfUpgradeStatusUseCase.upgradeAvailable(), getSelfUpgradeStatusUseCase.lastUpgrade()));
+    @GetMapping("/update")
+    public ResponseEntity<UpdateResponse> getUpdate() {
+        return ResponseEntity.ok(UpdateResponse.from(
+            getSelfUpdateStatusUseCase.updateAvailable(), getSelfUpdateStatusUseCase.lastUpdate()));
     }
 
     /**
@@ -83,22 +83,22 @@ public class SettingsRestController {
      * later, because the container serving this request is the one being replaced. The script on the host
      * decides how it ends, and rolls back to the image that was running if the new one does not answer.
      */
-    @PostMapping("/upgrade")
-    public ResponseEntity<UpgradeResponse> upgrade() {
-        SelfUpgradeStatus started = upgradeVaierUseCase.upgradeSelf();
-        return started.outcome() == SelfUpgradeStatus.Outcome.FAILED
-            ? ResponseEntity.unprocessableEntity().body(UpgradeResponse.from(false, started))
-            : ResponseEntity.accepted().body(UpgradeResponse.from(false, started));
+    @PostMapping("/update")
+    public ResponseEntity<UpdateResponse> update() {
+        SelfUpdateStatus started = updateVaierUseCase.updateSelf();
+        return started.outcome() == SelfUpdateStatus.Outcome.FAILED
+            ? ResponseEntity.unprocessableEntity().body(UpdateResponse.from(false, started))
+            : ResponseEntity.accepted().body(UpdateResponse.from(false, started));
     }
 
     /**
-     * What the Settings page is told about upgrading. {@code outcome} is the <em>last</em> upgrade's, not
+     * What the Settings page is told about updating. {@code outcome} is the <em>last</em> update's, not
      * this request's, so the page can say "the previous one rolled back" — which nothing else would reveal,
      * since a rolled-back Vaier is a running Vaier and looks perfectly healthy.
      */
-    record UpgradeResponse(boolean available, String outcome, String at, String detail, String runId) {
-        static UpgradeResponse from(boolean available, SelfUpgradeStatus status) {
-            return new UpgradeResponse(available, status.outcome().name(), status.at(), status.detail(),
+    record UpdateResponse(boolean available, String outcome, String at, String detail, String runId) {
+        static UpdateResponse from(boolean available, SelfUpdateStatus status) {
+            return new UpdateResponse(available, status.outcome().name(), status.at(), status.detail(),
                 status.runId());
         }
     }

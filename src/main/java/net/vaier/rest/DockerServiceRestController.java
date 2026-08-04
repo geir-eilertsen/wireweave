@@ -7,7 +7,7 @@ import net.vaier.domain.port.ForDiscoveringPeerContainers.PeerContainers;
 import net.vaier.application.CheckForImageUpdatesUseCase;
 import net.vaier.application.GetLanServerScrapeUseCase;
 import net.vaier.application.GetServerInfoUseCase;
-import net.vaier.application.UpgradeContainerImageUseCase;
+import net.vaier.application.UpdateContainerImageUseCase;
 import net.vaier.domain.DockerService;
 import net.vaier.domain.MachineId;
 import net.vaier.domain.MachineStatus;
@@ -31,20 +31,20 @@ public class DockerServiceRestController {
     private final DiscoverVaierServerContainersUseCase discoverVaierServerContainersUseCase;
     private final GetLanServerScrapeUseCase getLanServerScrapeUseCase;
     private final CheckForImageUpdatesUseCase checkForImageUpdatesUseCase;
-    private final UpgradeContainerImageUseCase upgradeContainerImageUseCase;
+    private final UpdateContainerImageUseCase updateContainerImageUseCase;
 
     public DockerServiceRestController(GetServerInfoUseCase getServerInfoUseCase,
                                        DiscoverPeerContainersUseCase discoverPeerContainersUseCase,
                                        DiscoverVaierServerContainersUseCase discoverVaierServerContainersUseCase,
                                        GetLanServerScrapeUseCase getLanServerScrapeUseCase,
                                        CheckForImageUpdatesUseCase checkForImageUpdatesUseCase,
-                                       UpgradeContainerImageUseCase upgradeContainerImageUseCase) {
+                                       UpdateContainerImageUseCase updateContainerImageUseCase) {
         this.getServerInfoUseCase = getServerInfoUseCase;
         this.discoverPeerContainersUseCase = discoverPeerContainersUseCase;
         this.discoverVaierServerContainersUseCase = discoverVaierServerContainersUseCase;
         this.getLanServerScrapeUseCase = getLanServerScrapeUseCase;
         this.checkForImageUpdatesUseCase = checkForImageUpdatesUseCase;
-        this.upgradeContainerImageUseCase = upgradeContainerImageUseCase;
+        this.updateContainerImageUseCase = updateContainerImageUseCase;
     }
 
     @GetMapping
@@ -106,11 +106,11 @@ public class DockerServiceRestController {
     record UpdateCheckResponse(boolean checked, boolean changed, String lastCheckedAt) {}
 
     /**
-     * Upgrade one container to the image its registry now serves (#352) — the verb the update-available
+     * Update one container to the image its registry now serves (#352) — the verb the update-available
      * mark never had.
      *
      * <p><b>202, not 200.</b> A pull is minutes of somebody else's bandwidth, so this accepts the request
-     * and returns; the outcome arrives on the fleet SSE stream as a {@code container-upgrade-settled}
+     * and returns; the outcome arrives on the fleet SSE stream as a {@code container-update-settled}
      * event carrying the sentence to show. Everything that can be refused is refused before the accept,
      * so a refusal is a status code and not an event that never comes: {@code 404} for a container that
      * machine does not have, {@code 409} for one Vaier will not recreate (carrying the plain reason),
@@ -121,12 +121,12 @@ public class DockerServiceRestController {
      * them, and the run goes over SSH rather than through {@code docker-socket-proxy}, whose permissions
      * are deliberately not widened for this.
      */
-    @PostMapping("/upgrade")
-    public ResponseEntity<UpgradeAcceptedResponse> upgradeContainerImage(@RequestBody UpgradeRequest request) {
+    @PostMapping("/update")
+    public ResponseEntity<UpdateAcceptedResponse> updateContainerImage(@RequestBody UpdateRequest request) {
         MachineId machineId = MachineId.of(request.machineId());
-        upgradeContainerImageUseCase.upgradeContainerImage(machineId, request.containerName());
+        updateContainerImageUseCase.updateContainerImage(machineId, request.containerName());
         return ResponseEntity.accepted()
-            .body(new UpgradeAcceptedResponse(machineId.value(), request.containerName()));
+            .body(new UpdateAcceptedResponse(machineId.value(), request.containerName()));
     }
 
     /**
@@ -134,8 +134,8 @@ public class DockerServiceRestController {
      *                      machines may share and either may change
      * @param containerName the container as the host's Docker reports it
      */
-    record UpgradeRequest(String machineId, String containerName) {}
+    record UpdateRequest(String machineId, String containerName) {}
 
-    /** What an accepted upgrade echoes back, so the browser knows which card the settled event belongs to. */
-    record UpgradeAcceptedResponse(String machineId, String containerName) {}
+    /** What an accepted update echoes back, so the browser knows which card the settled event belongs to. */
+    record UpdateAcceptedResponse(String machineId, String containerName) {}
 }

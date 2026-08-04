@@ -40,7 +40,7 @@ public final class VaierServerCatalogue {
         "host-lan-routes", "traefik-lan-routes",
         // The one-shot init containers that render config before their service starts.
         "vaier-init", "oauth2-proxy-init", "dex-init", "geoip-init",
-        // Decommissioned in #305 and gone from the stack — kept because an upgraded host can still be
+        // Decommissioned in #305 and gone from the stack — kept because an updated host can still be
         // carrying the containers, and a leftover session store is not something to offer publishing.
         "authelia", "redis"
     );
@@ -92,7 +92,7 @@ public final class VaierServerCatalogue {
      * <em>before</em> the registries are asked also keeps them from spending a rate limit that is real and
      * shared with every image the operator <em>can</em> act on.
      *
-     * <p><b>No exception for {@code vaier} itself.</b> Settings → Upgrade asks for itself rather than
+     * <p><b>No exception for {@code vaier} itself.</b> Settings → Update asks for itself rather than
      * reading a verdict from here, so the mark buys nothing — and on a host that builds Vaier locally the
      * local digest differs from what Docker Hub serves for {@code latest}, which makes the mark read
      * "newer available" when acting on it would <b>downgrade</b>. A mark that talks an operator into a

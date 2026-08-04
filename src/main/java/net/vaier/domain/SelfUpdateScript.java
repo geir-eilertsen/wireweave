@@ -3,9 +3,9 @@ package net.vaier.domain;
 /**
  * The script Vaier runs on its own host to replace itself, and the command that launches it.
  *
- * <p>Everything about its shape follows from one fact: <b>the process that asks for the upgrade dies in the
+ * <p>Everything about its shape follows from one fact: <b>the process that asks for the update dies in the
  * middle of it</b>. A container cannot recreate itself — the instant {@code docker compose up -d} replaces
- * it, whatever was driving the upgrade is gone, along with any in-memory record that it was happening and any
+ * it, whatever was driving the update is gone, along with any in-memory record that it was happening and any
  * connection it might have reported to. So the work is handed to the host and detached, and it has to be able
  * to finish, judge itself, undo itself and leave an account, with nobody listening.
  *
@@ -18,7 +18,7 @@ package net.vaier.domain;
  * <p>Rendering the script here rather than in a service follows {@link BorgServerSetupScript} and
  * {@link BorgClientSetupScript}: what the host is told to do is a domain rule, and the runner only carries it.
  */
-public final class SelfUpgradeScript {
+public final class SelfUpdateScript {
 
     /**
      * Where the script leaves its account of what happened. Vaier is restarting while it runs, so there is no
@@ -27,24 +27,28 @@ public final class SelfUpgradeScript {
      *
      * <p>Under the SSH user's own home, deliberately, and it is a shell expression rather than a path: a
      * fixed {@code /var/lib/...} needs root to create, and Vaier does not always have root on the host it
-     * upgrades. It would not have failed loudly either — the upgrade would have run correctly and simply left
+     * updates. It would not have failed loudly either — the update would have run correctly and simply left
      * no account, so a rollback would have been silent and Settings would have gone on reporting that nothing
-     * had ever been upgraded. (The same trap as {@code /var/lib/vaier-backup} on a non-root host.) Both the
+     * had ever been updated. (The same trap as {@code /var/lib/vaier-backup} on a non-root host.) Both the
      * script and the read run as the same SSH user, so both resolve it to the same place.
+     *
+     * <p>Still spelled "upgrade": the writer is the <em>old</em> Vaier's script and the reader is the new
+     * one, so renaming the path would lose the account of the very update that renamed it.
      */
     public static final String RESULT_FILE = "$HOME/.vaier-upgrade/last-upgrade";
 
     /** How long to wait for the replacement to answer before deciding it will not. */
     public static final int DEFAULT_HEALTH_TIMEOUT_SECONDS = 120;
 
-    private SelfUpgradeScript() {}
+    private SelfUpdateScript() {}
 
     /**
-     * Render the upgrade script. It pins the running image, pulls, recreates, waits (bounded) for the new
+     * Render the update script. It pins the running image, pulls, recreates, waits (bounded) for the new
      * container to answer on the endpoint that reports Vaier's version — so "it came up" and "it is the build
      * we asked for" are one check — and on silence puts the pinned image back. Every path out writes a single
      * line to {@link #RESULT_FILE}: {@code UPGRADED}, {@code ROLLED_BACK} or {@code FAILED}, with the run id
-     * so a stale result from an earlier upgrade is never mistaken for this one's.
+     * so a stale result from an earlier update is never mistaken for this one's. Those words are the on-disk
+     * protocol and are frozen — see {@link #RESULT_FILE}.
      */
     public static String generate(String composeDir, String service, String runId, int healthTimeoutSeconds) {
         String dir = quote(composeDir);
@@ -52,7 +56,7 @@ public final class SelfUpgradeScript {
         StringBuilder sb = new StringBuilder();
         sb.append("#!/usr/bin/env bash\n");
         sb.append("#\n");
-        sb.append("# Vaier self-upgrade. Runs detached on the host, because it replaces the container that\n");
+        sb.append("# Vaier self-update. Runs detached on the host, because it replaces the container that\n");
         sb.append("# asked for it. Rolls back to the previously running image if the new one does not answer.\n");
         sb.append("#\n");
         // Deliberately not `set -e`: a failing step must reach the result file, not abort the script and
@@ -103,7 +107,7 @@ public final class SelfUpgradeScript {
         // It did not answer. Put back exactly what was running, by digest.
         sb.append("if [ -n \"$PREVIOUS_IMAGE\" ]; then\n");
         sb.append("    docker tag \"$PREVIOUS_IMAGE\" ")
-            .append(quote(SelfUpgrade.IMAGE_REPOSITORY + ":latest")).append(" >/dev/null 2>&1\n");
+            .append(quote(SelfUpdate.IMAGE_REPOSITORY + ":latest")).append(" >/dev/null 2>&1\n");
         sb.append("    docker compose up -d --force-recreate ").append(svc).append(" >/dev/null 2>&1\n");
         sb.append("    say ROLLED_BACK \"$PREVIOUS_IMAGE\"\n");
         sb.append("    exit 5\n");
@@ -116,7 +120,7 @@ public final class SelfUpgradeScript {
     /**
      * The command that starts the script without tying it to the SSH session — or to the container — that
      * launched it. {@code setsid} detaches it from the session and {@code nohup} from the hangup, so killing
-     * the Vaier container mid-upgrade (which is the whole point of the exercise) cannot kill the upgrade
+     * the Vaier container mid-update (which is the whole point of the exercise) cannot kill the update
      * halfway through, which is the worst possible moment for it to stop.
      */
     public static String launch(String composeDir, String runId) {
@@ -126,7 +130,7 @@ public final class SelfUpgradeScript {
 
     /** Where the rendered script is staged on the host, per run so two never collide. */
     public static String scriptPathFor(String composeDir, String runId) {
-        return composeDir + "/.vaier-upgrade-" + runId + ".sh";
+        return composeDir + "/.vaier-update-" + runId + ".sh";
     }
 
     /** Where a compose-started container's project lives, and what compose calls it there. */
@@ -147,7 +151,7 @@ public final class SelfUpgradeScript {
 
     /**
      * Read that answer. Empty when either label is missing, which means this container was <b>not</b> started
-     * by compose — there is no {@code docker compose up} that would bring it back, so an upgrade would take
+     * by compose — there is no {@code docker compose up} that would bring it back, so an update would take
      * Vaier down and leave it down. Refusing is the only safe reading. Never throws.
      */
     public static java.util.Optional<ComposeLocation> parseComposeLabels(String stdout) {
@@ -170,7 +174,7 @@ public final class SelfUpgradeScript {
             + "chmod +x " + quote(path) + "; echo STAGED";
     }
 
-    /** Read the account the last upgrade left, if any. Absence is not an error — most hosts have none. */
+    /** Read the account the last update left, if any. Absence is not an error — most hosts have none. */
     public static String readResult() {
         return "cat \"" + RESULT_FILE + "\" 2>/dev/null || true";
     }

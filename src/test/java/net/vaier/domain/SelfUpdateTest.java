@@ -12,14 +12,14 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * Vaier upgrading itself: which container is Vaier, and whether there is anything to do about it.
+ * Vaier updating itself: which container is Vaier, and whether there is anything to do about it.
  *
  * <p>This is the one container Vaier is allowed to pull. {@code ImageUpdateWatcher} states the rule for every
  * other one — detection is read-only, the operator's move is the operator's — and that rule survives here,
- * because upgrading yourself is not the same act as reaching into someone else's machine and restarting their
+ * because updating yourself is not the same act as reaching into someone else's machine and restarting their
  * service. Vaier only ever does this to itself.
  */
-class SelfUpgradeTest {
+class SelfUpdateTest {
 
     private DockerService container(String name, String image, UpdateAvailability verdict) {
         return new DockerService("cid", name, image, "1.0", List.of(), List.of(), "running",
@@ -36,15 +36,15 @@ class SelfUpgradeTest {
             container("vaier-offline", "nginx:1.27-alpine", UpdateAvailability.UP_TO_DATE),
             container("vaier", "getvaier/vaier:latest", UpdateAvailability.UPDATE_AVAILABLE));
 
-        assertThat(SelfUpgrade.findSelf(containers)).isPresent();
-        assertThat(SelfUpgrade.findSelf(containers).get().containerName()).isEqualTo("vaier");
+        assertThat(SelfUpdate.findSelf(containers)).isPresent();
+        assertThat(SelfUpdate.findSelf(containers).get().containerName()).isEqualTo("vaier");
     }
 
     @Test
     void anOfflinePageIsNotVaier() {
         // vaier-offline exists precisely to be up while Vaier is down. Mistaking it for Vaier would have the
-        // upgrade recreate the one container that is supposed to survive the upgrade.
-        assertThat(SelfUpgrade.findSelf(List.of(
+        // update recreate the one container that is supposed to survive the update.
+        assertThat(SelfUpdate.findSelf(List.of(
             container("vaier-offline", "nginx:1.27-alpine", UpdateAvailability.UPDATE_AVAILABLE))))
             .isEmpty();
     }
@@ -63,49 +63,49 @@ class SelfUpgradeTest {
 
     @Test
     void thereIsSomethingToDo_onlyWhenTheRegistryReallyServesSomethingElse() {
-        assertThat(SelfUpgrade.upgradeAvailable(vaierRunning(UpdateAvailability.UNKNOWN),
+        assertThat(SelfUpdate.updateAvailable(vaierRunning(UpdateAvailability.UNKNOWN),
             registryServing("sha256:newer"))).isTrue();
-        assertThat(SelfUpgrade.upgradeAvailable(vaierRunning(UpdateAvailability.UNKNOWN),
+        assertThat(SelfUpdate.updateAvailable(vaierRunning(UpdateAvailability.UNKNOWN),
             registryServing("sha256:local"))).isFalse();
-        assertThat(SelfUpgrade.upgradeAvailable(List.of(), registryServing("sha256:newer"))).isFalse();
+        assertThat(SelfUpdate.updateAvailable(List.of(), registryServing("sha256:newer"))).isFalse();
     }
 
     @Test
     void settingsAsksTheRegistryItself_ratherThanReadingTheUpdateSweepsVerdict() {
         // #353 stops sweeping Vaier's own stack, `vaier` included, so the verdict on this container is now
-        // permanently UNKNOWN. Reading it would leave Settings blind to every upgrade there is — the one
+        // permanently UNKNOWN. Reading it would leave Settings blind to every update there is — the one
         // path the operator said should speak for itself. It asks the registry directly instead.
-        assertThat(SelfUpgrade.upgradeAvailable(vaierRunning(UpdateAvailability.UNKNOWN),
+        assertThat(SelfUpdate.updateAvailable(vaierRunning(UpdateAvailability.UNKNOWN),
             registryServing("sha256:newer"))).isTrue();
     }
 
     @Test
     void aRegistryThatCannotAnswerIsNeverAReasonToRecreateTheControlPlane() {
         // Unreachable, rate-limited, or a locally-built image with no registry digest to compare. Treating
-        // "cannot tell" as "upgrade" would turn a rate limit into an outage of the whole fleet's control
+        // "cannot tell" as "update" would turn a rate limit into an outage of the whole fleet's control
         // plane — and on a host that builds Vaier locally it would offer a DOWNGRADE to Hub's latest.
-        assertThat(SelfUpgrade.upgradeAvailable(vaierRunning(UpdateAvailability.UNKNOWN),
+        assertThat(SelfUpdate.updateAvailable(vaierRunning(UpdateAvailability.UNKNOWN),
             registryServing(null))).isFalse();
 
         ForResolvingRegistryDigest throwing = mock(ForResolvingRegistryDigest.class);
         when(throwing.resolveDigest(any())).thenThrow(new RuntimeException("429 Too Many Requests"));
-        assertThat(SelfUpgrade.upgradeAvailable(vaierRunning(UpdateAvailability.UNKNOWN), throwing))
+        assertThat(SelfUpdate.updateAvailable(vaierRunning(UpdateAvailability.UNKNOWN), throwing))
             .isFalse();
     }
 
     @Test
-    void aContainerWithNoLocalDigestIsNeverUpgraded() {
+    void aContainerWithNoLocalDigestIsNeverUpdated() {
         List<DockerService> noDigest = List.of(new DockerService("cid", "vaier", "getvaier/vaier:latest",
             "1.0", List.of(), List.of(), "running", null, UpdateAvailability.UNKNOWN));
 
-        assertThat(SelfUpgrade.upgradeAvailable(noDigest, registryServing("sha256:newer"))).isFalse();
+        assertThat(SelfUpdate.updateAvailable(noDigest, registryServing("sha256:newer"))).isFalse();
     }
 
     @Test
     void noVaierContainerMeansTheRegistryIsNeverAsked() {
         ForResolvingRegistryDigest registry = mock(ForResolvingRegistryDigest.class);
 
-        assertThat(SelfUpgrade.upgradeAvailable(List.of(
+        assertThat(SelfUpdate.updateAvailable(List.of(
             container("traefik", "traefik:v3.1", UpdateAvailability.UNKNOWN)), registry)).isFalse();
 
         verifyNoInteractions(registry);
