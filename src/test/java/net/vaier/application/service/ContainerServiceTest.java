@@ -1516,17 +1516,27 @@ class ContainerServiceTest {
         assertThat(asTheBrowserWouldSeeIt.get()).isEqualTo(UpdateAvailability.UNKNOWN);
     }
 
-    /** Run {@code work} with ContainerService's log captured. */
+    /**
+     * Run {@code work} with ContainerService's log captured.
+     *
+     * <p>Sets the level too, and restores it: logback's context is JVM-wide, so once the one
+     * {@code @ActiveProfiles("integration")} test has booted Spring, {@code net.vaier} sits at WARN for
+     * every test after it and an INFO capture silently returns nothing. Which tests those are depends on
+     * surefire's ordering, which differs between a laptop and CI.
+     */
     private List<ILoggingEvent> whileCapturingTheLog(Runnable work) {
         Logger serviceLog = (Logger) LoggerFactory.getLogger(ContainerService.class);
+        Level original = serviceLog.getLevel();
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
         appender.start();
         serviceLog.addAppender(appender);
+        serviceLog.setLevel(Level.INFO);
         try {
             work.run();
             return List.copyOf(appender.list);
         } finally {
             serviceLog.detachAppender(appender);
+            serviceLog.setLevel(original);
         }
     }
 
