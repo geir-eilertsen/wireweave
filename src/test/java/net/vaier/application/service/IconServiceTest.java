@@ -1,8 +1,10 @@
 package net.vaier.application.service;
 
 import net.vaier.domain.Icon;
+import net.vaier.domain.ReverseProxyRoute;
 import net.vaier.domain.port.ForFetchingIcons;
 import net.vaier.domain.port.ForFetchingIcons.FetchedBytes;
+import net.vaier.domain.port.ForPersistingReverseProxyRoutes;
 import net.vaier.domain.port.ForStoringIcons;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -10,10 +12,12 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -26,10 +30,17 @@ class IconServiceTest {
 
     @Mock ForStoringIcons forStoringIcons;
 
+    @Mock ForPersistingReverseProxyRoutes forPersistingReverseProxyRoutes;
+
     @InjectMocks IconService service;
 
     private static byte[] png() {
         return new byte[]{(byte) 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
+    }
+
+    private static ReverseProxyRoute route(String domain, String address, int port) {
+        return new ReverseProxyRoute("route", domain, address, port, "svc", null,
+            null, null, null, null, false, true, "http");
     }
 
     @Test
@@ -158,6 +169,37 @@ class IconServiceTest {
         verify(forStoringIcons, never()).store(any(), any());
         // The negative is still remembered in memory to avoid hammering a dead host.
         assertThat(service.cache).containsKey("dead.example.com");
+    }
+
+    @Test
+    void getIcon_resolvesFromTheServiceOriginWhenThePublicHostIsAuthGated() {
+        // A social-gated route answers 401 to Vaier's own fetch of https://<host>, so the site's
+        // own hint is unreachable there. The backend behind Traefik is un-gated and has it.
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
+            .thenReturn(List.of(route("rack.example.com", "192.168.3.132", 8080)));
+        when(forFetchingIcons.fetchHtml("http://192.168.3.132:8080/"))
+            .thenReturn(Optional.of("<link rel=\"icon\" type=\"image/svg+xml\" href=\"/assets/rack.svg\">"));
+        when(forFetchingIcons.fetchBytes("http://192.168.3.132:8080/assets/rack.svg"))
+            .thenReturn(Optional.of(new FetchedBytes("<svg/>".getBytes(), "image/svg+xml")));
+
+        Optional<Icon> result = service.getIcon("rack.example.com", null);
+
+        assertThat(result).isPresent();
+        assertThat(result.get().contentType()).isEqualTo("image/svg+xml");
+        verify(forFetchingIcons, never()).fetchHtml("https://rack.example.com/");
+    }
+
+    @Test
+    void getIcon_fallsBackToTheOriginFaviconBeforeThePublicHost() {
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
+            .thenReturn(List.of(route("rack.example.com", "192.168.3.132", 8080)));
+        when(forFetchingIcons.fetchHtml(anyString())).thenReturn(Optional.empty());
+        byte[] ico = {0, 0, 1, 0, 1, 0};
+        when(forFetchingIcons.fetchBytes("http://192.168.3.132:8080/favicon.ico"))
+            .thenReturn(Optional.of(new FetchedBytes(ico, null)));
+
+        assertThat(service.getIcon("rack.example.com", null)).isPresent();
+        verify(forFetchingIcons, never()).fetchBytes("https://rack.example.com/favicon.ico");
     }
 
     @Test

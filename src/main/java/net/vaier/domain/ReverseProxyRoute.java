@@ -14,6 +14,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.regex.Pattern;
 
@@ -220,17 +221,17 @@ public class ReverseProxyRoute {
     public static boolean conflictsWithExisting(List<ReverseProxyRoute> existing, String fqdn,
                                                 String pathPrefix) {
         return existing.stream().anyMatch(r ->
-            fqdn.equals(r.getDomainName()) && java.util.Objects.equals(pathPrefix, r.getPathPrefix()));
+            fqdn.equals(r.getDomainName()) && Objects.equals(pathPrefix, r.getPathPrefix()));
     }
 
     /**
      * Find the route with the given FQDN + pathPrefix in {@code existing}. Used by delete flows to
      * resolve a user-facing (fqdn, pathPrefix) tuple into a specific routerName.
      */
-    public static java.util.Optional<ReverseProxyRoute> findByFqdnAndPath(List<ReverseProxyRoute> existing,
+    public static Optional<ReverseProxyRoute> findByFqdnAndPath(List<ReverseProxyRoute> existing,
                                                                           String fqdn, String pathPrefix) {
         return existing.stream()
-            .filter(r -> fqdn.equals(r.getDomainName()) && java.util.Objects.equals(pathPrefix, r.getPathPrefix()))
+            .filter(r -> fqdn.equals(r.getDomainName()) && Objects.equals(pathPrefix, r.getPathPrefix()))
             .findFirst();
     }
 
@@ -500,7 +501,7 @@ public class ReverseProxyRoute {
      * @param peerContainersByVpnIp        containers per VPN peer, keyed by the peer's VPN IP
      * @param lanServerContainersByAddress containers per LAN server, keyed by its LAN address
      */
-    public java.util.Optional<DockerService> backingContainer(
+    public Optional<DockerService> backingContainer(
             List<DockerService> vaierServerContainers,
             Map<String, List<DockerService>> peerContainersByVpnIp,
             Map<String, List<DockerService>> lanServerContainersByAddress) {
@@ -521,8 +522,8 @@ public class ReverseProxyRoute {
      * <em>published</em> (host) port — never the container's internal port — so a container is
      * only ever attributed to the service actually reachable at that host port.
      */
-    private java.util.Optional<DockerService> firstPublishedOnPort(List<DockerService> candidates) {
-        if (candidates == null) return java.util.Optional.empty();
+    private Optional<DockerService> firstPublishedOnPort(List<DockerService> candidates) {
+        if (candidates == null) return Optional.empty();
         return candidates.stream()
             .filter(c -> c.ports().stream()
                 .anyMatch(m -> m.publicPort() != null && m.publicPort() == port))
@@ -556,6 +557,32 @@ public class ReverseProxyRoute {
     }
 
     /**
+     * Where the backing service actually listens — {@code protocol://address:port}, no path. This
+     * is the un-gated way in: everything Vaier itself fetches from a published service (its icon,
+     * say) reaches it here rather than through {@code https://<fqdn>}, which for a social-gated
+     * route answers 401 to any request that carries no oauth2 cookie — and Vaier carries none.
+     */
+    public String originUrl() {
+        String scheme = (protocol == null || protocol.isBlank()) ? "http" : protocol;
+        return scheme + "://" + address + ":" + port;
+    }
+
+    /**
+     * The {@link #originUrl} of the route serving {@code fqdn} at {@code pathPrefix}, or empty when
+     * no route matches. A null and an empty prefix mean the same thing — the host-only route — so
+     * callers that normalise a missing prefix to {@code ""} still find it.
+     */
+    public static Optional<String> originUrlFor(List<ReverseProxyRoute> routes, String fqdn,
+                                                String pathPrefix) {
+        String wanted = (pathPrefix == null || pathPrefix.isEmpty()) ? null : pathPrefix;
+        return routes.stream()
+            .filter(r -> fqdn.equals(r.getDomainName()))
+            .filter(r -> Objects.equals(wanted, r.getPathPrefix()))
+            .findFirst()
+            .map(ReverseProxyRoute::originUrl);
+    }
+
+    /**
      * This route's running version, read from its configured version endpoint via the
      * {@code prober} driven port. The route owns the interaction end to end: it decides whether
      * there is an endpoint worth probing and builds the URL, then delegates the HTTP call to the
@@ -563,8 +590,8 @@ public class ReverseProxyRoute {
      * takes {@link ForResolvingPeerIds}; the service must never call the port itself and feed
      * the result back. Empty when no endpoint is configured or the probe yields nothing.
      */
-    public java.util.Optional<String> probeVersion(ForProbingServiceVersion prober) {
-        if (!hasVersionEndpoint()) return java.util.Optional.empty();
+    public Optional<String> probeVersion(ForProbingServiceVersion prober) {
+        if (!hasVersionEndpoint()) return Optional.empty();
         return prober.probeVersion(versionProbeUrl(), versionProperty);
     }
 

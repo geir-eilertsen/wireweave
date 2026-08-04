@@ -886,6 +886,53 @@ class ReverseProxyRouteTest {
         assertThat(route.versionProbeUrl()).isEqualTo("http://192.168.3.50:9000/builder/version");
     }
 
+    // --- originUrl (icon resolution reaches the backend, not the gated public host) ---
+
+    @Test
+    void originUrl_buildsSchemeHostPortFromTheBackingService() {
+        assertThat(lanRoute("rack.example.com", "192.168.3.132", 8080).originUrl())
+            .isEqualTo("http://192.168.3.132:8080");
+    }
+
+    @Test
+    void originUrl_defaultsToHttpWhenNoProtocolIsRecorded() {
+        assertThat(route("app.example.com", "vaier", 8080).originUrl())
+            .isEqualTo("http://vaier:8080");
+    }
+
+    @Test
+    void originUrlFor_findsTheRouteServingThatHost() {
+        List<ReverseProxyRoute> routes = List.of(
+            lanRoute("other.example.com", "10.0.0.1", 80),
+            lanRoute("rack.example.com", "192.168.3.132", 8080));
+
+        assertThat(ReverseProxyRoute.originUrlFor(routes, "rack.example.com", null))
+            .contains("http://192.168.3.132:8080");
+    }
+
+    @Test
+    void originUrlFor_treatsAnEmptyPathPrefixAsNone() {
+        // The icon lookup normalises a missing prefix to ""; the route stores null. Same route.
+        List<ReverseProxyRoute> routes = List.of(lanRoute("rack.example.com", "192.168.3.132", 8080));
+
+        assertThat(ReverseProxyRoute.originUrlFor(routes, "rack.example.com", ""))
+            .contains("http://192.168.3.132:8080");
+    }
+
+    @Test
+    void originUrlFor_distinguishesPathRoutesSharingAHost() {
+        List<ReverseProxyRoute> routes = List.of(pathRoute("shared.example.com", "/builder"));
+
+        assertThat(ReverseProxyRoute.originUrlFor(routes, "shared.example.com", "/builder"))
+            .contains("http://10.0.0.1:8080");
+        assertThat(ReverseProxyRoute.originUrlFor(routes, "shared.example.com", null)).isEmpty();
+    }
+
+    @Test
+    void originUrlFor_isEmptyWhenNoRouteServesThatHost() {
+        assertThat(ReverseProxyRoute.originUrlFor(List.of(), "rack.example.com", null)).isEmpty();
+    }
+
     @Test
     void probeVersion_delegatesToProberWithBuiltUrlAndProperty() {
         ReverseProxyRoute route = versionRoute("sys/metrics?name[]=system_info", "display");
