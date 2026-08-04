@@ -1399,33 +1399,34 @@
 
         const body = document.createElement('div');
         body.className = 'ex-pane-body';
-        // A LAN server is not on the WireGuard mesh — it sits on a relay's LAN and Vaier reaches it through that
-        // relay — so the tunnel facts (tunnel address, endpoint, handshake, transfer) simply do not exist for it.
-        // Showing them as blanks would be a claim it has a tunnel that is merely down. Instead it gets the facts
-        // it does have: where it lives on the LAN, and when Vaier last reached it. A WireGuard peer gets the mesh
-        // facts. `latestHandshake` (peer) and `lastSeen` (LAN server) are both Unix epoch seconds, rendered human.
+        // A LAN server has no tunnel, so it never gets mesh rows — blanks would claim one that is merely down.
         const isLan = m.type === 'LAN_SERVER';
         const isVaierServer = !!m.vaierServer;
         const rows = [];
         if (isVaierServer) {
-            // The hub is not a peer of itself: it has no tunnel address, endpoint, handshake or transfer — those
-            // are all empty, and four dashes are noise, not information. It gets only what is true of it.
             rows.push(['Role', 'The fleet’s hub — WireGuard server, reverse proxy and DNS']);
         } else if (isLan) {
             const lan = S.lan.get(m.id);
-            rows.push(['LAN address', m.lanAddress || m.lanCidr]);
             rows.push(['Last seen', lan ? agoFromEpochSeconds(lan.lastSeen) : '']);
         } else {
-            rows.push(['Tunnel address', tunnelAddress(m)]);
-            if (m.lanCidr || m.lanAddress) rows.push(['LAN', m.lanCidr || m.lanAddress]);
-            rows.push(['Endpoint', m.endpointIp ? m.endpointIp + ':' + (m.endpointPort || '') : '']);
-            rows.push(['Latest handshake', peer ? agoFromEpochSeconds(peer.latestHandshake) : '']);
-            rows.push(['Transfer', m.transferRx || m.transferTx
+            rows.push(['Last handshake', peer ? agoFromEpochSeconds(peer.latestHandshake) : '']);
+        }
+        rows.push(['Device category', categoryLabel(m.deviceCategory)]);
+        body.appendChild(kv(rows));
+
+        const wires = disclosure('Connection details');
+        const wireRows = [];
+        if (!isVaierServer && !isLan) {
+            wireRows.push(['Tunnel address', tunnelAddress(m)]);
+            wireRows.push(['Endpoint', m.endpointIp ? m.endpointIp + ':' + (m.endpointPort || '') : '']);
+            wireRows.push(['Transfer', m.transferRx || m.transferTx
                 ? (m.transferTx || '0') + ' up / ' + (m.transferRx || '0') + ' down' : '']);
         }
-        rows.push(['Docker', m.runsDocker ? (m.dockerPort ? 'Yes — port ' + m.dockerPort : 'Yes') : 'No']);
-        rows.push(['Device category', m.deviceCategory]);
-        body.appendChild(kv(rows));
+        if (isLan) wireRows.push(['LAN address', m.lanAddress || m.lanCidr]);
+        else if (m.lanCidr || m.lanAddress) wireRows.push(['LAN', m.lanCidr || m.lanAddress]);
+        wireRows.push(['Docker', m.runsDocker ? (m.dockerPort ? 'Yes — port ' + m.dockerPort : 'Yes') : 'No']);
+        wires.appendChild(kv(wireRows));
+        body.appendChild(wires);
 
         body.appendChild(section('Inside this machine'));
         const inside = childrenOf(S.path);
@@ -3296,11 +3297,7 @@
 
     async function reloadServices(machineId) {
         await loadServices();
-        // Publishing a port answers the publish nudge, and so does dismissing one — the nudge counts what is
-        // still unanswered on the machine. Nudges are read once per machine, so without dropping the cached
-        // answer the card would go on offering a service the operator just ignored until the pane was left
-        // and reopened. No polling: the operator's own action is the signal, exactly as with run-settled.
-        S.nudges.delete(machineId);
+        S.nudges.delete(machineId);   // publishing or ignoring answers the publish nudge; it is read once per machine
         go(['fleet', machineId, 'services']);   // stay on the entry; it repaints from the fresh data
     }
 
@@ -6381,6 +6378,11 @@
         s.textContent = summaryText;
         d.appendChild(s);
         return d;
+    }
+
+    function categoryLabel(category) {
+        const hit = DEVICE_CATEGORIES.find(([v]) => v === (category || ''));
+        return hit ? hit[1] : (category || '');
     }
 
     // The device-category picker, pre-selected to a machine's current shape. Shared by the add and edit forms —

@@ -3123,6 +3123,14 @@ contract, not an extension of this one. `docs/ADVANCED.md`'s description of the 
 
 ---
 
+### 6.40 The mark arrives with the mail, and a machine opens on what it is ✅ (implemented 2026-08-04)
+
+**The daily sweep told no one.** Colina's `netdata` alert landed in the operator's inbox while the Explorer showing that container went on showing no mark until the page was reloaded by hand. `ImageUpdateWatcher` swept, stored the verdicts and mailed — and published nothing. The operator's own **update check** had pushed since #57 slice 3; the daily path never did, so the one moment Vaier *learns* an image went stale was the one moment it told nobody already looking. A backend that knows and stays quiet is [[feedback_frontend_never_polls]] inverted: the browser cannot go looking, so the push is the only way the news travels. `sweepImageUpdates` now builds the same `UpdateCheckOutcome` the button does and pushes on `worthPublishing()` — one decision, so the schedule and the button can never disagree about what is worth repainting, and a quiet day still wakes nobody.
+
+**A machine pane opened on mechanism.** Tunnel address, endpoint, latest handshake, transfer and Docker port, as a table, above what the machine is for and what is inside it — the addresses an operator reads rarely and types almost never. The pane now leads with what it is (**Role** for the hub, otherwise the **device category**, rendered as its label rather than the raw enum) and how it is doing (last handshake, or last seen for a **LAN server**), then **Inside this machine**. The addresses moved into a collapsed **Connection details** fold — the shell's existing `disclosure()`, the same one Advanced already uses, so nothing new was invented and nothing was lost: they are one click down. [[feedback_simplify_operator_decisions]].
+
+---
+
 ## 7. End-to-End Workflows
 
 ### 7.1 New service on a peer (primary workflow)

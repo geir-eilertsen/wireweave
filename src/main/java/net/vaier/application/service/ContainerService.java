@@ -66,6 +66,7 @@ public class ContainerService implements
     private final ForPublishingEvents forPublishingEvents;
     private final ImageUpdateTracker imageUpdateTracker;
     private final UpdateCheckFloor updateCheckFloor;
+    private final Clock clock;
     // The cached scrapes + sweep verdicts now live in InMemoryContainerSnapshotStore (a service must
     // not implement the driven discovery ports); the scrape/sweep use cases here write and read raw
     // through the store, and consumers read the decorated views through the discovery ports.
@@ -114,6 +115,7 @@ public class ContainerService implements
         // second entry point ever forces a sweep it must share THIS floor (a bean, as the tracker had to
         // become); two floors would each admit a check a minute and quietly double the ceiling.
         this.updateCheckFloor = new UpdateCheckFloor(clock);
+        this.clock = clock;
         // The store adapter backs the write side and the three read ports; Spring resolves each of
         // these interfaces to that single bean (a service depends on ports, never the adapter class).
         this.snapshotStore = snapshotStore;
@@ -140,12 +142,19 @@ public class ContainerService implements
      *
      * <p>Reads the cached snapshots rather than re-scraping: the sweep asks registries, not hosts, and the
      * scheduler has already refreshed these within the last 30 seconds.
+     *
+     * <p>Pushes what it found, on the same domain decision the operator's own check uses: only a moved verdict
+     * is worth repainting. Without it the alert mail arrives while every open Explorer still shows no mark.
      */
     @Override
     public Map<ScopedImage, UpdateAvailability> sweepImageUpdates() {
+        Map<ScopedImage, UpdateAvailability> before = snapshotStore.imageUpdateVerdicts();
         Map<ScopedImage, UpdateAvailability> verdicts =
             ImageUpdateSweep.sweep(everyContainerVaierCanSee(), forResolvingRegistryDigest);
         snapshotStore.storeImageUpdateVerdicts(verdicts);
+        if (UpdateCheckOutcome.checked(before, verdicts, clock.instant()).worthPublishing()) {
+            forPublishingEvents.publish(SSE_TOPIC, SSE_EVENT, SSE_DATA);
+        }
         return verdicts;
     }
 

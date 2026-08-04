@@ -257,6 +257,37 @@ class ContainerServiceTest {
     }
 
     @Test
+    void sweepImageUpdates_pushesTheResultToo_soTheMarkArrivesWithTheMailAndNotOnTheNextReload() {
+        // The path that mails the operator was the one that told open Explorers nothing: the alert landed
+        // while the page it was about showed no mark until a manual reload.
+        when(forGettingVpnClients.getClients()).thenReturn(List.of());
+        when(forGettingServerInfo.getServicesWithExposedPorts(any()))
+            .thenReturn(List.of(imaged("vaultwarden", "vaultwarden/server:latest", "sha256:old")));
+        when(forResolvingRegistryDigest.resolveDigest(any())).thenReturn(Optional.of("sha256:new"));
+        service.refresh();
+
+        service.sweepImageUpdates();
+
+        verify(forPublishingEvents).publish(eq("published-services"), eq("service-updated"), any());
+    }
+
+    @Test
+    void sweepImageUpdates_pushesNothingWhenNoVerdictMoved() {
+        // Same rule as the operator's own check: only a change is worth waking every open Explorer.
+        when(forGettingVpnClients.getClients()).thenReturn(List.of());
+        when(forGettingServerInfo.getServicesWithExposedPorts(any()))
+            .thenReturn(List.of(imaged("vaultwarden", "vaultwarden/server:latest", "sha256:old")));
+        when(forResolvingRegistryDigest.resolveDigest(any())).thenReturn(Optional.of("sha256:new"));
+        service.refresh();
+        service.sweepImageUpdates();                        // settles the verdict at UPDATE_AVAILABLE
+        clearInvocations(forPublishingEvents);
+
+        service.sweepImageUpdates();                        // same answer, second day
+
+        verify(forPublishingEvents, never()).publish(any(), any(), any());
+    }
+
+    @Test
     void checkForImageUpdates_pushesNothingWhenNoVerdictMoved() {
         // The commonest outcome: they pulled, Vaier already agreed. Waking every open Explorer in the fleet to
         // redraw an identical page is noise, and the browser that clicked learns "nothing new" from its own

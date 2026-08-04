@@ -1517,11 +1517,29 @@ class ExplorerShellTest {
     }
 
     @Test
+    void openingAMachine_leadsWithWhatItIs_andFoldsTheAddressesAway() throws IOException {
+        // The pane used to open on a table of addresses. An operator opening a machine asks what it does and
+        // what is inside it, not what its tunnel address is — so the addresses fold, they do not disappear.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function renderMachine(pane) {");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }\n", from));
+
+        int fold = body.indexOf("disclosure('Connection details')");
+        assertThat(fold).as("the addresses fold away behind the shell's own disclosure, not a new component")
+            .isPositive();
+        assertThat(body.indexOf("'Device category'"))
+            .as("what the machine is stays in the open").isPositive().isLessThan(fold);
+        for (String mechanism : List.of("'Tunnel address'", "'Endpoint'", "'Transfer'", "'Docker'")) {
+            assertThat(body.indexOf(mechanism)).as("%s is folded away", mechanism)
+                .isPositive().isGreaterThan(fold);
+        }
+    }
+
+    @Test
     void ignoringOrPublishingAService_reopensTheMachinesNudges() throws IOException {
-        // The publish nudge counts what is still unanswered on the machine, so dismissing a port answers it —
-        // and the count on the card is stale the instant the operator clicks Ignore. Nudges are read once per
-        // machine, so without dropping the cached answer here the card keeps asking about a service the
-        // operator just said no to, for the rest of the session. Same reflex as the settled-run push.
+        // Nudges are read once per machine, so without dropping the cached answer the card keeps asking about
+        // a service the operator just dismissed, for the rest of the session.
         String js = read("explorer-shell.js");
         int from = js.indexOf("async function reloadServices(");
         assertThat(from).isPositive();
