@@ -3176,6 +3176,12 @@ contract, not an extension of this one. `docs/ADVANCED.md`'s description of the 
 
 ---
 
+### 6.42 The self-update's verdict is the domain's, not the browser's ✅ (implemented 2026-08-04)
+
+**A rule with a dead copy and a live one.** `SelfUpdateStatus.trouble()` — whether a self-update outcome is worth telling the operator about — had no production caller at all; only its test. The Settings page re-derived the same answer from the raw enum name, `outcome === 'ROLLED_BACK' || outcome === 'FAILED'`. The two agreed, and nothing kept them agreeing: a new trouble outcome would have gone silent in exactly the place silence costs most, since **a rolled-back Vaier is a running Vaier and looks perfectly healthy**. `UpdateResponse` now carries the domain's `trouble` verdict and the shell renders off it, choosing its wording per outcome with the failure sentence as the fallback — so an outcome the browser has never heard of still says something rather than nothing. Found by the hex audit that ran over the vocabulary rename (§6.41).
+
+---
+
 ## 7. End-to-End Workflows
 
 ### 7.1 New service on a peer (primary workflow)

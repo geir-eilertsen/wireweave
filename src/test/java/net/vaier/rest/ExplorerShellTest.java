@@ -1522,6 +1522,20 @@ class ExplorerShellTest {
     }
 
     @Test
+    void whetherTheLastSelfUpdateIsTrouble_isTheDomainsVerdict_notTheBrowsersOwn() throws IOException {
+        // The shell re-derived it from the raw outcome name, so a new trouble outcome would have gone silent
+        // in exactly the place silence is worst: a rolled-back Vaier is a running Vaier and looks healthy.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("const upd = S.settings.update || {};");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("if (upd.available) {", from));
+
+        assertThat(body).as("the gate is the domain's verdict").contains("upd.trouble");
+        assertThat(body).as("no second copy of the rule in JS")
+            .doesNotContain("upd.outcome === 'FAILED'");
+    }
+
+    @Test
     void openingAMachine_leadsWithWhatItIs_andFoldsTheAddressesAway() throws IOException {
         // The pane used to open on a table of addresses. An operator opening a machine asks what it does and
         // what is inside it, not what its tunnel address is — so the addresses fold, they do not disappear.

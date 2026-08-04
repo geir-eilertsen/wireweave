@@ -3,11 +3,13 @@ package net.vaier.rest;
 import net.vaier.application.GetAppSettingsUseCase;
 import net.vaier.application.GetAppSettingsUseCase.AppSettingsResult;
 import net.vaier.application.GetAppVersionUseCase;
+import net.vaier.application.GetSelfUpdateStatusUseCase;
 import net.vaier.application.SetSurvivalKitPassphraseUseCase;
 import net.vaier.application.TestSmtpCredentialsUseCase;
 import net.vaier.application.UpdateBackupSettingsUseCase;
 import net.vaier.application.UpdateDiskMonitorSettingsUseCase;
 import net.vaier.application.UpdateSmtpSettingsUseCase;
+import net.vaier.domain.SelfUpdateStatus;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -30,6 +32,7 @@ class SettingsRestControllerTest {
     @Mock UpdateDiskMonitorSettingsUseCase updateDiskMonitorSettingsUseCase;
     @Mock UpdateBackupSettingsUseCase updateBackupSettingsUseCase;
     @Mock SetSurvivalKitPassphraseUseCase setSurvivalKitPassphraseUseCase;
+    @Mock GetSelfUpdateStatusUseCase getSelfUpdateStatusUseCase;
 
     @InjectMocks
     SettingsRestController controller;
@@ -182,5 +185,27 @@ class SettingsRestControllerTest {
                         "user@example.com", "badpass", "noreply@example.com", "admin@example.com"));
 
         assertThat(response.getStatusCode().value()).isEqualTo(400);
+    }
+
+    @Test
+    void getUpdate_carriesTheDomainsOwnVerdictOnWhetherTheLastUpdateIsTrouble() {
+        // The browser used to re-derive this from the raw outcome name. One rule, decided once: a rollback is
+        // trouble precisely BECAUSE Vaier is running again, which no reader of the enum would guess.
+        when(getSelfUpdateStatusUseCase.updateAvailable()).thenReturn(false);
+        when(getSelfUpdateStatusUseCase.lastUpdate()).thenReturn(
+            new SelfUpdateStatus("run-1", SelfUpdateStatus.Outcome.ROLLED_BACK, "2026-08-04T06:00:00Z", "img"));
+
+        ResponseEntity<SettingsRestController.UpdateResponse> response = controller.getUpdate();
+
+        assertThat(response.getBody().trouble()).isTrue();
+    }
+
+    @Test
+    void getUpdate_asuccessfulUpdateIsNotTrouble() {
+        when(getSelfUpdateStatusUseCase.updateAvailable()).thenReturn(false);
+        when(getSelfUpdateStatusUseCase.lastUpdate()).thenReturn(
+            new SelfUpdateStatus("run-1", SelfUpdateStatus.Outcome.UPGRADED, "2026-08-04T06:00:00Z", "img"));
+
+        assertThat(controller.getUpdate().getBody().trouble()).isFalse();
     }
 }

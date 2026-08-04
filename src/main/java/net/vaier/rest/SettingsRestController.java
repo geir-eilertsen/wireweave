@@ -95,11 +95,15 @@ public class SettingsRestController {
      * What the Settings page is told about updating. {@code outcome} is the <em>last</em> update's, not
      * this request's, so the page can say "the previous one rolled back" — which nothing else would reveal,
      * since a rolled-back Vaier is a running Vaier and looks perfectly healthy.
+     *
+     * <p>{@code trouble} is the domain's verdict, not the browser's: whether an outcome is worth telling the
+     * operator about is a rule, and it lived in two places until the JS copy was deleted.
      */
-    record UpdateResponse(boolean available, String outcome, String at, String detail, String runId) {
+    record UpdateResponse(boolean available, String outcome, String at, String detail, String runId,
+                          boolean trouble) {
         static UpdateResponse from(boolean available, SelfUpdateStatus status) {
             return new UpdateResponse(available, status.outcome().name(), status.at(), status.detail(),
-                status.runId());
+                status.runId(), status.trouble());
         }
     }
 

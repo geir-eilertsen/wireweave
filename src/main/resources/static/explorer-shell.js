@@ -5998,15 +5998,13 @@
         // not Vaier's business. Doing it to yourself, on request, is a different act.
         const upd = S.settings.update || {};
         body.appendChild(section('Vaier'));
-        // A rolled-back update is the one outcome nothing else would ever reveal: Vaier is running, so it
-        // looks perfectly healthy — it is just running the build from before. Said here, every time, until
-        // an update succeeds.
-        if (upd.outcome === 'ROLLED_BACK') {
-            body.appendChild(note('The last update did not come up, so Vaier put the previous build back. '
-                + 'You are running the old one — nothing was lost, and it is safe to try again.', true));
-        } else if (upd.outcome === 'FAILED') {
-            body.appendChild(note('The last update could not be carried out (' + (upd.detail || 'unknown')
-                + '). Vaier was not touched.', true));
+        // A rollback is the one outcome nothing else reveals: Vaier is running, just on the build from before.
+        if (upd.trouble) {
+            body.appendChild(note(upd.outcome === 'ROLLED_BACK'
+                ? 'The last update did not come up, so Vaier put the previous build back. You are running the '
+                  + 'old one — nothing was lost, and it is safe to try again.'
+                : 'The last update could not be carried out (' + (upd.detail || 'unknown')
+                  + '). Vaier was not touched.', true));
         }
         const upRow = el('div', 'ex-runline');
         upRow.textContent = upd.available
