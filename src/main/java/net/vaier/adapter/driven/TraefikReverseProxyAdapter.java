@@ -816,7 +816,9 @@ public class TraefikReverseProxyAdapter implements ForPersistingReverseProxyRout
      */
     @Override
     public void addReverseProxyRoute(String dnsName, String address, int port, AuthMode authMode,
-                                     String rootRedirectPath, String pathPrefix) {
+                                     String rawRootRedirectPath, String pathPrefix) {
+        // A redirect landing back on the root re-matches its own trigger and loops (rack.apalveien5).
+        String rootRedirectPath = ReverseProxyRoute.normaliseRootRedirectPath(rawRootRedirectPath);
         loadConfig();
 
         if (config == null) {
@@ -901,8 +903,9 @@ public class TraefikReverseProxyAdapter implements ForPersistingReverseProxyRout
      */
     @Override
     public void addLanReverseProxyRoute(String dnsName, String host, int port, String protocol,
-                                        AuthMode authMode, boolean directUrlDisabled, String rootRedirectPath,
+                                        AuthMode authMode, boolean directUrlDisabled, String rawRootRedirectPath,
                                         String pathPrefix) {
+        String rootRedirectPath = ReverseProxyRoute.normaliseRootRedirectPath(rawRootRedirectPath);
         loadConfig();
         if (config == null) config = new LinkedHashMap<>();
 
@@ -1218,6 +1221,19 @@ public class TraefikReverseProxyAdapter implements ForPersistingReverseProxyRout
         removeFromMapSidecar(VERSION_ENDPOINT_KEY, routerName);
         removeFromListSidecar(HIDDEN_FROM_LAUNCHPAD_KEY, routerName);
         removeFromListSidecar(DIRECT_URL_DISABLED_KEY, routerName);
+        removeRedirectMiddleware(routerName);
+    }
+
+    /**
+     * The route's own redirect middleware. Left behind, it is unreachable litter: nothing routes through it,
+     * and the API that would clear it refuses a router that no longer exists.
+     */
+    private void removeRedirectMiddleware(String routerName) {
+        Map<String, Object> http = getNestedMap(config, "http");
+        Map<String, Object> middlewares = http == null ? null : getNestedMap(http, "middlewares");
+        if (middlewares != null) {
+            middlewares.remove(routerName.replace("-router", "-redirect"));
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -1312,7 +1328,8 @@ public class TraefikReverseProxyAdapter implements ForPersistingReverseProxyRout
     }
 
     @Override
-    public void setRouteRootRedirectPath(String dnsName, String pathPrefix, String rootRedirectPath) {
+    public void setRouteRootRedirectPath(String dnsName, String pathPrefix, String rawRootRedirectPath) {
+        String rootRedirectPath = ReverseProxyRoute.normaliseRootRedirectPath(rawRootRedirectPath);
         loadConfig();
 
         Map<String, Object> http = getNestedMap(config, "http");

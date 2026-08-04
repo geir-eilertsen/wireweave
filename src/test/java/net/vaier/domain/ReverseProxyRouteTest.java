@@ -1316,4 +1316,27 @@ class ReverseProxyRouteTest {
         String recent = String.valueOf(System.currentTimeMillis() / 1000 - 60);
         return new VpnClient("pk", allowedIps, endpointIp, "51820", recent, "0", "0");
     }
+
+    // --- root redirect: a redirect that lands back on the root is a loop, not a redirect ---
+
+    @Test
+    void anEmptyRootRedirect_isNoRedirectAtAll() {
+        // Traefik's rule matches the bare host with or without the trailing slash, so a replacement of the
+        // host itself re-matches and redirects forever. Five live routes were doing exactly that.
+        assertThat(ReverseProxyRoute.normaliseRootRedirectPath("")).isNull();
+        assertThat(ReverseProxyRoute.normaliseRootRedirectPath("   ")).isNull();
+        assertThat(ReverseProxyRoute.normaliseRootRedirectPath(null)).isNull();
+    }
+
+    @Test
+    void aRootRedirectToTheRoot_isNoRedirectAtAll() {
+        assertThat(ReverseProxyRoute.normaliseRootRedirectPath("/")).isNull();
+    }
+
+    @Test
+    void aRealRootRedirect_survives_andGainsItsLeadingSlash() {
+        assertThat(ReverseProxyRoute.normaliseRootRedirectPath("/admin")).isEqualTo("/admin");
+        assertThat(ReverseProxyRoute.normaliseRootRedirectPath("admin")).isEqualTo("/admin");
+        assertThat(ReverseProxyRoute.normaliseRootRedirectPath(" /dashboard/ ")).isEqualTo("/dashboard/");
+    }
 }

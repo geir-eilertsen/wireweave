@@ -152,6 +152,18 @@ public class ReverseProxyRoute {
     }
 
     /**
+     * The path a bare host redirects to, or null when there is no redirect. Blank and {@code /} both mean
+     * "no redirect": Traefik's root rule matches the host with or without the trailing slash, so a
+     * replacement of the host itself re-matches its own trigger and the browser loops until it gives up.
+     */
+    public static String normaliseRootRedirectPath(String raw) {
+        if (raw == null) return null;
+        String trimmed = raw.trim();
+        if (trimmed.isEmpty() || trimmed.equals("/")) return null;
+        return trimmed.startsWith("/") ? trimmed : "/" + trimmed;
+    }
+
+    /**
      * Validates an already-normalised path prefix. Null is allowed (means "no PathPrefix"). Anything
      * else must start with {@code /}, contain no whitespace or URL-reserved characters, and have at
      * least one alphanumeric/-/_/. character after the leading slash.

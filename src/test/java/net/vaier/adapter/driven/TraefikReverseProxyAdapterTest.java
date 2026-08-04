@@ -3,6 +3,7 @@ package net.vaier.adapter.driven;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import net.vaier.config.ServiceNames;
+import net.vaier.domain.AuthMode;
 import net.vaier.domain.ReverseProxyRoute;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -1339,5 +1340,47 @@ class TraefikReverseProxyAdapterTest {
         adapter.removeAutheliaTraefikObjects();
 
         assertThat(adapter.getReverseProxyRoutes()).isEmpty();
+    }
+
+    // --- the root redirect that was a loop (rack.apalveien5, and four others on the live fleet) ---
+
+    @Test
+    void anEmptyRootRedirect_writesNoRedirectMiddleware() throws IOException {
+        // The replacement was the bare host, which the regex `^https://host/?$` matches — so the browser was
+        // redirected to the URL it had just been redirected from, until it gave up with TOO_MANY_REDIRECTS.
+        adapter.addReverseProxyRoute("rack.example.com", "192.168.3.132", 8080, AuthMode.SOCIAL, "", null);
+
+        String content = Files.readString(tempDir.resolve("remote-apps.yml"));
+        assertThat(content).doesNotContain("redirectRegex");
+        assertThat(content).doesNotContain("rack-example-com-redirect");
+    }
+
+    @Test
+    void aRootRedirectToTheRootItself_writesNoRedirectMiddleware() throws IOException {
+        adapter.addReverseProxyRoute("rack.example.com", "192.168.3.132", 8080, AuthMode.SOCIAL, "/", null);
+
+        assertThat(Files.readString(tempDir.resolve("remote-apps.yml"))).doesNotContain("redirectRegex");
+    }
+
+    @Test
+    void aRealRootRedirect_isStillWritten_andPointsSomewhereElse() throws IOException {
+        adapter.addReverseProxyRoute("pihole.example.com", "192.168.3.9", 80, AuthMode.SOCIAL, "/admin", null);
+
+        String content = Files.readString(tempDir.resolve("remote-apps.yml"));
+        assertThat(content).contains("redirectRegex");
+        assertThat(content).contains("replacement: https://pihole.example.com/admin");
+    }
+
+    @Test
+    void deletingARoute_takesItsRedirectMiddlewareWithIt() throws IOException {
+        // Three dead router-*-redirect middlewares outlived their routes on the live fleet, and every one of
+        // them was a loop nobody could reach to clear: the API refuses a router that no longer exists.
+        adapter.addReverseProxyRoute("pihole.example.com", "192.168.3.9", 80, AuthMode.SOCIAL, "/admin", null);
+        assertThat(Files.readString(tempDir.resolve("remote-apps.yml"))).contains("pihole-example-com-redirect");
+
+        adapter.deleteReverseProxyRouteByDnsName("pihole.example.com");
+
+        assertThat(Files.readString(tempDir.resolve("remote-apps.yml")))
+            .doesNotContain("pihole-example-com-redirect");
     }
 }

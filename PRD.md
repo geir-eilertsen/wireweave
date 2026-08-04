@@ -3182,6 +3182,16 @@ contract, not an extension of this one. `docs/ADVANCED.md`'s description of the 
 
 ---
 
+### 6.43 A root redirect that pointed at itself ✅ (implemented 2026-08-04)
+
+**`ERR_TOO_MANY_REDIRECTS` on a freshly published service, and Vaier had built the loop itself.** Publishing with the root-redirect field left empty still wrote a `redirectRegex` middleware whose replacement was the bare host — and the trigger, `^https://host/?$`, matches the bare host. The target re-matched its own trigger, so the browser was sent back to the URL it had just been sent from until it gave up. **Five live routes carried it**, not one: the operator only ever noticed the one they opened.
+
+**One rule, stated once.** `ReverseProxyRoute.normaliseRootRedirectPath` says what a root redirect *is* — blank and `/` are no redirect, anything else gains its leading slash — and the Traefik adapter applies it at all three points where it writes routing config, so no caller can hand it a loop again.
+
+**A second defect the scan exposed: deleting a service left its redirect middleware behind.** `removeRouterSidecarMetadata` cleaned four sidecar keys but not the middleware, so three of the five loops belonged to routes that no longer existed — unreachable litter, since the endpoint that would clear one refuses a router that is gone. The delete path takes the middleware with it now.
+
+---
+
 ## 7. End-to-End Workflows
 
 ### 7.1 New service on a peer (primary workflow)
