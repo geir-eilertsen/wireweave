@@ -64,8 +64,14 @@ public class MinaSshSessionAdapter implements ForOpeningSshSessions, ForRunningS
         this.maxOutputBytes = maxOutputBytes;
     }
 
+    /** Runs under this adapter's default deadline — see {@link #DEFAULT_EXEC_TIMEOUT}. */
     @Override
     public CommandResult run(SshTarget target, String command) {
+        return run(target, command, execTimeout);
+    }
+
+    @Override
+    public CommandResult run(SshTarget target, String command, Duration timeout) {
         Connection conn = SshConnector.establish(target);
         ChannelExec channel = null;
         try {
@@ -77,7 +83,7 @@ public class MinaSshSessionAdapter implements ForOpeningSshSessions, ForRunningS
             channel.open().verify(CHANNEL_TIMEOUT);
             // Bounded wait: if CLOSED never arrives within the deadline the command is abandoned,
             // so a hung command can neither block Vaier nor leak the connection.
-            Set<ClientChannelEvent> events = channel.waitFor(EnumSet.of(ClientChannelEvent.CLOSED), execTimeout);
+            Set<ClientChannelEvent> events = channel.waitFor(EnumSet.of(ClientChannelEvent.CLOSED), timeout);
             boolean timedOut = !events.contains(ClientChannelEvent.CLOSED);
             Integer exit = channel.getExitStatus();
             // -1 stands for "unknown": a timeout, or a server that never sent an exit status. A known

@@ -29,9 +29,11 @@ import net.vaier.domain.HostCredentialView;
 import net.vaier.domain.Machine;
 import net.vaier.domain.MachineType;
 import net.vaier.domain.NoSshServerException;
+import net.vaier.domain.DockerCommandAccess;
 import net.vaier.domain.RemoteDiskUsage;
 import net.vaier.domain.SshServerPresence;
 import net.vaier.domain.port.ForPublishingEvents;
+import net.vaier.domain.port.ForRecordingDockerCommandAccess;
 import net.vaier.domain.port.ForRecordingSshServerPresence;
 import org.junit.jupiter.api.BeforeEach;
 import org.mockito.ArgumentCaptor;
@@ -82,6 +84,7 @@ class RemoteDiskWatcherTest {
     ForPublishingEvents eventPublisher;
     ForPersistingDiskPressureState pressureState;
     InMemoryMachineDiskStandingCache standings;
+    ForRecordingDockerCommandAccess dockerAccessRecorder;
     SteppableClock clock;
     RemoteDiskWatcher watcher;
 
@@ -111,6 +114,7 @@ class RemoteDiskWatcherTest {
         eventPublisher = mock(ForPublishingEvents.class);
         pressureState = new InMemoryDiskPressureStateAdapter();
         standings = new InMemoryMachineDiskStandingCache();
+        dockerAccessRecorder = mock(ForRecordingDockerCommandAccess.class);
         clock = new SteppableClock();
         // Nothing configured: every filesystem is watched at the global threshold (#325).
         lenient().when(diskWatches.getDiskWatches()).thenReturn(new DiskWatches(List.of()));
@@ -122,7 +126,7 @@ class RemoteDiskWatcherTest {
     private RemoteDiskWatcher newWatcher() {
         return new RemoteDiskWatcher(machines, credentials, runner, notifier, forecastNotifier,
             diskWatches, configResolver, clock, sshPresenceRecorder, eventPublisher, pressureState,
-            detectMachineNetworks, forgetMachineNetworks, standings);
+            detectMachineNetworks, forgetMachineNetworks, standings, dockerAccessRecorder);
     }
 
     /** An SSH-capable server-type machine (effectiveSshAccess() true by default). */
@@ -344,7 +348,13 @@ class RemoteDiskWatcherTest {
 
         watcher.checkRemoteDiskUsage();
 
-        verify(runner).run(eq(mid("nas")), eq("df -P"));
+        // Ends with the domain's command, rather than being it: the Docker probe (#352) rides in front on
+        // the same connection. What #325 is about is unchanged — the df that runs is still unscoped, so it
+        // still reads every filesystem and not just the root one.
+        ArgumentCaptor<String> command = ArgumentCaptor.forClass(String.class);
+        verify(runner).run(eq(mid("nas")), command.capture());
+        assertThat(command.getValue()).endsWith("df -P");
+        assertThat(RemoteDiskUsage.DF_COMMAND).isEqualTo("df -P");
     }
 
     // --- every watched filesystem, not just the root one (#325) -----------------------------------------
@@ -926,5 +936,76 @@ class RemoteDiskWatcherTest {
         watcher.checkRemoteDiskUsage();
 
         verify(forgetMachineNetworks).forgetMachineNetworksExcept(Set.of(mid("kitchen")));
+    }
+
+    // --- what else this trip learns: the machine's Docker access (#352) ---
+
+    /** A sweep reading with the Docker probe's marker line in front of df's own output. */
+    private CommandResult sweptWithDockerRc(int rc, int usedPercent) {
+        CommandResult disks = df(usedPercent);
+        return new CommandResult(disks.exitCode(), "VAIER-DOCKER-RC=" + rc + "\n" + disks.stdout(),
+            disks.stderr(), false, disks.hostKeyFingerprint());
+    }
+
+    @Test
+    void theDockerProbeRidesOnTheTripThisSweepAlreadyMakes_withoutASecondSignIn() {
+        // The point of learning it here: one sign-in per machine per sweep, not two. A machine's Docker
+        // access is worth knowing, but not worth another SSH connection to every machine every 5 minutes.
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("colina27")));
+        hasCredential("colina27");
+        when(runner.run(eq(mid("colina27")), any())).thenReturn(sweptWithDockerRc(0, 40));
+
+        watcher.checkRemoteDiskUsage();
+
+        ArgumentCaptor<String> command = ArgumentCaptor.forClass(String.class);
+        verify(runner, times(1)).run(eq(mid("colina27")), command.capture());
+        assertThat(command.getValue()).contains("docker version").endsWith(RemoteDiskUsage.DF_COMMAND);
+    }
+
+    @Test
+    void aMachineWhoseSshUserCannotDriveDocker_isRecordedAsRefused() {
+        // Colina 27: geir is not in that host's docker group, so every compose command an upgrade would
+        // run there dies on permission denied — while the container scrape, which uses the Docker API over
+        // the tunnel, shows the machine as perfectly healthy.
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("colina27")));
+        hasCredential("colina27");
+        when(runner.run(eq(mid("colina27")), any())).thenReturn(sweptWithDockerRc(1, 40));
+
+        watcher.checkRemoteDiskUsage();
+
+        verify(dockerAccessRecorder).record(mid("colina27"), DockerCommandAccess.REFUSED);
+    }
+
+    @Test
+    void aMachineWhoseSshUserCanDriveDocker_isRecordedAsGranted() {
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("apalveien5")));
+        hasCredential("apalveien5");
+        when(runner.run(eq(mid("apalveien5")), any())).thenReturn(sweptWithDockerRc(0, 40));
+
+        watcher.checkRemoteDiskUsage();
+
+        verify(dockerAccessRecorder).record(mid("apalveien5"), DockerCommandAccess.GRANTED);
+    }
+
+    @Test
+    void aTripThatCameBackWithoutTheMarker_recordsNothing_soAKnownFactSurvivesASilentSweep() {
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("colina27")));
+        hasCredential("colina27");
+        when(runner.run(eq(mid("colina27")), any())).thenReturn(df(40));   // no marker at all
+
+        watcher.checkRemoteDiskUsage();
+
+        verify(dockerAccessRecorder, never()).record(any(), any());
+    }
+
+    @Test
+    void aMachineThatLeftTheFleet_hasItsDockerAccessForgottenToo() {
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("colina27")));
+        hasCredential("colina27");
+        when(runner.run(eq(mid("colina27")), any())).thenReturn(sweptWithDockerRc(1, 40));
+
+        watcher.checkRemoteDiskUsage();
+
+        verify(dockerAccessRecorder).retainOnly(Set.of(mid("colina27")));
     }
 }

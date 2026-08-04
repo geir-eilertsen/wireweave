@@ -1,8 +1,30 @@
 package net.vaier.application.service;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import net.vaier.adapter.driven.InMemoryContainerSnapshotStore;
+import net.vaier.adapter.driven.InMemoryDockerCommandAccessCache;
+import net.vaier.adapter.driven.LanServerContainerDiscoveryAdapter;
+
+import net.vaier.domain.AuthMethod;
+import net.vaier.domain.CommandResult;
+import net.vaier.domain.ConflictException;
+import net.vaier.domain.ContainerUpgrade;
+import net.vaier.domain.DockerCommandAccess;
+import net.vaier.domain.MachineId;
+import net.vaier.domain.NoHostCredentialException;
+import net.vaier.domain.NotFoundException;
 import net.vaier.domain.PeerId;
+import net.vaier.domain.SshTarget;
 import net.vaier.domain.TestMachineIds;
+import net.vaier.domain.port.ForDiscoveringLanServerContainers.LanServerContainers;
 import net.vaier.domain.port.ForDiscoveringPeerContainers.PeerContainers;
+import net.vaier.domain.port.ForGettingLanServerScrape;
+import net.vaier.domain.port.ForResolvingSshTargets;
+import net.vaier.domain.port.ForRunningSshCommands;
+import net.vaier.domain.port.ForTrackingHostKeys;
 import net.vaier.domain.PublishableService;
 import net.vaier.domain.PublishableService.PublishableSource;
 import net.vaier.domain.LanServer;
@@ -25,31 +47,44 @@ import net.vaier.domain.port.ForPublishingEvents;
 import net.vaier.domain.port.ForResolvingRegistryDigest;
 import net.vaier.domain.ImageUpdateTracker;
 import net.vaier.domain.ScopedImage;
+import net.vaier.domain.ComposeCoordinates;
 import net.vaier.domain.UpdateAvailability;
+import net.vaier.domain.UpgradeEligibility;
 import net.vaier.domain.UpdateCheckOutcome;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.LoggerFactory;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -65,10 +100,37 @@ class ContainerServiceTest {
     @Mock ForGettingLanServers forGettingLanServers;
     @Mock ForResolvingRegistryDigest forResolvingRegistryDigest;
     @Mock ForPublishingEvents forPublishingEvents;
+    @Mock ForGettingLanServerScrape forGettingLanServerScrape;
+    @Mock ForResolvingSshTargets forResolvingSshTargets;
+    @Mock ForRunningSshCommands forRunningSshCommands;
+    @Mock ForTrackingHostKeys forTrackingHostKeys;
 
     ContainerService service;
+    // Real cache, as in production: a machine nobody has swept reads UNKNOWN, which keeps the button.
+    InMemoryDockerCommandAccessCache dockerAccessCache;
+    // The real store, so a test can seed the verdict a pre-#353 Vaier would already be holding.
+    InMemoryContainerSnapshotStore snapshotStore;
     ImageUpdateTracker tracker;
     MutableClock clock;
+    DeferredExecutor upgradeExecutor;
+
+    /**
+     * Holds what the service hands off instead of running it, so a test can prove the request thread was
+     * released before the upgrade ran — and then run it deterministically.
+     */
+    private static class DeferredExecutor implements Executor {
+        private final List<Runnable> queued = new ArrayList<>();
+
+        @Override public void execute(Runnable command) { queued.add(command); }
+
+        int pending() { return queued.size(); }
+
+        void runPending() {
+            List<Runnable> toRun = List.copyOf(queued);
+            queued.clear();
+            toRun.forEach(Runnable::run);
+        }
+    }
 
     /** Wind-forward clock, so the update check's 60s floor can be proven without sleeping. */
     private static class MutableClock extends Clock {
@@ -87,15 +149,19 @@ class ContainerServiceTest {
         // scrape in its own adapter — both real infrastructure fed by the same mocks, so the end-to-end
         // flows behave exactly as in production. One store instance backs the write side and the three
         // read ports.
-        var snapshotStore = new net.vaier.adapter.driven.InMemoryContainerSnapshotStore(
+        snapshotStore = new InMemoryContainerSnapshotStore(
             VAIER_NETWORK, GATEWAY_IP, () -> TestMachineIds.of("Vaier server"));
+        dockerAccessCache = new InMemoryDockerCommandAccessCache();
         var lanServerDiscovery =
-            new net.vaier.adapter.driven.LanServerContainerDiscoveryAdapter(forGettingLanServers, forGettingServerInfo);
+            new LanServerContainerDiscoveryAdapter(forGettingLanServers, forGettingServerInfo, dockerAccessCache);
+        upgradeExecutor = new DeferredExecutor();
         service = new ContainerService(forGettingServerInfo, forGettingVpnClients,
             forResolvingPeerIds, forGettingPeerConfigurations,
             forResolvingRegistryDigest, forPublishingEvents, tracker, clock,
             snapshotStore, snapshotStore, snapshotStore, snapshotStore, lanServerDiscovery,
-            () -> TestMachineIds.of("Vaier server"));
+            () -> TestMachineIds.of("Vaier server"), forGettingLanServerScrape,
+            forResolvingSshTargets, forRunningSshCommands, forTrackingHostKeys, dockerAccessCache,
+            upgradeExecutor);
     }
 
     // --- Update available (#57) ---
@@ -418,7 +484,25 @@ class ContainerServiceTest {
             argThat(s -> s.dockerHostUrl().equals("unix:///var/run/docker.sock"))
         )).thenReturn(expected);
 
-        assertThat(service.scrapeVaierServerContainers()).isSameAs(expected);
+        assertThat(service.scrapeVaierServerContainers())
+            .extracting(DockerService::containerName).containsExactly("my-app");
+    }
+
+    @Test
+    void scrapeVaierServerContainers_judgesEachContainerAgainstVaiersOwnStack() {
+        // The verdict has to reach the Explorer stamped on the container: whether an Upgrade may be
+        // offered is a business decision, and the browser decides nothing.
+        when(forGettingServerInfo.getServicesWithExposedPorts(
+            argThat(s -> s.dockerHostUrl().equals("unix:///var/run/docker.sock"))
+        )).thenReturn(List.of(composeManaged("traefik"), composeManaged("vaultwarden"),
+            dockerService("hand-started", 9000)));
+
+        assertThat(service.scrapeVaierServerContainers())
+            .extracting(DockerService::containerName, DockerService::upgradeEligibility)
+            .containsExactly(
+                tuple("traefik", UpgradeEligibility.VAIER_OWN_STACK),
+                tuple("vaultwarden", UpgradeEligibility.UPGRADABLE),
+                tuple("hand-started", UpgradeEligibility.NOT_COMPOSE_MANAGED));
     }
 
     @Test
@@ -452,7 +536,8 @@ class ContainerServiceTest {
 
         service.refresh();
 
-        assertThat(service.discover()).isEqualTo(expected);
+        assertThat(service.discover())
+            .extracting(DockerService::containerName).containsExactly("my-app");
     }
 
     @Test
@@ -504,7 +589,28 @@ class ContainerServiceTest {
         // list for any machine whose two names disagreed by a character.
         assertThat(result.get(0).machineId()).isEqualTo(TestMachineIds.of("alice").value());
         assertThat(result.get(0).vpnIp()).isEqualTo("10.13.13.2");
-        assertThat(result.get(0).containers()).isSameAs(containers);
+        assertThat(result.get(0).containers())
+            .extracting(DockerService::containerName).containsExactly("my-app");
+    }
+
+    @Test
+    void discoverAll_judgesAPeersContainersAsTheOperatorsOwn() {
+        // VaierServerCatalogue is about the Vaier server alone. A peer running its own traefik is the
+        // operator's container, and theirs to upgrade — the name says nothing about whose it is.
+        when(forGettingVpnClients.getClients()).thenReturn(List.of(client("10.13.13.2/32")));
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice");
+        when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.2"))
+            .thenReturn(Optional.of(peerConfig("alice", "10.13.13.2", MachineType.UBUNTU_SERVER)));
+        when(forGettingServerInfo.getServicesWithExposedPorts(any(Server.class)))
+            .thenReturn(List.of(composeManaged("traefik"), dockerService("hand-started", 9000)));
+
+        List<PeerContainers> result = service.scrapePeerContainers();
+
+        assertThat(result.get(0).containers())
+            .extracting(DockerService::containerName, DockerService::upgradeEligibility)
+            .containsExactly(
+                tuple("traefik", UpgradeEligibility.UPGRADABLE),
+                tuple("hand-started", UpgradeEligibility.NOT_COMPOSE_MANAGED));
     }
 
     @Test
@@ -1145,9 +1251,382 @@ class ContainerServiceTest {
         assertThat(result.containers()).hasSize(1);
     }
 
+    // --- Vaier's own stack is not swept at all (#353) ---
+
+    @Test
+    void vaiersOwnStackIsNeverAskedAboutAtTheRegistry_norGivenAVerdict() {
+        // Not swept-and-hidden: the request itself is what spends the rate limit, and it is shared with
+        // every image the operator CAN act on.
+        when(forGettingServerInfo.getServicesWithExposedPorts(any())).thenReturn(List.of(
+            imaged("traefik", "traefik:v3.6.14", "sha256:local"),
+            imaged("pihole", "pihole/pihole:latest", "sha256:local")));
+        when(forGettingVpnClients.getClients()).thenReturn(List.of());
+        when(forResolvingRegistryDigest.resolveDigest(any())).thenReturn(Optional.of("sha256:newer"));
+        service.refresh();
+
+        assertThat(service.sweepImageUpdates())
+            .containsOnlyKeys(onVaierServer("pihole/pihole:latest"));
+        verify(forResolvingRegistryDigest, never())
+            .resolveDigest(argThat(reference -> reference.toString().contains("traefik")));
+    }
+
+    @Test
+    void vaierItselfIsNotSweptEither_soNoMarkCanTalkAnOperatorIntoADowngrade() {
+        when(forGettingServerInfo.getServicesWithExposedPorts(any()))
+            .thenReturn(List.of(imaged("vaier", "getvaier/vaier:latest", "sha256:localbuild")));
+        when(forGettingVpnClients.getClients()).thenReturn(List.of());
+        service.refresh();
+
+        assertThat(service.sweepImageUpdates()).isEmpty();
+        verify(forResolvingRegistryDigest, never()).resolveDigest(any());
+    }
+
+    @Test
+    void aMarkAlreadyHeldForVaiersOwnStackGoesClearOnTheVeryNextSweep() {
+        // The operator's actual complaint. Stopping the sweep is not enough on its own: the verdict from
+        // before the change sits in memory and would keep the dot lit until a restart. The sweep's own
+        // write is authoritative — it replaces the map wholesale — so the stale entry goes with it.
+        when(forGettingServerInfo.getServicesWithExposedPorts(any()))
+            .thenReturn(List.of(imaged("traefik", "traefik:v3.6.14", "sha256:local")));
+        when(forGettingVpnClients.getClients()).thenReturn(List.of());
+        // A registry that really is serving something newer, so a sweep that still asked about traefik
+        // would write the mark straight back — this test would pass for the wrong reason without it.
+        lenient().when(forResolvingRegistryDigest.resolveDigest(any())).thenReturn(Optional.of("sha256:newer"));
+        service.refresh();
+        snapshotStore.storeImageUpdateVerdicts(Map.of(
+            onVaierServer("traefik:v3.6.14"), UpdateAvailability.UPDATE_AVAILABLE));
+        assertThat(service.discover()).singleElement()
+            .extracting(DockerService::updateAvailable).isEqualTo(UpdateAvailability.UPDATE_AVAILABLE);
+
+        service.sweepImageUpdates();
+
+        assertThat(service.discover()).singleElement()
+            .extracting(DockerService::updateAvailable).isEqualTo(UpdateAvailability.UNKNOWN);
+    }
+
+    @Test
+    void aPeersOwnTraefikIsStillSwept_becauseItIsTheOperatorsContainer() {
+        // The whole reason the two judging entry points are separate. Silencing Vaier's own stack must not
+        // silence a peer that happens to run a container by the same name.
+        when(forGettingVpnClients.getClients()).thenReturn(List.of(client("10.13.13.2/32")));
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice");
+        when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.2"))
+            .thenReturn(Optional.of(peerConfig("alice", "10.13.13.2", MachineType.UBUNTU_SERVER)));
+        when(forGettingServerInfo.getServicesWithExposedPorts(any(Server.class)))
+            .thenReturn(List.of(imaged("traefik", "traefik:v3.6.14", "sha256:local")));
+        when(forResolvingRegistryDigest.resolveDigest(any())).thenReturn(Optional.of("sha256:newer"));
+        service.refresh();
+
+        assertThat(service.sweepImageUpdates()).containsEntry(
+            new ScopedImage(TestMachineIds.of("alice").value(), "traefik:v3.6.14"),
+            UpdateAvailability.UPDATE_AVAILABLE);
+    }
+
+    // --- Upgrading a container's image (#352) ---
+
+    private static final MachineId ALICE = TestMachineIds.of("alice");
+    private static final SshTarget ALICE_TARGET = new SshTarget("10.13.13.2", 22, "ubuntu",
+        AuthMethod.PASSWORD, "pw", null, "SHA256:pinned", ALICE);
+
+    /** Scrape a peer called alice carrying {@code containers}, so the fleet has something to upgrade. */
+    private void fleetWithPeerContainers(List<DockerService> containers) {
+        when(forGettingVpnClients.getClients()).thenReturn(List.of(client("10.13.13.2/32")));
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice");
+        when(forGettingPeerConfigurations.getPeerConfigByIp("10.13.13.2"))
+            .thenReturn(Optional.of(peerConfig("alice", "10.13.13.2", MachineType.UBUNTU_SERVER)));
+        when(forGettingServerInfo.getServicesWithExposedPorts(any(Server.class))).thenReturn(containers);
+        service.refresh();
+    }
+
+    private static CommandResult succeeded() {
+        return new CommandResult(0, "", "", false, "SHA256:pinned");
+    }
+
+    @Test
+    void upgrade_acceptsAndReturnsAtOnce_soNoRequestThreadEverWaitsOnAPull() {
+        fleetWithPeerContainers(List.of(composeManaged("vaultwarden")));
+        when(forResolvingSshTargets.resolve(ALICE)).thenReturn(ALICE_TARGET);
+
+        service.upgradeContainerImage(ALICE, "vaultwarden");
+
+        // Nothing has been run yet: the slow work is queued, not done on the caller's thread.
+        verifyNoInteractions(forRunningSshCommands);
+        assertThat(upgradeExecutor.pending()).isEqualTo(1);
+    }
+
+    @Test
+    void theQueuedUpgrade_pullsThenRecreates_andPushesTheSettledOutcome() {
+        fleetWithPeerContainers(List.of(composeManaged("vaultwarden")));
+        when(forResolvingSshTargets.resolve(ALICE)).thenReturn(ALICE_TARGET);
+        when(forRunningSshCommands.run(any(), anyString(), any())).thenReturn(succeeded());
+
+        service.upgradeContainerImage(ALICE, "vaultwarden");
+        upgradeExecutor.runPending();
+
+        verify(forRunningSshCommands).run(eq(ALICE_TARGET),
+            argThat(c -> c.startsWith("docker compose") && c.endsWith("pull 'vaultwarden'")),
+            eq(ContainerUpgrade.PULL_TIMEOUT));
+        verify(forRunningSshCommands).run(eq(ALICE_TARGET),
+            argThat(c -> c.endsWith("up -d 'vaultwarden'")), eq(ContainerUpgrade.RECREATE_TIMEOUT));
+        verify(forPublishingEvents).publish(eq("vpn-peers"), eq("container-upgrade-settled"),
+            argThat(data -> data.contains("\"outcome\":\"UPGRADED\"")
+                && data.contains(ALICE.value()) && data.contains("vaultwarden")));
+    }
+
+    @Test
+    void upgrade_ofAContainerThatMachineDoesNotHave_isNotFound_andQueuesNothing() {
+        fleetWithPeerContainers(List.of(composeManaged("vaultwarden")));
+
+        assertThatThrownBy(() -> service.upgradeContainerImage(ALICE, "paperless"))
+            .isInstanceOf(NotFoundException.class);
+
+        assertThat(upgradeExecutor.pending()).isZero();
+        verifyNoInteractions(forResolvingSshTargets);
+    }
+
+    @Test
+    void upgrade_ofAContainerVaierCannotRecreate_isRefusedWithTheReason() {
+        fleetWithPeerContainers(List.of(dockerService("hand-started", 9000)));
+
+        assertThatThrownBy(() -> service.upgradeContainerImage(ALICE, "hand-started"))
+            .isInstanceOf(ConflictException.class)
+            .hasMessageContaining("how it was started");
+
+        assertThat(upgradeExecutor.pending()).isZero();
+    }
+
+    @Test
+    void upgrade_ofVaiersOwnStackOnTheVaierServer_isRefused() {
+        when(forGettingServerInfo.getServicesWithExposedPorts(any(Server.class)))
+            .thenReturn(List.of(composeManaged("traefik")));
+        service.refresh();
+
+        assertThatThrownBy(() ->
+            service.upgradeContainerImage(TestMachineIds.of("Vaier server"), "traefik"))
+            .isInstanceOf(ConflictException.class)
+            .hasMessageContaining("Vaier release");
+    }
+
+    @Test
+    void upgrade_ofTheVaierServersOwnOperatorContainer_isAccepted() {
+        when(forGettingServerInfo.getServicesWithExposedPorts(any(Server.class)))
+            .thenReturn(List.of(composeManaged("vaultwarden")));
+        service.refresh();
+        MachineId vaierServer = TestMachineIds.of("Vaier server");
+        when(forResolvingSshTargets.resolve(vaierServer)).thenReturn(ALICE_TARGET);
+
+        service.upgradeContainerImage(vaierServer, "vaultwarden");
+
+        assertThat(upgradeExecutor.pending()).isEqualTo(1);
+    }
+
+    @Test
+    void upgrade_ofALanServersContainer_readsTheCachedLanScrape() {
+        MachineId nas = TestMachineIds.of("nas");
+        when(forGettingLanServerScrape.getLanServerContainers()).thenReturn(List.of(
+            new LanServerContainers(nas.value(), "nas", "192.168.3.50", 2375, "colina27", "OK",
+                UpgradeEligibility.judgeOperatorContainers(List.of(composeManaged("plex")), DockerCommandAccess.GRANTED))));
+        when(forResolvingSshTargets.resolve(nas)).thenReturn(ALICE_TARGET);
+
+        service.upgradeContainerImage(nas, "plex");
+
+        assertThat(upgradeExecutor.pending()).isEqualTo(1);
+    }
+
+    @Test
+    void upgrade_ofAMachineWithNoStoredCredential_failsBeforeAnythingIsQueued() {
+        fleetWithPeerContainers(List.of(composeManaged("vaultwarden")));
+        when(forResolvingSshTargets.resolve(ALICE)).thenThrow(new NoHostCredentialException("alice"));
+
+        assertThatThrownBy(() -> service.upgradeContainerImage(ALICE, "vaultwarden"))
+            .isInstanceOf(NoHostCredentialException.class);
+
+        assertThat(upgradeExecutor.pending()).isZero();
+    }
+
+    /** A compose-managed container carrying a local digest, so a sweep has two digests to compare. */
+    private static DockerService composeManagedImaged(String name, String localDigest) {
+        return composeManaged(name).toBuilder().imageDigest(localDigest).build();
+    }
+
+    /** That peer's container as the Explorer reads it — verdict and all. */
+    private DockerService peerContainerNamed(String name) {
+        return service.discoverAll().stream()
+            .flatMap(peer -> peer.containers().stream())
+            .filter(c -> c.containerName().equals(name))
+            .findFirst().orElseThrow();
+    }
+
+    /** Sweep the fleet with a registry that serves something newer, so the container is marked. */
+    private void markedOutOfDate(String containerName) {
+        fleetWithPeerContainers(List.of(composeManagedImaged(containerName, "sha256:old")));
+        when(forResolvingRegistryDigest.resolveDigest(any())).thenReturn(Optional.of("sha256:new"));
+        service.sweepImageUpdates();
+        assertThat(peerContainerNamed(containerName).updateAvailable())
+            .isEqualTo(UpdateAvailability.UPDATE_AVAILABLE);
+    }
+
+    @Test
+    void anUpgradedContainerStopsBeingMarkedOutOfDate_withoutWaitingForTheNextSweep() {
+        // The live bug: the sweep remembers its verdict per (machine, image TAG), and an upgrade changes
+        // the digest and not the tag — so re-scraping re-applied the same remembered UPDATE_AVAILABLE and
+        // the yellow mark outlived the upgrade that resolved it, indefinitely.
+        markedOutOfDate("vaultwarden");
+        when(forResolvingSshTargets.resolve(ALICE)).thenReturn(ALICE_TARGET);
+        when(forRunningSshCommands.run(any(), anyString(), any())).thenReturn(succeeded());
+
+        service.upgradeContainerImage(ALICE, "vaultwarden");
+        upgradeExecutor.runPending();
+
+        // Forgotten, not stamped up to date: Vaier pulled and recreated, it never re-compared the digests.
+        assertThat(peerContainerNamed("vaultwarden").updateAvailable())
+            .isEqualTo(UpdateAvailability.UNKNOWN);
+    }
+
+    @Test
+    void anUpgradeThatFailed_leavesTheMarkStanding_becauseTheOldImageIsStillWhatRuns() {
+        markedOutOfDate("vaultwarden");
+        when(forResolvingSshTargets.resolve(ALICE)).thenReturn(ALICE_TARGET);
+        when(forRunningSshCommands.run(any(), anyString(), any()))
+            .thenReturn(new CommandResult(1, "", "manifest unknown", false, "SHA256:pinned"));
+
+        service.upgradeContainerImage(ALICE, "vaultwarden");
+        upgradeExecutor.runPending();
+
+        assertThat(peerContainerNamed("vaultwarden").updateAvailable())
+            .isEqualTo(UpdateAvailability.UPDATE_AVAILABLE);
+    }
+
+    @Test
+    void theMarkIsAlreadyGoneWhenTheSettledEventFires_becauseTheBrowserReReadsOnIt() {
+        // Ordering, not bookkeeping: the Explorer re-reads its containers when the settled event arrives.
+        // Announcing first would hand it the stale mark and leave it there until something else moved.
+        markedOutOfDate("vaultwarden");
+        when(forResolvingSshTargets.resolve(ALICE)).thenReturn(ALICE_TARGET);
+        when(forRunningSshCommands.run(any(), anyString(), any())).thenReturn(succeeded());
+        AtomicReference<UpdateAvailability> asTheBrowserWouldSeeIt = new AtomicReference<>();
+        doAnswer(invocation -> {
+            asTheBrowserWouldSeeIt.set(peerContainerNamed("vaultwarden").updateAvailable());
+            return null;
+        }).when(forPublishingEvents).publish(any(), eq("container-upgrade-settled"), any());
+
+        service.upgradeContainerImage(ALICE, "vaultwarden");
+        upgradeExecutor.runPending();
+
+        assertThat(asTheBrowserWouldSeeIt.get()).isEqualTo(UpdateAvailability.UNKNOWN);
+    }
+
+    /** Run {@code work} with ContainerService's log captured. */
+    private List<ILoggingEvent> whileCapturingTheLog(Runnable work) {
+        Logger serviceLog = (Logger) LoggerFactory.getLogger(ContainerService.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        serviceLog.addAppender(appender);
+        try {
+            work.run();
+            return List.copyOf(appender.list);
+        } finally {
+            serviceLog.detachAppender(appender);
+        }
+    }
+
+    @Test
+    void everySettledUpgradeIsLogged_becauseRecreatingSomeonesContainerIsWorthAnAuditTrail() {
+        // Nothing about an upgrade reached the log at all, so there was no way to tell from a host's
+        // Vaier logs whether an upgrade had even been attempted.
+        fleetWithPeerContainers(List.of(composeManaged("vaultwarden")));
+        when(forResolvingSshTargets.resolve(ALICE)).thenReturn(ALICE_TARGET);
+        when(forRunningSshCommands.run(any(), anyString(), any())).thenReturn(succeeded());
+
+        List<ILoggingEvent> logged = whileCapturingTheLog(() -> {
+            service.upgradeContainerImage(ALICE, "vaultwarden");
+            upgradeExecutor.runPending();
+        });
+
+        assertThat(logged).anySatisfy(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.INFO);
+            assertThat(event.getFormattedMessage())
+                .contains("vaultwarden")
+                .contains(ALICE.value())
+                .contains("UPGRADED");
+        });
+    }
+
+    @Test
+    void aFailedUpgradesReasonReachesTheLog_soTheOperatorCanBeToldWhy() {
+        // The live complaint: PULL_FAILED in the browser and absolutely nothing in `docker logs vaier`.
+        fleetWithPeerContainers(List.of(composeManaged("netdata")));
+        when(forResolvingSshTargets.resolve(ALICE)).thenReturn(ALICE_TARGET);
+        when(forRunningSshCommands.run(any(), anyString(), any())).thenReturn(new CommandResult(1, "",
+            "Error response from daemon: pull access denied for netdata", false, "SHA256:pinned"));
+
+        List<ILoggingEvent> logged = whileCapturingTheLog(() -> {
+            service.upgradeContainerImage(ALICE, "netdata");
+            upgradeExecutor.runPending();
+        });
+
+        assertThat(logged).anySatisfy(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.WARN);
+            assertThat(event.getFormattedMessage())
+                .contains("netdata")
+                .contains("PULL_FAILED")
+                .contains("pull access denied");
+        });
+    }
+
+    @Test
+    void theSettledEventTellsTheOperatorWhy_notOnlyThatItFailed() {
+        fleetWithPeerContainers(List.of(composeManaged("netdata")));
+        when(forResolvingSshTargets.resolve(ALICE)).thenReturn(ALICE_TARGET);
+        when(forRunningSshCommands.run(any(), anyString(), any())).thenReturn(new CommandResult(1, "",
+            "Error response from daemon: pull access denied for netdata", false, "SHA256:pinned"));
+
+        service.upgradeContainerImage(ALICE, "netdata");
+        upgradeExecutor.runPending();
+
+        verify(forPublishingEvents).publish(eq("vpn-peers"), eq("container-upgrade-settled"),
+            argThat(data -> data.contains("pull access denied for netdata")
+                && data.contains("still running")));
+    }
+
+    @Test
+    void anUpgradeThatCouldNotBeCarriedOut_isAnnouncedAnyway_soTheExplorerNeverWaitsForever() {
+        // The hardest case for the async boundary: a failure nobody anticipated, on the far side of the
+        // hand-off, where nothing is left to turn it into a 4xx. The domain rules what it means; what is
+        // proven here is the service's own half — that a settled outcome is always pushed.
+        fleetWithPeerContainers(List.of(composeManaged("vaultwarden")));
+        when(forResolvingSshTargets.resolve(ALICE)).thenReturn(ALICE_TARGET);
+        when(forRunningSshCommands.run(any(), anyString(), any()))
+            .thenThrow(new IllegalStateException("a bug nobody saw coming"));
+
+        service.upgradeContainerImage(ALICE, "vaultwarden");
+        upgradeExecutor.runPending();
+
+        verify(forPublishingEvents).publish(eq("vpn-peers"), eq("container-upgrade-settled"),
+            argThat(data -> data.contains("\"outcome\":\"UNREACHABLE\"")));
+    }
+
     private DockerService dockerService(String name, int port) {
         return new DockerService("id123", name, "image:latest", "latest",
             List.of(new PortMapping(port, port, "tcp", "0.0.0.0")), List.of(), "running");
+    }
+
+    /** A compose-managed container, as every scrape of a real fleet host reports one. */
+    private static DockerService composeManaged(String name) {
+        return DockerService.builder()
+            .containerId("id-" + name)
+            .containerName(name)
+            .image(name + ":latest")
+            .version("latest")
+            .ports(List.of(new PortMapping(80, 8080, "tcp", "0.0.0.0")))
+            .networks(List.of())
+            .state("running")
+            .composeCoordinates(ComposeCoordinates.fromLabels(Map.of(
+                "com.docker.compose.project", name,
+                "com.docker.compose.service", name,
+                "com.docker.compose.project.config_files", "/srv/" + name + "/docker-compose.yml",
+                "com.docker.compose.project.working_dir", "/srv/" + name)).orElseThrow())
+            .build();
     }
 
     private DockerService wireguardContainer(String image) {

@@ -1,5 +1,7 @@
 package net.vaier.domain;
 
+import lombok.Builder;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -15,7 +17,14 @@ import java.util.Optional;
  * @param updateAvailable Vaier's verdict on this container's image. {@link UpdateAvailability#UNKNOWN} on a
  *                        freshly-scraped container: a scrape reads the host, and the verdict needs the
  *                        registry, which only the update sweep asks.
+ * @param composeCoordinates how Docker Compose started this container, read from its own labels. Null when
+ *                        it carries no compose labels Vaier will act on — a plain {@code docker run}.
+ * @param upgradeEligibility whether Vaier may offer to upgrade this container's image, and why not when it
+ *                        may not. Null on a container nobody has judged yet: the verdict needs to know which
+ *                        machine the container runs on, which only the scrape of that machine knows. Null is
+ *                        read as "no action offered" — never as permission.
  */
+@Builder(toBuilder = true)
 public record DockerService(
         String containerId,
         String containerName,
@@ -25,7 +34,9 @@ public record DockerService(
         List<String> networks,
         String state,
         String imageDigest,
-        UpdateAvailability updateAvailable
+        UpdateAvailability updateAvailable,
+        ComposeCoordinates composeCoordinates,
+        UpgradeEligibility upgradeEligibility
 ) {
 
     /**
@@ -36,7 +47,15 @@ public record DockerService(
     public DockerService(String containerId, String containerName, String image, String version,
                          List<PortMapping> ports, List<String> networks, String state) {
         this(containerId, containerName, image, version, ports, networks, state, null,
-            UpdateAvailability.UNKNOWN);
+            UpdateAvailability.UNKNOWN, null, null);
+    }
+
+    /** A container known down to its update verdict, but not yet to how it was started or judged. */
+    public DockerService(String containerId, String containerName, String image, String version,
+                         List<PortMapping> ports, List<String> networks, String state,
+                         String imageDigest, UpdateAvailability updateAvailable) {
+        this(containerId, containerName, image, version, ports, networks, state, imageDigest,
+            updateAvailable, null, null);
     }
 
     /** Null-safe: a record built with no verdict still reads as {@link UpdateAvailability#UNKNOWN}. */
@@ -46,8 +65,15 @@ public record DockerService(
 
     /** This container carrying {@code verdict}. The scrape stays as the host reported it. */
     public DockerService withUpdateAvailability(UpdateAvailability verdict) {
-        return new DockerService(containerId, containerName, image, version, ports, networks, state,
-            imageDigest, verdict);
+        return toBuilder().updateAvailable(verdict).build();
+    }
+
+    /**
+     * This container carrying Vaier's verdict on whether its image may be upgraded. Everything the host
+     * reported, and every other verdict, stays as it was.
+     */
+    public DockerService withUpgradeEligibility(UpgradeEligibility eligibility) {
+        return toBuilder().upgradeEligibility(eligibility).build();
     }
 
     /**

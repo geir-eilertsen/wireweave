@@ -19,11 +19,13 @@ import net.vaier.domain.MachineId;
 import net.vaier.domain.NoSshServerException;
 import net.vaier.domain.RemoteDiskForecastTracker;
 import net.vaier.domain.RemoteDiskPressureTracker;
+import net.vaier.domain.DockerCommandAccess;
 import net.vaier.domain.RemoteDiskUsage;
 import net.vaier.domain.SshServerPresence;
 import net.vaier.domain.port.ForHoldingMachineDiskStandings;
 import net.vaier.domain.port.ForPersistingDiskPressureState;
 import net.vaier.domain.port.ForPublishingEvents;
+import net.vaier.domain.port.ForRecordingDockerCommandAccess;
 import net.vaier.domain.port.ForRecordingSshServerPresence;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -34,8 +36,16 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Polls <b>every real filesystem</b> of every SSH-accessible machine that Vaier holds a credential for and
- * emails admins when a watched one crosses its alert threshold. This covers the Vaier host itself (via
+ * <b>The fleet's five-minute rounds.</b> Its name says disks because disks are what it was built for and
+ * still its largest job, but what it really is now is <em>the one trip Vaier makes to every credentialed
+ * machine</em>, and four things are learned on it: each machine's filesystems (and the alerts they raise),
+ * its {@link net.vaier.domain.SshServerPresence}, the network it sits on, and — since #352 — its
+ * {@link DockerCommandAccess}. New facts belong here rather than in a sweep of their own precisely because
+ * the sign-in has already been paid for; the name is the thing that has fallen behind, and renaming it is
+ * worth its own change rather than riding along with a behaviour one.
+ *
+ * <p>Polls <b>every real filesystem</b> of every SSH-accessible machine that Vaier holds a credential for
+ * and emails admins when a watched one crosses its alert threshold. This covers the Vaier host itself (via
  * SSH-to-self) as well as every other machine, so there is a single disk-alert path for the whole fleet. It
  * runs a bounded {@code df} over SSH via {@link RunRemoteCommandUseCase} (never touching the SSH ports
  * directly), and a per-filesystem {@link RemoteDiskPressureTracker} decides what admins hear: the first
@@ -110,6 +120,9 @@ public class RemoteDiskWatcher {
     private final DetectMachineNetworksUseCase detectMachineNetworks;
     private final ForgetMachineNetworksUseCase forgetMachineNetworks;
     private final ForHoldingMachineDiskStandings diskStandings;
+    // A second fact this same trip can teach, and the only place Vaier can learn it: the container scrape
+    // reads Docker's API over the tunnel and never needs the docker group this asks about.
+    private final ForRecordingDockerCommandAccess dockerAccessRecorder;
     private final RemoteDiskPressureTracker tracker;
     private final RemoteDiskForecastTracker forecastTracker = new RemoteDiskForecastTracker();
 
@@ -131,7 +144,8 @@ public class RemoteDiskWatcher {
                              ForPersistingDiskPressureState diskPressureState,
                              DetectMachineNetworksUseCase detectMachineNetworks,
                              ForgetMachineNetworksUseCase forgetMachineNetworks,
-                             ForHoldingMachineDiskStandings diskStandings) {
+                             ForHoldingMachineDiskStandings diskStandings,
+                             ForRecordingDockerCommandAccess dockerAccessRecorder) {
         this.machines = machines;
         this.credentials = credentials;
         this.remoteCommand = remoteCommand;
@@ -145,6 +159,7 @@ public class RemoteDiskWatcher {
         this.detectMachineNetworks = detectMachineNetworks;
         this.forgetMachineNetworks = forgetMachineNetworks;
         this.diskStandings = diskStandings;
+        this.dockerAccessRecorder = dockerAccessRecorder;
         // The domain owns the port call; this watcher only hands it in. Its state is on disk precisely so
         // that a redeploy — several a day here — no longer wipes what admins have already been told.
         this.tracker = new RemoteDiskPressureTracker(diskPressureState);
@@ -162,6 +177,7 @@ public class RemoteDiskWatcher {
         // it was last seen on — behind forever.
         Set<MachineId> fleet = allMachines.stream().map(Machine::id).collect(Collectors.toSet());
         sshPresenceRecorder.retainOnly(fleet);
+        dockerAccessRecorder.retainOnly(fleet);
         diskStandings.retainOnly(fleet);
         forgetMachineNetworks.forgetMachineNetworksExcept(fleet);
     }
@@ -201,10 +217,18 @@ public class RemoteDiskWatcher {
 
     private void checkDisks(Machine machine, DiskWatches watches, int globalThreshold) {
         try {
-            CommandResult result = remoteCommand.run(machine.id(), RemoteDiskUsage.DF_COMMAND);
+            // Two questions, one sign-in. The Docker probe rides in FRONT of df and prints its exit status
+            // on a marker line df's parser cannot mistake for a filesystem, so the disk reading below is
+            // exactly what it was — same stdout, same exit code, same failure paths.
+            CommandResult result =
+                remoteCommand.run(machine.id(), DockerCommandAccess.probeAheadOf(RemoteDiskUsage.DF_COMMAND));
             // Reaching a CommandResult at all — whatever df itself said — already proves the SSH session
             // connected and authenticated, so the server is present regardless of df's own exit status.
             recordSshServerPresent(machine);
+            // Recorded before df's own exit status is judged: whether Vaier can drive Docker there is a fact
+            // this trip established even when df itself had nothing useful to say. The domain decides
+            // whether anything was learned at all, and a trip that learned nothing records nothing.
+            DockerCommandAccess.retain(machine.id(), result, dockerAccessRecorder);
             if (result.timedOut() || result.exitCode() != 0) {
                 log.debug("Remote df on {} failed (exit={}, timedOut={}); skipping",
                         machine.name(), result.exitCode(), result.timedOut());

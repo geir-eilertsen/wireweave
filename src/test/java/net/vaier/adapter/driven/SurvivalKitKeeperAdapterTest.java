@@ -2,6 +2,7 @@ package net.vaier.adapter.driven;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import net.vaier.domain.AuthMethod;
@@ -43,9 +44,17 @@ class SurvivalKitKeeperAdapterTest {
         return new SshTarget("10.0.0.9", 22, "geir", AuthMethod.PASSWORD, "pw", null, null);
     };
 
-    private final ForRunningSshCommands ssh = (target, command) -> {
-        commands.add(command);
-        return new CommandResult(exitCode, "", exitCode == 0 ? "" : "Permission denied", false, null);
+    private final ForRunningSshCommands ssh = new ForRunningSshCommands() {
+        @Override
+        public CommandResult run(SshTarget target, String command) {
+            commands.add(command);
+            return new CommandResult(exitCode, "", exitCode == 0 ? "" : "Permission denied", false, null);
+        }
+
+        @Override
+        public CommandResult run(SshTarget target, String command, Duration timeout) {
+            return run(target, command);
+        }
     };
 
     private SurvivalKitKeeperAdapter adapter() {

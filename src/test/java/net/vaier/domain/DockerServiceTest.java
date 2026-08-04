@@ -57,6 +57,32 @@ class DockerServiceTest {
     }
 
     @Test
+    void withUpdateAvailability_keepsHowTheContainerWasStartedAndHowItWasJudged() {
+        // The two verdicts are settled at different moments by different things — the update sweep and the
+        // machine scrape — so each copy must carry the other's answer forward untouched.
+        DockerService judged = DockerService.builder()
+            .containerId("id").containerName("vaultwarden").image("vaultwarden/server:latest").version("v")
+            .ports(List.of(new PortMapping(80, 8080, "tcp", "0.0.0.0")))
+            .networks(List.of("bridge")).state("running")
+            .composeCoordinates(new ComposeCoordinates("apps", "vaultwarden",
+                List.of("/srv/apps/docker-compose.yml"), "/srv/apps"))
+            .upgradeEligibility(UpgradeEligibility.UPGRADABLE)
+            .build();
+
+        DockerService swept = judged.withUpdateAvailability(UpdateAvailability.UPDATE_AVAILABLE);
+
+        assertThat(swept.composeCoordinates()).isEqualTo(judged.composeCoordinates());
+        assertThat(swept.upgradeEligibility()).isEqualTo(UpgradeEligibility.UPGRADABLE);
+        assertThat(swept.updateAvailable()).isEqualTo(UpdateAvailability.UPDATE_AVAILABLE);
+    }
+
+    @Test
+    void aScrapedContainerCarriesNoCoordinatesAndNoEligibilityUntilSomethingSuppliesThem() {
+        assertThat(container(List.of("bridge")).composeCoordinates()).isNull();
+        assertThat(container(List.of("bridge")).upgradeEligibility()).isNull();
+    }
+
+    @Test
     void isOnNetwork_trueWhenAttachedToThatNetwork() {
         assertThat(container(List.of("vaier-network")).isOnNetwork("vaier-network")).isTrue();
         assertThat(container(List.of("bridge")).isOnNetwork("vaier-network")).isFalse();

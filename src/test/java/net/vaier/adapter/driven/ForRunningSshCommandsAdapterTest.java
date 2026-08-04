@@ -90,6 +90,31 @@ class ForRunningSshCommandsAdapterTest {
     }
 
     @Test
+    void run_withItsOwnTimeout_outlivesTheShortDefault() throws Exception {
+        int port = startServer();
+        // The default that would abandon this command mid-flight — exactly the case an image pull is in.
+        MinaSshSessionAdapter shortDefault =
+            new MinaSshSessionAdapter(Duration.ofMillis(500), 1024 * 1024);
+
+        CommandResult result = shortDefault.run(target(port, null), "sleep 2", Duration.ofSeconds(20));
+
+        assertThat(result.timedOut()).isFalse();
+        assertThat(result.exitCode()).isZero();
+    }
+
+    @Test
+    void run_withItsOwnTimeout_isStillBoundedByIt() throws Exception {
+        int port = startServer();
+
+        long start = System.currentTimeMillis();
+        CommandResult result = adapter.run(target(port, null), "sleep 5", Duration.ofMillis(500));
+        long elapsed = System.currentTimeMillis() - start;
+
+        assertThat(result.timedOut()).isTrue();
+        assertThat(elapsed).isLessThan(4000);
+    }
+
+    @Test
     void run_cappedOutput_doesNotExceedCap() throws Exception {
         int port = startServer();
         MinaSshSessionAdapter tinyCap =

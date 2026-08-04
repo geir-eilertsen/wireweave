@@ -3209,16 +3209,23 @@
         body.appendChild(kv([
             ['Image', c.image],
             ['Version', c.version],
-            ['Update', UPDATE_SAYS[c.updateAvailable] || UPDATE_SAYS.UNKNOWN],
+            ['Update', updateSays(c)],
             ['State', c.state],
             ['Ports', ports],
             ['Networks', (c.networks || []).join(', ')],
             ['Container id', (c.containerId || '').slice(0, 12)],
         ]));
 
-        body.appendChild(note('This is everything Vaier knows about the container: it reads Docker, and it '
-            + 'has no endpoint to control one. Nothing here can start or stop it, and Vaier will not show '
-            + 'you a control it cannot honour. Use the machine’s shell for that.', false));
+        // The one verb Vaier has over a container, offered where the verdict that earns it is spoken. It is
+        // here rather than in the list because it acts on ONE container, which is exactly why the registry
+        // check above the list is not here: that one act is fleet-wide however many buttons front it.
+        const act = upgradeAction(machineId, c);
+        if (act) body.appendChild(act);
+
+        body.appendChild(note('This is very nearly everything Vaier knows about the container: it reads '
+            + 'Docker, and upgrading it to the image its registry now serves is the only thing it can do to '
+            + 'one. Nothing here can start, stop or reconfigure it, and Vaier will not show you a control it '
+            + 'cannot honour. Use the machine’s shell for that.', false));
         pane.appendChild(body);
     }
 
@@ -3932,15 +3939,19 @@
     // on every row for it would train the operator to ignore the column that matters. The silence is not a
     // promise that the image is current, which is why renderContainer() says the verdict in words.
     //
-    // And nothing here is a verb. Vaier has no endpoint to pull an image, so the tooltip names the operator's
-    // own action, not Vaier's.
+    // The mark itself is still not a verb — it is a reading, and a row of them is a list of readings. The verb
+    // lives one click away on the container's own page, where there is room to say what it will do first, so
+    // the tooltip points at it rather than carrying it. For a container Vaier will not recreate, the tooltip
+    // keeps naming the operator's own action, because that is the only one there is.
     function updateMark(container) {
         // The past has no update to report: an archive is how a filesystem stood then, and the registry's
         // answer is about now. (Same reasoning as the liveness dot, which the stylesheet hides in the past.)
         if (S.at || !container || container.updateAvailable !== 'UPDATE_AVAILABLE') return null;
         const mark = el('span', 'ex-update');
         mark.innerHTML = svg('arrowup', 'ex-ico');
-        mark.title = 'Update available — pull this image on the machine yourself';
+        mark.title = container.upgradeEligibility === 'UPGRADABLE'
+            ? 'Update available — open this container to upgrade it'
+            : 'Update available — pull this image on the machine yourself';
         return mark;
     }
 
@@ -3950,6 +3961,139 @@
         UP_TO_DATE: 'Up to date',
         UNKNOWN: 'Vaier cannot tell',
     };
+
+    /**
+     * What the Update row says (#353). Vaier's own stack is no longer asked about at all — its images are
+     * pinned by a Vaier release and move when Vaier does — so those containers carry no verdict, and
+     * rendering "Vaier cannot tell" for them would be true, useless, and would read as a gap where there is
+     * a rule. Say the rule instead. Every other container still gets the domain's verdict, unaltered.
+     */
+    function updateSays(c) {
+        return c.upgradeEligibility === 'VAIER_OWN_STACK'
+            ? 'Moves with Vaier — upgrade from Settings'
+            : (UPDATE_SAYS[c.updateAvailable] || UPDATE_SAYS.UNKNOWN);
+    }
+
+    // --- the Upgrade action (#352) ----------------------------------------------------------------------
+    //
+    // The verb the mark above never had. For its whole life the update-available mark was advice with no way
+    // to act on it, and the operator ended up SSH-ing to the host to do by hand the thing Vaier had just told
+    // them to do. This is that thing, done from here.
+    //
+    // Whether a container may be upgraded at all is NOT decided here. UpgradeEligibility took that decision on
+    // the machine the container was scraped from, which is the only place that can: the same container name
+    // means Vaier's own stack on this host and the operator's own container on any other, and a name alone
+    // cannot tell you which. The shell reads one enum, exactly as it does for the update verdict.
+    //
+    // What Vaier does with it is compose's own `pull` then `up -d`, over SSH, from the coordinates the
+    // container carries about itself — never a rebuild from `docker inspect`, which comes back subtly
+    // different and reports success.
+
+    // Why the button is withheld, in the operator's terms. Both are ordinary states, not faults, so neither
+    // sentence is an error — it says what is true and, where there is one, what to do instead.
+    const UPGRADE_WITHHELD = {
+        NOT_COMPOSE_MANAGED: 'Vaier will not upgrade this one: it was started by hand rather than by compose, '
+            + 'so there is no compose file to recreate it from. Recreating it anyway would drop whatever it '
+            + 'was started with. Upgrade it on the machine itself.',
+        VAIER_OWN_STACK: 'This is part of Vaier’s own stack. Its image is pinned by a Vaier release and moves '
+            + 'when Vaier does — upgrade it from Settings, not one container at a time.',
+        // The one withheld reason that is somebody's to fix, so it says how. Vaier reads this machine's Docker
+        // over the tunnel, which needs no group at all — which is exactly why the machine looks healthy while
+        // being unable to act. It re-checks on its own rounds, so the button returns without anyone asking.
+        NO_DOCKER_ACCESS: 'Vaier can read this machine’s Docker but not act on it: the user it signs in as is '
+            + 'not in the machine’s docker group. Add it there — you can see which user under the machine’s '
+            + 'SSH credential — and Vaier will offer this again on its own.',
+    };
+
+    // Which upgrades this browser is waiting on. Keyed by machine and container, because a name is only unique
+    // on one machine, and the operator can start one on a peer and go and look at another.
+    const _upgrading = new Set();
+    const upgradeKey = (machineId, containerName) => machineId + ' ' + containerName;
+
+    /**
+     * The one control the Explorer offers over a container: a button, a reason it is withheld, or nothing at
+     * all. Offered only against a real update — recreating a container that is already on the newest image is
+     * a service interruption bought for nothing.
+     */
+    function upgradeAction(machineId, c) {
+        // The past has no container to act on: an archive is how a machine stood then, and this acts on now.
+        if (S.at || c.updateAvailable !== 'UPDATE_AVAILABLE') return null;
+        if (c.upgradeEligibility !== 'UPGRADABLE') {
+            const said = UPGRADE_WITHHELD[c.upgradeEligibility];
+            return said ? note(said, false) : null;
+        }
+        const waiting = _upgrading.has(upgradeKey(machineId, c.containerName));
+        const act = el('div', 'ex-lactions is-static');
+        const btn = selVerb('arrowup', waiting ? 'Upgrading…' : 'Upgrade', 'ex-btn is-accent',
+            () => upgradeContainer(machineId, c.containerName));
+        btn.title = 'Pull the image this container’s registry now serves and recreate it from its own compose '
+            + 'file. The container is briefly down while it restarts.';
+        btn.disabled = waiting;
+        act.appendChild(btn);
+        return act;
+    }
+
+    /**
+     * Ask for the upgrade and stop. A pull is minutes of somebody else's bandwidth, so the backend accepts the
+     * request and answers 202; the outcome arrives on the fleet stream this shell already holds open. Nothing
+     * here waits, and nothing here asks again — the settled event is what ends it.
+     */
+    async function upgradeContainer(machineId, containerName) {
+        const key = upgradeKey(machineId, containerName);
+        if (_upgrading.has(key)) return;
+        // Said before it happens, because it happens to something that is running. The reassurance is real and
+        // it is the domain's: a recreate that fails leaves the old container up, on the image it already had.
+        const sure = await confirmModal('Upgrade ' + containerName + '?',
+            'Vaier will pull the newer image on ' + nameOf(machineId) + ' and recreate ' + containerName
+            + ' from its own compose file. It is down for a moment while it restarts. If the recreate fails, '
+            + 'the old container keeps running on the image it has now.', 'Upgrade');
+        if (!sure) return;
+
+        _upgrading.add(key);
+        render();
+        try {
+            const res = await fetch('/docker-services/upgrade', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ machineId: machineId, containerName: containerName }),
+            });
+            if (!res.ok) {
+                // A refusal is a status code on purpose, so it can never be a settled event that never comes.
+                _upgrading.delete(key);
+                toast(await refusalSays(res, containerName));
+                render();
+            }
+        } catch (e) {
+            _upgrading.delete(key);
+            toast('Vaier could not ask ' + nameOf(machineId) + ' for that upgrade.');
+            render();
+        }
+    }
+
+    // Why an upgrade was refused before it started. The backend distinguishes these deliberately; collapsing
+    // them into "something went wrong" would throw away the one part the operator can act on.
+    async function refusalSays(res, containerName) {
+        if (res.status === 424) return 'Vaier holds no SSH login for that machine, so it cannot upgrade '
+            + containerName + '. Store one under the machine first.';
+        if (res.status === 404) return 'Vaier no longer sees a container named ' + containerName
+            + ' on that machine.';
+        try {
+            const body = await res.json();
+            if (body && body.message) return body.message;
+        } catch (e) { /* a refusal without a body is still a refusal */ }
+        return 'Vaier would not upgrade ' + containerName + '.';
+    }
+
+    // How it ended, in the words the domain wrote. The shell shows the sentence it was handed rather than
+    // turning the enum back into English of its own: "the old container is still running on the image it had"
+    // is the whole point of a failed recreate, and it must not be lost between the two.
+    function onUpgradeSettled(payload) {
+        _upgrading.delete(upgradeKey(payload.machineId, payload.containerName));
+        toast(payload.message);
+        // Re-read the containers whatever the outcome: on success the scrape now reads the new digest and the
+        // mark clears itself, and on a failure the operator is looking at what is actually there.
+        return loadContainers();
+    }
 
     // --- checking the registries on demand (#57 slice 3) -----------------------------------------------
     //
@@ -7481,7 +7625,15 @@
         // only on a reconnect edge, not on a timer.
         let opened = false;
         events.onopen = () => {
-            if (opened) Promise.all([loadFleet(), loadLanServers(), loadDiskStandings()]).then(render);
+            if (opened) {
+                // A settled upgrade may have fired into the gap, and there is no replay. Stop waiting on the
+                // ones we can no longer be told about: a button stuck on "Upgrading…" until the page is
+                // reloaded is a worse lie than offering it again, and the containers we re-read below are the
+                // honest answer about what is actually running.
+                _upgrading.clear();
+                Promise.all([loadFleet(), loadLanServers(), loadDiskStandings(), loadContainers()])
+                    .then(render);
+            }
             opened = true;
         };
         // A peer was added, renamed or removed — the tree's own shape changed.
@@ -7518,6 +7670,17 @@
         // empty body, so this re-reads the one memory-backed endpoint and repaints the marks. A machine that
         // stopped being readable is not corrected here by guesswork: the sweep says so, or it says nothing.
         events.addEventListener('disk-standing-changed', () => loadDiskStandings().then(render));
+        // An upgrade this browser (or another one) asked for has settled. It rides on this stream rather than
+        // one of its own for the same reason everything else here does — the fleet already holds it open — and
+        // it is what ends the wait: a pull is minutes, so the request returned 202 and nothing has been asking
+        // since. The payload carries the sentence the domain wrote, so both browsers say the same thing.
+        events.addEventListener('container-upgrade-settled', (e) => {
+            try {
+                onUpgradeSettled(JSON.parse(e.data)).then(render);
+            } catch (err) {
+                console.error('Failed to apply container-upgrade-settled:', err);
+            }
+        });
     }
 
     // The fleet's second stream, and the last one. `published-services` is a different topic on a different

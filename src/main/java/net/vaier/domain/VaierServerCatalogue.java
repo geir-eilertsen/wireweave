@@ -1,5 +1,6 @@
 package net.vaier.domain;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -67,6 +68,47 @@ public final class VaierServerCatalogue {
      */
     public static boolean isOffered(String containerName) {
         return OFFERED.containsKey(containerName.toLowerCase());
+    }
+
+    /**
+     * Whether a container running <b>on the Vaier server</b> is one of Vaier's own — hidden or offered
+     * alike. Offered is not the opposite of Vaier's own: Traefik is offered for publishing and is still
+     * part of the stack a Vaier release pins. Says nothing about a container of the same name on a peer
+     * or a LAN server, which is the operator's.
+     */
+    public static boolean isVaierOwnStack(String containerName) {
+        return isExcluded(containerName) || isOffered(containerName);
+    }
+
+    /**
+     * The Vaier-server containers an <b>update sweep</b> may ask registries about: the operator's own, and
+     * nothing of Vaier's own stack (#353).
+     *
+     * <p><b>Why they are dropped rather than swept and hidden.</b> These images are pinned by a Vaier
+     * release and move with it, so the only honest resolution of a mark on one is "wait for a Vaier
+     * release" — and the mark is not merely a mark: {@code ImageUpdateTracker} is edge-triggered and not
+     * baseline-quiet, so a re-pushed pinned tag reaches every admin as mail. An alert nobody can act on
+     * teaches an operator to filter the channel, and that costs the alerts that matter. Dropping them
+     * <em>before</em> the registries are asked also keeps them from spending a rate limit that is real and
+     * shared with every image the operator <em>can</em> act on.
+     *
+     * <p><b>No exception for {@code vaier} itself.</b> Settings → Upgrade asks for itself rather than
+     * reading a verdict from here, so the mark buys nothing — and on a host that builds Vaier locally the
+     * local digest differs from what Docker Hub serves for {@code latest}, which makes the mark read
+     * "newer available" when acting on it would <b>downgrade</b>. A mark that talks an operator into a
+     * downgrade is worse than no mark.
+     *
+     * <p><b>Only meaningful for the Vaier server.</b> A peer or LAN server running its own {@code traefik}
+     * or {@code redis} is the operator's container and is swept exactly as before; that distinction is why
+     * the two judging entry points are separate, and it is why this is not applied to their scrapes.
+     */
+    public static List<DockerService> sweepable(List<DockerService> vaierServerContainers) {
+        if (vaierServerContainers == null) {
+            return List.of();
+        }
+        return vaierServerContainers.stream()
+            .filter(container -> !isVaierOwnStack(container.containerName()))
+            .toList();
     }
 
     /**

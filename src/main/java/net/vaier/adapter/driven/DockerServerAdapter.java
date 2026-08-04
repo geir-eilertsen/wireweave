@@ -12,6 +12,7 @@ import com.github.dockerjava.core.DockerClientConfig;
 import com.github.dockerjava.core.DockerClientImpl;
 import com.github.dockerjava.zerodep.ZerodepDockerHttpClient;
 import com.github.dockerjava.transport.DockerHttpClient;
+import net.vaier.domain.ComposeCoordinates;
 import net.vaier.domain.Server;
 import net.vaier.domain.DockerService;
 import net.vaier.domain.UpdateAvailability;
@@ -82,17 +83,20 @@ public class DockerServerAdapter implements ForGettingServerInfo {
                     InspectImageResponse imageInfo = inspectImage(container.getImageId(), dockerClient);
                     List<String> networks = extractNetworks(container);
 
-                    services.add(new DockerService(
-                        container.getId(),
-                        containerName,
-                        image,
-                        resolveVersion(imageInfo, image),
-                        portMappings,
-                        networks,
-                        container.getState(),
-                        resolveImageDigest(imageInfo, image),
-                        UpdateAvailability.UNKNOWN
-                    ));
+                    services.add(DockerService.builder()
+                        .containerId(container.getId())
+                        .containerName(containerName)
+                        .image(image)
+                        .version(resolveVersion(imageInfo, image))
+                        .ports(portMappings)
+                        .networks(networks)
+                        .state(container.getState())
+                        .imageDigest(resolveImageDigest(imageInfo, image))
+                        .updateAvailable(UpdateAvailability.UNKNOWN)
+                        // How compose started it, straight off the container's own labels. Whether the
+                        // labels amount to coordinates at all is the domain's call, not this adapter's.
+                        .composeCoordinates(ComposeCoordinates.fromLabels(container.getLabels()).orElse(null))
+                        .build());
                 }
             }
 

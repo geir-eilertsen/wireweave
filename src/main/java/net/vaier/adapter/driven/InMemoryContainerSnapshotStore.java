@@ -19,6 +19,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -150,8 +151,26 @@ public class InMemoryContainerSnapshotStore implements
     }
 
     @Override
-    public void storeImageUpdateVerdicts(Map<ScopedImage, UpdateAvailability> verdicts) {
+    public synchronized void storeImageUpdateVerdicts(Map<ScopedImage, UpdateAvailability> verdicts) {
         this.imageUpdateVerdicts = verdicts;
+    }
+
+    /**
+     * Drop one image's remembered verdict, leaving every other one exactly as it was — a copy-on-write
+     * replacement, since the map a sweep hands in may be immutable.
+     *
+     * <p>Synchronized with {@link #storeImageUpdateVerdicts} so the read-copy-write cannot interleave with
+     * a sweep storing its results: without it, a sweep finishing mid-forget would be silently reverted to
+     * the map this read a moment earlier.
+     */
+    @Override
+    public synchronized void forgetImageUpdateVerdict(ScopedImage image) {
+        if (!imageUpdateVerdicts.containsKey(image)) {
+            return;
+        }
+        Map<ScopedImage, UpdateAvailability> remaining = new HashMap<>(imageUpdateVerdicts);
+        remaining.remove(image);
+        this.imageUpdateVerdicts = Map.copyOf(remaining);
     }
 
     @Override

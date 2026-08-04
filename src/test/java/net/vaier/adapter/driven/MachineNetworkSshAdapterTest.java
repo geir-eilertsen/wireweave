@@ -11,6 +11,7 @@ import net.vaier.domain.port.ForRunningSshCommands;
 import net.vaier.domain.port.ForTrackingHostKeys;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -41,9 +42,17 @@ class MachineNetworkSshAdapterTest {
         SshTarget.on("10.13.13.3",
             new HostCredential(machineId, "geir", AuthMethod.PASSWORD, "pw", null, false), null);
 
-    private final ForRunningSshCommands ssh = (target, command) -> {
-        commands.add(command);
-        return result;
+    private final ForRunningSshCommands ssh = new ForRunningSshCommands() {
+        @Override
+        public CommandResult run(SshTarget target, String command) {
+            commands.add(command);
+            return result;
+        }
+
+        @Override
+        public CommandResult run(SshTarget target, String command, Duration timeout) {
+            return run(target, command);
+        }
     };
 
     private final Map<MachineId, String> pinned = new ConcurrentHashMap<>();

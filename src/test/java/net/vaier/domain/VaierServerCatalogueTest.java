@@ -1,6 +1,7 @@
 package net.vaier.domain;
 
 import org.junit.jupiter.api.Test;
+
 import org.yaml.snakeyaml.Yaml;
 
 import java.nio.file.Files;
@@ -66,6 +67,17 @@ class VaierServerCatalogueTest {
     }
 
     @Test
+    void isVaierOwnStack_countsTheOfferedCarveOutAsVaiersOwnToo() {
+        // Offered is not the opposite of Vaier's own: Traefik is offered for publishing and is still part
+        // of the stack a Vaier release pins. Asking isExcluded alone would call it the operator's.
+        assertThat(VaierServerCatalogue.isVaierOwnStack("traefik")).isTrue();
+        assertThat(VaierServerCatalogue.isVaierOwnStack("vaier")).isTrue();
+        assertThat(VaierServerCatalogue.isVaierOwnStack("docker-proxy")).isTrue();
+        assertThat(VaierServerCatalogue.isVaierOwnStack("pihole")).isFalse();
+        assertThat(VaierServerCatalogue.isVaierOwnStack("Traefik")).isTrue();
+    }
+
+    @Test
     void isOffered_isTheCarveOutForVaiersOwnContainersThatAreWorthPublishing() {
         assertThat(VaierServerCatalogue.isOffered("traefik")).isTrue();
         assertThat(VaierServerCatalogue.isOffered("crowdsec")).isFalse();
@@ -119,5 +131,52 @@ class VaierServerCatalogueTest {
         assertThat(unclassified)
             .as("containers of Vaier's own stack that the catalogue neither hides nor offers")
             .isEmpty();
+    }
+
+    // --- what the update sweep may ask about (#353) ---
+
+    private static DockerService running(String name, String image) {
+        return new DockerService("id-" + name, name, image, "v",
+            List.of(), List.of(), "running", "sha256:local", UpdateAvailability.UNKNOWN);
+    }
+
+    @Test
+    void vaiersOwnStackIsNotSweptAtAll_soNoRegistryIsAskedAboutAnImageNobodyCanActOn() {
+        // The images move with a Vaier release, so the only honest resolution of a mark on one is "wait for
+        // a Vaier release" — an alert an operator cannot act on teaches them to filter the channel. Dropped
+        // BEFORE the registries are asked, not swept-and-hidden: it should not spend the rate limit either.
+        List<DockerService> vaierServerContainers = List.of(
+            running("traefik", "traefik:v3.6.14"),
+            running("wireguard", "linuxserver/wireguard:latest"),
+            running("pihole", "pihole/pihole:latest"));
+
+        assertThat(VaierServerCatalogue.sweepable(vaierServerContainers))
+            .extracting(DockerService::containerName)
+            .containsExactly("pihole");
+    }
+
+    @Test
+    void vaierItselfIsNotSweptEither_becauseSettingsSpeaksForIt() {
+        // The plan of record kept `vaier` because Settings has a real button. The operator overruled it:
+        // Settings asks for itself, and on a box that builds Vaier locally the local digest differs from
+        // Hub's `latest`, so the mark would read "newer available" when acting on it would DOWNGRADE.
+        // A mark that talks you into a downgrade is worse than no mark, so there is no exception at all.
+        assertThat(VaierServerCatalogue.sweepable(List.of(running("vaier", "getvaier/vaier:latest"))))
+            .isEmpty();
+    }
+
+    @Test
+    void theOfferedHalfOfTheStackIsDroppedToo_notJustTheHiddenHalf() {
+        // Traefik is OFFERED for publishing and is still part of the stack a Vaier release pins — which is
+        // exactly the container this issue was filed about. Offered is not the opposite of Vaier's own.
+        assertThat(VaierServerCatalogue.isOffered("traefik")).isTrue();
+        assertThat(VaierServerCatalogue.sweepable(List.of(running("traefik", "traefik:v3.6.14")))).isEmpty();
+    }
+
+    @Test
+    void sweepableIsNullSafeAndKeepsEverythingItDoesNotRecognise() {
+        assertThat(VaierServerCatalogue.sweepable(null)).isEmpty();
+        assertThat(VaierServerCatalogue.sweepable(List.of(running("openhab", "openhab:latest"))))
+            .hasSize(1);
     }
 }

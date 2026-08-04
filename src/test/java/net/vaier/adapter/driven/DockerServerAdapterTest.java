@@ -10,6 +10,7 @@ import com.github.dockerjava.api.model.ContainerHostConfig;
 import com.github.dockerjava.api.model.ContainerNetworkSettings;
 import com.github.dockerjava.api.model.ContainerPort;
 import com.github.dockerjava.transport.DockerHttpClient;
+import net.vaier.domain.ComposeCoordinates;
 import net.vaier.domain.DockerService;
 import net.vaier.domain.Server;
 import org.junit.jupiter.api.Test;
@@ -581,6 +582,75 @@ class DockerServerAdapterTest {
 
         assertThat(services).singleElement().extracting(DockerService::imageDigest).isNull();
         assertThat(services).singleElement().extracting(DockerService::containerName).isEqualTo("app");
+    }
+
+    @Test
+    void getServicesWithExposedPorts_readsHowComposeStartedTheContainerOffItsLabels() {
+        DockerClient dockerClient = mock(DockerClient.class);
+        DockerHttpClient dockerHttpClient = mock(DockerHttpClient.class);
+
+        ListContainersCmd listCmd = mock(ListContainersCmd.class);
+        when(dockerClient.listContainersCmd()).thenReturn(listCmd);
+        when(listCmd.withShowAll(anyBoolean())).thenReturn(listCmd);
+
+        Container container = mock(Container.class);
+        when(container.getId()).thenReturn("c4");
+        when(container.getNames()).thenReturn(new String[]{"/pihole"});
+        when(container.getImage()).thenReturn("pihole/pihole:latest");
+        when(container.getImageId()).thenReturn("sha256:p1");
+        when(container.getState()).thenReturn("running");
+        when(container.getLabels()).thenReturn(Map.of(
+            "com.docker.compose.project", "pihole",
+            "com.docker.compose.service", "pihole",
+            "com.docker.compose.project.config_files", "/home/ubuntu/pihole/docker-compose.yml",
+            "com.docker.compose.project.working_dir", "/home/ubuntu/pihole"));
+        ContainerPort piholePort = new ContainerPort()
+            .withIp("0.0.0.0").withPrivatePort(80).withPublicPort(8081).withType("tcp");
+        when(container.getPorts()).thenReturn(new ContainerPort[]{piholePort});
+        when(listCmd.exec()).thenReturn(List.of(container));
+
+        InspectImageCmd inspectImageCmd = mock(InspectImageCmd.class);
+        when(dockerClient.inspectImageCmd("sha256:p1")).thenReturn(inspectImageCmd);
+        when(inspectImageCmd.exec()).thenReturn(mock(InspectImageResponse.class));
+
+        DockerServerAdapter adapter = new DockerServerAdapter(dockerClient, dockerHttpClient);
+        List<DockerService> services = adapter.getServicesWithExposedPorts(Server.vaierServer());
+
+        ComposeCoordinates coordinates = services.get(0).composeCoordinates();
+        assertThat(coordinates).isNotNull();
+        assertThat(coordinates.project()).isEqualTo("pihole");
+        assertThat(coordinates.service()).isEqualTo("pihole");
+        assertThat(coordinates.configFiles()).containsExactly("/home/ubuntu/pihole/docker-compose.yml");
+    }
+
+    @Test
+    void getServicesWithExposedPorts_aContainerWithNoComposeLabelsCarriesNoCoordinates() {
+        DockerClient dockerClient = mock(DockerClient.class);
+        DockerHttpClient dockerHttpClient = mock(DockerHttpClient.class);
+
+        ListContainersCmd listCmd = mock(ListContainersCmd.class);
+        when(dockerClient.listContainersCmd()).thenReturn(listCmd);
+        when(listCmd.withShowAll(anyBoolean())).thenReturn(listCmd);
+
+        Container container = mock(Container.class);
+        when(container.getId()).thenReturn("c5");
+        when(container.getNames()).thenReturn(new String[]{"/hand-started"});
+        when(container.getImage()).thenReturn("some/app:1.0");
+        when(container.getImageId()).thenReturn("sha256:h1");
+        when(container.getState()).thenReturn("running");
+        ContainerPort appPort = new ContainerPort()
+            .withIp("0.0.0.0").withPrivatePort(80).withPublicPort(8082).withType("tcp");
+        when(container.getPorts()).thenReturn(new ContainerPort[]{appPort});
+        when(listCmd.exec()).thenReturn(List.of(container));
+
+        InspectImageCmd inspectImageCmd = mock(InspectImageCmd.class);
+        when(dockerClient.inspectImageCmd("sha256:h1")).thenReturn(inspectImageCmd);
+        when(inspectImageCmd.exec()).thenReturn(mock(InspectImageResponse.class));
+
+        DockerServerAdapter adapter = new DockerServerAdapter(dockerClient, dockerHttpClient);
+        List<DockerService> services = adapter.getServicesWithExposedPorts(Server.vaierServer());
+
+        assertThat(services).singleElement().extracting(DockerService::composeCoordinates).isNull();
     }
 
     private static ContainerPort port(int privatePort, int publicPort) {

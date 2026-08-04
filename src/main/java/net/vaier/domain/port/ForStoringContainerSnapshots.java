@@ -28,6 +28,16 @@ public interface ForStoringContainerSnapshots {
     /** Replace the last image-update sweep's verdicts (image → verdict). */
     void storeImageUpdateVerdicts(Map<ScopedImage, UpdateAvailability> verdicts);
 
+    /**
+     * Forget the remembered verdict for one {@link ScopedImage}, so it reads
+     * {@link UpdateAvailability#UNKNOWN} again — what every image no sweep has judged reads.
+     *
+     * <p>Deliberately narrow. The upgrade path needs to retire exactly one container's verdict, and doing
+     * that by rewriting the whole map would race the sweep: a sweep landing between an upgrade's pull and
+     * its settle would be clobbered by a map assembled before it ran. One key, left to the store to remove.
+     */
+    void forgetImageUpdateVerdict(ScopedImage image);
+
     /** The raw cached server-peer scrape (undecorated), for feeding a sweep. */
     List<PeerContainers> peerContainers();
 

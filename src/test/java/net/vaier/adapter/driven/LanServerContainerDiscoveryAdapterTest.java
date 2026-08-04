@@ -1,12 +1,16 @@
 package net.vaier.adapter.driven;
 
+import net.vaier.domain.ComposeCoordinates;
+import net.vaier.domain.DockerCommandAccess;
 import net.vaier.domain.DockerService;
 import net.vaier.domain.LanServer;
 import net.vaier.domain.DockerService.PortMapping;
 import net.vaier.domain.UpdateAvailability;
+import net.vaier.domain.UpgradeEligibility;
 import net.vaier.domain.port.ForDiscoveringLanServerContainers.LanServerContainers;
 import net.vaier.domain.port.ForGettingLanServers;
 import net.vaier.domain.port.ForGettingLanServers.LanServerView;
+import net.vaier.domain.port.ForCheckingDockerCommandAccess;
 import net.vaier.domain.port.ForGettingServerInfo;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -15,8 +19,10 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
@@ -26,6 +32,7 @@ class LanServerContainerDiscoveryAdapterTest {
 
     @Mock ForGettingLanServers forGettingLanServers;
     @Mock ForGettingServerInfo forGettingServerInfo;
+    @Mock ForCheckingDockerCommandAccess dockerAccess;
 
     @InjectMocks LanServerContainerDiscoveryAdapter adapter;
 
@@ -94,5 +101,67 @@ class LanServerContainerDiscoveryAdapterTest {
         when(forGettingServerInfo.getServicesWithExposedPorts(any())).thenReturn(List.of(container("app")));
 
         assertThat(adapter.discoverLanServerContainersForHost("nas").status()).isEqualTo("OK");
+    }
+
+    @Test
+    void scrape_judgesALanServersContainersAsTheOperatorsOwn() {
+        // A LAN server is the operator's machine: nothing on it is Vaier's own stack, whatever it is
+        // named, and the Explorer must be handed the verdict rather than work it out itself.
+        when(forGettingLanServers.getAll()).thenReturn(List.of(dockerHost("nas", "apalveien5")));
+        when(dockerAccess.accessFor(any())).thenReturn(DockerCommandAccess.GRANTED);
+        when(forGettingServerInfo.getServicesWithExposedPorts(any()))
+            .thenReturn(List.of(composeManaged("traefik"), container("hand-started")));
+
+        assertThat(adapter.discoverAllLanServerContainers().get(0).containers())
+            .extracting(DockerService::containerName, DockerService::upgradeEligibility)
+            .containsExactly(
+                tuple("traefik", UpgradeEligibility.UPGRADABLE),
+                tuple("hand-started", UpgradeEligibility.NOT_COMPOSE_MANAGED));
+    }
+
+    @Test
+    void scrape_withholdsTheUpgradeOnALanServerWhoseDockerVaierCannotDrive() {
+        // The scrape itself goes over the Docker API and works perfectly — which is exactly why the
+        // verdict has to carry the machine's SSH-side Docker access, learned elsewhere and handed in.
+        when(forGettingLanServers.getAll()).thenReturn(List.of(dockerHost("nas", "apalveien5")));
+        when(dockerAccess.accessFor(any())).thenReturn(DockerCommandAccess.REFUSED);
+        when(forGettingServerInfo.getServicesWithExposedPorts(any()))
+            .thenReturn(List.of(composeManaged("plex")));
+
+        assertThat(adapter.discoverAllLanServerContainers().get(0).containers())
+            .extracting(DockerService::containerName, DockerService::upgradeEligibility)
+            .containsExactly(tuple("plex", UpgradeEligibility.NO_DOCKER_ACCESS));
+    }
+
+    @Test
+    void scrape_ofAMachineNobodyHasSweptYet_stillOffersTheUpgrade() {
+        when(forGettingLanServers.getAll()).thenReturn(List.of(dockerHost("nas", "apalveien5")));
+        when(dockerAccess.accessFor(any())).thenReturn(DockerCommandAccess.UNKNOWN);
+        when(forGettingServerInfo.getServicesWithExposedPorts(any()))
+            .thenReturn(List.of(composeManaged("plex")));
+
+        assertThat(adapter.discoverAllLanServerContainers().get(0).containers())
+            .extracting(DockerService::upgradeEligibility)
+            .containsExactly(UpgradeEligibility.UPGRADABLE);
+    }
+
+    /** A compose-managed container, as a scrape of a real LAN server reports one. */
+    private static DockerService composeManaged(String name) {
+        return DockerService.builder()
+            .containerId("id-" + name)
+            .containerName(name)
+            .image("img:latest")
+            .version("v")
+            .ports(List.of(new PortMapping(80, 8080, "tcp", "0.0.0.0")))
+            .networks(List.of())
+            .state("running")
+            .imageDigest("sha256:x")
+            .updateAvailable(UpdateAvailability.UNKNOWN)
+            .composeCoordinates(ComposeCoordinates.fromLabels(Map.of(
+                "com.docker.compose.project", name,
+                "com.docker.compose.service", name,
+                "com.docker.compose.project.config_files", "/srv/" + name + "/docker-compose.yml",
+                "com.docker.compose.project.working_dir", "/srv/" + name)).orElseThrow())
+            .build();
     }
 }

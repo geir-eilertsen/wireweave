@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.entry;
 
 class InMemoryContainerSnapshotStoreTest {
 
@@ -81,5 +82,50 @@ class InMemoryContainerSnapshotStoreTest {
         assertThat(store.discoverAll()).singleElement()
             .extracting(p -> p.containers().get(0).updateAvailable())
             .isEqualTo(UpdateAvailability.UPDATE_AVAILABLE);
+    }
+
+    // --- forgetting one verdict (#352) ---
+
+    @Test
+    void forgettingOneVerdict_leavesTheContainerReadingUnknown_notUpToDate() {
+        // Forgetting is the honest erasure: nothing has been re-measured, so the container falls back to
+        // the same "no sweep has judged this" every un-swept container reports.
+        store.storeVaierServerContainers(List.of(imaged("vaultwarden", "vaultwarden/server:latest")));
+        ScopedImage image = new ScopedImage(VAIER_SERVER.value(), "vaultwarden/server:latest");
+        store.storeImageUpdateVerdicts(Map.of(image, UpdateAvailability.UPDATE_AVAILABLE));
+
+        store.forgetImageUpdateVerdict(image);
+
+        assertThat(store.discover())
+            .extracting(DockerService::updateAvailable)
+            .containsExactly(UpdateAvailability.UNKNOWN);
+        assertThat(store.imageUpdateVerdicts()).doesNotContainKey(image);
+    }
+
+    @Test
+    void forgettingOneVerdict_leavesEveryOtherMachinesVerdictStanding() {
+        // The narrow operation exists precisely so the upgrade path never rewrites the whole map and
+        // clobbers a sweep that landed between the pull and the settle.
+        ScopedImage mine = new ScopedImage(VAIER_SERVER.value(), "vaultwarden/server:latest");
+        ScopedImage theirs = new ScopedImage(TestMachineIds.of("apalveien5").value(), "some/app:latest");
+        store.storeImageUpdateVerdicts(Map.of(
+            mine, UpdateAvailability.UPDATE_AVAILABLE,
+            theirs, UpdateAvailability.UPDATE_AVAILABLE));
+
+        store.forgetImageUpdateVerdict(mine);
+
+        assertThat(store.imageUpdateVerdicts())
+            .containsExactly(entry(theirs, UpdateAvailability.UPDATE_AVAILABLE));
+    }
+
+    @Test
+    void forgettingAVerdictNobodyHolds_changesNothing() {
+        ScopedImage held = new ScopedImage(VAIER_SERVER.value(), "vaultwarden/server:latest");
+        store.storeImageUpdateVerdicts(Map.of(held, UpdateAvailability.UPDATE_AVAILABLE));
+
+        store.forgetImageUpdateVerdict(new ScopedImage(VAIER_SERVER.value(), "never/swept:latest"));
+
+        assertThat(store.imageUpdateVerdicts())
+            .containsExactly(entry(held, UpdateAvailability.UPDATE_AVAILABLE));
     }
 }

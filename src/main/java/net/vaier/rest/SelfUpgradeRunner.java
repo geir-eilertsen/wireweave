@@ -11,6 +11,7 @@ import net.vaier.domain.CommandResult;
 import net.vaier.domain.DockerService;
 import net.vaier.domain.MachineId;
 import net.vaier.domain.SelfUpgrade;
+import net.vaier.domain.port.ForResolvingRegistryDigest;
 import net.vaier.domain.port.ForResolvingVaierServerIdentity;
 import net.vaier.domain.SelfUpgradeScript;
 import net.vaier.domain.SelfUpgradeStatus;
@@ -36,13 +37,19 @@ public class SelfUpgradeRunner implements UpgradeVaierUseCase, GetSelfUpgradeSta
     private final DiscoverVaierServerContainersUseCase containers;
     private final RunRemoteCommandUseCase remoteCommand;
     private final ForResolvingVaierServerIdentity vaierServerIdentity;
+    // Settings speaks for itself (#353): Vaier's own stack is no longer swept, so the one image this may
+    // act on is asked about here rather than read off a verdict nobody takes any more. Cached answers are
+    // fine and deliberate — this is one image, and the rate limit is shared with the whole fleet.
+    private final ForResolvingRegistryDigest registryDigest;
 
     public SelfUpgradeRunner(DiscoverVaierServerContainersUseCase containers,
                              RunRemoteCommandUseCase remoteCommand,
-                             ForResolvingVaierServerIdentity vaierServerIdentity) {
+                             ForResolvingVaierServerIdentity vaierServerIdentity,
+                             ForResolvingRegistryDigest registryDigest) {
         this.containers = containers;
         this.remoteCommand = remoteCommand;
         this.vaierServerIdentity = vaierServerIdentity;
+        this.registryDigest = registryDigest;
     }
 
     /**
@@ -58,7 +65,7 @@ public class SelfUpgradeRunner implements UpgradeVaierUseCase, GetSelfUpgradeSta
     @Override
     public boolean upgradeAvailable() {
         try {
-            return SelfUpgrade.upgradeAvailable(containers.discover());
+            return SelfUpgrade.upgradeAvailable(containers.discover(), registryDigest);
         } catch (Exception e) {
             log.debug("Could not judge whether a Vaier upgrade is available: {}", e.getMessage());
             return false;

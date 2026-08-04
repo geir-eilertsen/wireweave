@@ -213,4 +213,40 @@ class ImageUpdateTrackerTest {
             .as("Colina 27 is newly out of date even though Apalveien 5 already was")
             .containsExactly(onColina);
     }
+
+    // --- an image that leaves the sweep entirely (#353) ---
+
+    @Test
+    void anImageThatLeavesTheSweepIsForgotten_ratherThanStayingLatchedAsAlerted() {
+        ImageUpdateTracker tracker = new ImageUpdateTracker();
+        // #353 drops Vaier's own stack from the sweep. An image that had already alerted must not sit in
+        // here as "alerted" forever: the tracker holds it only to suppress a repeat, and there is nothing
+        // left to repeat about an image nobody is judging any more.
+        ScopedImage traefik = new ScopedImage("machine-1", "traefik:v3.6.14");
+        ScopedImage pihole = new ScopedImage("machine-1", "pihole/pihole:latest");
+        assertThat(tracker.update(Map.of(
+            traefik, UpdateAvailability.UPDATE_AVAILABLE,
+            pihole, UpdateAvailability.UP_TO_DATE)))
+            .containsExactly(traefik);
+
+        // The next sweep no longer carries Vaier's own stack at all.
+        assertThat(tracker.update(Map.of(pihole, UpdateAvailability.UP_TO_DATE))).isEmpty();
+
+        // And it stays silent — the mail this issue is about is not sent again by the sweep after it.
+        assertThat(tracker.update(Map.of(pihole, UpdateAvailability.UP_TO_DATE))).isEmpty();
+    }
+
+    @Test
+    void anImageThatComesBackToTheSweepStaleIsNewsAgain_notASilence() {
+        ImageUpdateTracker tracker = new ImageUpdateTracker();
+        // The other half of forgetting. An own-stack container that stopped being own-stack — renamed, or
+        // moved to a peer — is a genuinely new situation, and a tracker still holding the old latch would
+        // swallow the one alert that mattered.
+        ScopedImage image = new ScopedImage("machine-1", "traefik:v3.6.14");
+        tracker.update(Map.of(image, UpdateAvailability.UPDATE_AVAILABLE));
+        tracker.update(Map.of());
+
+        assertThat(tracker.update(Map.of(image, UpdateAvailability.UPDATE_AVAILABLE)))
+            .containsExactly(image);
+    }
 }

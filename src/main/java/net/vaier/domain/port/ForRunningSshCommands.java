@@ -3,6 +3,8 @@ package net.vaier.domain.port;
 import net.vaier.domain.CommandResult;
 import net.vaier.domain.SshTarget;
 
+import java.time.Duration;
+
 /**
  * Driven port for running one non-interactive command on a machine over SSH and reading its result —
  * the counterpart to {@link ForOpeningSshSessions}, which streams an interactive shell. Where the web
@@ -17,6 +19,20 @@ import net.vaier.domain.SshTarget;
  */
 public interface ForRunningSshCommands {
 
-    /** Run {@code command} on {@code target} and return its captured output and exit status. */
+    /**
+     * Run {@code command} on {@code target} under the adapter's own short default deadline — the right
+     * bound for the probes and one-line reads that make up almost every remote command Vaier runs.
+     */
     CommandResult run(SshTarget target, String command);
+
+    /**
+     * As {@link #run(SshTarget, String)}, but bounded by {@code timeout} instead of the default.
+     *
+     * <p>The default is measured in seconds, which is the whole reason this exists: a command that is
+     * <em>expected</em> to take minutes — pulling a container image over a home connection, recreating a
+     * compose service — would be abandoned mid-flight and reported as a timeout while the host was still
+     * working. The caller that knows how long its command legitimately takes says so here rather than every
+     * other caller paying for it in a raised global default.
+     */
+    CommandResult run(SshTarget target, String command, Duration timeout);
 }

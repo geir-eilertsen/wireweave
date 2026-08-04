@@ -1,5 +1,7 @@
 package net.vaier.domain;
 
+import net.vaier.domain.port.ForResolvingRegistryDigest;
+
 import java.util.List;
 import java.util.Optional;
 
@@ -38,16 +40,40 @@ public final class SelfUpgrade {
     }
 
     /**
-     * Whether there is a newer Vaier image to move to. Only {@link UpdateAvailability#UPDATE_AVAILABLE}
-     * counts: {@code UNKNOWN} means the registry could not be reached, was rate-limited, or the image was
-     * built locally with no registry digest — none of which is a reason to recreate the container the fleet's
-     * whole control plane is running inside. Treating "cannot tell" as "upgrade" would turn a rate limit into
-     * an outage.
+     * Whether there is a newer Vaier image to move to — asked of the registry <b>here</b>, rather than read
+     * off the container's {@code updateAvailable} verdict.
+     *
+     * <p><b>Why it asks for itself (#353).</b> The update sweep no longer judges Vaier's own stack at all,
+     * {@code vaier} included: those images move with a Vaier release, so a mark on one is an alert whose only
+     * resolution is "wait for a release" — and on a host that builds Vaier locally the mark is worse than
+     * useless, since the local digest differs from what Hub serves for {@code latest} and acting on it would
+     * <b>downgrade</b>. Settings has a real button, so it asks the one question it actually needs about the
+     * one image it may act on. Reading the sweep's verdict here after #353 would leave Settings permanently
+     * blind, which would turn that fix into a regression on the path it was justified by.
+     *
+     * <p>Only a genuine difference counts. An empty answer — registry unreachable, rate-limited, or a locally
+     * built image with no digest to compare — is {@link UpdateAvailability#UNKNOWN}, and "cannot tell" is
+     * never a reason to recreate the container the fleet's whole control plane runs inside: that would turn a
+     * rate limit into an outage. A registry that throws is read exactly as one that could not answer.
      */
-    public static boolean upgradeAvailable(List<DockerService> containers) {
+    public static boolean upgradeAvailable(List<DockerService> containers,
+                                           ForResolvingRegistryDigest registry) {
         return findSelf(containers)
-            .map(c -> c.updateAvailable() == UpdateAvailability.UPDATE_AVAILABLE)
+            .map(self -> UpdateAvailability.compare(self.imageDigest(), servedDigest(self, registry))
+                == UpdateAvailability.UPDATE_AVAILABLE)
             .orElse(false);
+    }
+
+    /** What the registry serves for Vaier's own image right now, or null when it could not say. */
+    private static String servedDigest(DockerService self, ForResolvingRegistryDigest registry) {
+        try {
+            return ImageReference.parse(self.image())
+                .flatMap(registry::resolveDigest)
+                .orElse(null);
+        } catch (Exception e) {
+            // Unreachable, rate-limited, unauthorized: cannot tell, which is not an upgrade.
+            return null;
+        }
     }
 
     /**

@@ -3,9 +3,11 @@ package net.vaier.adapter.driven;
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.domain.DockerService;
 import net.vaier.domain.Server;
+import net.vaier.domain.UpgradeEligibility;
 import net.vaier.domain.port.ForDiscoveringLanServerContainers;
 import net.vaier.domain.port.ForGettingLanServers;
 import net.vaier.domain.port.ForGettingLanServers.LanServerView;
+import net.vaier.domain.port.ForCheckingDockerCommandAccess;
 import net.vaier.domain.port.ForGettingServerInfo;
 import org.springframework.stereotype.Component;
 
@@ -25,11 +27,16 @@ public class LanServerContainerDiscoveryAdapter implements ForDiscoveringLanServ
 
     private final ForGettingLanServers forGettingLanServers;
     private final ForGettingServerInfo forGettingServerInfo;
+    // What Vaier last saw of each machine's Docker access, so a container's verdict can say that this
+    // machine's Docker is out of reach rather than offering an upgrade that cannot run.
+    private final ForCheckingDockerCommandAccess dockerAccess;
 
     public LanServerContainerDiscoveryAdapter(ForGettingLanServers forGettingLanServers,
-                                              ForGettingServerInfo forGettingServerInfo) {
+                                              ForGettingServerInfo forGettingServerInfo,
+                                              ForCheckingDockerCommandAccess dockerAccess) {
         this.forGettingLanServers = forGettingLanServers;
         this.forGettingServerInfo = forGettingServerInfo;
+        this.dockerAccess = dockerAccess;
     }
 
     @Override
@@ -66,7 +73,11 @@ public class LanServerContainerDiscoveryAdapter implements ForDiscoveringLanServ
         // address is in the Vaier server's own subnet). The Docker socket target is the same.
         try {
             Server target = new Server(server.lanAddress(), server.dockerPort(), false);
-            List<DockerService> containers = forGettingServerInfo.getServicesWithExposedPorts(target);
+            // A LAN server is the operator's machine: its containers are theirs to upgrade, whatever they
+            // are named. The verdict is the domain's — this adapter only says which machine was scraped.
+            List<DockerService> containers = UpgradeEligibility.judgeOperatorContainers(
+                forGettingServerInfo.getServicesWithExposedPorts(target),
+                dockerAccess.accessFor(server.machineId()));
             log.info("Discovered {} containers on LAN server {} ({}) via {}",
                 containers.size(), server.name(), server.lanAddress(), view.relayPeerName());
             return new LanServerContainers(server.machineId().value(), server.name(), server.lanAddress(), server.dockerPort(),
