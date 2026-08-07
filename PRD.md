@@ -71,6 +71,7 @@ Each step is done in a different tool, with no feedback loop. Mistakes are silen
 - Not a general-purpose container orchestrator (no Portainer replacement)
 - Not a DNS manager at all — Vaier reads DNS, never writes it. The operator owns one wildcard record; see §6.4
 - Not a monitoring platform
+- Not a layer-4 proxy — publishing routes HTTP(S) only. Traefik can route raw TCP, but an entrypoint per service is static config (compose edit, host port, restart, firewall rule) and arrives without social login, the CrowdSec bouncer or security headers, while `HostSNI` returns per-service port bookkeeping. Non-HTTP services are reached over the VPN at their LAN address; see `docs/NETWORKING.md`
 - No multi-server WireGuard topology (single VPN server, multiple peers)
 - No management of the Docker host OS (no package installs, kernel config, etc.)
 - No mobile app

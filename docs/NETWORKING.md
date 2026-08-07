@@ -44,6 +44,10 @@ Your answers resolve to one of the four peer types, and each has its own handoff
 
 The handoff is shown **once**, in the same modal, and each variant shows a live "waiting for first handshake — turns green on its own" indicator. A server's routed LAN isn't asked here — set it later from the machine's pane once the peer is up.
 
+**A full-tunnel client can't reach a LAN it is sitting on.** A personal device routes *all traffic* into the tunnel, and the WireGuard clients pair that with a kill-switch: untunneled traffic is blocked outright. But the operating system still prefers its own on-link route for the local subnet, so packets aimed at a machine on the network the device is physically plugged into leave *outside* the tunnel — and the kill-switch drops them. The device reaches the whole fleet and loses only the LAN under its feet. On Windows the signature is unmistakable: `tracert` to the local address reports `General failure` on the first hop, meaning the packet never left the machine, where a genuinely unreachable host would time out instead.
+
+There is nothing to fix here, and splitting the tunnel to work around it costs more than it returns: at home you don't need the tunnel to reach your own LAN, and away from home there is no competing on-link route, so the same address works straight through the tunnel. Adding the local subnet to a client's `AllowedIPs` also collides with the on-link route at the same prefix length, which tends to hairpin local traffic out to the Vaier server and back.
+
 Every setup script — a peer's or a LAN server's — opens with a **setup-script guard** that refuses to run on the wrong machine. A setup script reconfigures the host it runs on (Docker, network interfaces, firewall) and arrives as a one-liner you paste into a terminal, so the guard checks four things before touching anything: that the host isn't a Vaier server, that it isn't already set up as a *different* machine (each completed run records its name at `/etc/vaier/machine`), that none of the networks the script would route into the tunnel is the one the host is reachable on — which would cut it off from its own gateway — and, where Vaier knows the machine's address, that the host actually holds it. A refusal prints what it refused and why, changes nothing, and exits 3. If you truly mean it, re-run with `VAIER_FORCE=1`.
 
 Each machine — VPN peer or LAN server — can carry an optional **description**, a free-text note (e.g. "Home media server (NUC, Ubuntu 22.04)") set on the Add Machine form and editable from the machine's **Edit details** dialog in the **Explorer**. It shows as a muted subtitle under the machine name so its purpose is obvious at a glance.
@@ -112,6 +116,14 @@ bmp.yourdomain.com/auth/*  →  http://rig.yourdomain.com:8090/auth/*
 Siblings on one host are independent: each is published and unpublished on its own, and removing one never affects another. There is no shared DNS record to keep track of — the host name resolves under your wildcard record whether one route sits on it or five.
 
 For publishing services from non-peer LAN machines (NAS, printers, extra Docker hosts), see [`docs/ADVANCED.md`](ADVANCED.md).
+
+### Services Vaier can't publish
+
+Publishing routes **HTTP(S) only**. The port you enter is the *backend* port — the port Traefik connects to on the machine — and never the port clients connect on: every published route is bound to the `websecure` entrypoint, so visitors always arrive on 443. A service speaking its own protocol on its own port (Synology Drive's sync agent on 6690, SMB, a database, a game server) therefore cannot be published. Nothing stops you typing its port into the publish form, since the only check is that the number is in range — but the result is a route that answers on 443 with HTTP, speaks HTTP at a backend that doesn't understand it, and sits on the launchpad looking exactly like a working service.
+
+Reach those over the VPN instead, at the machine's LAN address and its real port. A LAN server behind a relay peer is reachable from every connected peer, so `192.168.x.y:6690` works from anywhere on the fleet — no route to publish, no port exposed to the internet, and the transport is already encrypted by WireGuard, so the service's own TLS can usually be turned off. Publish the HTTP half as normal: a NAS's web UI on its own subdomain, its sync agent over the tunnel.
+
+Traefik can route raw TCP, but not on the terms publishing runs on. A TCP router needs its own entrypoint, and entrypoints are *static* config — a compose edit, a republished host port, a Traefik restart and a firewall rule per service, where every published service today is a hot file write with no downtime. It would also arrive without the things publishing means: no social login, no CrowdSec bouncer, no security headers, none of which exist below HTTP. And `HostSNI` gives one service per port, so the subdomain stops being the service's identity and per-service port bookkeeping comes back — the exact thing the wildcard record was meant to end.
 
 ---
 
