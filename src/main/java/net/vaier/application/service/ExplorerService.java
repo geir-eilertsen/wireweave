@@ -6,6 +6,7 @@ import net.vaier.application.BrowseFilesUseCase;
 import net.vaier.application.DeleteFileUseCase;
 import net.vaier.application.DownloadFileUseCase;
 import net.vaier.application.ResolveFileCoordinateUseCase;
+import net.vaier.application.UploadFileUseCase;
 import net.vaier.application.ViewFileUseCase;
 import net.vaier.application.ViewFileUseCase.View;
 import net.vaier.domain.FileEntry;
@@ -17,6 +18,7 @@ import net.vaier.domain.Selection;
 import net.vaier.domain.SftpRoot;
 import net.vaier.domain.ProtectedPaths;
 import net.vaier.domain.SshTarget;
+import net.vaier.domain.Upload;
 import net.vaier.domain.ViewableFile;
 import net.vaier.domain.port.ForBrowsingRemoteFiles;
 import net.vaier.domain.port.ForBrowsingRemoteFiles.DirectoryListing;
@@ -50,7 +52,7 @@ import java.util.zip.ZipOutputStream;
 @RequiredArgsConstructor
 public class ExplorerService
     implements BrowseFilesUseCase, ResolveFileCoordinateUseCase, DownloadFileUseCase, ViewFileUseCase,
-               DeleteFileUseCase {
+               DeleteFileUseCase, UploadFileUseCase {
 
     private final ForResolvingSshTargets forResolvingSshTargets;
     private final ForBrowsingRemoteFiles forBrowsingRemoteFiles;
@@ -163,6 +165,23 @@ public class ExplorerService
 
         forBrowsingRemoteFiles.delete(target, root.toDeletableJailPath(requested));
         log.info("Deleted {} on {}", requested, machineId);
+    }
+
+    /**
+     * Put one file from the browser into a directory on a machine — the Explorer's mirror of a download, and
+     * present-only for the same reason a delete is: a machine's past is a read-only mounted archive, so there
+     * is no {@code at} and nowhere in it to write. The service resolves the machine and its SFTP root and
+     * hands both, with the port, to the {@link Upload}; every decision — the destination path, whether the
+     * name is taken, whether it may be replaced — is the domain's, taken before a byte is sent. The stream is
+     * piped straight through, so memory stays flat however large the file is.
+     */
+    @Override
+    public void upload(Upload upload, InputStream content) {
+        SshTarget target = forResolvingSshTargets.resolve(upload.machineId());
+        SftpRoot root = forResolvingSftpRoots.rootFor(target);
+
+        upload.writeTo(target, root, forBrowsingRemoteFiles, content);
+        log.info("Uploaded {} to {}", upload.destinationPath(), upload.machineId());
     }
 
     private static final String OCTET_STREAM = "application/octet-stream";

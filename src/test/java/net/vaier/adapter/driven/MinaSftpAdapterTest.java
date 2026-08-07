@@ -26,6 +26,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.ServerSocket;
@@ -37,6 +38,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -536,6 +538,85 @@ class MinaSftpAdapterTest {
         } finally {
             Files.setPosixFilePermissions(locked, PosixFilePermissions.fromString("rwx------"));
         }
+    }
+
+    // --- uploading: the browser's bytes onto a machine, the mirror of a download -----------------------
+
+    @Test
+    void upload_writesTheContentToTheDestinationPath() throws Exception {
+        int port = startServer();
+
+        adapter.upload(target(port), remote("notes.txt"),
+            new ByteArrayInputStream("hello".getBytes(StandardCharsets.UTF_8)));
+
+        assertThat(Files.readString(remoteRoot.resolve("notes.txt"))).isEqualTo("hello");
+    }
+
+    /**
+     * Larger than the adapter's fixed relay buffer, so the loop really loops — an upload that only ever
+     * worked for files smaller than one buffer would pass a small-file test and truncate every real one.
+     */
+    @Test
+    void upload_streamsAFileLargerThanTheRelayBuffer_wholeAndUntruncated() throws Exception {
+        int port = startServer();
+        byte[] big = new byte[3 * 64 * 1024 + 517];
+        new Random(42).nextBytes(big);
+
+        adapter.upload(target(port), remote("big.bin"), new ByteArrayInputStream(big));
+
+        assertThat(Files.readAllBytes(remoteRoot.resolve("big.bin"))).isEqualTo(big);
+    }
+
+    /**
+     * The write truncates. Whether replacing was ALLOWED is the domain's decision, taken before the adapter is
+     * ever called — but when it says yes, the old contents must be gone, not left as a tail behind the new
+     * ones. A shorter file written over a longer one is where an untruncated write shows up.
+     */
+    @Test
+    void upload_overAnExistingFile_replacesItWholly_leavingNoTailOfTheOldContent() throws Exception {
+        int port = startServer();
+        Files.writeString(remoteRoot.resolve("notes.txt"), "the previous, much longer contents");
+
+        adapter.upload(target(port), remote("notes.txt"),
+            new ByteArrayInputStream("short".getBytes(StandardCharsets.UTF_8)));
+
+        assertThat(Files.readString(remoteRoot.resolve("notes.txt"))).isEqualTo("short");
+    }
+
+    @Test
+    void upload_intoADirectoryThatIsNotThere_throwsNotFound_carryingThePath() throws Exception {
+        int port = startServer();
+
+        assertThatThrownBy(() -> adapter.upload(target(port), remote("ghost/notes.txt"),
+            new ByteArrayInputStream("x".getBytes(StandardCharsets.UTF_8))))
+            .isInstanceOf(NotFoundException.class)
+            .hasMessageContaining("ghost");
+    }
+
+    @Test
+    void upload_intoADirectoryTheSshUserMayNotWrite_throwsPermissionDenied() throws Exception {
+        Path locked = Files.createDirectory(remoteRoot.resolve("locked"));
+        Files.setPosixFilePermissions(locked, PosixFilePermissions.fromString("r-x------"));
+        assumeTrue(!Files.isWritable(locked), "running as root — cannot make a directory unwritable");
+        int port = startServer();
+
+        try {
+            assertThatThrownBy(() -> adapter.upload(target(port), remote("locked/notes.txt"),
+                new ByteArrayInputStream("x".getBytes(StandardCharsets.UTF_8))))
+                .isInstanceOf(PermissionDeniedException.class);
+        } finally {
+            Files.setPosixFilePermissions(locked, PosixFilePermissions.fromString("rwx------"));
+        }
+    }
+
+    @Test
+    void upload_leavesNoSessionBehind() throws Exception {
+        int port = startServer();
+
+        adapter.upload(target(port), remote("notes.txt"),
+            new ByteArrayInputStream("hello".getBytes(StandardCharsets.UTF_8)));
+
+        assertServerHasNoActiveSessions();
     }
 
     // --- #321: walking a tree for a zip download, over ONE connection ----------------------------------

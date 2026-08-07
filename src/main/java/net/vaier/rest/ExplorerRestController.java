@@ -9,6 +9,7 @@ import net.vaier.application.DownloadFileUseCase;
 import net.vaier.application.DownloadFileUseCase.Download;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import net.vaier.application.ListMachineArchivesUseCase;
+import net.vaier.application.UploadFileUseCase;
 import net.vaier.application.ViewFileUseCase;
 import net.vaier.application.ViewFileUseCase.View;
 import net.vaier.domain.Archive;
@@ -16,6 +17,7 @@ import net.vaier.domain.FileEntry;
 import net.vaier.domain.MachineId;
 import net.vaier.domain.Selection;
 import net.vaier.domain.ProtectedPaths;
+import net.vaier.domain.Upload;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -25,8 +27,10 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
+import java.io.IOException;
 import java.util.List;
 
 /**
@@ -54,6 +58,7 @@ public class ExplorerRestController {
     private final DownloadFileUseCase downloadFileUseCase;
     private final DeleteFileUseCase deleteFileUseCase;
     private final ViewFileUseCase viewFileUseCase;
+    private final UploadFileUseCase uploadFileUseCase;
     private final ObjectMapper objectMapper;
 
     /**
@@ -214,6 +219,34 @@ public class ExplorerRestController {
     }
 
     /**
+     * Put one file from the operator's browser into a directory on a machine — the mirror of
+     * {@code /files/download} (#321). Multipart, one file per request: the browser sends them one at a time so
+     * each gets its own progress and its own answer, which is what makes a per-file "Replace it?" possible.
+     *
+     * <p>The bytes are <b>streamed</b>, never buffered: {@link MultipartFile#getInputStream()} goes straight to
+     * the use case, so a multi-gigabyte file costs the same memory as a small one. There is no {@code at} —
+     * a machine's past is a read-only archive, so an upload only ever writes the live filesystem.
+     *
+     * <p>The controller joins nothing and validates nothing. The destination directory is the {@code path}
+     * parameter and the name is the part's own, both handed to {@link Upload} verbatim — it decides where the
+     * file lands and whether the name may be taken. A name already in use is a {@code 409} carrying the
+     * domain's own sentence (via {@link GlobalExceptionHandler}), which is what the Explorer turns into the
+     * "Replace it?" question before retrying with {@code overwrite}. Never a silent replacement.
+     */
+    @PostMapping("/machines/{machineId}/files/upload")
+    public ResponseEntity<UploadResponse> upload(@PathVariable String machineId,
+                                                 @RequestParam String path,
+                                                 @RequestParam(defaultValue = "false") boolean overwrite,
+                                                 @RequestParam("file") MultipartFile file) throws IOException {
+        String filename = file.getOriginalFilename();
+        log.info("Uploading {} into {} on machine {}",
+            LogSafe.forLog(filename), LogSafe.forLog(path), LogSafe.forLog(machineId));
+        Upload upload = Upload.into(MachineId.of(machineId), path, filename, overwrite);
+        uploadFileUseCase.upload(upload, file.getInputStream());
+        return ResponseEntity.ok(new UploadResponse(upload.filename(), upload.destinationPath()));
+    }
+
+    /**
      * The archives this machine can be browsed at, newest first — the time rail's data. Each carries the
      * {@code id} the browser hands back as the {@code at} coordinate, plus a display name and creation time.
      */
@@ -223,6 +256,13 @@ public class ExplorerRestController {
         return ResponseEntity.ok(
             listMachineArchivesUseCase.listMachineArchives(MachineId.of(machineId)).stream()
             .map(ArchiveResponse::from).toList());
+    }
+
+    /**
+     * Where an uploaded file landed: the {@code name} it was stored under, and its absolute {@code path} —
+     * the machine's own true coordinate, so the browser can name what it just wrote without reassembling it.
+     */
+    record UploadResponse(String name, String path) {
     }
 
     /**

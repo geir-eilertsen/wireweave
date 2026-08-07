@@ -66,6 +66,17 @@ public interface ForBrowsingRemoteFiles {
     void download(SshTarget target, String path, java.io.OutputStream out);
 
     /**
+     * Stream {@code content} into the file at {@code path} on {@code target}, creating it or truncating what
+     * is already there — the byte sink for an {@link net.vaier.domain.Upload}, piped with a fixed buffer so
+     * memory stays flat regardless of how large the browser's file is. The mirror of {@link #download}: the
+     * caller owns {@code content}; this owns the SFTP session and closes it. It writes what it is given and
+     * asks nothing — whether the name was free, and whether replacing it was allowed, is the domain's
+     * decision, already taken before this is called. Fails with the same domain SSH exceptions as
+     * {@link #list}.
+     */
+    void upload(SshTarget target, String path, InputStream content);
+
+    /**
      * Create the directory at {@code path} on {@code target}, and every parent it needs — idempotent, so an
      * already-present directory is fine. The dest side of a transfer calls this to lay down the tree before
      * copying files into it. Fails with the same domain SSH exceptions as {@link #list}.

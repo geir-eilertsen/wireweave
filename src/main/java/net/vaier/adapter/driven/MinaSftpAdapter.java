@@ -16,6 +16,8 @@ import org.apache.sshd.sftp.client.SftpClientFactory;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.nio.file.attribute.FileTime;
 import java.time.Instant;
@@ -141,6 +143,35 @@ public class MinaSftpAdapter implements ForBrowsingRemoteFiles {
 
             in.transferTo(out);
             log.debug("Downloaded {} from {}", path, target.host());
+
+        } catch (IOException | UncheckedIOException e) {
+            throw translate(e, target, path);
+        }
+    }
+
+    /**
+     * The mirror of {@link #download}: the browser's bytes into a file on the machine, piped with the same
+     * fixed buffer the relay uses so memory stays flat however large the upload is. The write creates the file
+     * or truncates what is already there — MINA's default write modes — so a shorter file written over a
+     * longer one leaves no tail of the old contents behind. Whether replacing was <em>allowed</em> is not
+     * asked here: the domain ({@link net.vaier.domain.Upload}) has already decided that before a byte is sent.
+     * The caller owns {@code content}; the session and the write stream are this adapter's and are closed
+     * before it returns.
+     */
+    @Override
+    public void upload(SshTarget target, String path, InputStream content) {
+        try (Connection conn = SshConnector.establish(target);
+             SftpClient sftp = SftpClientFactory.instance().createSftpClient(conn.session());
+             OutputStream out = sftp.write(path)) {
+
+            byte[] buffer = new byte[COPY_BUFFER_BYTES];
+            long written = 0;
+            int read;
+            while ((read = content.read(buffer)) != -1) {
+                out.write(buffer, 0, read);
+                written += read;
+            }
+            log.debug("Uploaded {} bytes to {} on {}", written, path, target.host());
 
         } catch (IOException | UncheckedIOException e) {
             throw translate(e, target, path);

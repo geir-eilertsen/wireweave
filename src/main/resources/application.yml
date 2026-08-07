@@ -9,6 +9,18 @@ spring:
           no-cache: true
   mvc:
     static-path-pattern: /**
+  servlet:
+    multipart:
+      # The Explorer uploads files into a machine's directory. Spring's defaults (1MB per file, 10MB per
+      # request) are sized for form attachments and would refuse almost anything worth putting on a fleet
+      # machine — an ISO, a container image, a video. The bytes are never held in Vaier's heap: the part is
+      # spooled to a temp file and piped to SFTP with a fixed buffer, so this cap is about what the operator
+      # is allowed to send, not about what Vaier can hold.
+      max-file-size: 2GB
+      max-request-size: 2GB
+      # Resolve the parts when they are first asked for, not on every multipart request that arrives. A
+      # request refused before it reaches the endpoint then never spools a gigabyte to disk first.
+      resolve-lazily: true
 
 server:
   port: 8080

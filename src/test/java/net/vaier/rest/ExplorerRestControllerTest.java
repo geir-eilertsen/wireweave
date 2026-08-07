@@ -6,10 +6,12 @@ import net.vaier.application.DeleteFileUseCase;
 import net.vaier.application.DownloadFileUseCase;
 import net.vaier.application.DownloadFileUseCase.Download;
 import net.vaier.application.ListMachineArchivesUseCase;
+import net.vaier.application.UploadFileUseCase;
 import net.vaier.application.ViewFileUseCase;
 import net.vaier.application.ViewFileUseCase.View;
 import net.vaier.domain.Archive;
 import net.vaier.domain.CannotDeleteSftpRootException;
+import net.vaier.domain.ConflictException;
 import net.vaier.domain.Excludes;
 import net.vaier.domain.FileEntry;
 import net.vaier.domain.NoHostCredentialException;
@@ -22,33 +24,45 @@ import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.Selection;
 import net.vaier.domain.SftpRoot;
 import net.vaier.domain.SourcePaths;
+import net.vaier.domain.Upload;
 import net.vaier.rest.ExplorerRestController.DirectoryResponse;
 import net.vaier.rest.ExplorerRestController.FileEntryResponse;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -65,6 +79,7 @@ class ExplorerRestControllerTest {
     @Mock DownloadFileUseCase downloadFileUseCase;
     @Mock DeleteFileUseCase deleteFileUseCase;
     @Mock ViewFileUseCase viewFileUseCase;
+    @Mock UploadFileUseCase uploadFileUseCase;
     // A real ObjectMapper (spied so @InjectMocks wires it): the selection JSON must be parsed for real.
     @org.mockito.Spy com.fasterxml.jackson.databind.ObjectMapper objectMapper =
         new com.fasterxml.jackson.databind.ObjectMapper();
@@ -611,6 +626,108 @@ class ExplorerRestControllerTest {
                 .post("/machines/files/download-zip")
                 .param("selection", "not json at all"))
             .andExpect(status().isBadRequest());
+    }
+
+    // --- upload: the browser's file into a machine's directory -----------------------------------------
+
+    private static MockMultipartFile part(String filename, String content) {
+        return new MockMultipartFile("file", filename, "application/octet-stream",
+            content.getBytes(StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void upload_handsTheUseCaseTheDestination_andAnswersWhereTheFileLanded() throws Exception {
+        MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller)
+            .setControllerAdvice(new GlobalExceptionHandler()).build();
+
+        mockMvc.perform(multipart("/machines/" + mid("apalveien5") + "/files/upload")
+                .file(part("notes.txt", "hello"))
+                .param("path", "/home/geir"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.name").value("notes.txt"))
+            .andExpect(jsonPath("$.path").value("/home/geir/notes.txt"));
+
+        // The directory is the query parameter, the filename is the multipart part's own — the controller
+        // joins neither; the domain does.
+        verify(uploadFileUseCase).upload(
+            eq(Upload.into(mid("apalveien5"), "/home/geir", "notes.txt", false)), any());
+    }
+
+    @Test
+    void upload_withoutAnOverwriteFlag_doesNotAskToReplaceAnything() throws Exception {
+        MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
+
+        mockMvc.perform(multipart("/machines/" + mid("apalveien5") + "/files/upload")
+                .file(part("notes.txt", "hello"))
+                .param("path", "/home/geir"))
+            .andExpect(status().isOk());
+
+        ArgumentCaptor<Upload> upload = ArgumentCaptor.forClass(Upload.class);
+        verify(uploadFileUseCase).upload(upload.capture(), any());
+        assertThat(upload.getValue().overwrite()).isFalse();
+    }
+
+    @Test
+    void upload_withOverwriteAsked_carriesItThrough() throws Exception {
+        MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
+
+        mockMvc.perform(multipart("/machines/" + mid("apalveien5") + "/files/upload")
+                .file(part("notes.txt", "hello"))
+                .param("path", "/home/geir")
+                .param("overwrite", "true"))
+            .andExpect(status().isOk());
+
+        ArgumentCaptor<Upload> upload = ArgumentCaptor.forClass(Upload.class);
+        verify(uploadFileUseCase).upload(upload.capture(), any());
+        assertThat(upload.getValue().overwrite()).isTrue();
+    }
+
+    @Test
+    void upload_ontoANameAlreadyTaken_isAConflict_carryingTheDomainsOwnSentence() throws Exception {
+        MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller)
+            .setControllerAdvice(new GlobalExceptionHandler()).build();
+        doThrow(new ConflictException("\"notes.txt\" is already in /home/geir."))
+            .when(uploadFileUseCase).upload(any(), any());
+
+        // 409 is what turns the Explorer's silent write into the "Replace it?" question — the operator is
+        // asked, never overruled.
+        mockMvc.perform(multipart("/machines/" + mid("apalveien5") + "/files/upload")
+                .file(part("notes.txt", "hello"))
+                .param("path", "/home/geir"))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.message").value("\"notes.txt\" is already in /home/geir."));
+    }
+
+    @Test
+    void upload_ofAPartWithNoFilename_isABadRequest() throws Exception {
+        MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller)
+            .setControllerAdvice(new GlobalExceptionHandler()).build();
+
+        mockMvc.perform(multipart("/machines/" + mid("apalveien5") + "/files/upload")
+                .file(new MockMultipartFile("file", "", "application/octet-stream", "x".getBytes(UTF_8)))
+                .param("path", "/home/geir"))
+            .andExpect(status().isBadRequest());
+
+        verify(uploadFileUseCase, never()).upload(any(), any());
+    }
+
+    /**
+     * The whole point of the endpoint: a multi-gigabyte file must not become a multi-gigabyte byte array in
+     * Vaier's heap on its way to the machine. The part is read as a stream and never as bytes — so this pins
+     * {@code getInputStream()} and forbids {@code getBytes()}, which is the one line that would silently turn
+     * a flat-memory path into an OOM.
+     */
+    @Test
+    void upload_streamsThePart_andNeverReadsItWholeIntoMemory() throws Exception {
+        MultipartFile file = mock(MultipartFile.class);
+        InputStream content = new ByteArrayInputStream("hello".getBytes(UTF_8));
+        when(file.getOriginalFilename()).thenReturn("notes.txt");
+        when(file.getInputStream()).thenReturn(content);
+
+        controller.upload(mid("apalveien5").value(), "/home/geir", false, file);
+
+        verify(uploadFileUseCase).upload(any(), eq(content));
+        verify(file, never()).getBytes();
     }
 
     // --- slice 5: delete (present-only, destructive) ---------------------------------------------------

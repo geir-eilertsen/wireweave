@@ -356,7 +356,20 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 }
 .ex-pane-title .is-id { font-family: var(--mono); font-weight: 500; font-size: 15px; }
 .ex-pane-sub { color: var(--text-dim); font-size: 14px; }
-.ex-pane-actions { margin-left: auto; display: flex; gap: 6px; }
+/* The pane's one action group, hugging the right. It holds every verb that applies right now — the
+   selection's, Paste, and the folder's own Refresh and Upload — because the head, the selection toolbar and
+   the paste bar were the same label-left/actions-right row three times over, and stacked they buried the
+   listing under a pile of bars. */
+.ex-pane-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.ex-verbgroup { display: flex; align-items: center; gap: 6px; }
+/* One hairline, and only where the meaning changes: what you have PICKED (fleet-wide, and gone the moment you
+   clear it) on the left of it, what acts on THIS FOLDER on the right. Drawn by the selection group itself, so
+   it exists exactly when the selection does and no JS has to restate the condition. */
+.ex-pane-actions > .ex-selverbs {
+    padding-right: 10px; margin-right: 4px;
+    border-right: 1px solid var(--border);
+}
+.ex-pane-actions .ex-btn { padding: 4px 10px; }
 .ex-pane-body { padding: 16px 18px 40px; }
 
 .ex-btn {
@@ -419,17 +432,6 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 .ex-check input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* The selection toolbar — Gmail's move: it rises above the listing when anything is ticked. */
-.ex-selbar {
-    display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    margin-bottom: 12px; padding: 8px 12px;
-    background: var(--bg-card);
-    border: 1px solid var(--border-hi);
-    border-radius: var(--radius-2);
-}
-.ex-selbar-txt { font-size: 13px; font-weight: 600; color: var(--text); }
-.ex-selbar-actions { display: flex; align-items: center; gap: 8px; }
-.ex-selbar-actions .ex-btn { padding: 4px 10px; }
-
 /* Per-row actions ride over the Modified column. They stay visible — copy and download are the point of a
    file browser, not an easter egg — dimmed until the row is hovered or focused, then full strength. */
 .ex-lactions {
@@ -502,16 +504,48 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 .ex-btn:disabled { opacity: .4; cursor: not-allowed; }
 .ex-btn:disabled:hover { color: var(--text); border-color: var(--border-hi); background: var(--bg-card); }
 
-/* The paste bar sits between the rail and the listing — present only, and only with a full Clipboard. */
-.ex-pastebar {
-    display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    margin-bottom: 14px;
-    padding: 9px 13px;
-    background: var(--bg-card);
-    border: 1px dashed var(--border-hi);
+/* The real <input type=file> behind the pane head's Upload button: never drawn, never a tab stop. The OS
+   picker is the only way to reach the filesystem, and the raw control cannot be styled to belong in that row. */
+.ex-upload-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+/* The drop affordance: an overlay across the whole directory pane, drawn hidden and lit only while a file
+   drag is actually overhead.
+
+   It replaced a permanent dashed bar above the listing. That bar advertised a drop target on every folder
+   whether or not anyone was dragging, and — stacked under the selection bar and the paste bar — put three
+   trays between the operator and their files. The affordance that has to be permanent is the Upload icon in
+   the pane head, which costs no room; this one only has to exist during a drag.
+
+   An overlay rather than a tray that slides in, for two reasons, the second decisive: the pane body IS the
+   drop target, so lighting exactly it states honestly where you may let go; and a tray would push the listing
+   down at the instant a file is being held over the rows the operator is aiming at, moving the target under
+   the pointer. */
+.ex-dropzone-host { position: relative; }
+.ex-dropzone {
+    position: absolute; inset: 0; z-index: 5;
+    display: none;
+    align-items: center; justify-content: center;
+    background: rgba(6, 9, 13, .78);
+    border: 1px dashed var(--accent);
     border-radius: var(--radius-2);
+    /* The BODY owns the drop. An overlay that took pointer events would swallow dragleave and drop itself and
+       break the depth counting underneath it. */
+    pointer-events: none;
 }
-.ex-pastebar-txt { font-size: 14px; color: var(--text-muted); }
+.ex-dropzone.is-on { display: flex; animation: ex-dropzone-in .12s ease-out; }
+@keyframes ex-dropzone-in { from { opacity: 0; } to { opacity: 1; } }
+/* The overlay still appears — it is the whole affordance — it simply arrives without the fade. */
+@media (prefers-reduced-motion: reduce) {
+    .ex-dropzone.is-on { animation: none; }
+}
+.ex-dropzone-inner { text-align: center; padding: 0 16px; }
+.ex-dropzone-ico { width: 28px; height: 28px; color: var(--accent); margin-bottom: 10px; }
+.ex-dropzone-title { font-size: 17px; font-weight: 600; color: var(--text); }
+.ex-dropzone-where {
+    margin-top: 4px;
+    font-family: var(--mono); font-size: 12.5px; color: var(--text-muted);
+    overflow-wrap: anywhere;
+}
 /* One font across the navigation: the same entry reads identically in the tree, the address bar and the
    listing — all in the tree's own font (inherited, the app's system sans) — so a file never changes typeface
    as you move between the three. `inherit` is deliberate: a <button> would otherwise fall back to the browser
@@ -1649,30 +1683,36 @@ select.ex-input { cursor: pointer; }
     .ex-rail-stamp { display: inline; }
     .ex-rail-ago::before { content: ' · '; }
 
-    /* The bars above the listing (the selection toolbar, "Paste here") are label-left / buttons-right rows.
-       On a phone the button group cannot shrink past its content, so space-between pushed it off the right
-       edge and the verbs became unreachable — a selection you could make but not act on. They wrap instead:
-       the label takes the first line, the verbs take the next and stay inside the screen. */
-    .ex-selbar, .ex-pastebar { flex-wrap: wrap; gap: 8px 10px; }
-    .ex-selbar-txt, .ex-pastebar-txt { flex: 1 1 100%; }
-    .ex-selbar-actions { flex-wrap: wrap; width: 100%; }
-    /* Touch targets, not pointer targets: the compact 4px selection buttons are below the ~44px a thumb
-       needs, so they take the roomier default padding back on small screens. */
-    .ex-selbar-actions .ex-btn { padding: 8px 12px; }
+    /* One bar now carries every verb the old three did, so on a phone it has strictly more to fit. A button
+       group cannot shrink past its content, so without wrapping the verbs get pushed off the right edge and
+       become unreachable — a selection you could make but not act on. Both wrap: the machine name and the
+       subtitle take the first line, the verbs the next, all inside the screen. */
+    .ex-pane-head, .ex-pane-actions { flex-wrap: wrap; }
+    .ex-pane-actions { margin-left: 0; width: 100%; gap: 8px 10px; }
+    .ex-verbgroup { flex-wrap: wrap; gap: 8px 10px; }
+    /* Touch targets, not pointer targets: the compact 4px verbs are below the ~44px a thumb needs, so they
+       take the roomier padding back on small screens. */
+    .ex-pane-actions .ex-btn { padding: 8px 12px; }
 
-    /* Since the rows gave their verbs up to this bar, the bar has to be somewhere a thumb can always reach —
-       so it leaves the scrolling flow and sits at the foot of the screen, where every touch file browser puts
-       the actions for a selection. It is the only thing in this shell that floats, and it earns it: it exists
-       only while something is ticked, and while it does it is the one way to act on it. The pane makes room
-       underneath so the bar can never cover the last row of a listing you are choosing from. */
-    .ex-selbar {
+    /* While something is ticked, the verbs leave the scrolling flow and sit at the foot of the screen, where
+       every touch file browser puts the actions for a selection — the head scrolls away, and the rows gave
+       their own verbs up to this group. It is the same element in the same order; only its position changes.
+       It is the one thing in this shell that floats, and it earns it: it does this only while something is
+       ticked, and while it does it is the only way to act on it. The pane makes room underneath so it can
+       never cover the last row of the listing you are choosing from. */
+    .ex-app.has-sel .ex-pane-actions {
         position: fixed;
-        left: 10px; right: 10px;
+        left: 10px; right: 10px; width: auto;
         bottom: calc(10px + env(safe-area-inset-bottom));
         z-index: 50;
-        margin: 0;
+        margin: 0; padding: 8px 12px;
+        background: var(--bg-card);
+        border: 1px solid var(--border-hi);
+        border-radius: var(--radius-2);
         box-shadow: 0 8px 28px rgba(0, 0, 0, .5);
     }
+    /* The hairline splits two rows rather than two neighbours once these wrap, so it is dropped down here. */
+    .ex-app.has-sel .ex-pane-actions > .ex-selverbs { padding-right: 0; margin-right: 0; border-right: 0; }
     .ex-app.has-sel .ex-pane-body { padding-bottom: 148px; }
 }
 

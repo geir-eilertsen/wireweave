@@ -30,6 +30,9 @@
         disk:    '<rect x="2" y="3.4" width="12" height="9.2" rx="1"/><circle cx="8" cy="8" r="2.3"/><circle cx="8" cy="8" r=".45" fill="currentColor" stroke="none"/>',
         copy:    '<rect x="5.5" y="5.5" width="8" height="8.2" rx="1.2"/><path d="M3.4 10.5H3a1 1 0 0 1-1-1V3.2a1 1 0 0 1 1-1h6.3a1 1 0 0 1 1 1v.4"/>',
         download:'<path d="M8 2v7.5"/><path d="M4.7 6.5L8 9.8l3.3-3.3"/><path d="M2.5 13.5h11"/>',
+        // Download's own glyph, turned over: the arrow leaves the baseline instead of arriving at it. The two
+        // are the same operation in opposite directions and they should read that way at a glance.
+        upload:  '<path d="M8 13.5V6"/><path d="M4.7 9.3L8 6l3.3 3.3"/><path d="M2.5 2.5h11"/>',
         clip:    '<rect x="3" y="2.6" width="10" height="11.4" rx="1.2"/><path d="M5.8 2.6V2a.9.9 0 0 1 .9-.9h2.6a.9.9 0 0 1 .9.9v.6z"/><path d="M5.6 7.2h4.8M5.6 9.7h4.8M5.6 12.2h2.8"/>',
         check:   '<path d="M2.8 8.4l3.1 3.4L13.2 4.6"/>',
         warn:    '<path d="M8 2.4l6.1 11.1H1.9z"/><path d="M8 6.4v3.3"/><circle cx="8" cy="11.4" r=".5" fill="currentColor" stroke="none"/>',
@@ -144,6 +147,9 @@
         nudges: new Map(),               // machine identity -> { state, list }: its nudges (GET /machines/{machineId}/nudges), read once per machine
         clipboard: [],                   // held file coordinates {machine, path, at, name, directory, size} — the Clipboard
         transfers: new Map(),            // id -> a live/settled Transfer, streamed in over the transfers SSE topic
+        uploads: new Map(),              // id -> a file on its way up from this browser {name, machine, path, sent,
+                                         //   total, state, error}. Unlike a Transfer, no server pushes this: the
+                                         //   browser is the one sending, so its own send events are the progress
         sel: [],                         // the fleet-wide selection: {machine, path, at, name, directory, size, backedUp}
                                          //   coordinates ticked anywhere, kept as you navigate so you can gather
                                          //   from many folders and machines before acting on them all at once
@@ -1033,6 +1039,37 @@
     }
 
     // --- the Inspector ----------------------------------------------------------------------------------
+
+    // What the head's subtitle says about a directory. Idle it is how much is here; with a live selection it
+    // is the selection instead — the more urgent version of the same "how much" fact, and the only thing on
+    // the pane that changes while you are choosing. The TITLE stays the machine name throughout: it is the
+    // pane's identity and where you are standing, and it is the one label that must never move.
+    //
+    // A selection is fleet-wide, so it names how many machines are in play when it is more than one: "6
+    // selected" must never be read as six files in this one folder, because the verbs beside it fan out to
+    // every machine involved.
+    function directorySubtitle(loaded) {
+        if (S.sel.length) {
+            const machines = new Set(S.sel.map((s) => s.machine));
+            return S.sel.length + ' selected' + (machines.size > 1 ? ' · ' + machines.size + ' machines' : '');
+        }
+        const count = loaded && loaded.state === 'ready' ? loaded.entries.length : null;
+        return count == null ? null : count + (count === 1 ? ' item' : ' items');
+    }
+
+    // The verbs that are always there: Refresh, and Upload in the present. Pinned LAST in the action group so
+    // they stay anchored at the right edge whatever comes and goes to their left.
+    function folderVerbs(machineId, path) {
+        const group = el('div', 'ex-verbgroup');
+        const refresh = el('button', 'ex-iconbtn');
+        refresh.innerHTML = svg('refresh', 'ex-ico');
+        refresh.title = 'Refresh';
+        refresh.setAttribute('aria-label', 'Refresh this folder');
+        refresh.onclick = () => refreshDir(machineId, path);
+        group.appendChild(refresh);
+        group.appendChild(renderUploadAction(machineId, path));   // present-only; nothing in the past
+        return group;
+    }
 
     function paneHead(title, titleIsId, sub) {
         const head = document.createElement('div');
@@ -6136,24 +6173,37 @@
         // here, not the location again. A refresh re-reads this one directory over SFTP: the fleet changes
         // under Vaier (a Transfer just landed, a shell just wrote a file), and the cache is otherwise sticky.
         const loaded = S.dirs.get(dirKey(machineId, path, S.at));
-        const count = loaded && loaded.state === 'ready' ? loaded.entries.length : null;
-        const sub = count == null ? null : count + (count === 1 ? ' item' : ' items');
-        const head = paneHead(machineName, true, sub);
+        const head = paneHead(machineName, true, directorySubtitle(loaded));
+
+        // ONE bar. The head, the selection toolbar and the paste bar were the same row shape doing the same
+        // job three times — label left, actions right — and stacked they made the top of a pane a pile of
+        // bars, with Refresh holding a whole row open by itself most of the time. Every verb that applies
+        // right now lives in this one action group.
+        //
+        // The order is load-bearing: the group hugs the right edge, so appending the contextual verbs first
+        // grows it leftward and leaves Refresh and Upload anchored where they were. The two controls reached
+        // for idly never move as a selection or a Clipboard comes and goes.
         const actions = document.createElement('div');
         actions.className = 'ex-pane-actions';
-        const refresh = el('button', 'ex-iconbtn');
-        refresh.innerHTML = svg('refresh', 'ex-ico');
-        refresh.title = 'Refresh';
-        refresh.setAttribute('aria-label', 'Refresh this folder');
-        refresh.onclick = () => refreshDir(machineId, path);
-        actions.appendChild(refresh);
+        actions.append(selectionVerbs(), pasteVerb(machineId, path), folderVerbs(machineId, path));
         head.appendChild(actions);
         pane.appendChild(head);
 
         const body = document.createElement('div');
         body.className = 'ex-pane-body';
-        body.appendChild(renderRail(machineId));  // above the listing; nothing when the machine has no archives
-        body.appendChild(renderPasteBar(machineId, path)); // "Paste here", only in the present, Clipboard full
+        // The rail keeps a row of its own, deliberately: it is an axis, not a verb — it is scrubbed, so it
+        // needs the width — and it only exists on a machine that has archives.
+        body.appendChild(renderRail(machineId));
+        // Uploading is present-only, so only there does the pane become a drop target. The dropzone overlays
+        // the WHOLE body — a file let go over the listing rows must upload, not make the browser open it and
+        // navigate the tab off the Explorer — and stays hidden until a file drag is actually overhead, so at
+        // rest it takes no room from the listing at all.
+        if (!S.at && path != null) {
+            body.classList.add('ex-dropzone-host');
+            const zone = renderDropzone(path, machineName);
+            body.appendChild(zone);
+            armDropTarget(body, zone, machineId, path);
+        }
         const rows = document.createElement('div');
         rows.className = 'ex-listing';
         body.appendChild(rows);
@@ -6171,11 +6221,6 @@
         if (entry.state === 'error') return failureNote(rows, machineId, entry);
 
         const result = { entries: entry.entries };
-
-        // A toolbar rises when anything is ticked anywhere in the fleet (Gmail's move): the bulk verbs act on the
-        // whole selection at once. Above the listing so it does not shift the rows.
-        const selBar = renderSelectionBar();
-        if (selBar) body.insertBefore(selBar, rows);
 
         const lhead = document.createElement('div');
         lhead.className = 'ex-lhead';
@@ -6458,27 +6503,21 @@
         return wrap;
     }
 
-    // The selection toolbar — one set of verbs over everything ticked across the whole fleet. Copy adds it all to
-    // the Clipboard; Download hands the browser one zip of the lot (a single item downloads as itself); Back up,
-    // Stop backing up and Delete each fan out per machine over the live items. The bar names how many machines
-    // are in play when it is more than one, so "6 selected" is never mistaken for six files in one place.
-    function renderSelectionBar() {
+    // The selection's verbs, over everything ticked across the whole fleet: Copy adds it all to the Clipboard;
+    // Download hands the browser one zip of the lot (a single item downloads as itself); Back up, Stop backing
+    // up and Delete each fan out per machine over the live items. How many are ticked — and across how many
+    // machines — is said once by the head's subtitle (directorySubtitle), not repeated here.
+    function selectionVerbs() {
         const sel = S.sel;
-        if (!sel.length) return null;
+        if (!sel.length) return document.createDocumentFragment();
 
         // Present-only items are the ones a write can touch — an archived (past) coordinate is read-only.
         const live = sel.filter((s) => !s.at);
-        const machines = new Set(sel.map((s) => s.machine));
         const backupItems = live.filter((s) => backupEligible(s.machine));
         const unbackupItems = backupItems.filter(anyBackedUp);
 
-        const bar = el('div', 'ex-selbar');
-        const count = el('div', 'ex-selbar-txt');
-        count.textContent = sel.length + ' selected'
-            + (machines.size > 1 ? ' · ' + machines.size + ' machines' : '');
-        bar.appendChild(count);
-
-        const actions = el('div', 'ex-selbar-actions');
+        // Its own group, so one hairline can separate what you have PICKED from what acts on this folder.
+        const actions = el('div', 'ex-verbgroup ex-selverbs');
         actions.appendChild(selVerb('copy', 'Copy', 'ex-btn', () => selCopy()));
         actions.appendChild(selVerb('download', 'Download', 'ex-btn', () => selDownload()));
         // Back up is the whole idea: pick what matters and protect it. Live items only, and never the backup
@@ -6496,8 +6535,7 @@
         clear.setAttribute('aria-label', 'Clear selection');
         clear.onclick = () => { S.sel = []; render(); };
         actions.appendChild(clear);
-        bar.appendChild(actions);
-        return bar;
+        return actions;
     }
 
     function selVerb(icon, text, cls, onclick) {
@@ -6772,27 +6810,224 @@
         render();
     }
 
-    // "Paste here" belongs to a directory in the present, and only there — the invariant is that you can only
-    // paste into the present, so time-travelling hides it rather than offering a write that would be refused.
-    // It also needs a real destination path (the machine has said where its tree begins) and a non-empty
-    // Clipboard. Absent any of those, nothing is drawn.
-    function renderPasteBar(machineId, destPath) {
+    // Paste belongs to a directory in the present, and only there — you can only paste into the present, so
+    // time-travelling hides the verb rather than offering a write that would be refused. It also needs a real
+    // destination path (the machine has said where its tree begins) and a non-empty Clipboard.
+    //
+    // The old bar carried a "Clipboard: 3 items" label beside a "Paste here" button. In one shared row the
+    // label has no room and "here" has no referent, so the count moves into the button and it says exactly
+    // what it will do. What is ON the Clipboard is still listed in the tray, which is where it belongs.
+    function pasteVerb(machineId, destPath) {
         if (S.at || !S.clipboard.length || destPath == null) return document.createDocumentFragment();
 
-        const bar = el('div', 'ex-pastebar');
-        const label = el('div', 'ex-pastebar-txt');
+        const group = el('div', 'ex-verbgroup');
         const n = S.clipboard.length;
-        label.textContent = 'Clipboard: ' + n + (n === 1 ? ' item' : ' items');
-        bar.appendChild(label);
-
         const paste = el('button', 'ex-btn is-accent');
         paste.innerHTML = svg('clip', 'ex-ico');
         const verb = el('span');
-        verb.textContent = 'Paste here';
+        verb.textContent = 'Paste ' + n + (n === 1 ? ' item' : ' items');
         paste.appendChild(verb);
         paste.onclick = () => pasteHere(machineId, destPath);
-        bar.appendChild(paste);
-        return bar;
+        group.appendChild(paste);
+        return group;
+    }
+
+    // --- Upload: files from this browser into the folder in front of you --------------------------------
+    //
+    // The mirror of a download, and the one operation in the Explorer whose bytes start on the operator's own
+    // machine rather than on the fleet. Not a Transfer: a Transfer has a source machine and a point in time,
+    // and this has neither.
+
+    // The always-available affordance: an icon button in the pane head, beside Refresh.
+    //
+    // It first shipped as a bar above the listing and that was simply wrong. The selection bar and the paste
+    // bar earn their row by appearing only when something is ticked or held; an upload control is available in
+    // every folder, so a permanent bar bought nothing and cost a row on every listing — three stacked trays
+    // once you were also selecting and pasting. A folder's verbs already have a home in the pane head, at no
+    // vertical cost, and that is where a permanent one belongs.
+    //
+    // Present-only, like every write — an archive is read-only, so there is nowhere in the past to put a file
+    // — and it needs a real destination (the machine has said where its tree begins). Absent either, nothing
+    // is drawn.
+    function renderUploadAction(machineId, destPath) {
+        if (S.at || destPath == null) return document.createDocumentFragment();
+
+        // A real file input, kept out of sight and clicked by the button: the OS picker is the only way to
+        // reach the filesystem, and a bare <input type=file> cannot be styled to belong in this row. Files
+        // only — the input never gets the directory-picking attribute, because uploading a folder means
+        // recreating a tree on the far side, which is a different operation with its own failure modes and is
+        // not this one.
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.multiple = true;
+        input.className = 'ex-upload-input';
+        input.tabIndex = -1;        // the button is the control; the input must not be a second tab stop
+        input.setAttribute('aria-hidden', 'true');
+        input.onchange = () => {
+            uploadFiles(machineId, destPath, Array.from(input.files));
+            input.value = '';   // so picking the same file twice in a row still fires
+        };
+
+        // The same ex-iconbtn shape as Refresh beside it — one row of a folder's verbs, all reading alike.
+        const pick = el('button', 'ex-iconbtn');
+        pick.innerHTML = svg('upload', 'ex-ico');
+        pick.title = 'Upload files';
+        pick.setAttribute('aria-label', 'Upload files to this folder');
+        pick.onclick = () => input.click();
+
+        const frag = document.createDocumentFragment();
+        frag.append(pick, input);
+        return frag;
+    }
+
+    // The drop affordance, drawn hidden and lit by the drag itself. The original reasoning holds — dropping
+    // files onto a folder is invisible until something says you can — but it is only worth saying at the
+    // moment it is true.
+    //
+    // An overlay across the pane body, not a tray sliding in above the listing. Two reasons, and the second is
+    // the one that decided it: the body *is* the drop target, so lighting exactly it is the honest statement
+    // of where you may let go; and a tray would push the listing down at the instant the operator is holding a
+    // file over the rows they are aiming at, moving the target under the pointer. The overlay shifts nothing.
+    function renderDropzone(destPath, machineName) {
+        const zone = el('div', 'ex-dropzone');
+        const inner = el('div', 'ex-dropzone-inner');
+        inner.innerHTML = svg('upload', 'ex-dropzone-ico');
+        const title = el('div', 'ex-dropzone-title');
+        title.textContent = 'Drop to upload';
+        // Which folder on which machine, because the pane behind the overlay is now dimmed out of reading.
+        const where = el('div', 'ex-dropzone-where');
+        where.textContent = destPath + ' on ' + machineName;
+        inner.append(title, where);
+        zone.appendChild(inner);
+        return zone;
+    }
+
+    // Take a drop of files anywhere on {@code host} — the whole directory pane body — lighting {@code zone}
+    // (the overlay) while a file drag is overhead.
+    //
+    // Arming the WHOLE body, not just the lit overlay, is the point. A browser's default action for a dropped
+    // file is to open it, which navigates the tab away from the Explorer and loses everything on screen — so a
+    // file let go over the listing, the obvious place to aim, would throw the operator out of the page. The
+    // body swallows the drop wherever it lands; the overlay only says so.
+    //
+    // Only a drag carrying FILES lights it. Dragging selected text across a listing is an ordinary thing to do
+    // and must not offer to upload it.
+    //
+    // The depth counter is the awkward part of the HTML drag API: dragenter/dragleave fire for every child
+    // element the pointer crosses, so a plain "off on leave" flickers the overlay across every row.
+    function armDropTarget(host, zone, machineId, destPath) {
+        let depth = 0;
+        const carriesFiles = (e) => Array.from((e.dataTransfer && e.dataTransfer.types) || []).includes('Files');
+        const off = () => { depth = 0; zone.classList.remove('is-on'); };
+        host.addEventListener('dragover', (e) => {
+            if (!carriesFiles(e)) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+        });
+        host.addEventListener('dragenter', (e) => {
+            if (!carriesFiles(e)) return;
+            e.preventDefault();
+            depth++;
+            zone.classList.add('is-on');
+        });
+        host.addEventListener('dragleave', () => { if (--depth <= 0) off(); });
+        host.addEventListener('drop', (e) => {
+            e.preventDefault();
+            off();
+            // Only files. A dragged folder also arrives in `files`, as an entry no reader can open — so its
+            // names are collected once (the entries are valid only for the life of this event) and dropped
+            // from the list, and the operator is told plainly rather than watching an upload fail.
+            const folderNames = Array.from(e.dataTransfer.items || [])
+                .map((i) => (i.webkitGetAsEntry ? i.webkitGetAsEntry() : null))
+                .filter((entry) => entry && entry.isDirectory)
+                .map((entry) => entry.name);
+            if (folderNames.length) toast('Folders cannot be uploaded — drop the files inside them.');
+            uploadFiles(machineId, destPath,
+                Array.from(e.dataTransfer.files || []).filter((f) => !folderNames.includes(f.name)));
+        });
+    }
+
+    // Send the picked files one at a time. One request per file, in sequence, so each gets its own progress
+    // and its own answer — which is what makes a per-file "Replace it?" possible at all, and keeps a fleet
+    // machine behind WireGuard from being asked to write six streams at once.
+    async function uploadFiles(machineId, destPath, files) {
+        if (!files.length) return;
+        for (const file of files) {
+            await startUpload(machineId, destPath, file, false);
+        }
+    }
+
+    // One file, up. Progress comes from the browser's OWN send events (XHR upload.onprogress) — this is the
+    // one operation in the shell where the browser is the thing doing the work, so its progress is its own to
+    // report; nothing is polled and there is no endpoint that could be asked. XHR rather than fetch precisely
+    // because fetch still cannot report request-body progress.
+    //
+    // A name already taken comes back 409 rather than being overwritten, and that is the whole design: the
+    // operator is asked, then the same file is sent again with `overwrite`. Confirming is the only path to a
+    // replacement — nothing here retries by itself.
+    function startUpload(machineId, destPath, file, overwrite) {
+        const id = 'up-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+        const record = { id: id, name: file.name, machine: machineId, path: destPath,
+                         sent: 0, total: file.size, state: 'running' };
+        S.uploads.set(id, record);
+        renderClip();
+
+        const params = new URLSearchParams({ path: destPath });
+        if (overwrite) params.set('overwrite', 'true');
+        const form = new FormData();
+        form.append('file', file);
+
+        return new Promise((resolve) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/machines/' + encodeURIComponent(machineId) + '/files/upload?' + params.toString());
+            xhr.upload.onprogress = (e) => {
+                if (!e.lengthComputable) return;
+                record.sent = e.loaded;
+                record.total = e.total;
+                renderClip();
+            };
+            xhr.onload = async () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    record.state = 'done';
+                    record.sent = record.total;
+                    renderClip();
+                    refreshDir(machineId, destPath);   // the folder holds something it did not a moment ago
+                    return resolve(true);
+                }
+                const said = refusal(xhr);
+                // 409 is the backend refusing to overwrite silently. Ask, and only on a yes send it again with
+                // the flag — and only once: a second 409 (a folder wears the name) is a refusal no replacement
+                // settles, so it is reported rather than asked about again.
+                if (xhr.status === 409 && !overwrite) {
+                    S.uploads.delete(id);
+                    renderClip();
+                    const ok = await confirmModal('Replace ' + file.name + '?', said, 'Replace');
+                    if (!ok) return resolve(false);
+                    return resolve(await startUpload(machineId, destPath, file, true));
+                }
+                record.state = 'failed';
+                record.error = said;
+                renderClip();
+                resolve(false);
+            };
+            xhr.onerror = () => {
+                record.state = 'failed';
+                record.error = 'Could not reach Vaier to upload ' + file.name + '.';
+                renderClip();
+                resolve(false);
+            };
+            xhr.send(form);
+        });
+    }
+
+    // The server's own sentence for a refusal — "\"notes.txt\" is already in /home/geir." says more than any
+    // status code, and it is the text the Replace question is asked with.
+    function refusal(xhr) {
+        try {
+            const body = JSON.parse(xhr.responseText);
+            if (body && body.message) return body.message;
+        } catch (e) { /* a non-JSON body is an infrastructure failure, not the domain speaking */ }
+        return 'Vaier could not upload the file.';
     }
 
     // Paste every held coordinate into the directory in front of you: one Transfer per item. A big file gets a
@@ -6857,7 +7092,8 @@
         const host = $('exClip');
         host.textContent = '';
         const live = Array.from(S.transfers.values());
-        if (!S.clipboard.length && !live.length) { host.classList.remove('is-on'); return; }
+        const ups = Array.from(S.uploads.values());
+        if (!S.clipboard.length && !live.length && !ups.length) { host.classList.remove('is-on'); return; }
         host.classList.add('is-on');
 
         if (S.clipboard.length) {
@@ -6886,8 +7122,57 @@
             });
         }
 
-        // Newest transfer first, so the one you just started is at the top.
+        // Newest first, so the one you just started is at the top. Uploads share the tray with Transfers and
+        // wear the same row: both are bytes in flight with a destination, and the operator watches them the
+        // same way. Only where the progress comes from differs, and that is not something a row should show.
+        ups.slice().reverse().forEach((up) => host.appendChild(uploadRow(up)));
         live.slice().reverse().forEach((tr) => host.appendChild(transferRow(tr)));
+    }
+
+    // One upload in the tray, in the Transfer row's own clothes. The bar is always determinate: the browser
+    // holds the file, so it knows the total from the first byte — there is no indeterminate case to draw.
+    function uploadRow(up) {
+        const row = el('div', 'ex-xfer is-' + up.state);
+
+        const line = el('div', 'ex-xfer-line');
+        line.innerHTML = svg(up.state === 'done' ? 'check' : up.state === 'failed' ? 'warn' : 'upload', 'ex-ico');
+        const coord = el('span', 'ex-xfer-coord');
+        coord.textContent = up.name + ' → ' + nameOf(up.machine);
+        coord.title = up.name + '  →  ' + nameOf(up.machine) + ':' + up.path;
+        line.appendChild(coord);
+        const x = el('button', 'ex-iconbtn ex-xfer-x');
+        x.innerHTML = svg('cross', 'ex-ico');
+        x.title = 'Dismiss';
+        x.setAttribute('aria-label', 'Dismiss this upload');
+        x.onclick = () => { S.uploads.delete(up.id); renderClip(); };
+        line.appendChild(x);
+        row.appendChild(line);
+
+        if (up.state === 'failed') {
+            row.appendChild(note(up.error || 'The upload failed.', true));
+        } else {
+            const bar = el('div', 'ex-xfer-bar');
+            const fill = el('div', 'ex-xfer-fill');
+            fill.style.width = (up.total ? Math.min(100, Math.round((up.sent / up.total) * 100)) : 100) + '%';
+            bar.appendChild(fill);
+            row.appendChild(bar);
+
+            const meta = el('div', 'ex-xfer-meta');
+            meta.textContent = up.state === 'done'
+                ? 'Uploaded · ' + VaierListing.formatSize({ size: up.total })
+                : VaierListing.formatSize({ size: up.sent }) + ' of ' + VaierListing.formatSize({ size: up.total });
+            row.appendChild(meta);
+        }
+
+        // The same pure-CSS lifetime a finished Transfer gets: a landed upload clears itself, a failure stays
+        // until dismissed so its reason is never lost. No JS clock, so nothing here is a timer either.
+        if (up.state === 'done') {
+            row.classList.add('is-expiring');
+            row.addEventListener('animationend', (e) => {
+                if (e.animationName === 'ex-xfer-expire') { S.uploads.delete(up.id); renderClip(); }
+            });
+        }
+        return row;
     }
 
     function transferRow(tr) {

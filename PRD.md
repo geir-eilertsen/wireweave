@@ -1124,10 +1124,13 @@ now-removed Community/Enterprise split that once separated them).
   **backed-up** / **contains-backed-up** flags on the file listing, and one endpoint per direction that
   get-or-creates the machine's repository and job and folds a path selection into the job's **protected
   paths**; see **Delivered in slice 4** below.)*
-- [ ] **5 — Mutate 🟡 (delete backend delivered).** Delete, rename/move, new folder, behind a typed-confirmation
-  gate. Community. *(The **delete** backend landed — recursive delete over SFTP, an SFTP-root guard, and
-  `DELETE /machines/{name}/files`; see **Delivered in slice 5** below. **Rename/move** and **new folder** remain,
-  and the typed-confirmation gate is the frontend half.)*
+- [ ] **5 — Mutate 🟡 (delete and upload delivered).** Delete, upload, rename/move, new folder, behind a
+  typed-confirmation gate. Community. *(The **delete** backend landed — recursive delete over SFTP, an
+  SFTP-root guard, and `DELETE /machines/{name}/files` — and the typed-confirmation gate is its frontend half.
+  **Upload** landed whole, backend and frontend: files from the browser into a machine's directory, streamed,
+  present-only, with a name already taken refused as a **conflict** and replaced only on the operator's yes.
+  See **Delivered in slice 5** below. **Rename/move** and **new folder** remain, as does **folder upload**,
+  deliberately deferred.)*
 
 **Delivered in slice 1 (backend):**
 - **A shared SSH target resolver.** Resolving a machine name to *where to connect, with which credential,
@@ -1360,6 +1363,86 @@ job**'s source paths against the tree and would have reported a backed-up direct
   (no `at`). On success **`204 No Content`**; a missing path is the `404`, a permission-denied the `403`, the
   root guard a `400` carrying its sentence. Admin-authed like the rest of the Explorer. **Rename/move** and
   **new folder** remain.
+
+**Delivered in slice 5 (backend + frontend — upload):**
+- **Upload is a download run backwards, and its own thin path.** One file from the operator's browser into a
+  directory on a machine — the only Explorer operation whose bytes begin outside the fleet. It deliberately
+  does **not** reuse the **Transfer** machinery: a Transfer carries a coordinate between two machines and
+  therefore has a source machine, a point in time, and a no-op-onto-its-own-coordinate rule, all invariants it
+  documents carefully; an upload has none of them, and forcing it in would mean nulling out half the record and
+  weakening what the other half promises. Present-only, like every write — a machine's past is a read-only
+  **mounted archive**, so there is no `at` and nowhere in it to put a file. **Files only**: uploading a folder
+  means recreating a tree on the far side, a different operation with its own failure modes, deliberately
+  deferred.
+- **A name already taken is a conflict, never a silent replacement.** `Upload` asks the machine what is at the
+  destination before a byte is sent. Nothing there → write. A file there → `ConflictException` (a `409`
+  carrying the domain's own sentence), unless the upload was made with `overwrite`, which is the operator
+  having been asked and having said yes. A **folder** there → a conflict no overwrite settles, because
+  replacing a directory with a file would mean deleting it and everything inside.
+- **`Upload` is a domain value object** owning every decision: the destination is a `FileEntry.childPath` of
+  the normalised directory (so a multipart filename that is not a single path segment cannot escape the folder,
+  however the part was written by hand), the existence check and its verdict, and the jail down-mapping. It is
+  a domain method that **receives the driven port and calls it** (`writeTo(target, root, files, content)`); the
+  service only resolves the machine and its `SftpRoot` and passes them in. `FileEntry.childPath` /
+  `requireValidName` are now the single shared copy of the "a child's path is built this way" rule, which
+  `FileEntry.in` also uses.
+- **`ForBrowsingRemoteFiles` gains `upload`** (translation-only on `MinaSftpAdapter`, same error mapping as
+  `list`): the mirror of `download`, piping the caller's `InputStream` into an SFTP write stream with the same
+  fixed 64 KiB buffer the relay uses, so memory stays flat however large the file is. The write creates or
+  truncates, so a shorter file over a longer one leaves no tail behind. The adapter asks nothing about whether
+  replacing was allowed — that decision is already taken.
+- **`UploadFileUseCase` on `ExplorerService`** (a new narrow use case on the existing Explorer domain service —
+  no new service), and **`POST /machines/{machine}/files/upload?path=…&overwrite=…`** on
+  `ExplorerRestController`: multipart, **one file per request** so each gets its own progress and its own
+  answer, which is what makes a per-file "Replace it?" possible at all. `MultipartFile.getInputStream()` goes
+  straight to the use case — the bytes are never read whole into Vaier's heap. Admin-authed like the rest of
+  the Explorer; no whitelist or auth chain was touched. Spring's multipart limits are raised in
+  `application.yml` (2 GB per file and per request, `resolve-lazily: true`) — the defaults are 1 MB/10 MB and
+  would refuse almost anything worth putting on a fleet machine.
+- **One bar above a listing, not three (the pane-head merge).** The pane head, the selection toolbar
+  (`.ex-selbar`) and the paste bar (`.ex-pastebar`) were **the same row shape doing the same job three times**
+  — label on the left, actions on the right — and stacked they buried the listing under a pile of bars, with
+  Refresh holding a whole row open by itself most of the time. They are now **one** row: the directory pane's
+  head carries every verb that applies right now, in one `.ex-pane-actions` group. Both body bars are deleted
+  outright, DOM and stylesheet alike. *(Operator's words: "Can we manage with only ONE topbar" and "the
+  refresh button is a bit lonely there occupying a bar".)*
+  - **Left — the subtitle carries state, the title never moves.** `directorySubtitle` answers "how much is
+    here" (`24 items`) and, while anything is ticked, the more urgent version of the same fact
+    (`2 selected · 3 machines`). The **title stays the machine name** throughout: it is the pane's identity and
+    where the operator is standing, and swapping it for a count would move the one label that must not move.
+  - **Right — a stable order.** `actions.append(selectionVerbs(), pasteVerb(…), folderVerbs(…))`. The group
+    hugs the right edge, so the contextual verbs grow it *leftward* and **Refresh and Upload stay anchored** —
+    the two controls reached for idly never shift under the pointer as a selection or a Clipboard comes and
+    goes. One hairline (`.ex-selverbs`'s own right border, so no JS restates the condition) splits what you
+    have *picked* from what acts on *this folder*.
+  - **Paste says what it does.** The old bar's "Clipboard: 3 items" label plus "Paste here" button becomes one
+    `Paste 3 items` button — in a shared row the label has no room and "here" has no referent. What is *on*
+    the Clipboard is still listed in the tray, which is where it belongs.
+  - **The time rail keeps its own row**, deliberately: it is an axis, not a verb — it is scrubbed, so it needs
+    the width — and it exists only on a machine that has archives.
+  - **On a phone, the merged group floats.** It has strictly more to fit than the old three bars did, so the
+    head and the group both `flex-wrap` and the verbs take the roomier ~44px touch padding. While something is
+    ticked the group leaves the scrolling flow for a fixed bar at the foot of the screen — the same element in
+    the same order, only repositioned — preserving the thumb-reachable selection bar the phone layout already
+    had, since the head can be scrolled away and the rows gave their own verbs up to it.
+- **Frontend (`explorer-shell.{js,css}`).** Two affordances, split by whether they need to be permanent. The
+  always-available one is an **Upload icon in the directory pane's head, beside Refresh** (`renderUploadAction`,
+  the same `ex-iconbtn` shape), which costs the listing no vertical room. The drop affordance is a **dropzone
+  overlaying the whole pane body** (`renderDropzone`), drawn hidden and lit only while a drag *carrying files*
+  is actually overhead. *(It first shipped as a permanent dashed bar above the listing and the operator
+  rejected it on sight — "there are now 3 bars at the top". An
+  overlay rather than a tray that slides in, because the pane body **is** the drop target so lighting exactly
+  it is the honest statement, and because a tray would push the listing down at the instant a file is held over
+  the rows being aimed at.)* The **whole body** takes the drop — a file let go over the listing must upload,
+  not make the browser open it and navigate the tab off the Explorer — with the overlay `pointer-events: none`
+  so it never intercepts the drop it advertises. Files are sent one at a time and
+  each appears in the **tray** in a Transfer row's own clothes, with a determinate progress bar. Progress comes
+  from the browser's own send events (XHR `upload.onprogress`) — the one operation where the browser is the
+  thing doing the work, so its progress is its own to report; **nothing polls**, and there is no endpoint that
+  could be asked. A `409` opens the Replace question carrying the server's sentence, and only a yes re-sends
+  with `overwrite` — once, so a folder in the way is reported rather than asked about twice. A landed upload
+  re-reads the directory. Guarded by asset-invariant tests in `ExplorerShellTest`, as the shell's other
+  invariants are.
 
 **Delivered in slice 4 (backend — select and back up):**
 - **The operator makes the decision; the backend absorbs the machinery.** The whole flow an operator sees is
@@ -1809,7 +1892,8 @@ Three things this buys that a set of pages structurally cannot:
   a window's own URL across a reload/pop-out — never by chance.
 - [x] **Fleet-wide persistent selection, and download-as-one-zip ✅.** Ticking files in the Explorer now builds
   a **Selection** that survives every navigation — across folders and across machines — where it used to be
-  per-directory and cleared on each move. The selection bar is fleet-wide (`N selected · M machines`) and its
+  per-directory and cleared on each move. The selection is fleet-wide (`N selected · M machines`, said by the
+  directory pane's own subtitle since §6.20's one-bar merge) and its
   verbs (Copy, Download, Back up, Stop backing up, Delete) **fan out per machine** over the live items.
   **Download** hands the browser one file as itself and one folder as its own zip, but **two or more** items
   come down as a single `application/zip` streamed from `POST /machines/files/download-zip` (a hidden-form
@@ -2722,7 +2806,7 @@ than by re-rendering, so a push arriving mid-pan does not yank the map away. The
 deliberately its own visual vocabulary — a radar ping, not a machine chip — so a glance never reads
 "someone is probing us" as "my server is down"; it stops animating under
 `prefers-reduced-motion`. On a phone the row's verbs stay visible (unlike the file listing's, which
-hide behind the selection bar) — a phone is the screen you are most likely holding when the alert
+hide behind the floating selection verbs) — a phone is the screen you are most likely holding when the alert
 arrives, and hiding them would leave the view read-only there.
 
 **Parked follow-ups (all that remains of #329).** (1) **SSH acquisition** — pointing CrowdSec at the
@@ -2959,7 +3043,7 @@ exactly one screen to repaint: a trusted address is not a threat and gets no **t
 **The row is an address and one verb.** A trusted address has no scenario and no expiry — it is not a ban,
 it is a decision — so the trusted list has its own two-column grid rather than inheriting the blocked list's
 four and leaving two of them empty on every row. Its verb stays visible on a phone for the same reason
-§6.28's does: no selection bar carries it, and hiding it would leave an operator able to see what they
+§6.28's does: no selection verbs carry it, and hiding it would leave an operator able to see what they
 trusted and not to take it back.
 
 **Backlog — the "trusted on ‹date›" timestamp, deliberately not shipped.** The obvious next column is when

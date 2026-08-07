@@ -1359,9 +1359,12 @@ class ExplorerShellTest {
         String body = js.substring(from, js.indexOf("\n    }", from));
         assertThat(body).as("gated on the shared predicate, not on the full shield").contains("anyBackedUp(s)");
 
-        int bar = js.indexOf("function renderSelectionBar(");
-        String barBody = js.substring(bar, js.indexOf("\n    }", bar));
-        assertThat(barBody).as("the bar offers the verb on the same rule it is executed on")
+        // The selection's verbs merged into the pane head's one action group; the rule they are offered on is
+        // unchanged, so this follows the rename rather than being relaxed.
+        int verbs = js.indexOf("function selectionVerbs(");
+        assertThat(verbs).isPositive();
+        String verbsBody = js.substring(verbs, js.indexOf("\n    }", verbs));
+        assertThat(verbsBody).as("the verb is offered on the same rule it is executed on")
             .contains("anyBackedUp");
         // ...and that one predicate is what reads both shields, so the two sites can never drift apart.
         assertThat(js).contains("const anyBackedUp = (s) => !!s.backedUp || !!s.containsBackedUp;");
@@ -2411,5 +2414,185 @@ class ExplorerShellTest {
         int from = js.indexOf("function updateAction(");
         assertThat(from).isPositive();
         assertThat(js.substring(from, js.indexOf("\n    }", from))).contains("S.at");
+    }
+
+    // --- upload: the browser's files into a machine's directory ----------------------------------------
+
+    @Test
+    void anUploadReportsRealProgress_fromTheBrowsersOwnSendEvents_neverAPoll() throws IOException {
+        // The one place in this shell where progress is genuinely the BROWSER's to report: it is the thing
+        // doing the sending. XHR's upload.onprogress is an event, exactly like the SSE the rest of the shell
+        // listens to — so this obeys the no-polling rule rather than being an exception to it. A timer that
+        // asked the server "how far along am I?" would be a poll, and there is no endpoint that could answer.
+        String js = read("explorer-shell.js");
+
+        int from = js.indexOf("function startUpload(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).contains("upload.onprogress");
+        assertThat(body).doesNotContain("setInterval");
+        assertThat(js).doesNotContain("setInterval");
+    }
+
+    @Test
+    void anUploadOntoATakenName_asksBeforeReplacing_andOnlyThenSendsOverwrite() throws IOException {
+        // The backend refuses a taken name with 409 rather than overwriting, so the operator is asked. Without
+        // the confirm the retry would be an automatic overwrite — the silent data loss the refusal exists to
+        // prevent — and without the retry the conflict would be a dead end.
+        String js = read("explorer-shell.js");
+
+        int from = js.indexOf("function startUpload(");
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).contains("409");
+        assertThat(body).contains("confirmModal");
+        assertThat(body).contains("overwrite");
+    }
+
+    @Test
+    void uploadsAreFilesOnly_neverAWholeFolder() throws IOException {
+        // Folder upload was deliberately deferred: it means recreating a tree on the far side, which is a
+        // different operation with different failure modes. The input must not quietly offer it.
+        String js = read("explorer-shell.js");
+
+        assertThat(js).doesNotContain("webkitdirectory");
+    }
+
+    @Test
+    void aLandedUpload_reReadsTheDirectory_soTheNewFileIsThere() throws IOException {
+        // A folder the operator is standing in is cached. Without the re-read, a file that really did land
+        // would not appear until something else happened to invalidate the slot.
+        String js = read("explorer-shell.js");
+
+        int from = js.indexOf("function startUpload(");
+        assertThat(js.substring(from, js.indexOf("\n    }", from))).contains("refreshDir");
+    }
+
+    @Test
+    void uploadingIsPresentOnly_offeredNowhereInThePast() throws IOException {
+        // The same invariant every write in this shell keeps: an archive is read-only, so there is nowhere in
+        // the past to put a file. The affordance is not drawn there rather than being drawn and refused.
+        String js = read("explorer-shell.js");
+
+        int from = js.indexOf("function renderUploadAction(");
+        assertThat(from).isPositive();
+        assertThat(js.substring(from, js.indexOf("\n    }", from))).contains("S.at");
+    }
+
+    @Test
+    void aDirectoryHasOneBar_notThree_withEveryVerbThatAppliesInIt() throws IOException {
+        // The pane head, the selection bar and the paste bar were the same row shape doing the same job three
+        // times — label left, actions right — and stacking them made the top of a pane a pile of bars. They
+        // are one row now: the head's action group carries every verb that applies right now.
+        String js = read("explorer-shell.js");
+        String css = read("explorer-shell.css");
+
+        // The two body bars are gone outright, DOM and stylesheet alike — not merely hidden.
+        assertThat(js).doesNotContain("renderSelectionBar");
+        assertThat(js).doesNotContain("renderPasteBar");
+        assertThat(js).doesNotContain("ex-selbar");
+        assertThat(js).doesNotContain("ex-pastebar");
+        assertThat(css).doesNotContain("ex-selbar");
+        assertThat(css).doesNotContain("ex-pastebar");
+    }
+
+    @Test
+    void theFoldersOwnVerbsArePinnedLast_soRefreshAndUploadNeverMoveUnderThePointer() throws IOException {
+        // Order is load-bearing once the verbs share a row. The action group hugs the right, so appending the
+        // contextual verbs FIRST grows the group leftward and leaves Refresh and Upload — the two that are
+        // always there, and the two used idly — anchored at the right edge whatever else comes and goes.
+        String js = read("explorer-shell.js");
+
+        assertThat(js).contains(
+            "actions.append(selectionVerbs(), pasteVerb(machineId, path), folderVerbs(machineId, path))");
+    }
+
+    @Test
+    void aLiveSelectionTakesOverTheSubtitle_whileTheMachineNameKeepsTheTitle() throws IOException {
+        // The head's subtitle is the "how much is here" slot, and a live selection is the more urgent version
+        // of that same fact. The TITLE stays the machine name: it is the pane's identity and where you are
+        // standing, and swapping it for a count would move the one label that should never move.
+        String js = read("explorer-shell.js");
+
+        int from = js.indexOf("function directorySubtitle(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).contains("S.sel");
+        assertThat(body).contains("selected");
+        assertThat(body).contains("items");
+    }
+
+    @Test
+    void theTimeRailKeepsItsOwnRow_becauseItIsAnAxisAndNotAVerb() throws IOException {
+        // Deliberately NOT folded into the merged bar: a rail is scrubbed, so it needs width, and it only
+        // exists on a machine that has archives.
+        String js = read("explorer-shell.js");
+
+        assertThat(js).contains("body.appendChild(renderRail(machineId))");
+    }
+
+    @Test
+    void everyVerbStaysReachableOnAPhone_becauseOneBarCarriesMoreOfThem() throws IOException {
+        // The old bars wrapped on small screens because a button group cannot shrink past its content, and a
+        // selection you can make but not act on is the bug that caused. One merged bar carries MORE verbs, so
+        // the constraint is tighter, not looser: the head and its action group both wrap.
+        String css = read("explorer-shell.css");
+
+        assertThat(css).contains(".ex-pane-head, .ex-pane-actions { flex-wrap: wrap; }");
+    }
+
+    @Test
+    void theUploadControl_livesInThePaneHeadBesideRefresh_andCostsTheListingNoRoom() throws IOException {
+        // It shipped as a third bar stacked above the listing and the operator said so at once: the selection
+        // bar and the paste bar EARN their row by appearing only when there is something selected or held,
+        // and an upload control that is always there had earned nothing. A folder's verbs already have a home
+        // in the pane head — that is where a permanent one belongs, at zero vertical cost.
+        String js = read("explorer-shell.js");
+        String css = read("explorer-shell.css");
+
+        assertThat(js).contains("renderUploadAction(");
+        int from = js.indexOf("function folderVerbs(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).contains("renderUploadAction(");
+        assertThat(body).contains("Refresh");
+        // The bar and its stylesheet are gone outright, not merely hidden.
+        assertThat(js).doesNotContain("renderUploadBar");
+        assertThat(js).doesNotContain("ex-upbar");
+        assertThat(css).doesNotContain("ex-upbar");
+    }
+
+    @Test
+    void theDropAffordance_appearsOnlyWhileADragIsInFlight() throws IOException {
+        // The original reasoning stands — dropping files onto a folder is invisible until something says you
+        // can — but it is only worth saying at the moment it is true. The dropzone is drawn hidden and lit by
+        // the drag itself, so at rest it costs nothing and never shifts the listing under the pointer.
+        String js = read("explorer-shell.js");
+
+        int from = js.indexOf("function armDropTarget(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).contains("dragenter");
+        assertThat(body).contains("dragleave");
+        assertThat(body).contains("is-on");
+        assertThat(js).contains("function renderDropzone(");
+    }
+
+    @Test
+    void theWholePaneBodySwallowsTheDrop_soAFileLetGoOverTheListingNeverNavigatesTheTabAway() throws IOException {
+        // A browser's default action for a dropped file is to OPEN it, which navigates the tab off the
+        // Explorer and loses everything on screen. The listing is the obvious place to aim, so the body — not
+        // just the lit dropzone — has to take the drop and preventDefault it.
+        String js = read("explorer-shell.js");
+
+        assertThat(js).contains("armDropTarget(body,");
+        int from = js.indexOf("function armDropTarget(");
+        assertThat(js.substring(from, js.indexOf("\n    }", from))).contains("e.preventDefault()");
+    }
+
+    @Test
+    void theUploadEndpoint_isTheOneTheApiGrewForIt() throws IOException {
+        String js = read("explorer-shell.js");
+
+        assertThat(js).contains("/files/upload");
     }
 }

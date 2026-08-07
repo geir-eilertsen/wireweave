@@ -299,6 +299,9 @@ public abstract class VaierWebMvcIntegrationBase {
     @MockBean
     protected ViewFileUseCase viewFileUseCase;
 
+    @MockBean
+    protected UploadFileUseCase uploadFileUseCase;
+
     // --- Explorer Transfer (Clipboard) use cases ---
     @MockBean
     protected StartTransferUseCase startTransferUseCase;

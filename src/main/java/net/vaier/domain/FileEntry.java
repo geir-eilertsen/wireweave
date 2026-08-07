@@ -46,10 +46,19 @@ public record FileEntry(String name, String path, boolean directory, long sizeBy
      * with something like {@code ../../etc}: the name is validated as a single segment and joined here.
      */
     public static FileEntry in(String parentPath, String name, boolean directory, long sizeBytes, Instant modified) {
+        return new FileEntry(name, childPath(parentPath, name), directory, sizeBytes, modified);
+    }
+
+    /**
+     * The absolute path of {@code name} inside the directory at {@code parentPath} — the one place a child's
+     * path is built, so a name that is not a single segment can never become a path outside its parent. An
+     * {@link Upload} asks this the same way a listed entry does; two copies of the join is how the two would
+     * eventually disagree about a name at the root.
+     */
+    static String childPath(String parentPath, String name) {
         requireValidName(name);
         String parent = normalisePath(parentPath);
-        String path = "/".equals(parent) ? "/" + name : parent + "/" + name;
-        return new FileEntry(name, path, directory, sizeBytes, modified);
+        return "/".equals(parent) ? "/" + name : parent + "/" + name;
     }
 
     /**
@@ -101,7 +110,7 @@ public record FileEntry(String name, String path, boolean directory, long sizeBy
     }
 
     /** A name is one path segment: never blank, never a separator, never a {@code .} or {@code ..}. */
-    private static void requireValidName(String name) {
+    static void requireValidName(String name) {
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("A file entry must have a name");
         }

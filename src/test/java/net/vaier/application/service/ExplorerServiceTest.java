@@ -5,7 +5,9 @@ import net.vaier.application.DownloadFileUseCase.Download;
 import net.vaier.application.ViewFileUseCase.View;
 import net.vaier.domain.AuthMethod;
 import net.vaier.domain.CannotDeleteSftpRootException;
+import net.vaier.domain.ConflictException;
 import net.vaier.domain.FileEntry;
+import net.vaier.domain.Upload;
 import net.vaier.domain.HostCredential;
 import net.vaier.domain.MachineId;
 import net.vaier.domain.NoHostCredentialException;
@@ -37,7 +39,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -865,5 +869,79 @@ class ExplorerServiceTest {
             .isInstanceOf(IllegalArgumentException.class);
 
         verify(forResolvingSshTargets, never()).resolve(any());
+    }
+
+    // --- uploading a file into a machine's directory ---------------------------------------------------
+    //
+    // The service orchestrates and nothing more: resolve the machine, resolve its SFTP root, hand both plus
+    // the port to the Upload. Every decision — where the file lands, whether the name is taken, whether it may
+    // be replaced — is the domain's (UploadTest covers them); these prove the wiring and that the refusals
+    // really do reach the caller through the service.
+
+    private void nameIsFree(String jailPath) {
+        when(forBrowsingRemoteFiles.stat(any(), eq(jailPath)))
+            .thenThrow(new NotFoundException("No such directory: " + jailPath));
+    }
+
+    @Test
+    void upload_resolvesTheMachine_andStreamsTheContentToTheDestination() {
+        machineResolves("apalveien5", "SHA256:pinned");
+        nameIsFree("/home/geir/notes.txt");
+        InputStream content = new ByteArrayInputStream("hello".getBytes(StandardCharsets.UTF_8));
+
+        service.upload(Upload.into(mid("apalveien5"), "/home/geir", "notes.txt", false), content);
+
+        ArgumentCaptor<SshTarget> resolved = ArgumentCaptor.forClass(SshTarget.class);
+        verify(forBrowsingRemoteFiles).upload(resolved.capture(), eq("/home/geir/notes.txt"), eq(content));
+        assertThat(resolved.getValue().host()).isEqualTo("10.13.13.6");
+    }
+
+    @Test
+    void upload_onAJailedMachine_writesAtTheJailPath_ofTheTrueDirectoryTheBrowserSent() {
+        machineIsJailedIn("NAS", "/volume1");
+        nameIsFree("/homes/geir/notes.txt");
+
+        service.upload(Upload.into(mid("NAS"), "/volume1/homes/geir", "notes.txt", false),
+            new ByteArrayInputStream("hello".getBytes(StandardCharsets.UTF_8)));
+
+        verify(forBrowsingRemoteFiles).upload(any(), eq("/homes/geir/notes.txt"), any());
+    }
+
+    @Test
+    void upload_ontoANameAlreadyTaken_isAConflict_andNothingIsWritten() {
+        machineResolves("apalveien5", "SHA256:pinned");
+        when(forBrowsingRemoteFiles.stat(any(), eq("/home/geir/notes.txt")))
+            .thenReturn(new ForBrowsingRemoteFiles.RemoteStat(false, 120));
+
+        assertThatThrownBy(() -> service.upload(
+            Upload.into(mid("apalveien5"), "/home/geir", "notes.txt", false),
+            new ByteArrayInputStream("hello".getBytes(StandardCharsets.UTF_8))))
+            .isInstanceOf(ConflictException.class);
+
+        verify(forBrowsingRemoteFiles, never()).upload(any(), any(), any());
+    }
+
+    @Test
+    void upload_ontoANameAlreadyTaken_withOverwriteAsked_writesOverIt() {
+        machineResolves("apalveien5", "SHA256:pinned");
+        when(forBrowsingRemoteFiles.stat(any(), eq("/home/geir/notes.txt")))
+            .thenReturn(new ForBrowsingRemoteFiles.RemoteStat(false, 120));
+
+        service.upload(Upload.into(mid("apalveien5"), "/home/geir", "notes.txt", true),
+            new ByteArrayInputStream("hello".getBytes(StandardCharsets.UTF_8)));
+
+        verify(forBrowsingRemoteFiles).upload(any(), eq("/home/geir/notes.txt"), any());
+    }
+
+    @Test
+    void upload_toAPathAboveTheMachinesSftpRoot_isRefused_andNothingIsWritten() {
+        machineIsJailedIn("NAS", "/volume1");
+
+        assertThatThrownBy(() -> service.upload(
+            Upload.into(mid("NAS"), "/etc", "notes.txt", false),
+            new ByteArrayInputStream("hello".getBytes(StandardCharsets.UTF_8))))
+            .isInstanceOf(PathOutsideSftpRootException.class);
+
+        verify(forBrowsingRemoteFiles, never()).upload(any(), any(), any());
     }
 }
