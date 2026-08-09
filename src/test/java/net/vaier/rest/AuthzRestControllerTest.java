@@ -1,9 +1,11 @@
 package net.vaier.rest;
 
+import jakarta.servlet.http.HttpServletRequest;
 import net.vaier.application.AssignGroupsUseCase;
 import net.vaier.application.GetServiceAccessRulesUseCase;
 import net.vaier.application.GrantRoleUseCase;
 import net.vaier.application.ListAccessEntriesUseCase;
+import net.vaier.application.RecordAllowedAccessUseCase;
 import net.vaier.application.RevokeAccessUseCase;
 import net.vaier.application.SetServiceAccessRuleUseCase;
 import net.vaier.application.VerifyAccessUseCase;
@@ -11,14 +13,20 @@ import net.vaier.domain.AccessDecision;
 import net.vaier.domain.AccessEntry;
 import net.vaier.domain.LastAdminException;
 import net.vaier.domain.Role;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
+import org.springframework.mock.env.MockEnvironment;
+import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.*;
@@ -33,8 +41,26 @@ class AuthzRestControllerTest {
     @Mock RevokeAccessUseCase revokeAccessUseCase;
     @Mock SetServiceAccessRuleUseCase setServiceAccessRuleUseCase;
     @Mock GetServiceAccessRulesUseCase getServiceAccessRulesUseCase;
+    @Mock RecordAllowedAccessUseCase recordAllowedAccessUseCase;
 
     @InjectMocks AuthzRestController controller;
+
+    @BeforeEach
+    void setUp() {
+        ReflectionTestUtils.setField(controller, "trustedProxyCidr", "172.20.0.0/16");
+    }
+
+    /** A request as Traefik makes it: from the Docker bridge, carrying the real client in the header. */
+    private static HttpServletRequest requestFrom(String remoteAddress, String forwardedFor) {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        lenient().when(request.getRemoteAddr()).thenReturn(remoteAddress);
+        lenient().when(request.getHeader("X-Forwarded-For")).thenReturn(forwardedFor);
+        return request;
+    }
+
+    private static HttpServletRequest aRequest() {
+        return requestFrom("172.20.0.5", "203.0.113.7");
+    }
 
     // --- GET /authz/verify (forward-auth) ---
 
@@ -45,7 +71,7 @@ class AuthzRestControllerTest {
         when(verifyAccessUseCase.verify("friend@example.com", "plex.example.com", null, null, null))
                 .thenReturn(AccessDecision.allow(entry));
 
-        ResponseEntity<String> response = controller.verify("friend@example.com", "plex.example.com", null, null, null);
+        ResponseEntity<String> response = controller.verify(aRequest(), "friend@example.com", "plex.example.com", null, null, null);
 
         assertThat(response.getStatusCode().value()).isEqualTo(200);
         assertThat(response.getHeaders().getFirst("Remote-User")).isEqualTo("friend@example.com");
@@ -60,7 +86,7 @@ class AuthzRestControllerTest {
         when(verifyAccessUseCase.verify("friend@example.com", "plex.example.com", "Alice Smith", null, null))
                 .thenReturn(AccessDecision.allow(entry));
 
-        ResponseEntity<String> response = controller.verify("friend@example.com", "plex.example.com", "Alice Smith", null, null);
+        ResponseEntity<String> response = controller.verify(aRequest(), "friend@example.com", "plex.example.com", "Alice Smith", null, null);
 
         assertThat(response.getHeaders().getFirst("Remote-Name")).isEqualTo("Alice Smith");
     }
@@ -72,7 +98,7 @@ class AuthzRestControllerTest {
         when(verifyAccessUseCase.verify("friend@example.com", "plex.example.com", null, null, null))
                 .thenReturn(AccessDecision.allow(entry));
 
-        ResponseEntity<String> response = controller.verify("friend@example.com", "plex.example.com", null, null, null);
+        ResponseEntity<String> response = controller.verify(aRequest(), "friend@example.com", "plex.example.com", null, null, null);
 
         // Pre-approved entries have no name yet — don't emit an empty header.
         assertThat(response.getHeaders().containsKey("Remote-Name")).isFalse();
@@ -83,7 +109,7 @@ class AuthzRestControllerTest {
         when(verifyAccessUseCase.verify("p@example.com", "plex.example.com", null, null, null))
                 .thenReturn(AccessDecision.deny());
 
-        ResponseEntity<String> response = controller.verify("p@example.com", "plex.example.com", null, null, null);
+        ResponseEntity<String> response = controller.verify(aRequest(), "p@example.com", "plex.example.com", null, null, null);
 
         assertThat(response.getStatusCode().value()).isEqualTo(403);
         // Forward-auth returns this body to the browser, so it must be the branded Vaier page.
@@ -97,7 +123,7 @@ class AuthzRestControllerTest {
         when(verifyAccessUseCase.verify("friend@example.com", "plex.example.com", "Alice Smith", null, null))
                 .thenReturn(AccessDecision.deny());
 
-        controller.verify("friend@example.com", "plex.example.com", "Alice Smith", null, null);
+        controller.verify(aRequest(), "friend@example.com", "plex.example.com", "Alice Smith", null, null);
 
         verify(verifyAccessUseCase).verify("friend@example.com", "plex.example.com", "Alice Smith", null, null);
     }
@@ -107,7 +133,7 @@ class AuthzRestControllerTest {
         when(verifyAccessUseCase.verify("friend@example.com", "plex.example.com", "Alice Smith", "github", null))
                 .thenReturn(AccessDecision.deny());
 
-        controller.verify("friend@example.com", "plex.example.com", "Alice Smith", "github", null);
+        controller.verify(aRequest(), "friend@example.com", "plex.example.com", "Alice Smith", "github", null);
 
         verify(verifyAccessUseCase).verify("friend@example.com", "plex.example.com", "Alice Smith", "github", null);
     }
@@ -117,9 +143,89 @@ class AuthzRestControllerTest {
         when(verifyAccessUseCase.verify("friend@example.com", "plex.example.com", "Alice Smith", "github", "98765"))
                 .thenReturn(AccessDecision.deny());
 
-        controller.verify("friend@example.com", "plex.example.com", "Alice Smith", "github", "98765");
+        controller.verify(aRequest(), "friend@example.com", "plex.example.com", "Alice Smith", "github", "98765");
 
         verify(verifyAccessUseCase).verify("friend@example.com", "plex.example.com", "Alice Smith", "github", "98765");
+    }
+
+    // --- GET /authz/verify records where allowed accesses come from ---
+
+    @Test
+    void verify_allowed_recordsTheAllowedAccessFromTheCallerIp() {
+        AccessEntry entry = AccessEntry.builder().email("friend@example.com").role(Role.USER).build();
+        when(verifyAccessUseCase.verify("friend@example.com", "plex.example.com", null, null, null))
+                .thenReturn(AccessDecision.allow(entry));
+
+        controller.verify(requestFrom("172.20.0.5", "203.0.113.7"),
+                "friend@example.com", "plex.example.com", null, null, null);
+
+        verify(recordAllowedAccessUseCase)
+                .recordAllowedAccess(eq("203.0.113.7"), eq("friend@example.com"), any(Instant.class));
+    }
+
+    /**
+     * The one hop worth believing. A request that reached Vaier directly could put any address it liked in
+     * {@code X-Forwarded-For}, so outside the trusted proxy CIDR only the socket's own address counts —
+     * the decision is {@code CallerIp}'s, and this asserts the controller actually asks it.
+     */
+    @Test
+    void verify_allowed_ignoresAForwardedForHeaderFromOutsideTheTrustedProxy() {
+        AccessEntry entry = AccessEntry.builder().email("friend@example.com").role(Role.USER).build();
+        when(verifyAccessUseCase.verify("friend@example.com", "plex.example.com", null, null, null))
+                .thenReturn(AccessDecision.allow(entry));
+
+        controller.verify(requestFrom("203.0.113.99", "1.2.3.4"),
+                "friend@example.com", "plex.example.com", null, null, null);
+
+        verify(recordAllowedAccessUseCase)
+                .recordAllowedAccess(eq("203.0.113.99"), eq("friend@example.com"), any(Instant.class));
+    }
+
+    /** Only an allowed access is one. A refused knock belongs to the threat side of the security view. */
+    @Test
+    void verify_denied_recordsNothing() {
+        when(verifyAccessUseCase.verify("p@example.com", "plex.example.com", null, null, null))
+                .thenReturn(AccessDecision.deny());
+
+        controller.verify(aRequest(), "p@example.com", "plex.example.com", null, null, null);
+
+        verifyNoInteractions(recordAllowedAccessUseCase);
+    }
+
+    /**
+     * <b>The single most important property in this change.</b> Recording is a statistic riding on the
+     * endpoint that authenticates every request to every gated service. If a broken geolocation database,
+     * a full disk or anything else can make this throw, the operator is locked out of their own fleet by a
+     * feature that draws dots on a map. It must fail silently or not at all.
+     */
+    @Test
+    void verify_allowed_stillAuthenticatesWhenRecordingTheAccessBlowsUp() {
+        AccessEntry entry = AccessEntry.builder()
+                .email("friend@example.com").role(Role.USER).groups(List.of("family")).build();
+        when(verifyAccessUseCase.verify("friend@example.com", "plex.example.com", null, null, null))
+                .thenReturn(AccessDecision.allow(entry));
+        doThrow(new IllegalStateException("the map is on fire")).when(recordAllowedAccessUseCase)
+                .recordAllowedAccess(any(), any(), any());
+
+        ResponseEntity<String> response = controller.verify(aRequest(),
+                "friend@example.com", "plex.example.com", null, null, null);
+
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
+        assertThat(response.getHeaders().getFirst("Remote-Email")).isEqualTo("friend@example.com");
+        assertThat(response.getHeaders().getFirst("Remote-Groups")).isEqualTo("family");
+    }
+
+    /** A request Vaier cannot even read an address off must not become a 500 on the auth path. */
+    @Test
+    void verify_allowed_stillAuthenticatesWhenThereIsNoRequestToReadAnAddressFrom() {
+        AccessEntry entry = AccessEntry.builder().email("friend@example.com").role(Role.USER).build();
+        when(verifyAccessUseCase.verify("friend@example.com", "plex.example.com", null, null, null))
+                .thenReturn(AccessDecision.allow(entry));
+
+        ResponseEntity<String> response = controller.verify(null,
+                "friend@example.com", "plex.example.com", null, null, null);
+
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
     }
 
     // --- GET /access (admin) ---
@@ -238,7 +344,7 @@ class AuthzRestControllerTest {
 
     @Test
     void getServiceAccessRules_returnsTheRulesMap() {
-        java.util.Map<String, List<String>> rules = java.util.Map.of(
+        Map<String, List<String>> rules = Map.of(
                 "plex.example.com", List.of("family"), "git.example.com", List.of("devs"));
         when(getServiceAccessRulesUseCase.getServiceAccessRules()).thenReturn(rules);
 
@@ -266,4 +372,39 @@ class AuthzRestControllerTest {
     }
 
     private final GlobalExceptionHandler handler = new GlobalExceptionHandler();
+
+    // --- the trusted-proxy boundary is one value, under a name that fits its scope ---
+
+    /**
+     * The forward-auth path is not the launchpad, and an operator on a different Docker bridge should not
+     * have to set a {@code launchpad.*} key to fix who authenticates their fleet. One neutral key, honoured
+     * by both surfaces — with the old one still read, because an operator who already set it must not be
+     * broken by the rename.
+     */
+    @Test
+    void theTrustedProxyCidrHasANeutralKeyAndStillHonoursTheOldLaunchpadOne() throws Exception {
+        assertThat(resolve(Map.of())).isEqualTo("172.20.0.0/16");
+        assertThat(resolve(Map.of("launchpad.trusted-proxy-cidr", "10.9.0.0/16")))
+            .as("an operator who already set the launchpad key is not broken").isEqualTo("10.9.0.0/16");
+        assertThat(resolve(Map.of("vaier.trusted-proxy-cidr", "10.8.0.0/16"))).isEqualTo("10.8.0.0/16");
+        assertThat(resolve(Map.of("vaier.trusted-proxy-cidr", "10.8.0.0/16",
+            "launchpad.trusted-proxy-cidr", "10.9.0.0/16"))).isEqualTo("10.8.0.0/16");
+    }
+
+    /** Same boundary, same expression: the two surfaces are not allowed to disagree about who Traefik is. */
+    @Test
+    void bothSurfacesReadTheSameTrustedProxyBoundary() throws Exception {
+        assertThat(trustedProxyCidrExpression(AuthzRestController.class))
+            .isEqualTo(trustedProxyCidrExpression(LaunchpadRestController.class));
+    }
+
+    private static String resolve(Map<String, String> properties) throws Exception {
+        MockEnvironment environment = new MockEnvironment();
+        properties.forEach(environment::setProperty);
+        return environment.resolvePlaceholders(trustedProxyCidrExpression(AuthzRestController.class));
+    }
+
+    private static String trustedProxyCidrExpression(Class<?> controller) throws Exception {
+        return controller.getDeclaredField("trustedProxyCidr").getAnnotation(Value.class).value();
+    }
 }

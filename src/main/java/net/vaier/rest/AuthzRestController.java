@@ -1,14 +1,19 @@
 package net.vaier.rest;
 
+import jakarta.servlet.http.HttpServletRequest;
+import lombok.extern.slf4j.Slf4j;
 import net.vaier.application.AssignGroupsUseCase;
 import net.vaier.application.GetServiceAccessRulesUseCase;
 import net.vaier.application.GrantRoleUseCase;
 import net.vaier.application.ListAccessEntriesUseCase;
+import net.vaier.application.RecordAllowedAccessUseCase;
 import net.vaier.application.RevokeAccessUseCase;
 import net.vaier.application.SetServiceAccessRuleUseCase;
 import net.vaier.application.VerifyAccessUseCase;
 import net.vaier.domain.AccessDecision;
+import net.vaier.domain.CallerIp;
 import net.vaier.domain.Role;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -16,6 +21,7 @@ import org.springframework.web.bind.annotation.*;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -36,7 +42,22 @@ import java.util.Map;
  * </ul>
  */
 @RestController
+@Slf4j
 public class AuthzRestController {
+
+    /**
+     * The same trusted-proxy boundary the launchpad uses, and deliberately the same property: this is the
+     * identical question — which hop of {@code X-Forwarded-For} came from Vaier's own Traefik — so an
+     * operator whose Docker bridge differs should change one value, not hunt for a second one. (Contrast
+     * {@code security.docker-bridge-cidr}, which holds the same number today for a genuinely different
+     * reason and is kept separate on purpose.)
+     *
+     * <p>{@code vaier.trusted-proxy-cidr} rather than {@code launchpad.*} because the boundary now gates
+     * forward-auth too, and nobody should have to edit a launchpad key to fix who authenticates their
+     * fleet. The old key stays as the fallback: an operator who already set it is not broken by the rename.
+     */
+    @Value("${vaier.trusted-proxy-cidr:${launchpad.trusted-proxy-cidr:172.20.0.0/16}}")
+    private String trustedProxyCidr;
 
     private final VerifyAccessUseCase verifyAccessUseCase;
     private final ListAccessEntriesUseCase listAccessEntriesUseCase;
@@ -45,6 +66,7 @@ public class AuthzRestController {
     private final RevokeAccessUseCase revokeAccessUseCase;
     private final SetServiceAccessRuleUseCase setServiceAccessRuleUseCase;
     private final GetServiceAccessRulesUseCase getServiceAccessRulesUseCase;
+    private final RecordAllowedAccessUseCase recordAllowedAccessUseCase;
 
     public AuthzRestController(VerifyAccessUseCase verifyAccessUseCase,
                               ListAccessEntriesUseCase listAccessEntriesUseCase,
@@ -52,7 +74,8 @@ public class AuthzRestController {
                               AssignGroupsUseCase assignGroupsUseCase,
                               RevokeAccessUseCase revokeAccessUseCase,
                               SetServiceAccessRuleUseCase setServiceAccessRuleUseCase,
-                              GetServiceAccessRulesUseCase getServiceAccessRulesUseCase) {
+                              GetServiceAccessRulesUseCase getServiceAccessRulesUseCase,
+                              RecordAllowedAccessUseCase recordAllowedAccessUseCase) {
         this.verifyAccessUseCase = verifyAccessUseCase;
         this.listAccessEntriesUseCase = listAccessEntriesUseCase;
         this.grantRoleUseCase = grantRoleUseCase;
@@ -60,12 +83,14 @@ public class AuthzRestController {
         this.revokeAccessUseCase = revokeAccessUseCase;
         this.setServiceAccessRuleUseCase = setServiceAccessRuleUseCase;
         this.getServiceAccessRulesUseCase = getServiceAccessRulesUseCase;
+        this.recordAllowedAccessUseCase = recordAllowedAccessUseCase;
     }
 
     // --- Forward-auth (data path) ---
 
     @GetMapping("/authz/verify")
     public ResponseEntity<String> verify(
+            HttpServletRequest request,
             @RequestHeader(value = "X-Auth-Request-Email", required = false) String email,
             @RequestHeader(value = "X-Forwarded-Host", required = false) String host,
             @RequestHeader(value = "X-Auth-Request-Name", required = false) String name,
@@ -77,6 +102,7 @@ public class AuthzRestController {
             // (pending or not-in-group) identity sees the branded "awaiting approval" page.
             return ResponseEntity.status(403).contentType(MediaType.TEXT_HTML).body(DENIED_PAGE);
         }
+        recordAllowedAccess(request, decision);
         ResponseEntity.BodyBuilder ok = ResponseEntity.ok()
                 .header("Remote-User", decision.getUser())
                 .header("Remote-Email", decision.getEmail())
@@ -88,6 +114,27 @@ public class AuthzRestController {
             ok.header("Remote-Name", displayName);
         }
         return ok.body(null);
+    }
+
+    /**
+     * Note where this allowed access came from, so the map can draw a green dot for the place. Only on an
+     * allow: a refused knock belongs to the threat side of the security view, not to this one.
+     *
+     * <p><b>Nothing in here may reach the response.</b> This endpoint is what authenticates every request
+     * to every gated service, so a geolocation database that has gone missing, a store that cannot be
+     * written, or a bug nobody has found yet must cost a dot on a map and never an operator's access to
+     * their own fleet. The use case promises the same thing on its own side; this guard is the one that
+     * has to hold when that promise is broken, which is why the test for it asserts on the 200.
+     */
+    private void recordAllowedAccess(HttpServletRequest request, AccessDecision decision) {
+        try {
+            CallerIp callerIp = CallerIp.of(request.getRemoteAddr(),
+                request.getHeader("X-Forwarded-For"), trustedProxyCidr);
+            recordAllowedAccessUseCase.recordAllowedAccess(callerIp.value(), decision.getEmail(),
+                Instant.now());
+        } catch (Exception e) {
+            log.debug("Not recording this allowed access: {}", e.getMessage());
+        }
     }
 
     /** The branded "awaiting approval" page, loaded once from the classpath. */

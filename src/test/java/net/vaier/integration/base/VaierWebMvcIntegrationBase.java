@@ -325,6 +325,16 @@ public abstract class VaierWebMvcIntegrationBase {
     @MockBean
     protected UntrustAddressUseCase untrustAddressUseCase;
 
+    // --- Access sources: where allowed accesses came from ---
+    @MockBean
+    protected RecordAllowedAccessUseCase recordAllowedAccessUseCase;
+
+    @MockBean
+    protected GetAccessSourcesUseCase getAccessSourcesUseCase;
+
+    @MockBean
+    protected FlushAccessSourcesUseCase flushAccessSourcesUseCase;
+
     // --- Server location use case ---
     @MockBean
     protected GetServerLocationUseCase getServerLocationUseCase;

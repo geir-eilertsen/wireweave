@@ -1402,6 +1402,16 @@ button.ex-brepo-name:focus-visible { outline: 2px solid var(--accent); outline-o
 @media (prefers-reduced-motion: reduce) {
     .threat-ping::after { animation: none; opacity: .4; transform: scale(1); }
 }
+/* The mirror image of .threat-ping: green where Vaier let someone in, red where CrowdSec turned someone away.
+   It carries none of either existing marker's vocabulary — not the fleet's bordered icon chip, not the threat's
+   pulsing ring — because it is neither a machine nor an ongoing alarm, just a quiet fact about where allowed
+   traffic has come from. A small solid dot says that at a glance; the count lives in its popup rather than in
+   pulsing chrome, so it stays legible next to a threat ping without competing with it for attention. */
+.access-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--green); box-shadow: 0 0 4px rgba(78, 201, 176, .6);
+}
+
 /* Cluster bubbles: markercluster's default light-green is near-invisible on the tiles. Recolour to the shell's
    dark palette with an accent ring so the count reads at a glance. */
 .ex-map .marker-cluster-small,

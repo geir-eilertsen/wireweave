@@ -167,6 +167,9 @@
         threats: [],                     // GET /security/decisions — who CrowdSec is keeping out right now
         threatsRead: false,              // whether that read has landed once (an empty list is an answer, [] is not)
         threatsError: '',                // why that read failed, when it did — never shown as "nothing blocked"
+        accessSources: [],               // GET /security/access-sources — where allowed accesses to a gated
+                                          //   service came from, one element per city plus an unplaceable bucket
+        accessSourcesError: '',          // why that read failed, when it did — never shown as "nobody accessed anything"
         trusted: [],                     // GET /security/trusted-addresses — what the operator trusted by hand, and
                                          //   deliberately only that: the structural networks are never in this list,
                                          //   because this is the list the untrust verb hangs off (#348)
@@ -291,8 +294,8 @@
 
     // --- which machine a published service lives on ----------------------------------------------------
     //
-    // A published service is one thing with three homes: a container on a machine, a Traefik route, and a DNS
-    // record. The tree files it under the machine, and it decides which machine by the rule the Infrastructure page
+    // A published service is one thing with three homes: a container on a machine, a Traefik route, and the
+    // name it answers on. The tree files it under the machine, and it decides which machine by the rule the Infrastructure page
     // already uses — a LAN service by its LAN server (falling back to the relay peer when no registered LAN
     // server matches its address), the hub's own routes on the Vaier server, everything else by its host. A
     // second rule here would put the same service under two different machines in two different pages.
@@ -1264,7 +1267,9 @@
     // from and a firm one where its traffic surfaces (the Vaier server); LAN servers sit at their relay; the
     // Vaier server itself is the big marker in Frankfurt. Leaflet + markercluster load from explorer.html.
     let _map = null;
-    let _threatLayer = null;
+    let _cluster = null;
+    let _threatMarkers = [];
+    let _accessMarkers = [];
     const MAP_STATUS = { OK: 'up', DEGRADED: 'degraded', DOWN: 'down', UNKNOWN: 'unknown' };
     const iconByCategory = (cat) => { const k = cat ? String(cat).toLowerCase() : ''; return ICON[k] ? k : 'generic'; };
 
@@ -1294,15 +1299,21 @@
         return box;
     }
 
-    // Threats are drawn on their own layer, never into the fleet's cluster, and never into `coords` — so
-    // they cannot drag fitBounds. A single scanner in Singapore would otherwise zoom the fleet out to the
-    // whole globe every time the Map is opened, which would cost the operator the view the Map exists for.
-    // They are also refreshed in place (paintThreatLayer) rather than by re-rendering, so a push arriving
-    // while the operator is panning does not yank the map out from under them.
+    // Threat pings and access dots both need "remove exactly the markers this layer added last paint, then
+    // add fresh ones into the fleet's shared cluster" — written once so the two cannot drift apart on it.
+    // Joining the cluster, not a separate layer, is what makes co-located markers fan out on click (Frankfurt
+    // is both the access source AND the Vaier server's own 36px marker; a lone-layer dot hid underneath it).
+    // `coords` — what fitBounds reads for framing — is untouched here, so cluster membership can never drag
+    // the map's zoom toward a single remote scanner or sign-in.
+    function repaintIntoCluster(prevMarkers, items, buildMarker) {
+        if (!_map || !_cluster) return prevMarkers;
+        prevMarkers.forEach((m) => _cluster.removeLayer(m));
+        return items.map((d) => { const m = buildMarker(d); _cluster.addLayer(m); return m; });
+    }
+
+    // Refreshed in place (not re-rendered) so a push mid-pan doesn't yank the map from under the operator.
     function paintThreatLayer() {
-        if (!_map || !_threatLayer) return;
-        _threatLayer.clearLayers();
-        S.threats.filter((d) => d.locatable).forEach((d) => {
+        _threatMarkers = repaintIntoCluster(_threatMarkers, S.threats.filter((d) => d.locatable), (d) => {
             const m = L.marker([d.latitude, d.longitude], {
                 icon: L.divIcon({ html: '<div class="threat-ping"></div>', className: '',
                     iconSize: [22, 22], iconAnchor: [11, 11] }),
@@ -1311,7 +1322,27 @@
             m.bindPopup(mapPopup(d.sourceIp, [{ text: 'blocked at the edge', muted: true },
                 { text: d.scenario }, { text: d.origin },
                 { text: 'expires in ' + d.duration, muted: true }]));
-            _threatLayer.addLayer(m);
+            return m;
+        });
+    }
+
+    // The mirror image of paintThreatLayer: same shared repaint, same reason to join the cluster.
+    function paintAccessLayer() {
+        _accessMarkers = repaintIntoCluster(_accessMarkers, S.accessSources.filter((d) => d.locatable), (d) => {
+            const m = L.marker([d.latitude, d.longitude], {
+                icon: L.divIcon({ html: '<div class="access-dot"></div>', className: '',
+                    iconSize: [12, 12], iconAnchor: [6, 6] }),
+                riseOnHover: true,
+            });
+            const people = d.people || [];
+            const shown = people.slice(0, 5);
+            const rest = people.length - shown.length;
+            m.bindPopup(mapPopup(d.place, [
+                { text: d.count + (d.count === 1 ? ' allowed access' : ' allowed accesses'), muted: true },
+                { text: 'last seen ' + timeAgo(d.lastSeen), muted: true },
+                { text: shown.join(', ') + (rest > 0 ? ', +' + rest + ' more' : '') },
+            ]));
+            return m;
         });
     }
 
@@ -1325,7 +1356,7 @@
         body.appendChild(holder);
         pane.appendChild(body);
         if (typeof L === 'undefined') { body.appendChild(note('The map could not load its library.', true)); return; }
-        if (_map) { try { _map.remove(); } catch (e) { /* gone */ } _map = null; _threatLayer = null; }
+        if (_map) { try { _map.remove(); } catch (e) { /* gone */ } _map = null; _cluster = null; _threatMarkers = []; _accessMarkers = []; }
 
         const map = L.map(holder, { worldCopyJump: true }).setView([20, 0], 1);
         _map = map;
@@ -1333,6 +1364,7 @@
             { maxZoom: 18, attribution: '© OpenStreetMap' }).addTo(map);
         const cluster = L.markerClusterGroup({ showCoverageOnHover: false, spiderfyOnMaxZoom: true, maxClusterRadius: 30 });
         map.addLayer(cluster);
+        _cluster = cluster;
 
         const loc = S.serverLocation;
         const hasLoc = loc && loc.latitude != null && loc.longitude != null;
@@ -1393,13 +1425,28 @@
             add(m, [loc.latitude, loc.longitude]);
         }
 
-        _threatLayer = L.layerGroup().addTo(map);
         paintThreatLayer();
+        paintAccessLayer();
 
         // An unreadable threat list must not look like a quiet one. With no pings and no note, a map drawn
         // during a CrowdSec outage reads as "nobody is probing us" — the same falsely reassuring silence the
         // Security view says out loud, and worse here because the Map never claims a count to contradict.
         if (S.threatsError) body.appendChild(note(S.threatsError, true));
+        if (S.accessSourcesError) body.appendChild(note(S.accessSourcesError, true));
+
+        // Every access with no dot, counted rather than lost: allowed traffic that cannot be drawn is not a
+        // gap in the data and not zero usage. `!locatable` is the right filter precisely because it is the
+        // map's own question — anything the map will not draw belongs in this count, whether that is the
+        // unplaceable bucket, a city the database has no coordinates for, or null island.
+        //
+        // Which is also why the note does not name the VPN and the LAN as the cause: they are the common
+        // one, not an established one, and a lookup that simply failed on a public address lands here too.
+        const unplaceable = S.accessSources.filter((d) => !d.locatable)
+            .reduce((sum, d) => sum + (d.count || 0), 0);
+        if (unplaceable) {
+            body.appendChild(note(unplaceable + (unplaceable === 1 ? ' allowed access came' : ' allowed accesses came')
+                + ' from an address that cannot be placed on a map — your own VPN and LAN among them.', false));
+        }
 
         if (coords.length) map.fitBounds(L.latLngBounds(coords).pad(0.3), { maxZoom: 5 });
         else body.appendChild(note('No machine has a known location yet.', false));
@@ -1441,7 +1488,7 @@
         const isVaierServer = !!m.vaierServer;
         const rows = [];
         if (isVaierServer) {
-            rows.push(['Role', 'The fleet’s hub — WireGuard server, reverse proxy and DNS']);
+            rows.push(['Role', 'The fleet’s hub — WireGuard server and reverse proxy']);
         } else if (isLan) {
             const lan = S.lan.get(m.id);
             rows.push(['Last seen', lan ? agoFromEpochSeconds(lan.lastSeen) : '']);
@@ -3266,7 +3313,7 @@
         pane.appendChild(body);
     }
 
-    // --- services: a route, a machine and a DNS record are one thing ------------------------------------
+    // --- services: a route, a machine and the name it answers on are one thing --------------------------
 
     function renderServices(pane) {
         const machineId = S.path[1];
@@ -3318,7 +3365,7 @@
             }
         }
         // A service that isn't a container Vaier discovered — a LAN app, a device's own web page — is published
-        // by hand: name a port on this machine and Vaier makes the route and the DNS record just the same.
+        // by hand: name a port on this machine and Vaier makes the route just the same.
         body.appendChild(section('Publish a service by hand'));
         const manual = el('div', 'ex-lactions is-static');
         manual.appendChild(selVerb('route', 'Publish a service', 'ex-btn', () => lanPublish(machineId)));
@@ -3346,8 +3393,8 @@
     }
 
     // Publish a container port: the only choices that are the operator's are the subdomain (defaulted from the
-    // container name by the domain) and whether it sits behind login. Everything else — the DNS record, the
-    // Traefik route — Vaier does. So the form is two fields.
+    // container name by the domain) and whether it sits behind login. The Traefik route Vaier does, and the
+    // name already resolves. So the form is two fields.
     function publishCandidate(machineId, c) {
         publishForm(c).then((body) => {
             if (!body) return;
@@ -3416,8 +3463,9 @@
             const dialog = el('div', 'ex-dialog');
             const h = el('div', 'ex-dialog-title'); h.textContent = 'Publish ' + c.containerName;
             const sub = el('div', 'ex-dialog-body');
-            sub.textContent = 'Put ' + c.address + ':' + c.port + ' on the internet. Vaier makes the DNS record '
-                + 'and the route; you choose the name and whether it needs a login.';
+            sub.textContent = 'Put ' + c.address + ':' + c.port + ' on the internet. Vaier makes the route; '
+                + 'the name already resolves under your wildcard record. You choose the name and whether '
+                + 'it needs a login.';
             const form = el('div', 'ex-form');
             const subF = el('div', 'ex-field');
             const subL = el('label'); subL.textContent = 'Subdomain';
@@ -3454,7 +3502,7 @@
 
     // Publish a service by hand — a port on the machine that Vaier did not find as a container. The machine is
     // the context; the operator names the subdomain, the port, whether it speaks http or https, and whether it
-    // needs a login. Vaier makes the DNS record and the route.
+    // needs a login. Vaier makes the route; the name already resolves under the operator's wildcard record.
     function lanPublish(machineId) {
         // The identity goes to the endpoint; the name only into the dialog's title, where a person reads it.
         lanPublishForm(nameOf(machineId)).then((body) => {
@@ -3646,9 +3694,9 @@
 
         const body = el('div', 'ex-pane-body');
 
-        // The coordinates — the read-only truth about the route, its DNS record and its backend.
+        // The coordinates — the read-only truth about the route, the name it answers on and its backend.
         body.appendChild(kv([
-            ['DNS record', s.dnsAddress],
+            ['Address', s.dnsAddress],
             ['Route', s.state],
             ['Backend', (s.hostAddress || '') + (s.hostPort ? ':' + s.hostPort : '')],
             ['Path prefix', s.pathPrefix],
@@ -3710,9 +3758,10 @@
         // The point of the single namespace, said plainly. These three are not three things that happen to
         // share a name — they are one service, and when one of them is wrong the service is down.
         body.appendChild(note('A published service is one thing with three homes: a container on '
-            + machineName + ', a route through Traefik, and a DNS record at ' + (s.dnsAddress || 'its name')
-            + '. Unpublishing removes the route and the DNS record. The container keeps running — the '
-            + 'machine that hosts it does not notice.', false));
+            + machineName + ', a route through Traefik, and the name it answers on — '
+            + (s.dnsAddress || 'its name') + '. Unpublishing removes the route; the name goes on resolving '
+            + 'under your wildcard record, which is yours and Vaier never touches. The container keeps '
+            + 'running — the machine that hosts it does not notice.', false));
 
         // Unpublish sits here, at the foot of the page, directly under the paragraph that says what it does —
         // not in the pane header. A destructive verb parked in the chrome is one mis-tap from the title while
@@ -3884,11 +3933,11 @@
     }
 
     // Unpublish is the one verb slice C ships, because it is the one verb the backend actually has:
-    // DELETE /published-services/{dnsName}. It tears down a Traefik route and a DNS record, so it asks first.
+    // DELETE /published-services/{dnsName}. It tears down a Traefik route, so it asks first.
     async function unpublish(s, machineId) {
         const label = s.dnsAddress || serviceName(s);
-        if (!confirm('Unpublish ' + label + '?\n\nThis removes its Traefik route and its DNS record. '
-            + 'The container on ' + nameOf(machineId) + ' keeps running.')) return;
+        if (!confirm('Unpublish ' + label + '?\n\nThis removes its Traefik route, so the name stops '
+            + 'answering. The container on ' + nameOf(machineId) + ' keeps running.')) return;
 
         const query = s.pathPrefix ? '?pathPrefix=' + encodeURIComponent(s.pathPrefix) : '';
         try {
@@ -5391,15 +5440,29 @@
                 // could not even ask is the one mistake this screen must never make.
                 const err = await res.json().catch(() => ({}));
                 S.threatsError = err.message || 'Vaier could not ask CrowdSec who is blocked.';
-                S.threatsRead = true;
-                return;
+            } else {
+                S.threats = await res.json();
+                S.threatsError = '';
             }
-            S.threats = await res.json();
-            S.threatsError = '';
         } catch (e) {
             S.threatsError = 'Vaier could not ask CrowdSec who is blocked.';
         }
         S.threatsRead = true;
+
+        // Same shape, same reason: a fetch failure here must not read as "nobody accessed anything" — an
+        // empty green Map during an outage is as falsely reassuring as an empty red one.
+        try {
+            const res = await fetch('/security/access-sources', { cache: 'no-store' });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                S.accessSourcesError = err.message || 'Vaier could not read where allowed accesses came from.';
+            } else {
+                S.accessSources = await res.json();
+                S.accessSourcesError = '';
+            }
+        } catch (e) {
+            S.accessSourcesError = 'Vaier could not read where allowed accesses came from.';
+        }
     }
 
     // Read at boot beside the blocked list, so render() stays a pure function of state — a view that fetched
@@ -5428,7 +5491,7 @@
         let opened = false;
         events.onopen = () => {
             if (opened) {
-                loadSecurity().then(repaintThreats);
+                loadSecurity().then(() => { repaintThreats(); repaintAccessSources(); });
                 loadTrusted().then(repaintTrusted);
             }
             opened = true;
@@ -5440,6 +5503,15 @@
                 S.threatsError = '';
             } catch (err) { return; }   // a malformed push is not a reason to blank a good list
             repaintThreats();
+        });
+        // Mirrors block-decisions above: the payload is the same array the GET returns, pushed the moment
+        // a new allowed access lands rather than waited out on a clock.
+        events.addEventListener('access-sources', (e) => {
+            try {
+                S.accessSources = JSON.parse(e.data);
+                S.accessSourcesError = '';
+            } catch (err) { return; }
+            repaintAccessSources();
         });
         // Nothing on a clock ever sends this one: the trusted list changes only when a person changes it,
         // and the server pushes it the moment they do. Same contract as above — a malformed push is ignored
@@ -5462,6 +5534,13 @@
         const kind = kindOf(S.path);
         if (kind === 'security') render();
         else if (kind === 'map') paintThreatLayer();
+    }
+
+    // The Map is the only screen that draws these, so it is the only one to repaint — and in place, for
+    // the reason above: a push must not tear Leaflet down and throw away the operator's pan and zoom
+    // mid-gesture. Re-rendering Security here rebuilt a whole view every minute for data it never shows.
+    function repaintAccessSources() {
+        if (kindOf(S.path) === 'map') paintAccessLayer();
     }
 
     // The Map draws blocked addresses, never trusted ones — a trusted address is not a threat and has no
@@ -8164,7 +8243,7 @@
         loadTransfers();
         // Not awaited, and read at boot rather than on view, because the Map draws threats too — an
         // operator who opens the Map first would otherwise see an honest-looking map with nobody on it.
-        loadSecurity().then(repaintThreats);
+        loadSecurity().then(() => { repaintThreats(); repaintAccessSources(); });
         // The Map has no use for this one, but render() must never fetch, so it is read here too.
         loadTrusted().then(repaintTrusted);
         loadUser();

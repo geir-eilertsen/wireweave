@@ -1,14 +1,19 @@
 package net.vaier.application.service;
 
+import net.vaier.domain.AccessSource;
+import net.vaier.domain.AccessSources;
 import net.vaier.domain.BlockDecision;
 import net.vaier.domain.BlockDecisionsUnreadableException;
+import net.vaier.domain.GeoLocation;
 import net.vaier.domain.MachineType;
 import net.vaier.domain.SourceAddress;
 import net.vaier.domain.TrustedNetworks;
 import net.vaier.domain.port.ForDetectingIntrusions;
+import net.vaier.domain.port.ForGeolocatingIps;
 import net.vaier.domain.port.ForGettingPeerConfigurations;
 import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
 import net.vaier.domain.port.ForLiftingBlocks;
+import net.vaier.domain.port.ForPersistingAccessSources;
 import net.vaier.domain.port.ForPersistingTrustedAddresses;
 import net.vaier.domain.port.ForWritingCrowdSecWhitelist;
 import org.junit.jupiter.api.Test;
@@ -19,12 +24,27 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -37,10 +57,13 @@ class SecurityServiceTest {
     @Mock ForDetectingIntrusions forDetectingIntrusions;
     @Mock ForLiftingBlocks forLiftingBlocks;
     @Mock ForPersistingTrustedAddresses forPersistingTrustedAddresses;
+    @Mock ForPersistingAccessSources forPersistingAccessSources;
+    @Mock ForGeolocatingIps forGeolocatingIps;
 
     private SecurityService service() {
         SecurityService service = new SecurityService(peerConfigProvider, forWritingCrowdSecWhitelist,
-            forDetectingIntrusions, forLiftingBlocks, forPersistingTrustedAddresses);
+            forDetectingIntrusions, forLiftingBlocks, forPersistingTrustedAddresses,
+            forPersistingAccessSources, forGeolocatingIps);
         ReflectionTestUtils.setField(service, "vpnSubnet", "10.13.13.0/24");
         ReflectionTestUtils.setField(service, "dockerBridgeCidr", "172.20.0.0/16");
         return service;
@@ -246,5 +269,269 @@ class SecurityServiceTest {
             .isInstanceOf(IllegalArgumentException.class);
 
         verifyNoInteractions(forPersistingTrustedAddresses);
+    }
+
+    // --- Access sources: where allowed accesses came from ---
+
+    /** Relative, not a literal date: these tests exercise a one-month retention rule. */
+    private static final Instant RECENTLY = Instant.now();
+    private static final GeoLocation OSLO = new GeoLocation(59.91, 10.75, "Oslo", "Norway");
+
+    @Test
+    void recordAllowedAccess_countsTheAccessAgainstThePlaceItCameFrom() {
+        when(forGeolocatingIps.locate("203.0.113.7")).thenReturn(Optional.of(OSLO));
+        SecurityService service = service();
+
+        service.recordAllowedAccess("203.0.113.7", "geir@example.com", RECENTLY);
+        service.recordAllowedAccess("203.0.113.7", "geir@example.com", RECENTLY.plusSeconds(1));
+
+        assertThat(service.getAccessSources()).singleElement().satisfies(source -> {
+            assertThat(source.city()).isEqualTo("Oslo");
+            assertThat(source.count()).isEqualTo(2);
+            assertThat(source.people()).containsExactly("geir@example.com");
+        });
+    }
+
+    /**
+     * This runs inside the forward-auth check for every request to every gated service. Touching the disk
+     * there would put a file write on the critical path of authenticating a page load — the flush is what
+     * the disk is for.
+     */
+    @Test
+    void recordAllowedAccess_neverWritesToDisk() {
+        when(forGeolocatingIps.locate("203.0.113.7")).thenReturn(Optional.of(OSLO));
+
+        service().recordAllowedAccess("203.0.113.7", "geir@example.com", RECENTLY);
+
+        verify(forPersistingAccessSources, never()).save(any());
+    }
+
+    /**
+     * A broken map must never cost anybody access to their own services. The controller guards this call
+     * too; the use case guarantees it as well, because the property is worth being true twice.
+     */
+    @Test
+    void recordAllowedAccess_neverThrowsWhenTheGeolocationLookupBlowsUp() {
+        when(forGeolocatingIps.locate("203.0.113.7")).thenThrow(new IllegalStateException("mmdb closed"));
+        SecurityService service = service();
+
+        service.recordAllowedAccess("203.0.113.7", "geir@example.com", RECENTLY);
+
+        assertThat(service.getAccessSources()).singleElement()
+            .satisfies(source -> assertThat(source.locatable()).isFalse());
+    }
+
+    @Test
+    void getAccessSources_startsFromWhatSurvivedTheLastRestart() {
+        when(forPersistingAccessSources.getAll()).thenReturn(AccessSources.of(List.of(
+            AccessSource.builder().city("Oslo").country("Norway").latitude(59.91).longitude(10.75)
+                .count(412).firstSeen(RECENTLY.minusSeconds(86400)).lastSeen(RECENTLY).people(List.of()).build())));
+        SecurityService service = service();
+        service.onApplicationReady(null);
+
+        assertThat(service.getAccessSources()).singleElement()
+            .satisfies(source -> assertThat(source.count()).isEqualTo(412));
+    }
+
+    /** A store that cannot be read costs the history, never the recording that follows it. */
+    @Test
+    void recordAllowedAccess_stillWorksWhenTheStoreCouldNotBeRead() {
+        when(forPersistingAccessSources.getAll()).thenThrow(new IllegalStateException("unreadable"));
+        when(forGeolocatingIps.locate("203.0.113.7")).thenReturn(Optional.of(OSLO));
+        SecurityService service = service();
+        service.onApplicationReady(null);
+
+        service.recordAllowedAccess("203.0.113.7", "geir@example.com", RECENTLY);
+
+        assertThat(service.getAccessSources()).hasSize(1);
+    }
+
+    @Test
+    void flushAccessSources_savesWhatHasBeenRecordedSinceTheLastFlush() {
+        when(forGeolocatingIps.locate("203.0.113.7")).thenReturn(Optional.of(OSLO));
+        SecurityService service = service();
+        service.recordAllowedAccess("203.0.113.7", "geir@example.com", RECENTLY);
+
+        Optional<List<AccessSource>> flushed = service.flushAccessSources();
+
+        ArgumentCaptor<AccessSources> captor = ArgumentCaptor.forClass(AccessSources.class);
+        verify(forPersistingAccessSources).save(captor.capture());
+        assertThat(captor.getValue().sources()).extracting(AccessSource::city).containsExactly("Oslo");
+        assertThat(flushed).hasValueSatisfying(sources ->
+            assertThat(sources).extracting(AccessSource::city).containsExactly("Oslo"));
+    }
+
+    /**
+     * One month of retention, applied where the file is written, so the store cannot grow forever. Forgetting
+     * a place is a change like any other: the file has to be written even though nobody has been anywhere.
+     */
+    @Test
+    void flushAccessSources_forgetsAPlaceNobodyHasComeFromInAMonth() {
+        when(forPersistingAccessSources.getAll()).thenReturn(AccessSources.of(List.of(
+            AccessSource.builder().city("Oslo").country("Norway").latitude(59.91).longitude(10.75)
+                .count(412)
+                .firstSeen(Instant.now().minus(AccessSource.RETENTION).minusSeconds(172800))
+                .lastSeen(Instant.now().minus(AccessSource.RETENTION).minusSeconds(86400))
+                .people(List.of()).build())));
+        SecurityService service = service();
+        service.onApplicationReady(null);
+
+        assertThat(service.flushAccessSources()).contains(List.of());
+
+        ArgumentCaptor<AccessSources> captor = ArgumentCaptor.forClass(AccessSources.class);
+        verify(forPersistingAccessSources).save(captor.capture());
+        assertThat(captor.getValue().sources()).isEmpty();
+    }
+
+    /**
+     * The flush runs every minute forever. On a fleet nobody is using, an unconditional write is ~1440
+     * identical files a day — and an SSE push behind each one, repainting the map's green dots for nothing.
+     */
+    @Test
+    void flushAccessSources_whenNothingHasChangedSinceTheLastSave_writesNothing() {
+        when(forGeolocatingIps.locate("203.0.113.7")).thenReturn(Optional.of(OSLO));
+        SecurityService service = service();
+        service.recordAllowedAccess("203.0.113.7", "geir@example.com", RECENTLY);
+        service.flushAccessSources();
+
+        service.flushAccessSources();
+
+        verify(forPersistingAccessSources, times(1)).save(any());
+    }
+
+    /**
+     * Not writing is only half of it: the caller pushes what it gets over SSE, so a flush that wrote nothing
+     * has to say so rather than hand back a payload the browser would repaint the map for.
+     */
+    @Test
+    void flushAccessSources_whenNothingHasChangedSinceTheLastSave_hasNothingToHandTheCaller() {
+        when(forGeolocatingIps.locate("203.0.113.7")).thenReturn(Optional.of(OSLO));
+        SecurityService service = service();
+        service.recordAllowedAccess("203.0.113.7", "geir@example.com", RECENTLY);
+        service.flushAccessSources();
+
+        Optional<List<AccessSource>> flushed = service.flushAccessSources();
+
+        assertThat(flushed).isEmpty();
+    }
+
+    /**
+     * A write that blew up left the store holding something older, so the next flush must try again — the
+     * collection counts as clean only once a save has actually succeeded.
+     */
+    @Test
+    void flushAccessSources_whenTheSaveFailed_writesAgainOnTheNextFlush() {
+        when(forGeolocatingIps.locate("203.0.113.7")).thenReturn(Optional.of(OSLO));
+        doThrow(new IllegalStateException("disk full")).doNothing()
+            .when(forPersistingAccessSources).save(any());
+        SecurityService service = service();
+        service.recordAllowedAccess("203.0.113.7", "geir@example.com", RECENTLY);
+        assertThatThrownBy(service::flushAccessSources).isInstanceOf(IllegalStateException.class);
+
+        Optional<List<AccessSource>> flushed = service.flushAccessSources();
+
+        assertThat(flushed).isPresent();
+        verify(forPersistingAccessSources, times(2)).save(any());
+    }
+
+    /**
+     * The flush writes a file; recording an allowed access runs inside the forward-auth check for every
+     * request to every gated service. If the write happened under the same monitor recording needs, then
+     * once a minute every concurrent request across the fleet would queue behind a YAML write.
+     */
+    @Test
+    void flushAccessSources_doesNotHoldUpTheForwardAuthPathWhileTheStoreIsBeingWritten() throws Exception {
+        when(forGeolocatingIps.locate(any())).thenReturn(Optional.of(OSLO));
+        SecurityService service = service();
+        service.recordAllowedAccess("203.0.113.7", "geir@example.com", RECENTLY);
+
+        CountDownLatch saveInFlight = new CountDownLatch(1);
+        CountDownLatch releaseSave = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            saveInFlight.countDown();
+            releaseSave.await(5, TimeUnit.SECONDS);
+            return null;
+        }).when(forPersistingAccessSources).save(any());
+
+        ExecutorService threads = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> flush = threads.submit(service::flushAccessSources);
+            assertThat(saveInFlight.await(5, TimeUnit.SECONDS)).as("the save started").isTrue();
+            Future<?> record = threads.submit(() ->
+                service.recordAllowedAccess("198.51.100.9", "someone@example.com", RECENTLY));
+
+            assertThatCode(() -> record.get(2, TimeUnit.SECONDS))
+                .as("an allowed access is recorded while the store is still being written")
+                .doesNotThrowAnyException();
+
+            releaseSave.countDown();
+            flush.get(5, TimeUnit.SECONDS);
+        } finally {
+            releaseSave.countDown();
+            threads.shutdownNow();
+        }
+    }
+
+    /**
+     * Dropping the monitor across the write buys the forward-auth path its speed, but it left flush racing
+     * flush: {@code fixedDelay} only stops the scheduler overlapping itself, and {@code @PreDestroy}'s
+     * shutdown flush is a second caller. Interleaved, the older snapshot is written last and marked clean —
+     * which during normal running the next minute heals, and at shutdown nothing does, defeating the whole
+     * point of flushing on the way out.
+     */
+    @Test
+    void flushAccessSources_twoAtOnce_neverLeaveTheOlderSnapshotInTheStore() throws Exception {
+        when(forGeolocatingIps.locate(any())).thenReturn(Optional.of(OSLO));
+        SecurityService service = service();
+        service.recordAllowedAccess("203.0.113.7", "geir@example.com", RECENTLY);
+
+        CountDownLatch firstSaveInFlight = new CountDownLatch(1);
+        CountDownLatch releaseFirstSave = new CountDownLatch(1);
+        AtomicBoolean firstSave = new AtomicBoolean(true);
+        List<Long> savedCounts = Collections.synchronizedList(new ArrayList<>());
+        doAnswer(invocation -> {
+            AccessSources saving = invocation.getArgument(0);
+            if (firstSave.compareAndSet(true, false)) {
+                firstSaveInFlight.countDown();
+                releaseFirstSave.await(5, TimeUnit.SECONDS);
+            }
+            savedCounts.add(saving.sources().get(0).count());
+            return null;
+        }).when(forPersistingAccessSources).save(any());
+
+        ExecutorService threads = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> scheduled = threads.submit(service::flushAccessSources);
+            assertThat(firstSaveInFlight.await(5, TimeUnit.SECONDS)).as("the first save started").isTrue();
+
+            service.recordAllowedAccess("198.51.100.9", "kari@example.com", RECENTLY);
+            Future<?> shutdown = threads.submit(service::flushAccessSources);
+            // Bounded, so a regression fails here rather than hanging: every chance to overtake the first
+            // save, and then the assertion that it did not.
+            Thread.sleep(200);
+
+            releaseFirstSave.countDown();
+            scheduled.get(5, TimeUnit.SECONDS);
+            shutdown.get(5, TimeUnit.SECONDS);
+        } finally {
+            releaseFirstSave.countDown();
+            threads.shutdownNow();
+        }
+
+        assertThat(savedCounts).as("the write that landed last is the newer snapshot").last().isEqualTo(2L);
+        assertThat(service.flushAccessSources())
+            .as("and what was marked clean is what the store actually holds").isEmpty();
+    }
+
+    /** Prune once, not twice: the flush must leave behind exactly what it wrote. */
+    @Test
+    void flushAccessSources_leavesTheServiceHoldingWhatItSaved() {
+        when(forGeolocatingIps.locate("203.0.113.7")).thenReturn(Optional.of(OSLO));
+        SecurityService service = service();
+        service.recordAllowedAccess("203.0.113.7", "geir@example.com", RECENTLY);
+
+        service.flushAccessSources();
+
+        assertThat(service.getAccessSources()).extracting(AccessSource::city).containsExactly("Oslo");
     }
 }

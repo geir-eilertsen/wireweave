@@ -6,7 +6,7 @@ import net.vaier.application.GetLaunchpadServicesUseCase;
 import net.vaier.application.GetLaunchpadServicesUseCase.LaunchpadServiceUco;
 import net.vaier.application.ResolveViewerUseCase;
 import net.vaier.domain.AccessEntry;
-import net.vaier.domain.Cidr;
+import net.vaier.domain.CallerIp;
 import net.vaier.domain.port.ForSubscribingToEvents;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
@@ -27,7 +27,8 @@ public class LaunchpadRestController {
     private final ResolveViewerUseCase resolveViewerUseCase;
     private final ForSubscribingToEvents forSubscribingToEvents;
 
-    @Value("${launchpad.trusted-proxy-cidr:172.20.0.0/16}")
+    /** One boundary for both surfaces — see {@code AuthzRestController} for why the key is neutral. */
+    @Value("${vaier.trusted-proxy-cidr:${launchpad.trusted-proxy-cidr:172.20.0.0/16}}")
     private String trustedProxyCidr;
 
     /**
@@ -67,15 +68,13 @@ public class LaunchpadRestController {
         return getLaunchpadServicesUseCase.getLaunchpadServices(resolveCallerIp(request), viewer);
     }
 
+    /**
+     * Which hop to believe is {@link CallerIp}'s decision, not this controller's — the forward-auth check
+     * asks the same question when it records where an allowed access came from, and a second copy of the
+     * rule here is exactly the copy that would drift.
+     */
     String resolveCallerIp(HttpServletRequest request) {
-        String remote = request.getRemoteAddr();
-        if (Cidr.parse(trustedProxyCidr).contains(remote)) {
-            String xff = request.getHeader("X-Forwarded-For");
-            if (xff != null && !xff.isBlank()) {
-                int comma = xff.indexOf(',');
-                return (comma < 0 ? xff : xff.substring(0, comma)).trim();
-            }
-        }
-        return remote;
+        return CallerIp.of(request.getRemoteAddr(), request.getHeader("X-Forwarded-For"), trustedProxyCidr)
+            .value();
     }
 }

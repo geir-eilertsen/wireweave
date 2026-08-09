@@ -622,7 +622,7 @@ class ExplorerShellTest {
         assertThat(js).contains("'/transfers'");
         assertThat(js).contains("/files?path=");   // DELETE a file or folder (slice 5)
 
-        // and it asks before it does it — unpublishing tears down a route and a DNS record
+        // and it asks before it does it — unpublishing tears down a route, and the name stops answering
         int from = js.indexOf("async function unpublish(");
         assertThat(from).isPositive();
         assertThat(js.substring(from, js.indexOf("\n    }", from))).contains("confirm(");
@@ -655,15 +655,31 @@ class ExplorerShellTest {
     @Test
     void theInspectorForAService_saysWhereItsThreeHomesAre() throws IOException {
         // The single namespace exists precisely to hold this relationship together: the route, the machine
-        // it is backed by, and the DNS record are three faces of one service. The Inspector names all three.
+        // it is backed by, and the name it answers on are three faces of one service. The Inspector names all
+        // three.
         String js = read("explorer-shell.js");
         int from = js.indexOf("function renderService(");
         assertThat(from).isPositive();
         String body = js.substring(from, js.indexOf("\n    function", from));
 
-        assertThat(body).contains("dnsAddress");       // the DNS record
+        assertThat(body).contains("dnsAddress");       // the name it answers on
         assertThat(body).contains("hostAddress");      // the backend it routes to
         assertThat(body).contains("image");            // the container behind it
+    }
+
+    @Test
+    void theShell_neverTellsTheOperatorThatVaierWritesDns_becauseTheWildcardRecordIsTheirs() throws IOException {
+        // #331 took Vaier out of DNS: publishing writes a Traefik route and nothing else, and unpublishing
+        // leaves the name resolving under the operator's own wildcard record. Copy that still promises a
+        // record is a promise the backend stopped keeping — and it is read at the exact moment the operator
+        // is deciding whether to press the button.
+        String js = read("explorer-shell.js");
+
+        assertThat(js).as("the publish dialogs").doesNotContain("makes the DNS record");
+        assertThat(js).as("the inspector's coordinates").doesNotContain("'DNS record'");
+        assertThat(js).as("the three-homes note").doesNotContain("a DNS record at");
+        assertThat(js).as("the unpublish confirm").doesNotContain("its DNS record");
+        assertThat(js).as("the Vaier server's role").doesNotContain("reverse proxy and DNS");
     }
 
     @Test
@@ -2058,17 +2074,33 @@ class ExplorerShellTest {
     }
 
     @Test
-    void threatsNeverDragTheMapsFraming() throws IOException {
-        // The fleet's markers push their coordinates into `coords`, which fitBounds frames. A threat must
-        // not: one scanner in Singapore would zoom a European fleet out to the whole globe on every open,
-        // costing the operator the view the Map exists for. Threats live on their own layer instead.
+    void threatsFanOutWithTheFleetsMarkersInsteadOfHidingUnderThem() throws IOException {
+        // A blocked scanner can share a city with one of the operator's own machines, so a threat ping
+        // joins the fleet's own cluster — same reasoning, and the same shared repaintIntoCluster, as the
+        // access dots. Framing stays safe: the fleet's markers push their coordinates into `coords`, which
+        // fitBounds reads, and a threat ping still never joins it — a scanner in Singapore must not zoom a
+        // European fleet out to the whole globe on every open just because it now shares a layer.
         String js = read("explorer-shell.js");
         int from = js.indexOf("function paintThreatLayer(");
         assertThat(from).isPositive();
         String body = js.substring(from, js.indexOf("\n    }", from));
         assertThat(body).as("a threat marker is never added to the framing coordinates")
             .doesNotContain("coords");
-        assertThat(body).contains("_threatLayer.addLayer(m)");
+        assertThat(body).contains("repaintIntoCluster(_threatMarkers");
+    }
+
+    @Test
+    void theSharedClusterRepaintNeverTouchesFramingAndAlwaysUsesTheFleetsCluster() throws IOException {
+        // Threat pings and access dots both need "remove exactly the markers I added last time, then add
+        // fresh ones into the shared cluster" — written once here so the two cannot drift apart on it, and
+        // proven once here that the dance never reaches into `coords`.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function repaintIntoCluster(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).as("the shared repaint never touches the framing coordinates").doesNotContain("coords");
+        assertThat(body).contains("_cluster.addLayer(m)");
+        assertThat(body).contains("_cluster.removeLayer(m)");
     }
 
     @Test
@@ -2107,6 +2139,153 @@ class ExplorerShellTest {
         assertThat(css.substring(css.indexOf("@keyframes ex-threat-ping")))
             .as("the ping's animation is disabled under prefers-reduced-motion")
             .contains("prefers-reduced-motion");
+    }
+
+    // --- allowed accesses on the Map, the mirror image of the threat pings -----------------------------
+
+    @Test
+    void theMapNeverReDerivesWhetherAnAccessCanBeDrawn() throws IOException {
+        // The domain decides `locatable`, exactly as it does for a blocked address (BlockDecision.locatable()
+        // guards the equator/prime-meridian 0/0 sentinel trap) — the shell consumes the verdict, it never
+        // re-takes it with a JS truthiness check that would silently drop a real place at latitude or
+        // longitude zero.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function paintAccessLayer(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).contains("S.accessSources.filter((d) => d.locatable)");
+        assertThat(body).doesNotContain("d.latitude && d.longitude");
+        assertThat(body).doesNotContain("d.latitude != null && d.longitude != null");
+    }
+
+    @Test
+    void accessSourcesJoinTheFleetsClusterSoCoLocatedMarkersFanOut() throws IOException {
+        // Unlike a threat, an access dot can land exactly on a machine marker — the Vaier server's own
+        // exit IP is itself a real access source, so a dot in Frankfurt sits under the 36px server marker.
+        // A separate layer could never fix that; only the fleet's own markerClusterGroup can, since its
+        // spiderfyOnMaxZoom is what pulls co-located markers apart on click. This is still safe for framing:
+        // fitBounds reads `coords`, not cluster membership, and an access marker still never joins `coords`
+        // (below) — so joining the cluster cannot drag the map's zoom out to a single remote sign-in.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function paintAccessLayer(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).as("an access marker is never added to the framing coordinates").doesNotContain("coords");
+        assertThat(body).contains("repaintIntoCluster(_accessMarkers");
+    }
+
+    @Test
+    void anAccessPushRepaintsOnlyTheMap_andOnlyInPlace() throws IOException {
+        // Two ways to get this wrong, and it had both. Re-rendering the Map would tear Leaflet down and
+        // throw away the operator's pan and zoom, possibly mid-drag — hence the in-place layer repaint.
+        // And the Security view, which displays no access sources at all, was being torn down and rebuilt
+        // every minute the counts changed, for data it never shows.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function repaintAccessSources(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).contains("paintAccessLayer()");
+        assertThat(body).as("no view is re-rendered for a push it does not display")
+            .doesNotContain("render()");
+        assertThat(body).as("the Security view has no access-sources surface to repaint")
+            .doesNotContain("'security'");
+    }
+
+    @Test
+    void noStateIsKeptForAnAccessSourcesReadNothingEverAsksAbout() throws IOException {
+        // accessSourcesRead was written in two places and read in none. threatsRead earns its keep — the
+        // Security view distinguishes "nothing blocked" from "not asked yet" with it — but nothing draws
+        // these, so the flag was only ever a promise of a surface that is not in this change.
+        assertThat(read("explorer-shell.js")).doesNotContain("accessSourcesRead");
+    }
+
+    @Test
+    void theAccessSourcesArePushedOnTheExistingSecurityStream_neverPolled() throws IOException {
+        // Same stream as block-decisions and trusted-addresses — a new event name, not a new connection —
+        // and the same rule the rest of the shell lives by: the backend sweeps and publishes, the browser
+        // only listens.
+        String js = read("explorer-shell.js");
+        assertThat(js).contains("new EventSource('/security/events')");
+        assertThat(js).contains("events.addEventListener('access-sources'");
+        assertThat(js).doesNotContain("setInterval");
+        // And the very first read happens once, at boot — never re-fetched on a timer or on view.
+        int from = js.indexOf("function loadSecurity(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).contains("fetch('/security/access-sources'");
+    }
+
+    @Test
+    void thePopupNamesThePlaceTheDomainNamed() throws IOException {
+        // AccessSource.place() decides how a city and a country read together. A join here would be a
+        // second answer free to drift from it — and it already had: the domain joins one way, this joined
+        // another. The shell renders the name it was given.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function paintAccessLayer(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).contains("mapPopup(d.place");
+        assertThat(body).as("the shell never re-derives a place name the domain already sent")
+            .doesNotContain("d.city");
+    }
+
+    @Test
+    void theUnplaceableBucketIsNeverPaintedAsADot() throws IOException {
+        // Accesses over the VPN or the LAN arrive with locatable: false and no coordinates — Vaier's
+        // domain says so, not a JS guess — so the same `d.locatable` filter that protects paintThreatLayer
+        // must keep it out of the layer. Its count is a note near the map instead, never a pin nobody can
+        // place.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function paintAccessLayer(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).contains("S.accessSources.filter((d) => d.locatable)");
+        int mapFrom = js.indexOf("function renderMap(");
+        assertThat(mapFrom).isPositive();
+        String mapBody = js.substring(mapFrom, js.indexOf("\n    }", mapFrom));
+        assertThat(mapBody).as("the unplaceable count is summed from the non-locatable rows, near the map")
+            .contains("S.accessSources.filter((d) => !d.locatable)")
+            .contains("cannot be placed on a map");
+    }
+
+    @Test
+    void theUndrawnCountNeverClaimsACauseVaierDidNotEstablish() throws IOException {
+        // The note counts every row with no dot, which is the right count — its whole job is that the map's
+        // totals add up, and a named city the database has no coordinates for is just as undrawn as a LAN
+        // address. But `locatable: false` is not proof of a private address: that same named city lands
+        // here, and so does a lookup that simply failed on a public one. Naming the VPN and the LAN as the
+        // cause is the same confidently wrong caption as calling a drawable place "Not placeable".
+        String js = read("explorer-shell.js");
+        int mapFrom = js.indexOf("function renderMap(");
+        assertThat(mapFrom).isPositive();
+        String mapBody = js.substring(mapFrom, js.indexOf("\n    }", mapFrom));
+        assertThat(mapBody).contains("cannot be placed on a map");
+        assertThat(mapBody).as("the VPN and the LAN are an example, not an established cause")
+            .doesNotContain("in over the VPN or the LAN, whose private addresses");
+    }
+
+    @Test
+    void aFailedAccessSourcesReadIsVisibleRatherThanReadingAsQuiet() throws IOException {
+        // The threatsError precedent: an outage must not be indistinguishable from "nobody accessed
+        // anything". A failed fetch sets an error the Map surfaces as a note, never a silently empty list.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function loadSecurity(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).contains("S.accessSourcesError");
+        assertThat(js).contains("if (S.accessSourcesError) body.appendChild(note(S.accessSourcesError, true));");
+    }
+
+    @Test
+    void theAccessDotIsDistinctFromBothExistingMapVocabularies() throws IOException {
+        // A green dot on this map already means something (.map-marker.up is a machine that is up), and red
+        // already means something else close by (.threat-ping). The new mark must not borrow either class —
+        // it needs its own, restrained rule so a glance never reads an allowed access as a machine or as an
+        // ongoing alarm.
+        String js = read("explorer-shell.js");
+        assertThat(js).contains("class=\"access-dot\"");
+        String css = read("explorer-shell.css");
+        assertThat(css).contains(".access-dot {");
     }
 
     // --- the trusted addresses, and undoing one (#348) -------------------------------------------------

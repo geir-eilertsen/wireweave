@@ -3,11 +3,13 @@ package net.vaier.rest;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.vaier.application.GetAccessSourcesUseCase;
 import net.vaier.application.GetBlockDecisionsUseCase;
 import net.vaier.application.GetTrustedAddressesUseCase;
 import net.vaier.application.LiftBlockUseCase;
 import net.vaier.application.TrustAddressUseCase;
 import net.vaier.application.UntrustAddressUseCase;
+import net.vaier.domain.AccessSource;
 import net.vaier.domain.BlockDecision;
 import net.vaier.domain.SourceAddress;
 import net.vaier.domain.port.ForPublishingEvents;
@@ -59,6 +61,7 @@ public class SecurityRestController {
     private final TrustAddressUseCase trustAddressUseCase;
     private final GetTrustedAddressesUseCase getTrustedAddressesUseCase;
     private final UntrustAddressUseCase untrustAddressUseCase;
+    private final GetAccessSourcesUseCase getAccessSourcesUseCase;
     private final ForPublishingEvents forPublishingEvents;
     private final ForSubscribingToEvents forSubscribingToEvents;
     private final ObjectMapper objectMapper;
@@ -134,6 +137,20 @@ public class SecurityRestController {
     }
 
     /**
+     * Where the people Vaier lets in come from — one entry per place, for the map's green dots. The other
+     * half of what this controller serves: the threat reads above say who was kept out, this one says who
+     * got in. Served from here rather than a controller of its own because it is the same domain and the
+     * same SSE topic, even though the surface that draws it is the Map.
+     *
+     * <p>Authenticated like everything else here, and deliberately: the list names the places and the
+     * people who reach this fleet, which is not something to hand to an anonymous caller.
+     */
+    @GetMapping("/access-sources")
+    public List<AccessSourceResponse> accessSources() {
+        return accessSourceResponses(getAccessSourcesUseCase.getAccessSources());
+    }
+
+    /**
      * Push the decisions as they stand now, so the view updates the moment something changed instead of
      * waiting for the next five-minute sweep — the {@code PublishedServiceRestController} pattern: act,
      * then publish. Called only after the action succeeded; a failed action publishes nothing, since a
@@ -176,6 +193,10 @@ public class SecurityRestController {
         return addresses.stream().map(a -> new TrustedAddressResponse(a.value())).toList();
     }
 
+    static List<AccessSourceResponse> accessSourceResponses(List<AccessSource> sources) {
+        return sources.stream().map(AccessSourceResponse::from).toList();
+    }
+
     /** Which address to trust. */
     record TrustAddressRequest(String sourceIp) {}
 
@@ -206,6 +227,37 @@ public class SecurityRestController {
                 decision.type(), decision.duration(), decision.country(), decision.asnOrg(),
                 decision.latitude(), decision.longitude(),
                 decision.enriched(), decision.locatable(), decision.origin(), decision.label());
+        }
+    }
+
+    /**
+     * One place allowed accesses came from, as the browser sees it — the same shape the REST read returns
+     * and the {@code access-sources} SSE event carries, built in one place so the two cannot drift.
+     *
+     * <p>{@code locatable} is carried as the domain decided it, for the reason spelled out on
+     * {@link BlockDecisionResponse}: {@code 0} is falsy in JavaScript, and a browser-side
+     * {@code if (latitude)} would quietly delete the equator. The unplaceable bucket arrives as one element
+     * with null city, country and coordinates and {@code locatable: false} — the map has no dot to draw for
+     * it and shows its count as a note beside itself, rather than pretending those accesses never happened.
+     *
+     * <p>{@code place} rides along for the same reason {@code BlockDecisionResponse} carries
+     * {@code origin}: how a place reads to a person — which halves are known, what separates them, what
+     * the unplaceable bucket is called — is one decision, and a frontend that joined {@code city} and
+     * {@code country} itself would have taken a copy of it. The raw halves are still here for anything
+     * that needs to sort or group by them.
+     *
+     * <p>The timestamps are rendered as ISO-8601 strings here rather than left to Jackson, so the wire
+     * format is a property of this record and not of whatever the {@code ObjectMapper} is configured with.
+     */
+    record AccessSourceResponse(String city, String country, String place,
+                                Double latitude, Double longitude,
+                                boolean locatable, long count, String firstSeen, String lastSeen,
+                                List<String> people) {
+
+        static AccessSourceResponse from(AccessSource source) {
+            return new AccessSourceResponse(source.city(), source.country(), source.place(),
+                source.latitude(), source.longitude(), source.locatable(), source.count(),
+                source.firstSeen().toString(), source.lastSeen().toString(), source.people());
         }
     }
 }

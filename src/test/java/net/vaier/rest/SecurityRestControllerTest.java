@@ -1,12 +1,14 @@
 package net.vaier.rest;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import net.vaier.application.GetAccessSourcesUseCase;
 import net.vaier.application.GetBlockDecisionsUseCase;
 import net.vaier.application.GetTrustedAddressesUseCase;
 import net.vaier.application.GetTrustedNetworksUseCase;
 import net.vaier.application.LiftBlockUseCase;
 import net.vaier.application.TrustAddressUseCase;
 import net.vaier.application.UntrustAddressUseCase;
+import net.vaier.domain.AccessSource;
 import net.vaier.domain.BlockDecision;
 import net.vaier.domain.BlockDecisionsUnreadableException;
 import net.vaier.domain.BlockNotLiftedException;
@@ -18,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
+import java.time.Instant;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -55,6 +58,7 @@ class SecurityRestControllerTest {
     UntrustAddressUseCase untrustAddress = mock(UntrustAddressUseCase.class);
     ForPublishingEvents forPublishingEvents = mock(ForPublishingEvents.class);
     ForSubscribingToEvents forSubscribingToEvents = mock(ForSubscribingToEvents.class);
+    GetAccessSourcesUseCase getAccessSources = mock(GetAccessSourcesUseCase.class);
 
     SecurityRestController controller;
     MockMvc mvc;
@@ -62,8 +66,8 @@ class SecurityRestControllerTest {
     @BeforeEach
     void setUp() {
         controller = new SecurityRestController(getBlockDecisions, liftBlock, trustAddress,
-            getTrustedAddresses, untrustAddress, forPublishingEvents, forSubscribingToEvents,
-            new ObjectMapper());
+            getTrustedAddresses, untrustAddress, getAccessSources, forPublishingEvents,
+            forSubscribingToEvents, new ObjectMapper());
         mvc = MockMvcBuilders.standaloneSetup(controller)
             .setControllerAdvice(new GlobalExceptionHandler())
             .build();
@@ -312,5 +316,89 @@ class SecurityRestControllerTest {
             .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
 
         verifyNoInteractions(forPublishingEvents);
+    }
+
+    // --- GET /security/access-sources ---
+
+    private static final Instant FIRST = Instant.parse("2026-07-10T08:00:00Z");
+    private static final Instant LAST = Instant.parse("2026-08-09T12:31:00Z");
+
+    private static final AccessSource OSLO = AccessSource.builder()
+        .city("Oslo").country("Norway").latitude(59.91).longitude(10.75)
+        .count(412).firstSeen(FIRST).lastSeen(LAST)
+        .people(List.of("geir.eilertsen@gmail.com")).build();
+
+    @Test
+    void getAccessSources_returnsThePlacesAllowedAccessesCameFrom() throws Exception {
+        when(getAccessSources.getAccessSources()).thenReturn(List.of(OSLO));
+
+        mvc.perform(get("/security/access-sources"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].city").value("Oslo"))
+            .andExpect(jsonPath("$[0].country").value("Norway"))
+            .andExpect(jsonPath("$[0].latitude").value(59.91))
+            .andExpect(jsonPath("$[0].longitude").value(10.75))
+            .andExpect(jsonPath("$[0].count").value(412))
+            .andExpect(jsonPath("$[0].firstSeen").value("2026-07-10T08:00:00Z"))
+            .andExpect(jsonPath("$[0].lastSeen").value("2026-08-09T12:31:00Z"))
+            .andExpect(jsonPath("$[0].people[0]").value("geir.eilertsen@gmail.com"));
+    }
+
+    /**
+     * The place name is the domain's too, and shipped for the same reason a block decision's origin is: a
+     * browser that joins city and country itself has taken a copy of the rule, and the copy is what drifts
+     * — a different separator on the map from the one in a mail, and nobody notices for a year.
+     */
+    @Test
+    void getAccessSources_namesThePlaceAsTheDomainNamesIt() throws Exception {
+        when(getAccessSources.getAccessSources()).thenReturn(List.of(OSLO,
+            AccessSource.firstAccessFrom(null, "geir.eilertsen@gmail.com", LAST)));
+
+        mvc.perform(get("/security/access-sources"))
+            .andExpect(jsonPath("$[0].place").value("Oslo, Norway"))
+            .andExpect(jsonPath("$[1].place").value("Not placeable"));
+    }
+
+    /**
+     * Shipped pre-decided, exactly like a block decision's. {@code 0} is falsy in JavaScript, so a browser
+     * that re-derived this from the coordinates with {@code if (lat)} would silently delete the equator.
+     */
+    @Test
+    void getAccessSources_shipsTheLocatableDecisionAlreadyMade() throws Exception {
+        AccessSource onTheEquator = AccessSource.builder()
+            .city("Quito").country("Ecuador").latitude(0.0).longitude(-78.5)
+            .count(3).firstSeen(FIRST).lastSeen(LAST).people(List.of()).build();
+        when(getAccessSources.getAccessSources()).thenReturn(List.of(OSLO, onTheEquator));
+
+        mvc.perform(get("/security/access-sources"))
+            .andExpect(jsonPath("$[0].locatable").value(true))
+            .andExpect(jsonPath("$[1].locatable").value(true))
+            .andExpect(jsonPath("$[1].latitude").value(0.0));
+    }
+
+    /** The accesses Vaier could not place are one element with nothing in it but a count. */
+    @Test
+    void getAccessSources_carriesTheUnplaceableBucketAsOneNullElement() throws Exception {
+        when(getAccessSources.getAccessSources()).thenReturn(List.of(
+            AccessSource.firstAccessFrom(null, "geir.eilertsen@gmail.com", LAST)));
+
+        mvc.perform(get("/security/access-sources"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].locatable").value(false))
+            .andExpect(jsonPath("$[0].city").doesNotExist())
+            .andExpect(jsonPath("$[0].country").doesNotExist())
+            .andExpect(jsonPath("$[0].latitude").doesNotExist())
+            .andExpect(jsonPath("$[0].longitude").doesNotExist())
+            .andExpect(jsonPath("$[0].count").value(1));
+    }
+
+    @Test
+    void getAccessSources_withNobodyLetInYet_isAnEmptyArray() throws Exception {
+        when(getAccessSources.getAccessSources()).thenReturn(List.of());
+
+        mvc.perform(get("/security/access-sources"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$").isArray())
+            .andExpect(jsonPath("$").isEmpty());
     }
 }
