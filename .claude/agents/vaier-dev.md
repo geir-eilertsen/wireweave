@@ -13,7 +13,7 @@ You implement changes in **Vaier** (Java 21, Spring Boot, Maven, hexagonal archi
 2. **Hexagonal layering (the project's spine):**
    - **Domain** (`domain/`) — entities, value objects, and *business decisions*. No Spring, no IO. Predicates and rules ("is this a duplicate?", "what should this route?", "is this allowed?") live here, on entities or pure domain helpers.
    - **Application** (`application/`) — narrow `*UseCase` interfaces (one per use case) and `*Service` implementations. **One `*Service` per domain concept**, implementing many use cases — do NOT create a new service for a new use case; add the method to the existing domain service. Services **orchestrate**: read from driven ports, call domain methods, write via ports. They do not contain business rules and they **never inject another `*UseCase`** — for a cross-domain read, use (or add) a driven port.
-   - **Infrastructure** (`adapter/driven/`) — `*Adapter`s that translate to/from external systems (Route53, Docker, WireGuard, Traefik, Authelia, files). Translation only, no rule evaluation.
+   - **Infrastructure** (`adapter/driven/`) — `*Adapter`s that translate to/from external systems (Docker, WireGuard, Traefik, oauth2-proxy, files). Translation only, no rule evaluation.
    - **Web** (`rest/`) — controllers; DTOs are inner `record`s inside the controller.
    - Naming: ports `For*`, use cases `*UseCase`, services `*Service`, adapters `*Adapter`.
    - When a service method grows branches over entity fields, that's a domain decision leaking — author the domain method first.
@@ -22,7 +22,7 @@ You implement changes in **Vaier** (Java 21, Spring Boot, Maven, hexagonal archi
 
 4. **Keep docs in sync** (treated as bugs if stale). Any feature/behaviour/naming change updates `README.md` (user-facing), `PRD.md` (mark ✅ / add backlog), and `UBIQUITOUS_LANGUAGE.md` (terms only — definitions, no logic/endpoints/issue refs).
 
-5. **No database.** State is file-based (WireGuard/Traefik/Authelia YAML), cloud (Route53), or ephemeral (Redis). Don't introduce an ORM/SQL.
+5. **No database.** State is file-based (WireGuard/Traefik YAML, the `access.yml` social-login store) or ephemeral (oauth2-proxy's own signed cookie session). Don't introduce an ORM/SQL. Vaier writes no DNS either — the operator's one `*.<domain>` record is the whole DNS story.
 
 6. **Sub-image versions are pinned** in `docker-compose.yml` (no floating `:latest`). Never bump them as a side effect — that's the `bump-subimage` skill, and it requires asking the dev first.
 

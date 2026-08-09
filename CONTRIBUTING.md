@@ -20,7 +20,7 @@ Vaier uses **hexagonal architecture** (ports & adapters), strictly enforced by p
 ```
 domain/          Business logic, entities, port interfaces. No Spring, no I/O.
 application/     Use case interfaces (*UseCase) + service implementations (*Service).
-adapter/driven/  Infrastructure adapters (*Adapter): WireGuard, Traefik, Route53, Docker, Authelia.
+adapter/driven/  Infrastructure adapters (*Adapter): WireGuard, Traefik, Docker, oauth2-proxy, files.
 rest/            REST controllers. DTOs are inner Java record classes — no separate DTO files.
 ```
 
@@ -30,8 +30,8 @@ rest/            REST controllers. DTOs are inner Java record classes — no sep
 |---------|---------|---------|
 | Port interface | `For*` | `ForGettingVpnClients` |
 | Use case interface | `*UseCase` | `PublishServiceUseCase` |
-| Service (use case impl) | `*Service` | `PublishServiceService` |
-| Adapter | `*Adapter` | `Route53DnsAdapter` |
+| Service (use case impl) | `*Service` | `PublishingService` |
+| Adapter | `*Adapter` | `TraefikReverseProxyAdapter` |
 
 ### Layer isolation rule
 

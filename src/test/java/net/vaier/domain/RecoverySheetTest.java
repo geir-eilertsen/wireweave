@@ -77,7 +77,7 @@ class RecoverySheetTest {
     @Test
     void itCarriesTheConfigKeyToo_becauseARestoredVaierCannotReadItsOwnSecretsWithoutIt() {
         // The archives open with the passphrases alone. But restoring Vaier itself from one of them yields a
-        // config store whose credentials, AWS secret and passphrases are all ciphertext — this is the key.
+        // config store whose credentials and passphrases are all ciphertext — this is the key.
         String sheet = RecoverySheet.render(server(), List.of(repo("r", "p")), List.of(), names(), "AAAAkey==");
 
         assertThat(sheet).contains("AAAAkey==");

@@ -271,15 +271,14 @@ services:
           cidr=$$(grep -oE '"lanCidr":"[^"]+"' "$$f" 2>/dev/null | head -1 | sed -E 's/.*"lanCidr":"([^"]+)".*/\1/')
           [ -n "$$cidr" ] && ip route replace "$$cidr" via "$$WG_IP" 2>/dev/null || true
         done
-        # Fresh-install ACME race guard. In auto-DNS mode Vaier creates the vaier/oauth2/dex Route53
-        # records at boot, but this container starts alongside it — and if we launch traefik now, its first
-        # Let's Encrypt request beats the records into existence, LE returns NXDOMAIN, and the retry burst
-        # trips LE's "5 failed authorizations per host per hour" limit (an hour on the self-signed default
-        # cert). So hold here until all three infra names resolve on a PUBLIC resolver (what LE queries —
-        # not this container's split-horizon/VPC resolver) BEFORE any ACME. `vaier` depends_on
-        # `traefik: service_started`, which already fired when this container started, so Vaier is free to
-        # create the records WHILE we wait — no deadlock. Fail-open after ~5 min so a genuinely broken DNS
-        # never leaves the box without a reverse proxy forever; traefik's own ACME retry then takes over.
+        # Fresh-install ACME race guard. Vaier writes no DNS (#331) — the operator's one `*.<domain>` A
+        # record answers for all three infra names — but on a fresh install that record may have been made
+        # minutes ago, or not at all. If we launch traefik before it answers, the first Let's Encrypt
+        # request gets NXDOMAIN and the retry burst trips LE's "5 failed authorizations per host per hour"
+        # limit (an hour on the self-signed default cert). So hold here until all three names resolve on a
+        # PUBLIC resolver (what LE queries — not this container's split-horizon/VPC resolver) BEFORE any
+        # ACME. Fail-open after ~5 min so a genuinely broken wildcard never leaves the box without a
+        # reverse proxy forever; traefik's own ACME retry then takes over.
         if [ -n "$$VAIER_DOMAIN" ]; then
           deadline=$$(( $$(date +%s) + 300 ))
           for h in vaier oauth2 dex; do
@@ -357,10 +356,10 @@ services:
     networks:
       vaier-network:
         # Inside the stack, the infra hostnames must resolve to Traefik itself — not out to the public IP.
-        # A fresh install creates the vaier/oauth2/dex Route53 records only after Vaier boots, so a container
-        # that looks one up too early gets NXDOMAIN and poisons its resolver's NEGATIVE cache (Route53's SOA
-        # negative TTL is ~15 min). That is what stranded oauth2-proxy's OIDC discovery against dex.<domain>
-        # in a crash loop long after the record existed. These aliases make Docker's embedded DNS answer
+        # A container that looks one of these up before the operator's wildcard answers gets NXDOMAIN and
+        # poisons its resolver's NEGATIVE cache (a zone's SOA negative TTL is commonly ~15 min). That is what
+        # stranded oauth2-proxy's OIDC discovery against dex.<domain> in a crash loop long after the record
+        # existed. These aliases make Docker's embedded DNS answer
         # vaier/oauth2/dex.<domain> from its own registry (straight to Traefik over the bridge) before it ever
         # forwards externally — no public DNS, no negative cache — and Traefik then terminates TLS with the
         # real cert and routes on to the backend. The internal-resolution complement to the entrypoint's

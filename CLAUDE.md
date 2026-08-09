@@ -27,7 +27,7 @@ I am basically tired of maintaining a VPN server with reverse proxy pointing to 
 
 | Pattern | Example |
 |---------|---------|
-| Port interfaces | `For*` (e.g., `ForGettingVpnClients`, `ForPersistingDnsRecords`) |
+| Port interfaces | `For*` (e.g., `ForGettingVpnClients`, `ForPersistingReverseProxyRoutes`) |
 | Use case interfaces | `*UseCase` — one per use case, narrow (e.g., `CreatePeerUseCase`, `DeletePeerUseCase`) |
 | Service implementations | `*Service` — **one per domain concept**, implements many `*UseCase` interfaces (e.g., `VpnService`, `UserService`, `PublishingService`) |
 | Adapters | `*Adapter` (e.g., `TraefikReverseProxyAdapter`, `WireGuardVpnAdapter`) |
@@ -40,7 +40,7 @@ Do **not** justify the rule by "narrow interfaces keep controller tests small." 
 
 Be honest about the price: **117 of 131 `*UseCase` interfaces carry a single method, and 87 have exactly one consumer** (85 of those a controller or scheduler). That is the rule working as designed, not drift — none of them are dead. But it means every new operation costs a file, so the discipline that actually matters is upstream: **do not reach for new machinery a feature has not earned.** Before adding a use case, a port, an adapter, or a cache, check whether the information already flows through a path that exists. Growth here comes from features each recruiting a little more architecture than they need, not from the rules themselves.
 
-Group **implementations** by domain concept: `VpnService`, `UserService`, `DnsService`, `ReverseProxyService`, `ContainerService`, `SettingsService`, `PublishingService`. One `@Service` class implements every use case in its domain.
+Group **implementations** by domain concept: `VpnService`, `UserService`, `ReverseProxyService`, `ContainerService`, `SettingsService`, `PublishingService`. One `@Service` class implements every use case in its domain.
 
 When adding a new use case, do NOT create a new `*Service` class unless the use case belongs to a genuinely new domain. Add the method to the existing domain service.
 

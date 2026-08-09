@@ -92,8 +92,8 @@ public final class RecoverySheet {
         sb.append("VAIER'S OWN CONFIGURATION KEY\n");
         sb.append("-----------------------------\n");
         sb.append("The archives above open with their passphrases alone. This key is for the step after:\n");
-        sb.append("restoring Vaier itself from one of them yields a configuration whose stored credentials,\n");
-        sb.append("AWS secret and passphrases are all ciphertext, and this is what decrypts them.\n\n");
+        sb.append("restoring Vaier itself from one of them yields a configuration whose stored credentials\n");
+        sb.append("and passphrases are all ciphertext, and this is what decrypts them.\n\n");
         row(sb, "Config key", configKey == null || configKey.isBlank() ? "NOT AVAILABLE" : configKey);
 
         return sb.toString();

@@ -7,7 +7,7 @@ import java.util.Optional;
  * every {@code enc:v1:} value in it.
  *
  * <p>It exists for one reader: the survival kit. Restoring Vaier from one of its own backup archives yields
- * a configuration whose credentials, AWS secret and repository passphrases are all ciphertext, and without
+ * a configuration whose credentials and repository passphrases are all ciphertext, and without
  * this key that restore stops there. The archives themselves need only their own passphrases, which the kit
  * also carries — this is for the step after.
  *
