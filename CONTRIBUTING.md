@@ -1,4 +1,4 @@
-# Contributing to Vaier
+# Contributing to Fjord
 
 Thanks for your interest. This guide covers everything you need to get your first PR merged.
 
@@ -15,7 +15,7 @@ Open an issue before starting anything non-trivial. It avoids duplicate work and
 
 ## Architecture
 
-Vaier uses **hexagonal architecture** (ports & adapters), strictly enforced by package structure:
+Fjord uses **hexagonal architecture** (ports & adapters), strictly enforced by package structure:
 
 ```
 domain/          Business logic, entities, port interfaces. No Spring, no I/O.

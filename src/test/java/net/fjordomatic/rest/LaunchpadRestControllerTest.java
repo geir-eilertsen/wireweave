@@ -1,0 +1,169 @@
+package net.fjordomatic.rest;
+
+import jakarta.servlet.http.HttpServletRequest;
+import net.fjordomatic.application.GetLaunchpadServicesUseCase;
+import net.fjordomatic.application.GetLaunchpadServicesUseCase.LaunchpadServiceUco;
+import net.fjordomatic.application.ResolveViewerUseCase;
+import net.fjordomatic.domain.AccessEntry;
+import net.fjordomatic.domain.LaunchpadLiveness;
+import net.fjordomatic.domain.LaunchpadVisibility;
+import net.fjordomatic.domain.Role;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+
+import java.util.List;
+import java.util.Optional;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+class LaunchpadRestControllerTest {
+
+    @Mock
+    GetLaunchpadServicesUseCase getLaunchpadServicesUseCase;
+
+    @Mock
+    ResolveViewerUseCase resolveViewerUseCase;
+
+    @Mock
+    net.fjordomatic.domain.port.ForSubscribingToEvents forSubscribingToEvents;
+
+    @InjectMocks
+    LaunchpadRestController controller;
+
+    @BeforeEach
+    void setUp() {
+        ReflectionTestUtils.setField(controller, "trustedProxyCidr", "172.20.0.0/16");
+    }
+
+    @Test
+    void events_subscribesSignalOnly_soNoSubdomainLeaksToAnonymousViewers() {
+        SseEmitter emitter = new SseEmitter();
+        when(forSubscribingToEvents.subscribeSignalOnly("published-services")).thenReturn(emitter);
+
+        SseEmitter result = controller.events();
+
+        assertThat(result).isSameAs(emitter);
+        verify(forSubscribingToEvents).subscribeSignalOnly("published-services");
+    }
+
+    @Test
+    void getServices_returnsLaunchpadServices() {
+        var services = List.of(
+            new LaunchpadServiceUco("app.example.com", null, "10.0.0.1", LaunchpadVisibility.VISIBLE_ACTIVE, LaunchpadLiveness.LIVE, null, "app", "app", "host=app.example.com", "media server"),
+            new LaunchpadServiceUco("db.example.com", null, "10.0.0.2", LaunchpadVisibility.VISIBLE_ACTIVE, LaunchpadLiveness.LIVE, null, "db", "db", "host=db.example.com", "database host")
+        );
+        // getServices passes a null (anonymous) viewer.
+        when(getLaunchpadServicesUseCase.getLaunchpadServices(any(), isNull())).thenReturn(services);
+
+        List<LaunchpadServiceUco> result = controller.getServices(mock(HttpServletRequest.class));
+
+        assertThat(result).isEqualTo(services);
+    }
+
+    @Test
+    void getServices_trustsXForwardedFor_whenRequestComesFromTraefikSubnet() {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(request.getRemoteAddr()).thenReturn("172.20.0.5");
+        when(request.getHeader("X-Forwarded-For")).thenReturn("192.168.3.42");
+
+        controller.getServices(request);
+
+        verify(getLaunchpadServicesUseCase).getLaunchpadServices(eq("192.168.3.42"), isNull());
+    }
+
+    @Test
+    void getServices_usesFirstHop_whenXForwardedForHasMultipleIps() {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(request.getRemoteAddr()).thenReturn("172.20.0.5");
+        when(request.getHeader("X-Forwarded-For")).thenReturn("192.168.3.42, 10.0.0.1");
+
+        controller.getServices(request);
+
+        verify(getLaunchpadServicesUseCase).getLaunchpadServices(eq("192.168.3.42"), isNull());
+    }
+
+    @Test
+    void getServices_ignoresSpoofedXForwardedFor_whenRequestNotFromTraefikSubnet() {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(request.getRemoteAddr()).thenReturn("203.0.113.99");
+
+        controller.getServices(request);
+
+        verify(getLaunchpadServicesUseCase).getLaunchpadServices(eq("203.0.113.99"), isNull());
+    }
+
+    @Test
+    void getServices_noXForwardedForHeader_fallsBackToRemoteAddr() {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(request.getRemoteAddr()).thenReturn("172.20.0.5");
+        when(request.getHeader("X-Forwarded-For")).thenReturn(null);
+
+        controller.getServices(request);
+
+        verify(getLaunchpadServicesUseCase).getLaunchpadServices(eq("172.20.0.5"), isNull());
+    }
+
+    // --- viewer-adaptive: public endpoint anonymous, authenticated endpoint carries the viewer ---
+
+    @Test
+    void getServices_alwaysCallsUseCaseWithAnonymousViewer() {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(request.getRemoteAddr()).thenReturn("172.20.0.5");
+
+        controller.getServices(request);
+
+        // /launchpad/services is reached by anonymous launchpad loads and intentionally never
+        // surfaces social-gated tiles — the null viewer sees public services only.
+        verify(getLaunchpadServicesUseCase).getLaunchpadServices(any(), isNull());
+    }
+
+    @Test
+    void getServicesAuthenticated_resolvesViewerFromEmailHeaderAndPassesItToTheUseCase() {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(request.getRemoteAddr()).thenReturn("172.20.0.5");
+        AccessEntry viewer = AccessEntry.builder().email("alice@example.com").role(Role.USER).build();
+        when(resolveViewerUseCase.resolveViewer("alice@example.com")).thenReturn(Optional.of(viewer));
+
+        controller.getServicesAuthenticated(request, "alice@example.com");
+
+        verify(getLaunchpadServicesUseCase).getLaunchpadServices(any(), eq(viewer));
+    }
+
+    @Test
+    void getServicesAuthenticated_unknownIdentity_passesNullViewer() {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(request.getRemoteAddr()).thenReturn("172.20.0.5");
+        when(resolveViewerUseCase.resolveViewer("nobody@example.com")).thenReturn(Optional.empty());
+
+        controller.getServicesAuthenticated(request, "nobody@example.com");
+
+        verify(getLaunchpadServicesUseCase).getLaunchpadServices(any(), isNull());
+    }
+
+    @Test
+    void getServicesAuthenticated_propagatesCallerIpLikeServices() {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(request.getRemoteAddr()).thenReturn("172.20.0.5");
+        when(request.getHeader("X-Forwarded-For")).thenReturn("192.168.3.42");
+        AccessEntry viewer = AccessEntry.builder().email("alice@example.com").role(Role.ADMIN).build();
+        lenient().when(resolveViewerUseCase.resolveViewer("alice@example.com")).thenReturn(Optional.of(viewer));
+
+        controller.getServicesAuthenticated(request, "alice@example.com");
+
+        verify(getLaunchpadServicesUseCase).getLaunchpadServices(eq("192.168.3.42"), any());
+    }
+}

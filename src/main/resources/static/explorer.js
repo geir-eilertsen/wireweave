@@ -1,6 +1,6 @@
 // Explorer — one file tree spanning the fleet (#321, slice 1: browse).
 //
-// Every machine Vaier can reach over SSH is a root in one tree, so "where is that file?" is answered in a
+// Every machine Fjord can reach over SSH is a root in one tree, so "where is that file?" is answered in a
 // single place rather than by opening a shell per host. Listings come over SFTP, on demand, one directory at
 // a time — a fleet's filesystem is far too big to fetch eagerly, and a directory you never open should cost
 // nothing.
@@ -23,9 +23,9 @@
     let root = null;
     let cwd = null;
 
-    const listing = VaierListing.createBrowser();   // owns the newest-listing-wins guard
-    const formatSize = VaierListing.formatSize;
-    const formatTime = VaierListing.formatTime;
+    const listing = FjordListing.createBrowser();   // owns the newest-listing-wins guard
+    const formatSize = FjordListing.formatSize;
+    const formatTime = FjordListing.formatTime;
 
     const $ = (id) => document.getElementById(id);
 
@@ -198,7 +198,7 @@
         if (!machines.length) {
             $('exFleet').appendChild(note('No machines.', false));
             $('exRows').appendChild(note(
-                'Explorer browses machines Vaier can reach over SSH. Give a machine an SSH credential on its '
+                'Explorer browses machines Fjord can reach over SSH. Give a machine an SSH credential on its '
                 + 'Infrastructure card and it will appear here.', false));
             return;
         }

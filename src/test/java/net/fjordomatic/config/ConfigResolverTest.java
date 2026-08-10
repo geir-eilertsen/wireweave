@@ -1,0 +1,160 @@
+package net.fjordomatic.config;
+
+import net.fjordomatic.domain.FjordConfig;
+import net.fjordomatic.domain.port.ForPersistingAppConfiguration;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.util.Map;
+import java.util.Optional;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+class ConfigResolverTest {
+
+    @Mock ForPersistingAppConfiguration configPersistence;
+
+    @Test
+    void resolvesFromFileWhenPresent() {
+        FjordConfig config = FjordConfig.builder()
+            .domain("file.com")
+            .acmeEmail("file@example.com")
+            .build();
+        when(configPersistence.load()).thenReturn(Optional.of(config));
+
+        ConfigResolver resolver = new ConfigResolver(configPersistence);
+
+        assertThat(resolver.getDomain()).isEqualTo("file.com");
+        assertThat(resolver.getAcmeEmail()).isEqualTo("file@example.com");
+    }
+
+    @Test
+    void fallsBackToEnvVarsWhenNoFile() {
+        when(configPersistence.load()).thenReturn(Optional.empty());
+
+        ConfigResolver resolver = new ConfigResolver(configPersistence);
+
+        // In test environment, env vars are not set, so values will be null
+        // The important thing is it doesn't throw
+        assertThat(resolver.getDomain()).isNull();
+    }
+
+    @Test
+    void reloadPicksUpNewConfig() {
+        when(configPersistence.load()).thenReturn(Optional.empty());
+        ConfigResolver resolver = new ConfigResolver(configPersistence);
+        assertThat(resolver.getDomain()).isNull();
+
+        FjordConfig config = FjordConfig.builder()
+            .domain("new.com")
+            .acmeEmail("e@e.com")
+            .build();
+        when(configPersistence.load()).thenReturn(Optional.of(config));
+        resolver.reload();
+
+        assertThat(resolver.getDomain()).isEqualTo("new.com");
+    }
+
+    @Test
+    void fallsBackToEnvVarPerFieldWhenPersistedValueIsNull() {
+        FjordConfig config = FjordConfig.builder()
+            .domain(null)
+            .acmeEmail(null)
+            .smtpHost("smtp.example.com")
+            .build();
+        when(configPersistence.load()).thenReturn(Optional.of(config));
+        Map<String, String> env = Map.of(
+            "VAIER_DOMAIN", "env.example.com",
+            "ACME_EMAIL", "env@example.com"
+        );
+
+        ConfigResolver resolver = new ConfigResolver(configPersistence, env::get);
+
+        assertThat(resolver.getDomain()).isEqualTo("env.example.com");
+        assertThat(resolver.getAcmeEmail()).isEqualTo("env@example.com");
+        assertThat(resolver.getSmtpHost()).isEqualTo("smtp.example.com");
+    }
+
+    @Test
+    void fileValuesWinOverEnvVars() {
+        FjordConfig config = FjordConfig.builder()
+            .domain("file.com")
+            .acmeEmail("file@example.com")
+            .build();
+        when(configPersistence.load()).thenReturn(Optional.of(config));
+        Map<String, String> env = Map.of("VAIER_DOMAIN", "env.com");
+
+        ConfigResolver resolver = new ConfigResolver(configPersistence, env::get);
+
+        assertThat(resolver.getDomain()).isEqualTo("file.com");
+    }
+
+    @Test
+    void socialAuthAvailable_isTrueOnlyWhenGoogleClientIdIsSet() {
+        when(configPersistence.load()).thenReturn(Optional.empty());
+
+        assertThat(new ConfigResolver(configPersistence, Map.<String, String>of()::get)
+            .isSocialAuthAvailable()).isFalse();
+        assertThat(new ConfigResolver(configPersistence,
+            Map.of("VAIER_OIDC_GOOGLE_CLIENT_ID", "")::get).isSocialAuthAvailable()).isFalse();
+        assertThat(new ConfigResolver(configPersistence,
+            Map.of("VAIER_OIDC_GOOGLE_CLIENT_ID", "abc.apps.googleusercontent.com")::get)
+            .isSocialAuthAvailable()).isTrue();
+    }
+
+
+
+
+
+
+
+    @Test
+    void diskMonitorThreshold_defaultsTo85WhenUnset() {
+        when(configPersistence.load()).thenReturn(Optional.empty());
+
+        ConfigResolver resolver = new ConfigResolver(configPersistence, key -> null);
+
+        assertThat(resolver.getDiskMonitorThresholdPercent()).isEqualTo(85);
+    }
+
+    @Test
+    void diskMonitorThreshold_usesConfiguredValue() {
+        FjordConfig config = FjordConfig.builder()
+            .diskMonitorThresholdPercent(70)
+            .build();
+        when(configPersistence.load()).thenReturn(Optional.of(config));
+
+        ConfigResolver resolver = new ConfigResolver(configPersistence, key -> null);
+
+        assertThat(resolver.getDiskMonitorThresholdPercent()).isEqualTo(70);
+    }
+
+    @Test
+    void exposesBackupScheduleHour() {
+        // Defaults to 2am when unset.
+        when(configPersistence.load()).thenReturn(Optional.empty());
+        assertThat(new ConfigResolver(configPersistence, key -> null).getBackupScheduleHour()).isEqualTo(2);
+
+        // Uses the configured value when present.
+        FjordConfig config = FjordConfig.builder().backupScheduleHour(5).build();
+        when(configPersistence.load()).thenReturn(Optional.of(config));
+        assertThat(new ConfigResolver(configPersistence, key -> null).getBackupScheduleHour()).isEqualTo(5);
+    }
+
+    @Test
+    void treatsBlankPersistedValueAsMissing() {
+        FjordConfig config = FjordConfig.builder()
+            .domain("   ")
+            .build();
+        when(configPersistence.load()).thenReturn(Optional.of(config));
+        Map<String, String> env = Map.of("VAIER_DOMAIN", "env.com");
+
+        ConfigResolver resolver = new ConfigResolver(configPersistence, env::get);
+
+        assertThat(resolver.getDomain()).isEqualTo("env.com");
+    }
+}

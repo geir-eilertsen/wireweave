@@ -1,12 +1,12 @@
 // The Explorer shell — the fleet as one tree (#323, slice A).
 //
-// Vaier's domain is already a namespace: a file has a coordinate (machine, path, point in time), and so does a
-// container, a published service, an archive. Vaier sits at the VPN hub and is the only machine with SSH to
+// Fjord's domain is already a namespace: a file has a coordinate (machine, path, point in time), and so does a
+// container, a published service, an archive. Fjord sits at the VPN hub and is the only machine with SSH to
 // every other, so it is the only place a tree spanning the fleet can exist. This is that tree, and the pane
 // beside it is a renderer chosen by what the selected entry *is*. Nothing else is navigation.
 //
 // Slice A builds the shell and moves the terminal dock into it. Machines, files, shells and backups are real
-// entries now; only two Vaier-wide globals (Users, Concepts) are still framed whole (see renderGlobalBridge),
+// entries now; only two Fjord-wide globals (Users, Concepts) are still framed whole (see renderGlobalBridge),
 // until they too are ported.
 (function () {
     'use strict';
@@ -40,7 +40,7 @@
         refresh: '<path d="M13.4 8a5.4 5.4 0 1 1-1.6-3.8"/><path d="M13.6 2.4v3.1h-3.1"/>',
         // A newer image exists. Deliberately not the bare `download` arrow and not `refresh`: both of those
         // are verbs elsewhere in this shell (a Download button, a Reissue button), and a mark that borrows a
-        // verb's glyph reads as a control — which is the one thing this must never do, since Vaier cannot
+        // verb's glyph reads as a control — which is the one thing this must never do, since Fjord cannot
         // pull an image. Enclosing the arrow makes it a badge rather than a button.
         arrowup: '<circle cx="8" cy="8" r="6"/><path d="M8 11.2V5.2"/><path d="M5.6 7.6L8 5.2l2.4 2.4"/>',
         trash:   '<path d="M3 4.5h10M6.5 4.5V3a.8.8 0 0 1 .8-.8h1.4a.8.8 0 0 1 .8.8v1.5"/><path d="M4.2 4.5l.6 8a1 1 0 0 0 1 .9h4.4a1 1 0 0 0 1-.9l.6-8"/><path d="M6.7 7v4M9.3 7v4"/>',
@@ -81,7 +81,7 @@
             + 'stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">' + ICON[name] + '</svg>';
     }
 
-    // Vaier-wide entries that are NOT of the fleet — they belong to Vaier, not to any machine — so they sit at
+    // Fjord-wide entries that are NOT of the fleet — they belong to Fjord, not to any machine — so they sit at
     // the top level of the tree, outside `fleet`. Settings is native now; Users and Concepts still bridge their
     // pages (framed whole, via renderGlobalBridge) until they are ported. This is why the tree is a forest, not
     // one root. Fleet-level bridges are all gone: Infrastructure and Backups are native entries now (#323).
@@ -101,7 +101,7 @@
     };
 
     // The device shapes an operator can pin a machine to — the same set the Infrastructure page offered, and the
-    // same keys the tree's icons are drawn from (see ICON). The empty value is "let Vaier choose from what it
+    // same keys the tree's icons are drawn from (see ICON). The empty value is "let Fjord choose from what it
     // sees" (clears the override); everything else pins the icon and the map marker.
     const DEVICE_CATEGORIES = [
         ['', 'Auto-detect'], ['PHONE', 'Phone'], ['LAPTOP', 'Laptop'], ['DESKTOP', 'Desktop'],
@@ -110,14 +110,14 @@
         ['GENERIC', 'Generic'],
     ];
 
-    // The Vaier server is a machine in the fleet like any other (#311) — but it is *this* machine, the one
-    // serving the page. Mirrors LanAnchor.VAIER_SERVER_NAME.
-    const VAIER_SERVER = 'Vaier server';
-    // Which machine Vaier is running on, as an identity. /machines marks it, because comparing a display
-    // name to the literal "Vaier server" is a name doing an identity's job — it stops recognising the
+    // The Fjord server is a machine in the fleet like any other (#311) — but it is *this* machine, the one
+    // serving the page. Mirrors LanAnchor.FJORD_SERVER_NAME.
+    const FJORD_SERVER = 'Fjord server';
+    // Which machine Fjord is running on, as an identity. /machines marks it, because comparing a display
+    // name to the literal "Fjord server" is a name doing an identity's job — it stops recognising the
     // machine the moment someone renames it, and mistakes any other machine that takes the name for it.
-    const vaierServerId = () => (S.machines.find((m) => m.vaierServer) || {}).id || null;
-    const isVaierServerMachine = (machineId) => machineId != null && machineId === vaierServerId();
+    const fjordServerId = () => (S.machines.find((m) => m.fjordServer) || {}).id || null;
+    const isFjordServerMachine = (machineId) => machineId != null && machineId === fjordServerId();
 
     // --- state ----------------------------------------------------------------------------------------
 
@@ -128,14 +128,14 @@
         peers: new Map(),                // machine id -> its live WireGuard peer (tunnel address, liveness)
         peersById: new Map(),            // WireGuard peer id -> the same peer (the SSE keys stats that way)
         lan: new Map(),                  // machine identity -> its LAN server (the domain's MachineStatus)
-        serverLocation: null,            // GET /vpn/peers/server-location — the Vaier server's geo (Frankfurt), for the map
+        serverLocation: null,            // GET /vpn/peers/server-location — the Fjord server's geo (Frankfurt), for the map
         lanScan: null,                   // GET /lan-scan — the discovered-machines snapshot { status, machines, lastScanCompleted }
         lanScanLans: null,               // GET /lan-scan/lans — the LANs an operator can pick to scan [{ anchor, name, cidr }]
         dirs: new Map(),                 // dirKey -> one directory's read: its state, its children, its reader
         services: [],                    // GET /published-services/discover — the whole fleet's routes
         publishable: [],                 // GET /published-services/publishable — container ports that could be published (and which are ignored)
         access: {},                      // GET /access/services — dnsAddress -> the groups allowed through
-        containers: new Map(),           // machine identity -> its containers, as Vaier last scraped them
+        containers: new Map(),           // machine identity -> its containers, as Fjord last scraped them
         containersRead: false,           // whether the fleet-wide Docker scrape has landed at least once
         disks: new Map(),                // machine identity -> its filesystems: state, the list, the failure's words
         diskStandings: new Map(),        // machine identity -> how its disks stand, as the backend's 5-minute sweep
@@ -158,10 +158,10 @@
         repoArchives: new Map(),         // repo name -> { state, list, error }: the archives in a repository, read when looked at
         backupJobs: [],                  // GET /backup-jobs — the jobs, each backing one machine up to a repository
         jobRuns: new Map(),              // machine identity -> { state, run }: its last run, read on view and on the run-settled push
-        preparing: new Set(),            // machine identities Vaier is readying to back up (first back-up), cleared on prepare-client-settled
+        preparing: new Set(),            // machine identities Fjord is readying to back up (first back-up), cleared on prepare-client-settled
         rootAfterGrant: new Set(),       // machine identities whose "back up as root" is waiting on the sudoers grant to land;
                                          //   the prepare-client-settled push asks once more, then drops them (never a loop)
-        readying: new Map(),             // machine identity -> the one `sudo bash …` line Vaier staged where it could not gain root itself
+        readying: new Map(),             // machine identity -> the one `sudo bash …` line Fjord staged where it could not gain root itself
         provisionWatch: null,            // { serverName, bodyEl } while a provision dialog awaits its provision-settled push
         settings: { state: 'idle', config: null, version: '' },   // the native Settings entry, read on view
         threats: [],                     // GET /security/decisions — who CrowdSec is keeping out right now
@@ -183,7 +183,7 @@
     // to tune it is a later slice; the default is deliberate, not a placeholder.)
     const TRANSFER_WARN_BYTES = 1024 * 1024 * 1024;   // 1 GiB
 
-    // Directory reads go through VaierListing — one reader per directory, created in readDir. A single shared
+    // Directory reads go through FjordListing — one reader per directory, created in readDir. A single shared
     // reader would make concurrent expands cancel one another.
     const $ = (id) => document.getElementById(id);
     const key = (path) => '/' + path.join('/');
@@ -250,7 +250,7 @@
     }
 
     // A tree path names its machine by IDENTITY. Every crossing back to a name goes through nameOf, and it
-    // is a crossing to something a person reads — never to something Vaier finds a machine by.
+    // is a crossing to something a person reads — never to something Fjord finds a machine by.
     const machineOf = (path) => S.machines.find((m) => m.id === path[1]) || null;
 
     const machineById = (machineId) => S.machines.find((m) => m.id === machineId) || null;
@@ -264,11 +264,11 @@
         return m ? m.name : machineId;
     }
 
-    // Machines are ordered the way the Infrastructure page orders them, so the two never disagree: the Vaier
+    // Machines are ordered the way the Infrastructure page orders them, so the two never disagree: the Fjord
     // server first, then the servers, then the clients, each group alphabetical. Server-ness is the machine's
     // type (the domain's isServerType — Ubuntu/Windows/LAN server), the same split the fleet grid draws.
     const SERVER_TYPES = new Set(['UBUNTU_SERVER', 'WINDOWS_SERVER', 'LAN_SERVER']);
-    const machineRank = (m) => (m.vaierServer ? 0 : (SERVER_TYPES.has(m.type) ? 1 : 2));
+    const machineRank = (m) => (m.fjordServer ? 0 : (SERVER_TYPES.has(m.type) ? 1 : 2));
     const sortedMachines = () => S.machines.slice()
         .sort((a, b) => machineRank(a) - machineRank(b) || a.name.localeCompare(b.name));
 
@@ -278,7 +278,7 @@
     // told us where that is, the path is null — which means "wherever this machine's tree begins", the one
     // question only the machine can answer.
     //
-    // The past has no such question. An archive captured absolute machine paths, and Vaier mounts it rooted at
+    // The past has no such question. An archive captured absolute machine paths, and Fjord mounts it rooted at
     // "/" (the backend answers a past listing with root "/", always), so browsing a machine's history always
     // begins at "/". That is why the past base is known without asking: it lets a whole path chain resolve in
     // one pass when you scrub, rather than each depth waiting on the one above it to report a root.
@@ -297,7 +297,7 @@
     // A published service is one thing with three homes: a container on a machine, a Traefik route, and the
     // name it answers on. The tree files it under the machine, and it decides which machine by the rule the Infrastructure page
     // already uses — a LAN service by its LAN server (falling back to the relay peer when no registered LAN
-    // server matches its address), the hub's own routes on the Vaier server, everything else by its host. A
+    // server matches its address), the hub's own routes on the Fjord server, everything else by its host. A
     // second rule here would put the same service under two different machines in two different pages.
     // The feed says which machine a route's backend runs on, by identity — the domain decides it
     // (ReverseProxyRoute.hostMachineId) so the Explorer and every other surface can never disagree about
@@ -316,11 +316,11 @@
     const candidateMachine = (c) => c.machineId || null;
     const candidatesOn = (machineId) => S.publishable.filter((c) => candidateMachine(c) === machineId);
     // The repositories that live on a backup server, filtered by the server they name. One server, so this is
-    // every repository Vaier knows — but the filter keeps it honest if a stale repo names a server that is gone.
+    // every repository Fjord knows — but the filter keeps it honest if a stale repo names a server that is gone.
     const reposOn = (server) => (server ? S.backupRepos.filter((r) => r.serverName === server.name) : []);
 
     // What a store on the backup server is, to a person: the backups of a machine. "Repository" is a borg
-    // noun and the operator never chose one — Vaier creates exactly one per machine, behind the Back up verb,
+    // noun and the operator never chose one — Fjord creates exactly one per machine, behind the Back up verb,
     // and names it after the machine's IDENTITY, so two machines called "NAS" cannot compete for one
     // directory. That name says nothing to a person, so the backend supplies the label (BackupStoreLabel):
     // the machine's name, and where it is when another machine shares that name.
@@ -358,7 +358,7 @@
         if (kind === 'machine') {
             const m = machineOf(path);
             if (!m) return [];
-            // Honest and conditional: a machine grows only the entries Vaier can actually reach on it. Files
+            // Honest and conditional: a machine grows only the entries Fjord can actually reach on it. Files
             // and disk ride on a held SSH credential, so they appear only once one is stored — not merely
             // because the SSH-access toggle is on, which would grow an entry that opens onto a red "no login"
             // wall until the operator refreshes. A machine that runs no Docker must not grow an empty
@@ -371,7 +371,7 @@
             // published, or is a server (so a non-container service on it — a printer's page, a LAN app — can
             // still be published by hand). Clients, which host nothing, stay quiet.
             if (servicesOn(m.id).length || candidatesOn(m.id).length
-                || SERVER_TYPES.has(m.type) || m.vaierServer) {
+                || SERVER_TYPES.has(m.type) || m.fjordServer) {
                 kids.push({ name: 'services', kind: 'services' });
             }
             if (m.hasCredential) kids.push({ name: 'disk', kind: 'disk' });
@@ -439,14 +439,14 @@
         let entry = S.dirs.get(k);
         if (entry && entry.state === 'loading') return;   // already on its way
         if (!entry) {
-            // Each directory owns its own VaierListing browser, and therefore its own monotonic ticket. That
+            // Each directory owns its own FjordListing browser, and therefore its own monotonic ticket. That
             // is the whole race guard, and the reason it is per-directory rather than shared: a *re-read* of
             // this directory must supersede the read before it, but three directories expanded at once are
             // three independent reads that must all land. One shared ticket would be worse than none — the
             // earlier expands would be declared stale and spin forever, which is precisely the hang we are
             // guarding against.
             entry = { machine: machine, state: 'unread', entries: [], error: null,
-                      reader: VaierListing.createBrowser() };
+                      reader: FjordListing.createBrowser() };
             S.dirs.set(k, entry);
         }
         entry.state = 'loading';
@@ -496,13 +496,13 @@
     //   disk       — one machine, read when its disk entry is looked at. A fleet-wide df on page load would
     //                wake every sleeping machine to answer a question nobody asked.
 
-    // Vaier scrapes Docker per kind of machine, so this is three endpoints and one map. All three already
+    // Fjord scrapes Docker per kind of machine, so this is three endpoints and one map. All three already
     // exist — this is the Infrastructure page's own data, re-filed under the machines it belongs to.
     //
     // The filing used to be the whole difficulty: a peer's containers arrived keyed by the peer's *id* (the
     // WireGuard directory, "apalveien5") while the tree spoke the display name ("Apalveien 5"), so either
     // choice needed a crossing, and one character of disagreement showed a machine with no containers while
-    // Vaier could see them perfectly well. Every scrape carries the machine's identity now, so there is no
+    // Fjord could see them perfectly well. Every scrape carries the machine's identity now, so there is no
     // crossing left to get wrong — the cache is keyed by the same thing the tree stands on.
     async function loadContainers() {
         const next = new Map();
@@ -518,7 +518,7 @@
                 if (p.machineId) next.set(p.machineId, p.containers || []);
             });
             (lan || []).forEach((l) => next.set(l.machineId, l.containers || []));
-            if (server) next.set(vaierServerId(), server.containers || []);
+            if (server) next.set(fjordServerId(), server.containers || []);
             S.containers = next;
             S.containersRead = true;
         } catch (e) {
@@ -573,7 +573,7 @@
     }
 
     // One machine's filesystems, read when they are looked at (#323 slice C, every filesystem since #325).
-    // Vaier has computed this on a schedule since the disk alerts shipped and only ever emailed about it;
+    // Fjord has computed this on a schedule since the disk alerts shipped and only ever emailed about it;
     // this is the same reading, looked at.
     async function loadDisk(machineId) {
         const held = S.disks.get(machineId);
@@ -585,16 +585,16 @@
             if (res.ok) {
                 S.disks.set(machineId, { state: 'ready', filesystems: body, error: null });
             } else {
-                // The server's own sentence, verbatim — "Vaier could not read the disk on X. The machine may
-                // be asleep..." says everything a status code cannot. A disk Vaier failed to read is never
+                // The server's own sentence, verbatim — "Fjord could not read the disk on X. The machine may
+                // be asleep..." says everything a status code cannot. A disk Fjord failed to read is never
                 // painted as a disk with room on it.
                 S.disks.set(machineId, { state: 'error', filesystems: null,
-                    error: body.message || 'Vaier could not read the disks on ' + nameOf(machineId) + '.',
+                    error: body.message || 'Fjord could not read the disks on ' + nameOf(machineId) + '.',
                     errorCode: body.code, errorDetail: body.detail });
             }
         } catch (e) {
             S.disks.set(machineId, { state: 'error', filesystems: null,
-                error: 'Vaier could not read the disks on ' + nameOf(machineId) + '.' });
+                error: 'Fjord could not read the disks on ' + nameOf(machineId) + '.' });
         }
         render();
     }
@@ -616,7 +616,7 @@
         render();
     }
 
-    // A machine's progressive-adoption nudges — the next capabilities Vaier suggests adopting for it
+    // A machine's progressive-adoption nudges — the next capabilities Fjord suggests adopting for it
     // (publish its services, back it up, make it the fleet's backup server). Read once per machine when its
     // pane opens, then repainted; never polled — a nudge changes when the operator acts, not under the cursor.
     // The domain decides which apply (GET /machines/{name}/nudges); the shell only renders them and routes the
@@ -705,16 +705,16 @@
     //
     //   a peer         — WireGuard knows whether the tunnel is up, right now
     //   a LAN server   — the backend probes it on a schedule and hands us MachineStatus, already decided
-    //   the Vaier server — it is serving this page; if you can read this, it is up
+    //   the Fjord server — it is serving this page; if you can read this, it is up
     //
     // Knowing only the first (which is all the shell knew when this shipped) meant the NAS, the NUCs and the
-    // Roon boxes — every machine the operator actually SSHes into — sat grey forever, and grey claimed "Vaier
-    // has no idea". Vaier did have an idea. It just never asked itself.
+    // Roon boxes — every machine the operator actually SSHes into — sat grey forever, and grey claimed "Fjord
+    // has no idea". Fjord did have an idea. It just never asked itself.
 
     // The domain's four-state MachineStatus, mapped to a dot. The *combination* (reachability + Docker scrape
     // + runsDocker) is decided server-side in MachineStatus.forLanServer — the browser only picks a colour, and
     // the fleet map picks the same four. Note what is deliberately NOT green: UNKNOWN means no probe has run
-    // yet, and painting that up would be Vaier claiming to know something it does not. Grey is the honest
+    // yet, and painting that up would be Fjord claiming to know something it does not. Grey is the honest
     // answer to a question nobody has asked yet.
     const STATUS_DOT = {
         'OK':       'is-up',
@@ -725,7 +725,7 @@
 
     function livenessOf(machineId) {
         // We are standing inside the answer.
-        if (isVaierServerMachine(machineId)) return 'is-up';
+        if (isFjordServerMachine(machineId)) return 'is-up';
 
         const peer = S.peers.get(machineId);
         if (peer) {
@@ -788,7 +788,7 @@
         UNKNOWN:    'The last backup’s outcome is unknown',
     };
 
-    // The dot on a machine's backup entry: its job's last outcome, read straight off the job list Vaier
+    // The dot on a machine's backup entry: its job's last outcome, read straight off the job list Fjord
     // already loaded at boot — no request per row, and no traversal to find out. The colour comes from the
     // same RUN_DOT map the job pane uses, so the tree and the pane can never disagree about a run. A machine
     // with no job (the backup server's own entry — it is the store, not a thing that is stored) grows no dot,
@@ -896,7 +896,7 @@
         tree.appendChild(label);
         tree.appendChild(branch(['fleet'], 'fleet', 'fleet', 0));
 
-        // Vaier's own entries used to hang here as a second root, which made this a forest. They are in the
+        // Fjord's own entries used to hang here as a second root, which made this a forest. They are in the
         // topbar menu now — the one surface that survives the tree being folded away or absent — and a second
         // home for them here would be two roads to one place. So the rail is exactly what it is labelled: the
         // fleet, and nothing else.
@@ -940,7 +940,7 @@
             row.title = (entry && entry.error) || 'This directory could not be read.';
         }
 
-        // Files and disk both ride on SSH — greyed rather than removed when Vaier's last check found no
+        // Files and disk both ride on SSH — greyed rather than removed when Fjord's last check found no
         // server on the owning machine, so the entry still names what is there and the greying lifts on its
         // own the moment a later sweep reaches the machine again.
         if (kind === 'files' || kind === 'disk') {
@@ -1036,7 +1036,7 @@
         });
         // A path too long for the bar scrolls inside it, and it is the tail that matters: the folder you are
         // standing in is the answer to "where am I", while the fleet root it hangs off is the part you can
-        // already guess. Left at zero a phone showed "fleet / Vaier server / files / home / ubu…" and cut off
+        // already guess. Left at zero a phone showed "fleet / Fjord server / files / home / ubu…" and cut off
         // the only crumb that was news. The ancestors are still one swipe away.
         bar.scrollLeft = bar.scrollWidth;
     }
@@ -1110,7 +1110,7 @@
     }
 
     // disabledTitle: when set, the card is greyed and inert rather than removed — the entry still names what
-    // is there, it just cannot be opened right now (e.g. Vaier's last check found no SSH server). Pass a
+    // is there, it just cannot be opened right now (e.g. Fjord's last check found no SSH server). Pass a
     // falsy value for a normal, live card.
     function card(icon, name, nameIsId, noteText, onClick, dotMachineId, disabledTitle) {
         const btn = document.createElement('button');
@@ -1140,7 +1140,7 @@
         return btn;
     }
 
-    // "Vaier is root here", readable without opening the machine (#346). A tag rather than a third clause
+    // "Fjord is root here", readable without opening the machine (#346). A tag rather than a third clause
     // in the note line: that line already carries a type and an address, and a fact with this much
     // consequence appended to the end of it is a fact that gets skimmed past.
     function rootTag(username) {
@@ -1149,7 +1149,7 @@
         // EffectiveUser reserves the right to widen what counts as privileged — and a badge that asserts
         // a word the backend never sent is a badge that starts lying the day it does.
         tag.textContent = username;
-        tag.title = 'Vaier logs in as ' + username + ' here — a privileged user';
+        tag.title = 'Fjord logs in as ' + username + ' here — a privileged user';
         return tag;
     }
 
@@ -1206,7 +1206,7 @@
             const grid = document.createElement('div');
             grid.className = 'ex-grid';
             sortedMachines().forEach((m) => {
-                // The card says what the machine is FOR, not where it answers. A tunnel address is Vaier's own
+                // The card says what the machine is FOR, not where it answers. A tunnel address is Fjord's own
                 // plumbing: standing on the fleet an operator can do nothing with 10.13.13.6, while the
                 // description is the one line that tells them which machine this is. The address has not been
                 // hidden, only put where an address belongs — renderMachine still lists it under the machine's
@@ -1221,7 +1221,7 @@
                 // made folding the outline away cost nothing.
                 const top = c.querySelector('.ex-card-top');
                 top.insertBefore(machineMarks(m.id), top.querySelector('.ex-dot'));
-                // Where Vaier is root, said on the card itself — the fleet is readable for it without
+                // Where Fjord is root, said on the card itself — the fleet is readable for it without
                 // opening every machine. The backend decided it (domain.EffectiveUser); nothing here
                 // re-judges a username.
                 if (m.effectiveUserPrivileged) {
@@ -1258,14 +1258,14 @@
         pane.appendChild(body);
     }
 
-    // The fleet on a map — where the machines physically are, from the geo Vaier already resolves onto each
+    // The fleet on a map — where the machines physically are, from the geo Fjord already resolves onto each
     // peer (latitude/longitude/city). Leaflet, loaded from explorer.html; if it did not load, the entry says so
     // rather than breaking. The map is torn down and rebuilt on each render (rare — peer stats only repaint the
     // dots, so the map is not thrashed), and requestAnimationFrame — never a timer — settles its size.
     // The fleet on a map — a faithful port of the Infrastructure page's map. Clustered so
     // co-located machines gather and spiderfy on click; a client shows twice — a weak marker where it connects
-    // from and a firm one where its traffic surfaces (the Vaier server); LAN servers sit at their relay; the
-    // Vaier server itself is the big marker in Frankfurt. Leaflet + markercluster load from explorer.html.
+    // from and a firm one where its traffic surfaces (the Fjord server); LAN servers sit at their relay; the
+    // Fjord server itself is the big marker in Frankfurt. Leaflet + markercluster load from explorer.html.
     let _map = null;
     let _cluster = null;
     let _threatMarkers = [];
@@ -1302,7 +1302,7 @@
     // Threat pings and access dots both need "remove exactly the markers this layer added last paint, then
     // add fresh ones into the fleet's shared cluster" — written once so the two cannot drift apart on it.
     // Joining the cluster, not a separate layer, is what makes co-located markers fan out on click (Frankfurt
-    // is both the access source AND the Vaier server's own 36px marker; a lone-layer dot hid underneath it).
+    // is both the access source AND the Fjord server's own 36px marker; a lone-layer dot hid underneath it).
     // `coords` — what fitBounds reads for framing — is untouched here, so cluster membership can never drag
     // the map's zoom toward a single remote scanner or sign-in.
     function repaintIntoCluster(prevMarkers, items, buildMarker) {
@@ -1383,7 +1383,7 @@
                 add(weak, [p.latitude, p.longitude]);
                 if (hasLoc) {
                     const firm = mapMarker([loc.latitude, loc.longitude], iconKind, statusKey);
-                    firm.bindPopup(mapPopup(p.name, [{ text: 'internet via Vaier', muted: true },
+                    firm.bindPopup(mapPopup(p.name, [{ text: 'internet via Fjord', muted: true },
                         { text: [loc.city, loc.country].filter(Boolean).join(', ') }]));
                     add(firm, [loc.latitude, loc.longitude]);
                 }
@@ -1397,9 +1397,9 @@
         Array.from(S.lan.values()).forEach((s) => {
             if (!s.relayPeerName) return;
             let lat, lon;
-            // Anchored at the Vaier server's own LAN, which is the case where there IS no relay peer — so
+            // Anchored at the Fjord server's own LAN, which is the case where there IS no relay peer — so
             // the absence of a relay identity is the test, not the relay's name. Tested by name, a peer an
-            // operator had called "Vaier server" (allowed since names stopped needing to be unique) would
+            // operator had called "Fjord server" (allowed since names stopped needing to be unique) would
             // have put every machine behind it on the hub's dot instead of its own.
             if (!s.relayMachineId) {
                 if (!hasLoc) return; lat = loc.latitude; lon = loc.longitude;
@@ -1420,7 +1420,7 @@
 
         if (hasLoc) {
             const m = mapMarker([loc.latitude, loc.longitude], 'server', 'up', { big: true });
-            m.bindPopup(mapPopup('Vaier server', [{ text: loc.publicHost, mono: true },
+            m.bindPopup(mapPopup('Fjord server', [{ text: loc.publicHost, mono: true },
                 { text: [loc.city, loc.country].filter(Boolean).join(', ') }]));
             add(m, [loc.latitude, loc.longitude]);
         }
@@ -1454,7 +1454,7 @@
     }
 
     // A peer answers at its tunnel address, a LAN server on its LAN — the same rule the SSH connection
-    // itself is resolved by, so what the Inspector shows is where Vaier would actually go.
+    // itself is resolved by, so what the Inspector shows is where Fjord would actually go.
     function tunnelAddress(m) {
         const peer = S.peers.get(m.id);
         if (peer && peer.tunnelIp) return peer.tunnelIp;
@@ -1485,9 +1485,9 @@
         body.className = 'ex-pane-body';
         // A LAN server has no tunnel, so it never gets mesh rows — blanks would claim one that is merely down.
         const isLan = m.type === 'LAN_SERVER';
-        const isVaierServer = !!m.vaierServer;
+        const isFjordServer = !!m.fjordServer;
         const rows = [];
-        if (isVaierServer) {
+        if (isFjordServer) {
             rows.push(['Role', 'The fleet’s hub — WireGuard server and reverse proxy']);
         } else if (isLan) {
             const lan = S.lan.get(m.id);
@@ -1500,7 +1500,7 @@
 
         const wires = disclosure('Connection details');
         const wireRows = [];
-        if (!isVaierServer && !isLan) {
+        if (!isFjordServer && !isLan) {
             wireRows.push(['Tunnel address', tunnelAddress(m)]);
             wireRows.push(['Endpoint', m.endpointIp ? m.endpointIp + ':' + (m.endpointPort || '') : '']);
             wireRows.push(['Transfer', m.transferRx || m.transferTx
@@ -1515,8 +1515,8 @@
         body.appendChild(section('Inside this machine'));
         const inside = childrenOf(S.path);
         if (!inside.length) {
-            body.appendChild(note('Vaier cannot reach anything inside this machine. It has no SSH access, so '
-                + 'no files, no shell and no disk reading; it runs no Docker Vaier knows of; and nothing is '
+            body.appendChild(note('Fjord cannot reach anything inside this machine. It has no SSH access, so '
+                + 'no files, no shell and no disk reading; it runs no Docker Fjord knows of; and nothing is '
                 + 'published from it. Turn on SSH access below and give it a credential, and it opens up.',
                 false));
         } else {
@@ -1524,7 +1524,7 @@
             grid.className = 'ex-grid';
             const NOTE = {
                 files:      'Browse over SFTP',
-                containers: containersOn(m.id).length + ' seen by Vaier',
+                containers: containersOn(m.id).length + ' seen by Fjord',
                 services:   servicesOn(m.id).length + ' published from here',
                 disk:       'Its filesystems, and how full they are',
                 backup:     'The fleet backs up here',
@@ -1544,7 +1544,7 @@
             body.appendChild(grid);
         }
 
-        // What Vaier suggests doing next with this machine — progressive-adoption nudges (§6.15.1): publish its
+        // What Fjord suggests doing next with this machine — progressive-adoption nudges (§6.15.1): publish its
         // services, back it up, or (in the bootstrapping moment before any exists) make it the fleet's backup
         // server. Each is an evidence-backed single action. The *domain* decides which apply
         // (GET /machines/{name}/nudges) — so the shell no longer hand-rolls "offer a backup server when none
@@ -1558,13 +1558,13 @@
         }
 
         // SSH is what opens this machine's files, shell, disk and backups — so this section carries three things:
-        // whether Vaier may open a session at all (the access flag), the login it uses when it does (the
+        // whether Fjord may open a session at all (the access flag), the login it uses when it does (the
         // credential), and the shell itself, opened right here (a terminal is the most direct thing SSH is for).
-        // Offered on any machine Vaier would SSH (a server or a LAN server), never on a phone or laptop client.
+        // Offered on any machine Fjord would SSH (a server or a LAN server), never on a phone or laptop client.
         // Turning access off hides the files and disk entries in the tree — it stops claiming a reach it lost.
         if (m.type !== 'MOBILE_CLIENT' && m.type !== 'WINDOWS_CLIENT') {
             body.appendChild(section('SSH access'));
-            // Vaier's last-known belief about whether this machine has an SSH server at all — pushed live by
+            // Fjord's last-known belief about whether this machine has an SSH server at all — pushed live by
             // the same 5-minute sweep that already reaches every SSH-accessible, credentialed machine
             // (RemoteDiskWatcher), never a fresh probe from here. Transient and self-healing: the next sweep
             // that reaches the machine lifts every greying below without a reload.
@@ -1573,14 +1573,14 @@
             const box = el('input'); box.type = 'checkbox'; box.checked = !!m.sshAccess;
             // Never disable an already-on toggle: an operator who turned access on must still be able to turn
             // it back off, see the stored credential, or retry — never stranded behind a control with no way
-            // back. The gate only ever stops turning access ON for a machine Vaier already knows has nothing
+            // back. The gate only ever stops turning access ON for a machine Fjord already knows has nothing
             // listening.
             if (!m.sshAccess && noSshServer) {
                 box.disabled = true;
                 box.title = 'No SSH server detected on last check';
             }
             box.onchange = () => toggleSshAccess(m.id, box.checked, box);
-            const atxt = el('span'); atxt.textContent = 'Let Vaier open an SSH session to this machine';
+            const atxt = el('span'); atxt.textContent = 'Let Fjord open an SSH session to this machine';
             access.append(box, atxt);
             body.appendChild(access);
             if (m.sshAccess) {
@@ -1600,25 +1600,25 @@
                 cred.appendChild(shellBtn);
                 cred.appendChild(selVerb('gear', 'SSH credential', 'ex-btn', () => credentialDialog(m.id)));
                 body.appendChild(cred);
-                // Who Vaier actually is on this machine. The credential's username IS the effective user,
+                // Who Fjord actually is on this machine. The credential's username IS the effective user,
                 // so saying it costs nothing — and it is the whole difference between a delete that
                 // removes a file you did not want and one that removes a file the machine needs to boot.
                 // Nobody chose root on the DietPi boxes; it arrived with the image. Naming it is the first
                 // step to deciding whether it stays.
                 if (m.effectiveUsername) {
-                    const who = note('Vaier acts as ' + m.effectiveUsername + ' on ' + m.name
+                    const who = note('Fjord acts as ' + m.effectiveUsername + ' on ' + m.name
                         + (m.effectiveUserPrivileged
-                            ? ', a privileged user. Everything Vaier does here — reading, writing and '
+                            ? ', a privileged user. Everything Fjord does here — reading, writing and '
                               + 'deleting — runs unrestricted.'
                             : '. It reaches exactly what that user can reach, and nothing else.'), false);
                     if (m.effectiveUserPrivileged) who.classList.add('is-warn');
                     body.appendChild(who);
                 }
                 body.appendChild(note('The shell opens in its own window and runs on ' + m.name + ' itself, so it '
-                    + 'survives closing the window — and even a Vaier restart. Reopening reattaches you right where '
+                    + 'survives closing the window — and even a Fjord restart. Reopening reattaches you right where '
                     + 'you left off; Exit shell (inside the window) is the one that stops it.', false));
             } else {
-                body.appendChild(note('Off — Vaier holds no session to this machine, so it has no shell, files '
+                body.appendChild(note('Off — Fjord holds no session to this machine, so it has no shell, files '
                     + 'or disk reading here. Turn it on to give it an SSH credential.', false));
             }
         }
@@ -1626,8 +1626,8 @@
         // Everything you do TO the machine, rather than reach INSIDE it. Editing its details is common enough to
         // sit in the open; the rest — reissuing or regenerating a peer's config, showing a LAN host's setup
         // script, and removing the machine — is rare or destructive, so it folds away behind Advanced and does
-        // not crowd the pane. The Vaier server is this machine: it is never edited or removed here.
-        if (!m.vaierServer) {
+        // not crowd the pane. The Fjord server is this machine: it is never edited or removed here.
+        if (!m.fjordServer) {
             body.appendChild(section('This machine'));
             const edit = el('div', 'ex-lactions is-static');
             edit.appendChild(selVerb('gear', 'Edit details', 'ex-btn', () => editMachine(m)));
@@ -1662,11 +1662,11 @@
         PUBLISH:                 (m) => ({ icon: 'route',   label: 'Publish',          run: () => go(['fleet', m.id, 'services']) }),
         BACK_UP:                 (m) => ({ icon: 'archive', label: 'Choose folders',   run: () => go(['fleet', m.id, 'files']) }),
         DESIGNATE_BACKUP_SERVER: (m) => ({ icon: 'nas',     label: 'Set it up',        run: () => designateBackupServer(m) }),
-        // The only nudge whose answer changes what Vaier's login on that machine is allowed to do, so it is
+        // The only nudge whose answer changes what Fjord's login on that machine is allowed to do, so it is
         // the only one that carries a `learn` slug: the operator can read what saying yes grants, on the
         // Concepts page, before answering. `run` is the single grant-and-flag action, never a wizard step.
         BACK_UP_AS_ROOT:         (m) => ({ icon: 'shield',  label: 'Back up everything', run: () => backUpAsRootNow(m.id), learn: 'back-up-as-root' }),
-        // The only nudge carrying a value: Vaier read the network off the machine, and the operator is
+        // The only nudge carrying a value: Fjord read the network off the machine, and the operator is
         // answering whether the fleet should reach it. The CIDR travels on the nudge, so the shell never
         // has to recover it from the sentence it was rendered into.
         ROUTE_LAN:               (m, n) => ({ icon: 'relay',   label: 'Route this network', run: () => routeDetectedLan(m, n.value) }),
@@ -1682,7 +1682,7 @@
         const title = el('div', 'ex-nudge-title'); title.textContent = n.title;
         const why = el('div', 'ex-nudge-why'); why.textContent = n.evidence;
         text.append(title, why);
-        // A nudge that changes what Vaier may do on a machine says where to read what that means. The shell
+        // A nudge that changes what Fjord may do on a machine says where to read what that means. The shell
         // has no deep-link routing and does not need any: the Concepts page already anchors every term by
         // slug, so this is a plain link to it.
         if (a.learn) {
@@ -1704,7 +1704,7 @@
     // typing the CIDR by hand produces, with nothing reimplemented alongside it.
     async function routeDetectedLan(m, cidr) {
         const peer = S.peers.get(m.id);
-        if (!peer || !cidr) { toast('Vaier cannot route that network.'); return; }
+        if (!peer || !cidr) { toast('Fjord cannot route that network.'); return; }
         const ok = await patchJson('/vpn/peers/' + encodeURIComponent(peer.id) + '/lan-cidr',
             { lanCidr: cidr }, 'Could not route that network — another machine may already carry it.');
         if (!ok) return;
@@ -1726,7 +1726,7 @@
         const isLan = m.type === 'LAN_SERVER';
         const peer = S.peers.get(m.id);
         const pid = peer ? peer.id : null;
-        if (!isLan && !pid) { toast('Vaier cannot edit that machine.'); return; }
+        if (!isLan && !pid) { toast('Fjord cannot edit that machine.'); return; }
         const enc = encodeURIComponent;
         // A LAN server is addressed by its identity; a peer by its WireGuard id, which a rename never moves.
         const base = isLan ? '/lan-servers/' + enc(m.id) : '/vpn/peers/' + enc(pid);
@@ -1772,7 +1772,7 @@
 
     // The edit form: a machine's human details, resolved as a body or null. A server peer also gets its LAN
     // address and CIDR; every machine gets a device category. Keys and tunnel address are never asked — they
-    // are Vaier's.
+    // are Fjord's.
     function editMachineForm(m) {
         return new Promise((resolve) => {
             const rec = S.peers.get(m.id) || S.lan.get(m.id) || {};
@@ -1781,7 +1781,7 @@
             const dialog = el('div', 'ex-dialog');
             const h = el('div', 'ex-dialog-title'); h.textContent = 'Edit ' + m.name;
             const sub = el('div', 'ex-dialog-body');
-            sub.textContent = 'What Vaier knows about this machine. Its keys and tunnel address are Vaier’s to '
+            sub.textContent = 'What Fjord knows about this machine. Its keys and tunnel address are Fjord’s to '
                 + 'keep — everything here is yours to name.';
             const form = el('div', 'ex-form');
             const field = (label, hint, control) => {
@@ -1801,14 +1801,14 @@
             if (isServerPeer) {
                 form.append(field('LAN address', 'Where this server answers on its own network.', lanAddr));
             }
-            form.append(field('Device category', 'Its shape in the tree and on the map. Auto-detect lets Vaier '
+            form.append(field('Device category', 'Its shape in the tree and on the map. Auto-detect lets Fjord '
                 + 'choose from what it sees.', cat));
             if (isServerPeer) {
-                // Vaier reads the network off the machine and offers it on the machine's own pane, so this
+                // Fjord reads the network off the machine and offers it on the machine's own pane, so this
                 // field is no longer how the question gets answered — it is the escape hatch for the case
                 // nothing can detect: a machine fronting a second subnet. Folded, and it says why.
                 const adv = disclosure('Advanced');
-                adv.appendChild(field('Network behind it', 'Vaier reads this off the machine and offers it on '
+                adv.appendChild(field('Network behind it', 'Fjord reads this off the machine and offers it on '
                     + 'the machine’s page. Set it by hand only for a network it cannot see — a second subnet '
                     + 'this machine also fronts.', lanCidr));
                 // A machine that already routes a network shows it rather than hiding state behind a fold.
@@ -1839,7 +1839,7 @@
         });
     }
 
-    // Whether Vaier may open an SSH session to a machine at all — the switch above the credential. Distinct from
+    // Whether Fjord may open an SSH session to a machine at all — the switch above the credential. Distinct from
     // the credential itself: this is the capability, that is the login. Optimistic, with the checkbox reverted if
     // the server refuses; on success the fleet reloads so the files/shell/disk entries appear or vanish with it.
     async function toggleSshAccess(machineId, enabled, checkbox) {
@@ -1848,7 +1848,7 @@
             'Could not update SSH access.');
         if (!ok) { checkbox.checked = !enabled; checkbox.disabled = false; return; }
         await loadFleet();
-        toast(enabled ? 'Vaier can now open SSH sessions to ' + nameOf(machineId) + '.'
+        toast(enabled ? 'Fjord can now open SSH sessions to ' + nameOf(machineId) + '.'
                       : 'SSH sessions to ' + nameOf(machineId) + ' turned off.');
         render();
     }
@@ -1861,7 +1861,7 @@
         const peer = S.peers.get(m.id);
         if (!peer) return;
         const ok = await confirmModal('Regenerate ' + m.name + '’s config?',
-            'Vaier deletes ' + m.name + '’s WireGuard peer and recreates it with a fresh keypair — a brand-new '
+            'Fjord deletes ' + m.name + '’s WireGuard peer and recreates it with a fresh keypair — a brand-new '
             + 'identity on the VPN. The current config stops working the moment the peer is deleted, and ' + m.name
             + ' can only reconnect once the new one is installed. Reissue keeps the same keys; regenerate '
             + 'replaces them. Only regenerate when the keypair itself must change.', 'Regenerate');
@@ -1871,12 +1871,12 @@
             lanAddress: m.lanAddress || null, description: rec.description || null };
         try {
             const del = await fetch('/vpn/peers/' + encodeURIComponent(peer.id), { method: 'DELETE' });
-            if (!del.ok && del.status !== 204) { toast('Vaier could not regenerate ' + m.name + '.'); return; }
+            if (!del.ok && del.status !== 204) { toast('Fjord could not regenerate ' + m.name + '.'); return; }
             const res = await fetch('/vpn/peers', { method: 'POST',
                 headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(recreate) });
             if (!res.ok) {
                 const e = await res.json().catch(() => ({}));
-                toast(e.message || 'Vaier deleted the old peer but could not recreate it.');
+                toast(e.message || 'Fjord deleted the old peer but could not recreate it.');
                 await loadFleet(); render(); return;
             }
             const created = await res.json();
@@ -1884,12 +1884,12 @@
             toast(m.name + '’s config regenerated — save the new config now.');
             createResult(created);   // the same one-shot config view a new machine gets
         } catch (e) {
-            toast('Vaier could not regenerate ' + m.name + '.');
+            toast('Fjord could not regenerate ' + m.name + '.');
         }
     }
 
     // Mint a single-use, ~15-min setup token for a LAN host, so the curl one-liner authorizes itself on a
-    // bare box with no Vaier session — exactly like a peer's. Returns the token, or null if minting failed.
+    // bare box with no Fjord session — exactly like a peer's. Returns the token, or null if minting failed.
     // Mint a single-use setup token for a LAN host, or learn there is nothing to set up. Returns
     // { needed: true, token } when the host has a setup script, { needed: false } when it has none
     // (204 — runs no Docker, anchors no LAN), or null on a real failure.
@@ -1904,21 +1904,21 @@
         } catch (e) { return null; }
     }
 
-    // A LAN host's setup script. Vaier mints a single-use token and hands over the curl one-liner to run on the
-    // host: the box pulls the script over HTTPS from Vaier's token-gated /setup route. It needs sudo because it
+    // A LAN host's setup script. Fjord mints a single-use token and hands over the curl one-liner to run on the
+    // host: the box pulls the script over HTTPS from Fjord's token-gated /setup route. It needs sudo because it
     // installs Docker. The in-console setup.sh download stays a by-hand fallback. (A VPN peer's setup script is
     // shown once with its config; reissue or regenerate to see it again.)
     async function lanSetupScript(machineId) {
         const machineName = nameOf(machineId);
         const mint = await mintLanSetupToken(machineId);
-        if (!mint) { toast('Vaier could not prepare the setup command for ' + machineName + '.'); return; }
-        if (!mint.needed) { toast('Nothing to set up on ' + machineName + ' — Vaier manages it as-is.'); return; }
+        if (!mint) { toast('Fjord could not prepare the setup command for ' + machineName + '.'); return; }
+        if (!mint.needed) { toast('Nothing to set up on ' + machineName + ' — Fjord manages it as-is.'); return; }
         const origin = window.location.origin;
         const runUrl = origin + '/lan-servers/' + encodeURIComponent(machineId)
             + '/setup?t=' + encodeURIComponent(mint.token);
         setupScriptDialog({
             title: 'Setup command for ' + machineName,
-            body: 'Run this on ' + machineName + ' itself (it needs sudo) to open its Docker engine API to Vaier '
+            body: 'Run this on ' + machineName + ' itself (it needs sudo) to open its Docker engine API to Fjord '
                 + 'and install the routes that let it reach the rest of the fleet. It’s idempotent — safe to '
                 + 'run once at onboarding or again later, e.g. after rebuilding the host. The link works once.',
             curl: "curl -fsSL '" + runUrl + "' | sudo bash",
@@ -1953,17 +1953,17 @@
     // --- adding and removing a machine -----------------------------------------------------------------
     //
     // A machine is a WireGuard peer. Adding one asks a name and a type (and, for a server, the LAN behind it);
-    // Vaier assigns the keys and the tunnel address, and hands back the config to install — shown once, because
+    // Fjord assigns the keys and the tunnel address, and hands back the config to install — shown once, because
     // the download endpoints are one-shot. Removing deletes the peer (or a LAN-server registration) behind the
     // typed-name gate. LAN servers are usually found by the scan, so the add form offers the peer kinds.
 
-    // Adding a machine is one flow with one fork Vaier can't infer: a new peer (Vaier hands it a config) or a
-    // server already on one of your networks (Vaier scans, finds it, and adopts it). The peer branch hands off
+    // Adding a machine is one flow with one fork Fjord can't infer: a new peer (Fjord hands it a config) or a
+    // server already on one of your networks (Fjord scans, finds it, and adopts it). The peer branch hands off
     // to the existing peer form unchanged; the LAN-server branch discovers and adopts. Everything else — the
-    // address, the kind, the Docker port, the site it sits behind — Vaier already knows, so it is never typed.
+    // address, the kind, the Docker port, the site it sits behind — Fjord already knows, so it is never typed.
     function addMachine() { addMachineFork('fork', null); }
 
-    // One modal, internal screens — the fork Vaier can't infer, then (LAN-server branch) discover + adopt, with
+    // One modal, internal screens — the fork Fjord can't infer, then (LAN-server branch) discover + adopt, with
     // a quiet by-address fallback for empty scans. Optionally opens straight on a screen
     // (the fleet's "Discovered on the LAN" list jumps in at 'adopt' for a chosen candidate). Cached-first and
     // push-driven: candidates show instantly from the last scan, and a finished scan repaints the list over the
@@ -2035,20 +2035,20 @@
                 || { anchor: anchor, name: relayName(anchor) || anchor, cidr: null };
         }
 
-        // ---- fork: the one question Vaier can't infer ---------------------------------------------------
+        // ---- fork: the one question Fjord can't infer ---------------------------------------------------
         function paintFork() {
             titleEl.textContent = 'Add a machine';
             content.innerHTML = '';
             const sub = el('div', 'ex-dialog-body');
-            sub.textContent = 'Vaier fills in everything it can. Answer the one thing it can’t infer: a new peer '
+            sub.textContent = 'Fjord fills in everything it can. Answer the one thing it can’t infer: a new peer '
                 + 'that connects through the VPN, or a server already on one of your networks?';
             const grid = el('div', 'ex-choice-grid');
             const peer = choiceCard('relay', 'A peer',
-                'A new box or device that connects through Vaier’s VPN. Gets a tunnel address, keys and a config '
+                'A new box or device that connects through Fjord’s VPN. Gets a tunnel address, keys and a config '
                 + 'to install.');
             peer.onclick = () => screen('peerWhat');
             const lan = choiceCard('server', 'A LAN server',
-                'A machine already running on one of your networks. Vaier scans, finds it, and adopts it.');
+                'A machine already running on one of your networks. Fjord scans, finds it, and adopts it.');
             lan.onclick = () => { screen('pickLan'); };
             grid.append(peer, lan);
             content.append(sub, section('What are you adding?'), grid);
@@ -2058,14 +2058,14 @@
         }
 
         // ---- pickLan: choose which LAN to scan first (small page, targeted scan) ------------------------
-        // The operator always picks a LAN before Vaier sweeps it, so no screen ever renders every LAN's finds
+        // The operator always picks a LAN before Fjord sweeps it, so no screen ever renders every LAN's finds
         // at once and no scan fans out over the whole fleet. Each row is one "via <name>" network with its
         // CIDR and, from the cached snapshot, how many candidates it holds and when it was last scanned.
         function paintPickLan() {
             titleEl.textContent = 'Add a LAN server';
             content.innerHTML = '';
             const sub = el('div', 'ex-dialog-body');
-            sub.textContent = 'Pick the network to look on. Vaier scans that one LAN — quicker than sweeping them '
+            sub.textContent = 'Pick the network to look on. Fjord scans that one LAN — quicker than sweeping them '
                 + 'all — and shows what it finds.';
             content.appendChild(sub);
 
@@ -2087,9 +2087,9 @@
                 content.appendChild(list);
             } else {
                 // A zero state, so it has to name the thing to go and do — and the by-address path is not it:
-                // an address Vaier cannot route to is refused, and with no networks here there is none.
+                // an address Fjord cannot route to is refused, and with no networks here there is none.
                 content.appendChild(note('No networks to scan yet. Add a peer on the network you want to '
-                    + 'reach and tell Vaier the network behind it — Vaier can only look where a machine of '
+                    + 'reach and tell Fjord the network behind it — Fjord can only look where a machine of '
                     + 'yours already is.', false));
             }
             content.appendChild(pickFoot());
@@ -2220,7 +2220,7 @@
             return foot;
         }
 
-        // ---- adopt: one editable name, everything else Vaier already probed -----------------------------
+        // ---- adopt: one editable name, everything else Fjord already probed -----------------------------
         function paintAdopt() {
             const d = cand;
             // Opened straight from the fleet's "Discovered on the LAN" list (no LAN picked), so seed the LAN
@@ -2232,13 +2232,13 @@
 
             const name = el('input', 'ex-input'); name.type = 'text'; name.value = suggested;
             name.autocomplete = 'off'; name.spellcheck = false;
-            content.appendChild(field('Name', 'The only thing Vaier can’t infer — what to call it.', name));
+            content.appendChild(field('Name', 'The only thing Fjord can’t infer — what to call it.', name));
 
             // The read-only readout of what the scan already knows. None of it is typed.
             const det = el('div', 'ex-detected');
             const head = el('div', 'ex-detected-head');
             head.appendChild(el('span', 'ex-detected-check')).textContent = '✓';
-            const ht = el('span'); ht.textContent = 'Detected by Vaier — no need to enter'; head.appendChild(ht);
+            const ht = el('span'); ht.textContent = 'Detected by Fjord — no need to enter'; head.appendChild(ht);
             det.appendChild(head);
             const drow = (k, v, accent) => {
                 const r = el('div', 'ex-drow');
@@ -2257,7 +2257,7 @@
             content.appendChild(det);
 
             // Optional SSH access — the same login the web terminal, disk watch and backups ride on. Offered
-            // only when the host actually answered on port 22 (Vaier probed it): a machine that doesn't speak
+            // only when the host actually answered on port 22 (Fjord probed it): a machine that doesn't speak
             // SSH is adopted without a credential, so the fields never appear for it. Tested live against the
             // host before it is stored, so a wrong password is caught here, not later in the dark.
             let draft = () => null;
@@ -2304,12 +2304,12 @@
                     try {
                         const r = await fetch('/lan-scan/' + encodeURIComponent(d.ipAddress) + '/ssh-credential/test', {
                             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(draft()) });
-                        if (!r.ok) { toast('Vaier could not test that login.'); return; }
+                        if (!r.ok) { toast('Fjord could not test that login.'); return; }
                         const v = await r.json();
                         if (v.authenticated) { testOk.classList.add('is-on'); }
                         else if (v.reachable) { toast('Reached ' + d.ipAddress + ', but that login was refused.'); }
-                        else { toast('Vaier could not reach ' + d.ipAddress + ' over SSH.'); }
-                    } catch (e) { toast('Vaier could not test that login.'); }
+                        else { toast('Fjord could not reach ' + d.ipAddress + ' over SSH.'); }
+                    } catch (e) { toast('Fjord could not test that login.'); }
                     finally { testBtn.disabled = false; testBtn.textContent = was; }
                 };
             }
@@ -2337,30 +2337,30 @@
             try {
                 const res = await fetch('/lan-scan/' + encodeURIComponent(cand.ipAddress) + '/adopt', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(bodyObj) });
-                if (!res.ok) { const e = await res.json().catch(() => ({})); toast(e.message || 'Vaier could not add that machine.'); restore(); return; }
+                if (!res.ok) { const e = await res.json().catch(() => ({})); toast(e.message || 'Fjord could not add that machine.'); restore(); return; }
                 const resp = await res.json();
                 await loadFleet(); await loadLanScan();
                 const credNote = resp.credentialProvided && !resp.credentialStored
                     ? ' Its SSH login couldn’t be saved — set one from the machine.' : '';
                 adopted = { machineId: resp.machineId, name: resp.name, credNote: credNote };
                 screen('lanHandoff');
-            } catch (e) { toast('Vaier could not add that machine.'); restore(); }
+            } catch (e) { toast('Fjord could not add that machine.'); restore(); }
         }
 
-        // ---- LAN handoff — the machine is registered; hand over the command that lets Vaier manage it -----
+        // ---- LAN handoff — the machine is registered; hand over the command that lets Fjord manage it -----
         // Parity with the peer handoff: instead of jumping straight to the machine, show the copyable
         // curl one-liner the operator runs on the host (with sudo — it installs Docker), gated by a fresh
         // single-use token. The by-hand setup.sh download stays as a fallback. Done closes and navigates.
         async function paintLanHandoff() {
             const a = adopted;
             if (!a) { screen('fork'); return; }
-            titleEl.textContent = a.name + ' — let Vaier manage it';
+            titleEl.textContent = a.name + ' — let Fjord manage it';
             content.innerHTML = '';
 
             const mint = await mintLanSetupToken(a.machineId);
             const sub = el('div', 'ex-dialog-body');
             if (mint && mint.needed) {
-                sub.textContent = a.name + ' is registered.' + (a.credNote || '') + ' To let Vaier manage its '
+                sub.textContent = a.name + ' is registered.' + (a.credNote || '') + ' To let Fjord manage its '
                     + 'containers, run this on ' + a.name + ' — it needs sudo:';
                 content.appendChild(sub);
 
@@ -2380,13 +2380,13 @@
                 content.appendChild(fb);
             } else if (mint && !mint.needed) {
                 sub.textContent = a.name + ' is registered.' + (a.credNote || '')
-                    + ' Vaier can manage it as-is — nothing to install on the host.';
+                    + ' Fjord can manage it as-is — nothing to install on the host.';
                 content.appendChild(sub);
             } else {
                 sub.textContent = a.name + ' is registered.' + (a.credNote || '');
                 content.appendChild(sub);
                 const warn = el('div', 'ex-hint');
-                warn.textContent = 'Vaier could not prepare the setup command. Open ' + a.name
+                warn.textContent = 'Fjord could not prepare the setup command. Open ' + a.name
                     + ' and use its Setup script button.';
                 content.appendChild(warn);
             }
@@ -2401,18 +2401,18 @@
             content.appendChild(actions);
         }
 
-        // ---- by address: the fallback (an empty scan, or a LAN Vaier can't reach) -----------------------
-        // The scan can come back empty, or find nothing on a LAN Vaier can't reach, so registering a LAN
+        // ---- by address: the fallback (an empty scan, or a LAN Fjord can't reach) -----------------------
+        // The scan can come back empty, or find nothing on a LAN Fjord can't reach, so registering a LAN
         // server by hand never goes away — it just steps out of the way of discovery. But once the operator
-        // names an address, Vaier can still probe that one host (POST /lan-servers/probe) and offer the same
+        // names an address, Fjord can still probe that one host (POST /lan-servers/probe) and offer the same
         // detected readout + SSH credential test the adopt flow does. Detection never blocks Add: an
         // unreachable host just leaves the plain fields to fill in by hand.
         function paintByAddress() {
             titleEl.textContent = 'Add a LAN server';
             content.innerHTML = '';
             const sub = el('div', 'ex-dialog-body');
-            sub.textContent = 'A LAN server is reached through the machine whose network it sits on, so Vaier only '
-                + 'needs where it answers. Give its LAN address and Vaier will try to detect the rest.';
+            sub.textContent = 'A LAN server is reached through the machine whose network it sits on, so Fjord only '
+                + 'needs where it answers. Give its LAN address and Fjord will try to detect the rest.';
             content.appendChild(sub);
 
             const name = el('input', 'ex-input'); name.type = 'text'; name.placeholder = 'e.g. Roon server';
@@ -2421,7 +2421,7 @@
             lanAddr.autocomplete = 'off'; lanAddr.spellcheck = false;
             const dockerBox = el('input'); dockerBox.type = 'checkbox';
             const dockerRow = el('label', 'ex-check-row');
-            const dtxt = el('span'); dtxt.textContent = 'It runs Docker Vaier can read'; dockerRow.append(dockerBox, dtxt);
+            const dtxt = el('span'); dtxt.textContent = 'It runs Docker Fjord can read'; dockerRow.append(dockerBox, dtxt);
             const dockerPort = el('input', 'ex-input'); dockerPort.type = 'number'; dockerPort.min = '1';
             dockerPort.max = '65535'; dockerPort.value = '2375';
             const dockerPortField = field('Docker API port', 'The port its Docker engine API listens on.', dockerPort);
@@ -2488,12 +2488,12 @@
                 try {
                     const r = await fetch('/lan-scan/' + encodeURIComponent(addr) + '/ssh-credential/test', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(draft()) });
-                    if (!r.ok) { toast('Vaier could not test that login.'); return; }
+                    if (!r.ok) { toast('Fjord could not test that login.'); return; }
                     const v = await r.json();
                     if (v.authenticated) { testOk.classList.add('is-on'); }
                     else if (v.reachable) { toast('Reached ' + addr + ', but that login was refused.'); }
-                    else { toast('Vaier could not reach ' + addr + ' over SSH.'); }
-                } catch (e) { toast('Vaier could not test that login.'); }
+                    else { toast('Fjord could not reach ' + addr + ' over SSH.'); }
+                } catch (e) { toast('Fjord could not test that login.'); }
                 finally { testBtn.disabled = false; testBtn.textContent = was; }
             };
 
@@ -2553,7 +2553,7 @@
         }
 
         // ---- peer branch: intent first, an explicit OS second, then name, then handoff ------------------
-        // A brand-new peer is on no network yet, so Vaier can't probe it. It asks only intent — what the
+        // A brand-new peer is on no network yet, so Fjord can't probe it. It asks only intent — what the
         // machine is for, and its OS — and generates everything else. The intent -> MachineType mapping is
         // the domain's (MachineIntent, resolved server-side from intent + windows); the browser never
         // decides the routing type. The LAN a server routes is set later from the machine, so the operator
@@ -2574,7 +2574,7 @@
             titleEl.textContent = 'Add a peer';
             content.innerHTML = '';
             const sub = el('div', 'ex-dialog-body');
-            sub.textContent = 'A peer connects through Vaier’s VPN — Vaier assigns its tunnel address and keys. '
+            sub.textContent = 'A peer connects through Fjord’s VPN — Fjord assigns its tunnel address and keys. '
                 + 'Answer what it is for, and it generates the rest.';
             const grid = el('div', 'ex-choice-grid');
             // The two cards carry the whole of the difference between the intents, so they say what each one
@@ -2586,7 +2586,7 @@
             server.onclick = () => { peerIntent = 'SERVER'; screen('peerOs'); };
             const device = choiceCard('laptop', 'A personal device',
                 'A phone, laptop or desktop that just needs to reach the fleet. Its traffic goes through '
-                + 'Vaier while it’s connected.');
+                + 'Fjord while it’s connected.');
             device.onclick = () => { peerIntent = 'PERSONAL_DEVICE'; screen('peerOs'); };
             grid.append(server, device);
             content.append(sub, section('What is this?'), grid, peerFoot(() => screen('fork')));
@@ -2602,16 +2602,16 @@
             sub.textContent = isServer
                 ? 'The operating system sets how the peer comes up — a no-root container command on Ubuntu, '
                   + 'or the WireGuard app on Windows.'
-                : 'The kind of device sets how Vaier hands off — a QR to scan, or a config for the '
+                : 'The kind of device sets how Fjord hands off — a QR to scan, or a config for the '
                   + 'WireGuard app.';
             const grid = el('div', 'ex-choice-grid');
             let a, b;
             if (isServer) {
                 a = choiceCard('server', 'Ubuntu',
-                    'Comes up with a single no-root command — Vaier runs the tunnel in a container.');
+                    'Comes up with a single no-root command — Fjord runs the tunnel in a container.');
                 a.onclick = () => { peerWindows = false; screen('peerName'); };
                 b = choiceCard('desktop', 'Windows',
-                    'Comes up with WireGuard for Windows and the config Vaier generates.');
+                    'Comes up with WireGuard for Windows and the config Fjord generates.');
                 b.onclick = () => { peerWindows = true; screen('peerName'); };
             } else {
                 a = choiceCard('phone', 'Phone / Mac / Linux',
@@ -2626,7 +2626,7 @@
                 peerFoot(() => screen('peerWhat')));
         }
 
-        // ---- peer · name — the one thing Vaier can't generate ------------------------------------------
+        // ---- peer · name — the one thing Fjord can't generate ------------------------------------------
         function paintPeerName() {
             if (!peerIntent) { screen('peerWhat'); return; }
             titleEl.textContent = 'Add a peer';
@@ -2635,12 +2635,12 @@
             const name = el('input', 'ex-input'); name.type = 'text';
             name.placeholder = peerIntent === 'SERVER' ? 'e.g. Roon server' : 'e.g. Geir’s phone';
             name.autocomplete = 'off'; name.spellcheck = false;
-            content.appendChild(field('Name', 'The only thing Vaier can’t generate — what to call it.', name));
+            content.appendChild(field('Name', 'The only thing Fjord can’t generate — what to call it.', name));
 
             const det = el('div', 'ex-detected');
             const head = el('div', 'ex-detected-head');
             head.appendChild(el('span', 'ex-detected-check')).textContent = '✓';
-            const ht = el('span'); ht.textContent = 'Vaier will generate'; head.appendChild(ht);
+            const ht = el('span'); ht.textContent = 'Fjord will generate'; head.appendChild(ht);
             det.appendChild(head);
             const drow = (k, v, accent) => {
                 const r = el('div', 'ex-drow');
@@ -2679,7 +2679,7 @@
                 });
                 if (!res.ok) {
                     const e = await res.json().catch(() => ({}));
-                    toast(e.message || 'Vaier could not add that machine.');
+                    toast(e.message || 'Fjord could not add that machine.');
                     addBtn.disabled = false; addBtn.textContent = was; return;
                 }
                 peerCreated = await res.json();
@@ -2687,7 +2687,7 @@
                 toast(peerCreated.name + ' added.');
                 screen('peerHandoff');
             } catch (e) {
-                toast('Vaier could not add that machine.');
+                toast('Fjord could not add that machine.');
                 addBtn.disabled = false; addBtn.textContent = was;
             }
         }
@@ -2779,7 +2779,7 @@
 
         // Ubuntu server: the no-sudo recipe. When a single-use setup token is present (Slice 4b) the
         // PRIMARY recipe is the curl one-liner — log in as yourself, paste one line, it turns green on its
-        // own; the box pulls its own config over HTTPS from Vaier's token-gated /setup route. Copying the
+        // own; the box pulls its own config over HTTPS from Fjord's token-gated /setup route. Copying the
         // script by hand stays as a fallback. Without a token (older responses) we keep the save-the-file flow.
         function peerHandoffUbuntu(p) {
             const wrap = el('div');
@@ -2884,7 +2884,7 @@
     }
 
     // Register a LAN server by hand — a machine on a relay's LAN that is not a WireGuard peer of its own (a NAS,
-    // a printer, an appliance). It is reached through its relay, so Vaier only needs where it answers and, if it
+    // a printer, an appliance). It is reached through its relay, so Fjord only needs where it answers and, if it
     // speaks Docker, on which port. Usually these are found by the scan; this is the by-hand path. A 400 means
     // the address is not inside any relay's LAN — the one failure worth its own sentence.
     async function createLanServer(body) {
@@ -2897,13 +2897,13 @@
                     credential: body.credential || null }),
             });
             if (res.status === 400) {
-                toast(body.lanAddress + ' isn’t on a network Vaier can reach. Add the machine that sits on '
+                toast(body.lanAddress + ' isn’t on a network Fjord can reach. Add the machine that sits on '
                     + 'that network first.');
                 return false;
             }
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
-                toast(err.message || 'Vaier could not add that machine.');
+                toast(err.message || 'Fjord could not add that machine.');
                 return false;
             }
             // With a credential the body reports whether it stuck; the machine is registered either way.
@@ -2917,7 +2917,7 @@
             go(['fleet', added]);
             return true;
         } catch (e) {
-            toast('Vaier could not add that machine.');
+            toast('Fjord could not add that machine.');
             return false;
         }
     }
@@ -2933,8 +2933,8 @@
                            : '/lan-servers/' + encodeURIComponent(m.id);
         try {
             const res = await fetch(url, { method: 'DELETE' });
-            if (!res.ok && res.status !== 204) { toast('Vaier could not remove ' + m.name + '.'); return; }
-        } catch (e) { toast('Vaier could not remove ' + m.name + '.'); return; }
+            if (!res.ok && res.status !== 204) { toast('Fjord could not remove ' + m.name + '.'); return; }
+        } catch (e) { toast('Fjord could not remove ' + m.name + '.'); return; }
         await loadFleet();
         toast(m.name + ' removed.');
         go(['fleet']);
@@ -2946,24 +2946,24 @@
         const peer = S.peers.get(m.id);
         if (!peer) return;
         const ok = await confirmModal('Reissue ' + m.name + '’s config?',
-            'Vaier generates a fresh WireGuard config for ' + m.name + '. The current one stops working the '
+            'Fjord generates a fresh WireGuard config for ' + m.name + '. The current one stops working the '
             + 'moment the new one is installed — reissue only when you are ready to replace it.', 'Reissue');
         if (!ok) return;
         try {
             const res = await fetch('/vpn/peers/' + encodeURIComponent(peer.id) + '/reissue', { method: 'POST' });
             if (!res.ok) {
                 const e = await res.json().catch(() => ({}));
-                toast(e.message || 'Vaier could not reissue the config.');
+                toast(e.message || 'Fjord could not reissue the config.');
                 return;
             }
             toast(m.name + '’s config reissued.');
             createResult(await res.json());   // same one-shot config view a new machine gets
         } catch (e) {
-            toast('Vaier could not reissue the config.');
+            toast('Fjord could not reissue the config.');
         }
     }
 
-    // A tiny client-side download — turns text Vaier already sent (a config, a compose file) into a file the
+    // A tiny client-side download — turns text Fjord already sent (a config, a compose file) into a file the
     // browser saves, so nothing has to be re-fetched through the peer's one-shot download gate.
     function downloadText(filename, text) {
         const blob = new Blob([text], { type: 'text/plain' });
@@ -3024,7 +3024,7 @@
         document.addEventListener('keydown', onKey);
     }
 
-    // The SSH credential Vaier holds for a machine, ported from the Infrastructure page's modal. Loads the
+    // The SSH credential Fjord holds for a machine, ported from the Infrastructure page's modal. Loads the
     // stored username/method on open (the secret is never returned), saves a new one, or forgets it. This is
     // what turns a machine's files/shell/disk/backups on — without it they are dark.
     function credentialDialog(machineId) {
@@ -3052,7 +3052,7 @@
         const pwF = field('Password', null, password);
         const keyF = field('Private key (PEM)', null, keyArea);
 
-        // The public half of whatever key Vaier holds — derived from the private key, never stored beside it.
+        // The public half of whatever key Fjord holds — derived from the private key, never stored beside it.
         // It is the one piece of a key credential that is safe to show, and the only piece that is any use to
         // the operator: it has to end up in a file on the machine itself.
         const pubWrap = el('div', 'ex-pubkey-wrap');
@@ -3060,7 +3060,7 @@
         const pubCopy = el('button', 'ex-btn ex-pubkey-copy'); pubCopy.type = 'button'; pubCopy.textContent = 'Copy';
         pubWrap.append(pubKey, pubCopy);
         const pubF = field('Public key', 'Add this line to ~/.ssh/authorized_keys on ' + machineName
-            + '. Vaier keeps the private half and never shows it.', pubWrap);
+            + '. Fjord keeps the private half and never shows it.', pubWrap);
         pubF.style.display = 'none';
         pubCopy.onclick = () => {
             navigator.clipboard.writeText(pubKey.textContent).then(() => toast('Copied.'))
@@ -3069,8 +3069,8 @@
 
         form.append(field('Username', null, username), field('Auth method', null, method), pwF, keyF, passF, pubF);
 
-        // What Vaier currently holds, as far as this dialog knows. `managed` is the whole reason the dialog
-        // has two shapes: a keypair Vaier generated has no private half the operator could edit, so offering
+        // What Fjord currently holds, as far as this dialog knows. `managed` is the whole reason the dialog
+        // has two shapes: a keypair Fjord generated has no private half the operator could edit, so offering
         // them the textarea would be a lie about what they can do.
         let managed = false;
         let hasCredential = false;
@@ -3082,7 +3082,7 @@
             keyF.style.display = isKey && !isManagedKey ? '' : 'none';
             passF.style.display = isKey && !isManagedKey ? '' : 'none';
             pubF.style.display = isKey && pubKey.textContent ? '' : 'none';
-            // Nothing to save for a managed keypair: to hand Vaier a key of your own, pick Password or
+            // Nothing to save for a managed keypair: to hand Fjord a key of your own, pick Password or
             // delete this one first. A Save button with no editable secret behind it would do nothing.
             ok.style.display = isManagedKey ? 'none' : '';
         };
@@ -3118,11 +3118,11 @@
             syncMethod();
             del.style.display = v.hasSecret ? '' : 'none';
             status.textContent = managed
-                ? 'Vaier generated this keypair for ' + (v.username || '') + ' and holds the private half.'
+                ? 'Fjord generated this keypair for ' + (v.username || '') + ' and holds the private half.'
                 : 'Stored for ' + (v.username || '') + ' · '
                     + (v.authMethod || '').toLowerCase().replace('_', ' ') + '. Enter the secret again to replace it.';
             if (v.authMethod === 'PRIVATE_KEY' && v.hasSecret) loadPublicKey();
-        }).catch(() => { status.textContent = 'Could not reach Vaier.'; });
+        }).catch(() => { status.textContent = 'Could not reach Fjord.'; });
 
         // A pasted key has a public half too, and an operator checking "is this the key I installed?" needs
         // it as much as a generated one does — so this is asked for any key credential, not only a managed one.
@@ -3131,7 +3131,7 @@
                 const r = await fetch('/machines/' + encodeURIComponent(machineId) + '/ssh-credential/public-key');
                 if (!r.ok) return;
                 showPublicKey((await r.json()).publicKey);
-            } catch (e) { /* the key is unreadable or Vaier is unreachable; the panel simply stays away */ }
+            } catch (e) { /* the key is unreadable or Fjord is unreachable; the panel simply stays away */ }
         }
 
         function showPublicKey(key) {
@@ -3144,7 +3144,7 @@
             if (!user) { toast('Enter a username.'); return; }
             if (hasCredential) {
                 const sure = await confirmModal('Generate a new keypair for ' + machineName + '?',
-                    'Vaier replaces the login it holds for ' + machineName + ' with a keypair it generates '
+                    'Fjord replaces the login it holds for ' + machineName + ' with a keypair it generates '
                     + 'itself. The current login stops working immediately, and the new one does nothing until '
                     + 'you add its public key to authorized_keys on ' + machineName + '. Its files, shell, disk '
                     + 'and backups go dark in between.', 'Generate');
@@ -3193,7 +3193,7 @@
 
         del.onclick = async () => {
             const sure = await confirmModal('Delete the SSH credential for ' + machineName + '?',
-                'Vaier forgets the login it holds for ' + machineName + '. Its files, shell, disk and backups go dark '
+                'Fjord forgets the login it holds for ' + machineName + '. Its files, shell, disk and backups go dark '
                 + 'until you set one again.', 'Delete');
             if (!sure) return;
             try {
@@ -3205,11 +3205,11 @@
         };
     }
 
-    // --- containers: what Vaier can see, and nothing it cannot do ---------------------------------------
+    // --- containers: what Fjord can see, and nothing it cannot do ---------------------------------------
     //
     // Read-only, and that is not an omission to paper over. DockerServiceRestController exposes GETs and
-    // nothing else — Vaier has no endpoint to start, stop or restart a container, and none to fetch its
-    // logs. So this Inspector shows what Vaier genuinely knows and offers no control it cannot honour.
+    // nothing else — Fjord has no endpoint to start, stop or restart a container, and none to fetch its
+    // logs. So this Inspector shows what Fjord genuinely knows and offers no control it cannot honour.
     // A button that looks like a verb and does nothing is a lie about what works, and the fleet is exactly
     // the place where an operator must be able to trust what the screen says.
 
@@ -3229,7 +3229,7 @@
             return;
         }
         if (!found.length) {
-            body.appendChild(note('Vaier scraped this machine’s Docker and found no containers. Either '
+            body.appendChild(note('Fjord scraped this machine’s Docker and found no containers. Either '
                 + 'none are running, or the machine is not answering on its Docker port.', false));
             pane.appendChild(body);
             return;
@@ -3240,7 +3240,7 @@
         // scrolling a long list of containers. It is HERE, and only here, because this is where the operator
         // lands — they pull a whole compose stack on one machine and then look at that machine's containers.
         // Not on each container's Inspector (they did not pull one image) and not in three places, since the
-        // check is a single fleet-wide act however many buttons front it. The check covers everything Vaier
+        // check is a single fleet-wide act however many buttons front it. The check covers everything Fjord
         // can see, because the backend's sweep does; a per-machine control would be a lie about what happens.
         // Hidden in the archive for the same reason the mark is: there is no "now" back there to re-check.
         if (!S.at) {
@@ -3248,7 +3248,7 @@
             const btn = selVerb('refresh', _updateChecking ? 'Checking…' : 'Check the registries now',
                 'ex-btn', () => checkForUpdates());
             btn.title = 'Ask each registry whether it now serves a newer image for the tag these containers '
-                + 'run. Vaier only reads — it never pulls an image or touches a container.';
+                + 'run. Fjord only reads — it never pulls an image or touches a container.';
             if (_updateChecking) btn.disabled = true;
             act.appendChild(btn);
             body.appendChild(act);
@@ -3275,7 +3275,7 @@
         const name = S.path[3];
         const c = containersOn(machineId).find((x) => x.containerName === name);
         if (!c) {
-            return pane.appendChild(note('Vaier no longer sees a container by that name on ' + machineName + '.',
+            return pane.appendChild(note('Fjord no longer sees a container by that name on ' + machineName + '.',
                 true));
         }
 
@@ -3287,7 +3287,7 @@
             + p.privatePort + '/' + (p.type || 'tcp')).join('  ');
 
         // The Inspector is where the verdict is spoken in words, all three of them. No mark in the rail does
-        // NOT mean the image is current — it means either "current" or "Vaier cannot tell", and those are very
+        // NOT mean the image is current — it means either "current" or "Fjord cannot tell", and those are very
         // different facts to an operator. The rail has no room for the difference; this row does, and #57 was
         // filed precisely because "cannot tell" had been quietly rendered as "fine".
         body.appendChild(kv([
@@ -3300,15 +3300,15 @@
             ['Container id', (c.containerId || '').slice(0, 12)],
         ]));
 
-        // The one verb Vaier has over a container, offered where the verdict that earns it is spoken. It is
+        // The one verb Fjord has over a container, offered where the verdict that earns it is spoken. It is
         // here rather than in the list because it acts on ONE container, which is exactly why the registry
         // check above the list is not here: that one act is fleet-wide however many buttons front it.
         const act = updateAction(machineId, c);
         if (act) body.appendChild(act);
 
-        body.appendChild(note('This is very nearly everything Vaier knows about the container: it reads '
+        body.appendChild(note('This is very nearly everything Fjord knows about the container: it reads '
             + 'Docker, and updating it to the image its registry now serves is the only thing it can do to '
-            + 'one. Nothing here can start, stop or reconfigure it, and Vaier will not show you a control it '
+            + 'one. Nothing here can start, stop or reconfigure it, and Fjord will not show you a control it '
             + 'cannot honour. Use the machine’s shell for that.', false));
         pane.appendChild(body);
     }
@@ -3339,7 +3339,7 @@
             body.appendChild(rows);
         }
 
-        // Container ports Vaier could put on the internet — publish one, or ignore it so it stops being offered.
+        // Container ports Fjord could put on the internet — publish one, or ignore it so it stops being offered.
         if (open.length) {
             body.appendChild(section('Ready to publish'));
             open.forEach((c) => body.appendChild(candidateRow(machineName, c, [
@@ -3364,8 +3364,8 @@
                 ])));
             }
         }
-        // A service that isn't a container Vaier discovered — a LAN app, a device's own web page — is published
-        // by hand: name a port on this machine and Vaier makes the route just the same.
+        // A service that isn't a container Fjord discovered — a LAN app, a device's own web page — is published
+        // by hand: name a port on this machine and Fjord makes the route just the same.
         body.appendChild(section('Publish a service by hand'));
         const manual = el('div', 'ex-lactions is-static');
         manual.appendChild(selVerb('route', 'Publish a service', 'ex-btn', () => lanPublish(machineId)));
@@ -3393,7 +3393,7 @@
     }
 
     // Publish a container port: the only choices that are the operator's are the subdomain (defaulted from the
-    // container name by the domain) and whether it sits behind login. The Traefik route Vaier does, and the
+    // container name by the domain) and whether it sits behind login. The Traefik route Fjord does, and the
     // name already resolves. So the form is two fields.
     function publishCandidate(machineId, c) {
         publishForm(c).then((body) => {
@@ -3463,7 +3463,7 @@
             const dialog = el('div', 'ex-dialog');
             const h = el('div', 'ex-dialog-title'); h.textContent = 'Publish ' + c.containerName;
             const sub = el('div', 'ex-dialog-body');
-            sub.textContent = 'Put ' + c.address + ':' + c.port + ' on the internet. Vaier makes the route; '
+            sub.textContent = 'Put ' + c.address + ':' + c.port + ' on the internet. Fjord makes the route; '
                 + 'the name already resolves under your wildcard record. You choose the name and whether '
                 + 'it needs a login.';
             const form = el('div', 'ex-form');
@@ -3500,9 +3500,9 @@
         });
     }
 
-    // Publish a service by hand — a port on the machine that Vaier did not find as a container. The machine is
+    // Publish a service by hand — a port on the machine that Fjord did not find as a container. The machine is
     // the context; the operator names the subdomain, the port, whether it speaks http or https, and whether it
-    // needs a login. Vaier makes the route; the name already resolves under the operator's wildcard record.
+    // needs a login. Fjord makes the route; the name already resolves under the operator's wildcard record.
     function lanPublish(machineId) {
         // The identity goes to the endpoint; the name only into the dialog's title, where a person reads it.
         lanPublishForm(nameOf(machineId)).then((body) => {
@@ -3521,8 +3521,8 @@
             const dialog = el('div', 'ex-dialog');
             const h = el('div', 'ex-dialog-title'); h.textContent = 'Publish a service on ' + machine;
             const sub = el('div', 'ex-dialog-body');
-            sub.textContent = 'A service Vaier did not discover as a container — a LAN app, a device’s own page. '
-                + 'Name where it listens on ' + machine + ' and Vaier puts it on the internet.';
+            sub.textContent = 'A service Fjord did not discover as a container — a LAN app, a device’s own page. '
+                + 'Name where it listens on ' + machine + ' and Fjord puts it on the internet.';
             const form = el('div', 'ex-form');
             const field = (label, hint, control) => {
                 const f = el('div', 'ex-field'); const l = el('label'); l.textContent = label;
@@ -3604,7 +3604,7 @@
     }
     // A stable id from a string — for pairing a datalist with its input without Math.random (banned here).
     function hashStr(str) { let h = 0; for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0; return h; }
-    // The group names already in use across the fleet's routes — a suggestion set, gathered from what Vaier
+    // The group names already in use across the fleet's routes — a suggestion set, gathered from what Fjord
     // already holds so it needs no extra fetch.
     function accessGroupSuggestions() {
         const set = new Set();
@@ -3747,7 +3747,7 @@
         ve.onkeydown = vp.onkeydown = (e) => { if (e.key === 'Enter') e.target.blur(); };
         const verPair = el('div', 'ex-field-pair'); verPair.append(ve, vp);
         adv.appendChild(formField('Version endpoint',
-            'Where Vaier reads this service’s running version, and the JSON property to read from it.', verPair));
+            'Where Fjord reads this service’s running version, and the JSON property to read from it.', verPair));
 
         adv.appendChild(checkRow('Link straight to the LAN URL when the visitor shares its network',
             !s.directUrlDisabled,
@@ -3760,7 +3760,7 @@
         body.appendChild(note('A published service is one thing with three homes: a container on '
             + machineName + ', a route through Traefik, and the name it answers on — '
             + (s.dnsAddress || 'its name') + '. Unpublishing removes the route; the name goes on resolving '
-            + 'under your wildcard record, which is yours and Vaier never touches. The container keeps '
+            + 'under your wildcard record, which is yours and Fjord never touches. The container keeps '
             + 'running — the machine that hosts it does not notice.', false));
 
         // Unpublish sits here, at the foot of the page, directly under the paragraph that says what it does —
@@ -3777,7 +3777,7 @@
 
     // --- disk -------------------------------------------------------------------------------------------
     //
-    // Every real filesystem on the machine, not just the root one (#325). Vaier used to read `df -P /` — on
+    // Every real filesystem on the machine, not just the root one (#325). Fjord used to read `df -P /` — on
     // the NAS that is the 2.3 GB DSM system partition, 88% by design and never moving, while /volume1 (11.6
     // TB, every borg backup) was invisible and could have filled to 100% in silence.
     //
@@ -3805,14 +3805,14 @@
 
         held.filesystems.forEach(fs => body.appendChild(filesystemBlock(fs, machineId)));
 
-        body.appendChild(note('Vaier reads these with df over SSH, on a schedule, and emails the admins when '
+        body.appendChild(note('Fjord reads these with df over SSH, on a schedule, and emails the admins when '
             + 'a watched filesystem crosses its threshold. A filesystem with no threshold of its own is '
             + 'judged against the fleet-wide one, set on Settings. Mute the ones that are full by design — '
-            + 'a DSM system partition sits near-full forever — but mute them deliberately: everything Vaier '
+            + 'a DSM system partition sits near-full forever — but mute them deliberately: everything Fjord '
             + 'has not been told about is watched.', false));
     }
 
-    // One filesystem: what it is, how full, what it is judged against, and whether Vaier is watching at all.
+    // One filesystem: what it is, how full, what it is judged against, and whether Fjord is watching at all.
     // Mount point and device are coordinates, so they are mono — the shell's one type rule.
     function filesystemBlock(fs, machineId) {
         const block = document.createElement('div');
@@ -3890,11 +3890,11 @@
                 body: JSON.stringify({ mountPoint, watched, thresholdPercent })
             });
             if (!res.ok) {
-                alert('Vaier could not save the watch on ' + mountPoint + '.');
+                alert('Fjord could not save the watch on ' + mountPoint + '.');
                 return;
             }
         } catch (e) {
-            alert('Vaier could not save the watch on ' + mountPoint + '.');
+            alert('Fjord could not save the watch on ' + mountPoint + '.');
             return;
         }
         S.disks.delete(machineId);
@@ -3903,7 +3903,7 @@
 
     // The shell's one figure, once per filesystem. The bar is how full it is; the tick is what that is being
     // judged against — its own threshold or the fleet-wide one, drawn where it actually falls. Without it the
-    // operator would do the comparison in their head, and that comparison is a decision Vaier has already
+    // operator would do the comparison in their head, and that comparison is a decision Fjord has already
     // made (RemoteDiskUsage.breaches) and emails about.
     //
     // A muted filesystem loses its tick, because nothing is being judged: muting is not a quieter alert, it
@@ -3945,11 +3945,11 @@
                 { method: 'DELETE' });
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
-                alert(err.message || 'Vaier could not unpublish ' + label + '.');
+                alert(err.message || 'Fjord could not unpublish ' + label + '.');
                 return;
             }
         } catch (e) {
-            alert('Vaier could not unpublish ' + label + '.');
+            alert('Fjord could not unpublish ' + label + '.');
             return;
         }
         // Stand where the service used to be: its parent. The route is gone, so the entry is gone with it.
@@ -4027,7 +4027,7 @@
     //
     // The mark itself is still not a verb — it is a reading, and a row of them is a list of readings. The verb
     // lives one click away on the container's own page, where there is room to say what it will do first, so
-    // the tooltip points at it rather than carrying it. For a container Vaier will not recreate, the tooltip
+    // the tooltip points at it rather than carrying it. For a container Fjord will not recreate, the tooltip
     // keeps naming the operator's own action, because that is the only one there is.
     function updateMark(container) {
         // The past has no update to report: an archive is how a filesystem stood then, and the registry's
@@ -4045,50 +4045,50 @@
     const UPDATE_SAYS = {
         UPDATE_AVAILABLE: 'Update available',
         UP_TO_DATE: 'Up to date',
-        UNKNOWN: 'Vaier cannot tell',
+        UNKNOWN: 'Fjord cannot tell',
     };
 
     /**
-     * What the Update row says (#353). Vaier's own stack is no longer asked about at all — its images are
-     * pinned by a Vaier release and move when Vaier does — so those containers carry no verdict, and
-     * rendering "Vaier cannot tell" for them would be true, useless, and would read as a gap where there is
+     * What the Update row says (#353). Fjord's own stack is no longer asked about at all — its images are
+     * pinned by a Fjord release and move when Fjord does — so those containers carry no verdict, and
+     * rendering "Fjord cannot tell" for them would be true, useless, and would read as a gap where there is
      * a rule. Say the rule instead. Every other container still gets the domain's verdict, unaltered.
      */
     function updateSays(c) {
-        return c.updateEligibility === 'VAIER_OWN_STACK'
-            ? 'Moves with Vaier — update from Settings'
+        return c.updateEligibility === 'FJORD_OWN_STACK'
+            ? 'Moves with Fjord — update from Settings'
             : (UPDATE_SAYS[c.updateAvailable] || UPDATE_SAYS.UNKNOWN);
     }
 
     // --- the Update action (#352) ----------------------------------------------------------------------
     //
     // The verb the mark above never had. For its whole life the update-available mark was advice with no way
-    // to act on it, and the operator ended up SSH-ing to the host to do by hand the thing Vaier had just told
+    // to act on it, and the operator ended up SSH-ing to the host to do by hand the thing Fjord had just told
     // them to do. This is that thing, done from here.
     //
     // Whether a container may be updated at all is NOT decided here. ContainerUpdateEligibility took that decision on
     // the machine the container was scraped from, which is the only place that can: the same container name
-    // means Vaier's own stack on this host and the operator's own container on any other, and a name alone
+    // means Fjord's own stack on this host and the operator's own container on any other, and a name alone
     // cannot tell you which. The shell reads one enum, exactly as it does for the update verdict.
     //
-    // What Vaier does with it is compose's own `pull` then `up -d`, over SSH, from the coordinates the
+    // What Fjord does with it is compose's own `pull` then `up -d`, over SSH, from the coordinates the
     // container carries about itself — never a rebuild from `docker inspect`, which comes back subtly
     // different and reports success.
 
     // Why the button is withheld, in the operator's terms. Both are ordinary states, not faults, so neither
     // sentence is an error — it says what is true and, where there is one, what to do instead.
     const UPDATE_WITHHELD = {
-        NOT_COMPOSE_MANAGED: 'Vaier will not update this one: it was started by hand rather than by compose, '
+        NOT_COMPOSE_MANAGED: 'Fjord will not update this one: it was started by hand rather than by compose, '
             + 'so there is no compose file to recreate it from. Recreating it anyway would drop whatever it '
             + 'was started with. Update it on the machine itself.',
-        VAIER_OWN_STACK: 'This is part of Vaier’s own stack. Its image is pinned by a Vaier release and moves '
-            + 'when Vaier does — update it from Settings, not one container at a time.',
-        // The one withheld reason that is somebody's to fix, so it says how. Vaier reads this machine's Docker
+        FJORD_OWN_STACK: 'This is part of Fjord’s own stack. Its image is pinned by a Fjord release and moves '
+            + 'when Fjord does — update it from Settings, not one container at a time.',
+        // The one withheld reason that is somebody's to fix, so it says how. Fjord reads this machine's Docker
         // over the tunnel, which needs no group at all — which is exactly why the machine looks healthy while
         // being unable to act. It re-checks on its own rounds, so the button returns without anyone asking.
-        NO_DOCKER_ACCESS: 'Vaier can read this machine’s Docker but not act on it: the user it signs in as is '
+        NO_DOCKER_ACCESS: 'Fjord can read this machine’s Docker but not act on it: the user it signs in as is '
             + 'not in the machine’s docker group. Add it there — you can see which user under the machine’s '
-            + 'SSH credential — and Vaier will offer this again on its own.',
+            + 'SSH credential — and Fjord will offer this again on its own.',
     };
 
     // Which updates this browser is waiting on. Keyed by machine and container, because a name is only unique
@@ -4130,7 +4130,7 @@
         // Said before it happens, because it happens to something that is running. The reassurance is real and
         // it is the domain's: a recreate that fails leaves the old container up, on the image it already had.
         const sure = await confirmModal('Update ' + containerName + '?',
-            'Vaier will pull the newer image on ' + nameOf(machineId) + ' and recreate ' + containerName
+            'Fjord will pull the newer image on ' + nameOf(machineId) + ' and recreate ' + containerName
             + ' from its own compose file. It is down for a moment while it restarts. If the recreate fails, '
             + 'the old container keeps running on the image it has now.', 'Update');
         if (!sure) return;
@@ -4151,7 +4151,7 @@
             }
         } catch (e) {
             _updating.delete(key);
-            toast('Vaier could not ask ' + nameOf(machineId) + ' for that update.');
+            toast('Fjord could not ask ' + nameOf(machineId) + ' for that update.');
             render();
         }
     }
@@ -4159,15 +4159,15 @@
     // Why an update was refused before it started. The backend distinguishes these deliberately; collapsing
     // them into "something went wrong" would throw away the one part the operator can act on.
     async function refusalSays(res, containerName) {
-        if (res.status === 424) return 'Vaier holds no SSH login for that machine, so it cannot update '
+        if (res.status === 424) return 'Fjord holds no SSH login for that machine, so it cannot update '
             + containerName + '. Store one under the machine first.';
-        if (res.status === 404) return 'Vaier no longer sees a container named ' + containerName
+        if (res.status === 404) return 'Fjord no longer sees a container named ' + containerName
             + ' on that machine.';
         try {
             const body = await res.json();
             if (body && body.message) return body.message;
         } catch (e) { /* a refusal without a body is still a refusal */ }
-        return 'Vaier would not update ' + containerName + '.';
+        return 'Fjord would not update ' + containerName + '.';
     }
 
     // How it ended, in the words the domain wrote. The shell shows the sentence it was handed rather than
@@ -4184,7 +4184,7 @@
     // --- checking the registries on demand (#57 slice 3) -----------------------------------------------
     //
     // The sweep behind the mark runs once a day, which leaves the operator ahead of it: they read the rollup
-    // mail, pull the image, and Vaier goes on saying "update available" for hours about something already
+    // mail, pull the image, and Fjord goes on saying "update available" for hours about something already
     // fixed. That lingering mark is corrosive — a mark you know is wrong is a mark you learn to ignore — and
     // it would eventually cost the whole column its credibility. This is the button that settles it.
     //
@@ -4217,23 +4217,23 @@
         await loadContainers();
     }
 
-    // What Vaier says it did — and it only ever says what actually happened. "Checked, nothing new" and "did
+    // What Fjord says it did — and it only ever says what actually happened. "Checked, nothing new" and "did
     // not check, here is when it last did" are different facts, and the backend keeps them apart precisely so
-    // this can too. None of these sentences may imply Vaier changed anything: it read.
+    // this can too. None of these sentences may imply Fjord changed anything: it read.
     function updateCheckNote() {
         if (_updateChecking) return note('Checking the registries…', false);
         if (!_updateCheck) return null;
         if (_updateCheck.failed) {
-            return note('Vaier could not reach the registries just now, so the marks below stand as they '
+            return note('Fjord could not reach the registries just now, so the marks below stand as they '
                 + 'were. Nothing on any machine was touched.', true);
         }
         if (!_updateCheck.checked) {
             // The floor refused. Say so plainly rather than painting a tick over a check that never ran — and
-            // say it by reporting WHEN Vaier last looked, which is the fact the backend sent for exactly this
+            // say it by reporting WHEN Fjord last looked, which is the fact the backend sent for exactly this
             // purpose. Spelling the floor's own length out in prose here would copy a domain constant into
             // English: change UpdateCheckFloor and the sentence quietly becomes false — the same
             // wrong-but-confident claim this whole feature exists to stop making.
-            return note('Vaier last checked ' + timeAgo(_updateCheck.lastCheckedAt) + ', so it did not ask '
+            return note('Fjord last checked ' + timeAgo(_updateCheck.lastCheckedAt) + ', so it did not ask '
                 + 'again — that answer still stands.', false);
         }
         return note(_updateCheck.changed
@@ -4252,7 +4252,7 @@
 
     // --- the backup server: the fleet's one archive destination, given a coordinate --------------------
     //
-    // Identity lives here — which machine plays the role, and how Vaier reaches its `borg serve` — with the
+    // Identity lives here — which machine plays the role, and how Fjord reaches its `borg serve` — with the
     // repositories that live on it shown read-only. The operations that stand a server up or trust a client
     // (provision, authorize) poll for their outcome, and the shell never polls, so those stay on the Backups
     // page; this entry links there. Editing the coordinates and removing the designation are single calls, and
@@ -4300,18 +4300,18 @@
     // own), and the identity actions. The operations that poll for an outcome stay on the Backups bridge.
     function renderServerBackup(body, machineId, s) {
         // The operator pointed at this machine and said "keep the fleet's backups here". Everything that
-        // followed — the borg user, the paths under it, the port Vaier reaches it on — Vaier chose, and none
+        // followed — the borg user, the paths under it, the port Fjord reaches it on — Fjord chose, and none
         // of it is a decision to revisit. So the entry opens on what the machine is actually doing (what it
         // keeps), and its coordinates fold away for the day someone needs to check them.
         // What this machine is keeping, by machine — not a list of borg repositories with their paths. The
-        // operator never made these and never named them: Vaier creates one per machine behind the Back up
+        // operator never made these and never named them: Fjord creates one per machine behind the Back up
         // verb. There is deliberately no way to add one by hand here, because doing that by hand is what
         // once minted a second store with a fresh passphrase over a live borg repository and orphaned it.
         body.appendChild(section('Backups kept here'));
         const repos = reposOn(s);
         if (!repos.length) {
             body.appendChild(note('Nothing is backed up here yet. Tick files or folders on a machine and '
-                + 'choose Back up — Vaier will set the rest up itself.', false));
+                + 'choose Back up — Fjord will set the rest up itself.', false));
         } else {
             const list = el('div', 'ex-brepos');
             repos.forEach((r) => {
@@ -4329,7 +4329,7 @@
             body.appendChild(list);
         }
 
-        // Everything below this line is mechanism, and it folds. The coordinates are Vaier's own choices; the
+        // Everything below this line is mechanism, and it folds. The coordinates are Fjord's own choices; the
         // three operations are things it does for the operator already — it provisions when it can, and it
         // authorizes a host as part of backing that host up — kept only as the manual fallback for the hosts
         // where it cannot (a Synology it has no root on). Leaving them on the surface asked the operator to
@@ -4342,7 +4342,7 @@
             ['Borg user', s.borgUser],
             ['Base repo path', '/' + s.baseRepoPath],
             ['Server data path', s.serverDataPath],
-            ['Stood up by Vaier', s.managed ? 'Yes' : 'No — adopted'],
+            ['Stood up by Fjord', s.managed ? 'Yes' : 'No — adopted'],
         ]));
         const ops = el('div', 'ex-lactions is-static');
         ops.appendChild(selVerb('refresh', 'Provision', 'ex-btn', () => provisionBackupServer(s)));
@@ -4415,16 +4415,16 @@
                 bodyEl.appendChild(provisionStatus(result.provisioned ? 'SUCCESS' : 'FAILED'));
                 if (result.message) bodyEl.appendChild(note(result.message, !result.provisioned));
             })
-            .catch(() => { bodyEl.textContent = 'Could not reach Vaier to start provisioning.'; });
+            .catch(() => { bodyEl.textContent = 'Could not reach Fjord to start provisioning.'; });
     }
 
-    // Vaier couldn't drive Docker over SSH: either it staged the script on the host (show the one command to
+    // Fjord couldn't drive Docker over SSH: either it staged the script on the host (show the one command to
     // run) or it couldn't (offer the download). Directive guidance, not an error — the same fork the bridge drew.
     function renderProvisionScriptOnly(bodyEl, s, result) {
         bodyEl.textContent = '';
         if (result.stagedScriptPath) {
             const cmd = 'sudo bash ' + result.stagedScriptPath;
-            bodyEl.appendChild(note('Vaier can’t drive Docker over SSH on ' + s.machineName + ', so it placed the '
+            bodyEl.appendChild(note('Fjord can’t drive Docker over SSH on ' + s.machineName + ', so it placed the '
                 + 'setup script on the host. Run this on ' + s.machineName + ' to finish:', false));
             const code = el('div', 'ex-config'); code.textContent = cmd;
             bodyEl.appendChild(code);
@@ -4436,7 +4436,7 @@
             bodyEl.appendChild(copy);
             return;
         }
-        bodyEl.appendChild(note('Vaier can’t drive Docker over SSH on ' + s.machineName + ' and couldn’t stage the '
+        bodyEl.appendChild(note('Fjord can’t drive Docker over SSH on ' + s.machineName + ' and couldn’t stage the '
             + 'script there. Download setup.sh, copy it to the host, and run it with sudo.'
             + (result.message ? ' ' + result.message : ''), false));
         const dl = el('button', 'ex-btn is-accent'); dl.textContent = 'Download setup.sh';
@@ -4490,7 +4490,7 @@
                 if (!r.ok) { result.textContent = ''; toast(v.message || ('Could not authorize ' + machineName + '.')); return; }
                 renderAuthorizeResult(result, v, machineName);
             } catch (e) {
-                result.textContent = ''; toast('Could not reach Vaier to authorize the host.');
+                result.textContent = ''; toast('Could not reach Fjord to authorize the host.');
             } finally { ok.disabled = false; }
         };
     }
@@ -4522,7 +4522,7 @@
     function designateBackupServer(m) {
         backupServerForm({
             title: 'Make ' + m.name + ' the backup server',
-            intro: 'The fleet backs its archives up here. Vaier reaches the server’s borg over SSH — the '
+            intro: 'The fleet backs its archives up here. Fjord reaches the server’s borg over SSH — the '
                 + 'coordinates below say how.',
             existing: { host: machineHostGuess(m), sshPort: 8022, borgUser: 'borg',
                         baseRepoPath: 'home/borg/backups', serverDataPath: '', managed: false },
@@ -4537,7 +4537,7 @@
     function editBackupServer(s) {
         backupServerForm({
             title: 'Edit ' + s.name,
-            intro: 'How Vaier reaches this server’s borg over SSH.',
+            intro: 'How Fjord reaches this server’s borg over SSH.',
             existing: s,
             confirmLabel: 'Save',
         }).then((body) => {
@@ -4556,14 +4556,14 @@
             });
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
-                toast(err.message || 'Vaier could not save the backup server.');
+                toast(err.message || 'Fjord could not save the backup server.');
                 return;
             }
             await loadBackup();
             toast('Backup server ' + verbedPast + '.');
             go(['fleet', machineId, 'backup']);   // the role now has a coordinate — stand on it
         } catch (e) {
-            toast('Vaier could not save the backup server.');
+            toast('Fjord could not save the backup server.');
         }
     }
 
@@ -4579,11 +4579,11 @@
         try {
             const res = await fetch('/backup-servers/' + encodeURIComponent(s.name), { method: 'DELETE' });
             if (!res.ok && res.status !== 404) {
-                toast('Vaier could not remove the backup server.');
+                toast('Fjord could not remove the backup server.');
                 return;
             }
         } catch (e) {
-            toast('Vaier could not remove the backup server.');
+            toast('Fjord could not remove the backup server.');
             return;
         }
         const machineId = s.machineId;
@@ -4636,7 +4636,7 @@
             const managedRow = el('label', 'ex-check-row');
             managedRow.append(managed);
             const mtxt = el('span');
-            mtxt.textContent = 'Vaier stood this server up (rather than adopting an existing one)';
+            mtxt.textContent = 'Fjord stood this server up (rather than adopting an existing one)';
             managedRow.append(mtxt);
 
             form.append(
@@ -4709,12 +4709,12 @@
             claimed ? 'Backed up to ' + (s ? s.name : '') : 'Kept on ' + (s ? s.name : '')));
         const body = el('div', 'ex-pane-body');
         if (!claimed) {
-            body.appendChild(note('No machine backs up here any more. These archives are still kept — Vaier '
+            body.appendChild(note('No machine backs up here any more. These archives are still kept — Fjord '
                 + 'never deletes them — but nothing is adding to them. That happens when a machine was '
                 + 'renamed or stopped being backed up.', true));
         }
         // Where the bytes sit, whether the store is append-only and where its passphrase lives are all
-        // mechanism the operator did not choose and cannot act on from here, so they fold away. Vaier's
+        // mechanism the operator did not choose and cannot act on from here, so they fold away. Fjord's
         // promise is that they are handled; the fold is for the day someone needs to check.
         const adv = disclosure('Storage details');
         adv.appendChild(kv([
@@ -4740,7 +4740,7 @@
             body.appendChild(note(held.error, true));
         } else if (!held.list.length) {
             body.appendChild(note('No archives to show. Nothing has been backed up here yet, or no backup job '
-                + 'points here any more — Vaier reads the list from the machine a job backs up, so without '
+                + 'points here any more — Fjord reads the list from the machine a job backs up, so without '
                 + 'one there is nowhere to read it from.', false));
         } else {
             const list = el('div', 'ex-brepos');
@@ -4770,11 +4770,11 @@
             } else {
                 const b = await res.json().catch(() => ({}));
                 S.repoArchives.set(name, { state: 'error', list: [],
-                    error: b.message || 'Vaier could not read the archives kept here.' });
+                    error: b.message || 'Fjord could not read the archives kept here.' });
             }
         } catch (e) {
             S.repoArchives.set(name, { state: 'error', list: [],
-                error: 'Vaier could not read the archives kept here.' });
+                error: 'Fjord could not read the archives kept here.' });
         }
         render();
     }
@@ -4782,11 +4782,11 @@
     // Make a repository on the server. The server is the context, so the form asks only the repository's own
     // name, an optional path override (it derives under the server's base path when blank), append-only, and a
     // passphrase — pre-filled with a strong generated one, shown once, because a repository that cannot be
-    // unlocked is a repository that cannot be restored. Vaier stores it encrypted in the vault regardless.
-    // There is no by-hand "create a store" any more. Vaier makes exactly one per machine behind the Back up
+    // unlocked is a repository that cannot be restored. Fjord stores it encrypted in the vault regardless.
+    // There is no by-hand "create a store" any more. Fjord makes exactly one per machine behind the Back up
     // verb, names it after the machine and generates its passphrase, so the operator never had a reason to
     // make one — and making one by hand is what once minted a second store with a fresh passphrase over a
-    // live borg repository and orphaned it. Adopting a store Vaier did not create is still possible over the
+    // live borg repository and orphaned it. Adopting a store Fjord did not create is still possible over the
     // API (PUT /backup-repositories/{name}); it is rare enough that it does not belong on this page.
     function editRepository(r) {
         repoForm({
@@ -4810,7 +4810,7 @@
             });
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
-                toast(err.message || 'Vaier could not save the storage details.');
+                toast(err.message || 'Fjord could not save the storage details.');
                 return;
             }
             await loadBackup();
@@ -4818,18 +4818,18 @@
             toast('Storage details ' + verbedPast + '.');
             go(['fleet', S.path[1], 'backup', name]);
         } catch (e) {
-            toast('Vaier could not save the storage details.');
+            toast('Fjord could not save the storage details.');
         }
     }
 
-    // Deleting a repository forgets it in Vaier — it does not erase the borg store on the server. That is the
+    // Deleting a repository forgets it in Fjord — it does not erase the borg store on the server. That is the
     // safe default (the archives on disk are the whole point of a backup), so it takes a plain confirm rather
     // than the typed-name gate a file delete does.
     async function deleteRepository(r) {
         // One flow, one verb. The button says Forget, so the confirm asks Forget and the toast says forgotten
         // — the operator should never have to work out that "delete repository" was the thing they pressed.
         const ok = await confirmModal('Forget ' + repoPhrase(r.name) + '?',
-            'Vaier stops tracking them — it does not erase the borg store on ' + r.serverName + ' or the '
+            'Fjord stops tracking them — it does not erase the borg store on ' + r.serverName + ' or the '
             + 'archives in it. Any backup job pointing here will have nowhere to write until you add them '
             + 'back.',
             'Forget');
@@ -4838,17 +4838,17 @@
         try {
             const res = await fetch('/backup-repositories/' + encodeURIComponent(r.name), { method: 'DELETE' });
             if (!res.ok && res.status !== 404) {
-                toast('Vaier could not forget ' + phrase + '.');
+                toast('Fjord could not forget ' + phrase + '.');
                 return;
             }
         } catch (e) {
-            toast('Vaier could not forget ' + phrase + '.');
+            toast('Fjord could not forget ' + phrase + '.');
             return;
         }
         const machineId = S.path[1];
         S.repoArchives.delete(r.name);
         await loadBackup();
-        toast('Vaier has forgotten ' + phrase + '.');
+        toast('Fjord has forgotten ' + phrase + '.');
         go(['fleet', machineId, 'backup']);   // back up to the server
     }
 
@@ -4901,7 +4901,7 @@
                 field('Name', creating ? 'Letters, digits, dot, dash, underscore.' : null, name),
                 field('Path override', 'No leading slash. Blank derives ' + (existing ? existing.serverName
                     : (S.backupServer ? S.backupServer.name : 'the server')) + '’s base path + the name.', repoPath),
-                field('Passphrase', creating ? 'Save this — it unlocks these backups. Vaier also keeps it '
+                field('Passphrase', creating ? 'Save this — it unlocks these backups. Fjord also keeps it '
                     + 'encrypted in the vault.' : 'Blank keeps the stored one; type a new one to replace it.',
                     passphrase),
                 appendRow,
@@ -4977,9 +4977,9 @@
         return (s.length <= 60 && s.indexOf('{') === -1 && s.indexOf('\n') === -1) ? s : '';
     }
 
-    // A machine is backed up by one job that Vaier owns — this READS it, it does not configure it. What's
+    // A machine is backed up by one job that Fjord owns — this READS it, it does not configure it. What's
     // protected is chosen in the file browser (tick and Back up); the schedule is fleet-wide; retention and
-    // whether to read as root are Vaier's to decide, not knobs to turn. So the whole entry is a readout with a
+    // whether to read as root are Fjord's to decide, not knobs to turn. So the whole entry is a readout with a
     // single intent — run it now — and one way out — stop backing this machine up.
     function renderJobsBackup(body, machineId, jobs) {
         const machineName = nameOf(machineId);
@@ -5000,7 +5000,7 @@
         }
 
         // What's protected — each a link back into the file browser, where it is added and removed. The paths
-        // are the only backup fact the operator owns; everything else is Vaier's.
+        // are the only backup fact the operator owns; everything else is Fjord's.
         body.appendChild(section('Protected'));
         const paths = job.sourcePaths || [];
         if (!paths.length) {
@@ -5051,7 +5051,7 @@
         rootAdv.appendChild(checkRow('Back up files owned by other users', job.backupAsRoot,
             (on) => toggleBackupAsRoot(job, on)));
         rootAdv.appendChild(note(job.backupAsRoot
-            ? 'On — Vaier reads every file in the protected paths, whoever owns them, so the archive holds '
+            ? 'On — Fjord reads every file in the protected paths, whoever owns them, so the archive holds '
               + 'all of it.'
             : 'Off — any file here that belongs to someone else is skipped, and the archive is missing it. '
               + 'Turn this on if the protected paths hold other people’s home directories, a container’s '
@@ -5073,7 +5073,7 @@
         } else if (held.state === 'none') {
             runLine.textContent = 'Never run yet.';
         } else if (held.state === 'error') {
-            runLine.textContent = 'Vaier could not read the last run.';
+            runLine.textContent = 'Fjord could not read the last run.';
         } else {
             const r = held.run;
             const d = el('span');
@@ -5094,7 +5094,7 @@
         // happened to the data. The domain decided the run is incomplete (BackupRunStatus.INCOMPLETE) and the
         // diagnostics below name the files; this line says what that means and what to do about it.
         if (held && held.state === 'ready' && held.run.status === 'INCOMPLETE') {
-            body.appendChild(note('Some files were not backed up. Vaier could not read them, so they are '
+            body.appendChild(note('Some files were not backed up. Fjord could not read them, so they are '
                 + 'missing from the archive — the backup ran, but the data is not all there. '
                 + (job.backupAsRoot
                     ? 'Backing up other users’ files is already on, so these are files even root cannot read; '
@@ -5116,15 +5116,15 @@
         // The one failure an operator can fix from where they are standing: the host has no borg client. The
         // domain decides that this is what happened (BackupRun.needsClientReadying) — the shell never reads
         // the error text to work it out — and the fix is offered on the spot rather than named and left to
-        // be hunted for. The command below appears only where Vaier could not gain root itself.
+        // be hunted for. The command below appears only where Fjord could not gain root itself.
         const needsReady = held && held.state === 'ready' && held.run.needsClientReadying;
         const staged = S.readying.get(machineId);
         if (needsReady && !S.preparing.has(machineId)) {
-            body.appendChild(note('This machine has no borg client yet — nothing else is wrong. Vaier can '
+            body.appendChild(note('This machine has no borg client yet — nothing else is wrong. Fjord can '
                 + 'install it, and tonight’s backup will run.', true));
         }
         if (staged) {
-            body.appendChild(note('Vaier cannot become root on ' + machineName + ', so it has left the installer '
+            body.appendChild(note('Fjord cannot become root on ' + machineName + ', so it has left the installer '
                 + 'there. Open this machine’s shell and run this once:', true));
             const cmd = el('div', 'ex-cmd');
             cmd.textContent = staged;
@@ -5196,8 +5196,8 @@
             const res = await fetch('/backup-jobs/' + encodeURIComponent(job.machineId) + '/runs', { method: 'POST' });
             if (!res.ok) {
                 toast(res.status === 404
-                    ? 'Cannot start the backup — Vaier can’t find where this machine’s backups are kept.'
-                    : 'Vaier could not start the backup.');
+                    ? 'Cannot start the backup — Fjord can’t find where this machine’s backups are kept.'
+                    : 'Fjord could not start the backup.');
                 return;
             }
             const started = await res.json();                                     // RUNNING
@@ -5206,13 +5206,13 @@
             toast('Backing up ' + job.machineName + '…');
             render();
         } catch (e) {
-            toast('Vaier could not start the backup.');
+            toast('Fjord could not start the backup.');
         }
     }
 
     // The two directions of "back up files owned by other users" are not mirror images, so they are not one
     // call. Turning it OFF needs nothing installed anywhere — it is a job save. Turning it ON only means
-    // anything if the machine lets Vaier's login run borg as root, and that grant used to be a separate,
+    // anything if the machine lets Fjord's login run borg as root, and that grant used to be a separate,
     // undiscoverable step: a ticked box on a machine without it produced a job whose every run died on
     // `sudo -n` before borg started. So ON goes through the one action that does both.
     async function toggleBackupAsRoot(job, on) {
@@ -5220,7 +5220,7 @@
         return stopBackingUpAsRoot(job);
     }
 
-    // Say yes to backing up as root, in ONE call: Vaier installs the sudoers grant where it is missing and
+    // Say yes to backing up as root, in ONE call: Fjord installs the sudoers grant where it is missing and
     // turns the job's flag on where the machine actually grants it. The response is compound — granted / job
     // / provisioning — and this reports it as it is. A 200 is NOT "done": a machine that has not granted root
     // borg comes back granted:false with the flag still off, and telling the operator otherwise would leave
@@ -5237,27 +5237,27 @@
             if (!res.ok) {
                 toast(res.status === 404
                     ? 'Nothing on ' + name + ' is backed up yet.'
-                    : 'Vaier could not turn that on for ' + name + '.');
+                    : 'Fjord could not turn that on for ' + name + '.');
                 return;
             }
             const out = await res.json();
             const staged = out.provisioning && out.provisioning.scriptOnly;
             if (out.granted) {
-                toast('Vaier will read every file on ' + name + ', whoever owns them, from the next run.');
+                toast('Fjord will read every file on ' + name + ', whoever owns them, from the next run.');
             } else if (staged) {
                 S.readying.set(machineId, 'sudo bash ' + out.provisioning.stagedScriptPath);
-                toast('Vaier cannot gain root on ' + name + ' by itself. Run the command on its Backup entry, '
+                toast('Fjord cannot gain root on ' + name + ' by itself. Run the command on its Backup entry, '
                     + 'then turn this on again.');
             } else {
                 S.preparing.add(machineId);
                 if (!retrying) S.rootAfterGrant.add(machineId);
-                toast('Getting ' + name + ' ready to read every file — Vaier will finish this off itself.');
+                toast('Getting ' + name + ' ready to read every file — Fjord will finish this off itself.');
             }
             S.nudges.delete(machineId);     // the evidence just changed; the pane re-asks on the next paint
             await loadBackup();
             render();
         } catch (e) {
-            toast('Vaier could not turn that on for ' + name + '.');
+            toast('Fjord could not turn that on for ' + name + '.');
         }
     }
 
@@ -5265,7 +5265,7 @@
     // job is re-saved with it off and every other field carried through unchanged (drop one and the job would
     // silently lose its protected paths). Optimistic like the SSH-access toggle — the checkbox is already
     // where the operator put it — and a save that fails puts it back rather than leaving the screen lying
-    // about what Vaier will do tonight.
+    // about what Fjord will do tonight.
     async function stopBackingUpAsRoot(job) {
         const was = job.backupAsRoot;
         job.backupAsRoot = false;
@@ -5282,28 +5282,28 @@
             if (!res.ok) throw new Error('save failed');
         } catch (e) {
             job.backupAsRoot = was;
-            toast('Vaier could not save that. Nothing changed.');
+            toast('Fjord could not save that. Nothing changed.');
             render();
             return;
         }
         await loadBackup();
         S.nudges.delete(job.machineId);
-        toast('Vaier will skip files owned by other users on ' + job.machineName + '.');
+        toast('Fjord will skip files owned by other users on ' + job.machineName + '.');
         render();
     }
 
-    // Stop backing this machine up entirely — Vaier forgets the job and its schedule. It never touches the
+    // Stop backing this machine up entirely — Fjord forgets the job and its schedule. It never touches the
     // archives already made; they stay on the server. (Removing individual paths is done in the file browser;
     // this is the one-click "stop everything".) A plain confirm: the data you'd hate to lose is not at risk.
     async function stopMachineBackup(job) {
         const ok = await confirmModal('Stop backing up ' + job.machineName + '?',
-            'Vaier stops backing up ' + job.machineName + ' — nothing new is protected and the nightly run '
+            'Fjord stops backing up ' + job.machineName + ' — nothing new is protected and the nightly run '
             + 'stops. The archives already made are untouched; they stay on the server.', 'Stop backing up');
         if (!ok) return;
         try {
             const res = await fetch('/backup-jobs/' + encodeURIComponent(job.machineId), { method: 'DELETE' });
-            if (!res.ok && res.status !== 404) { toast('Vaier could not stop the backup.'); return; }
-        } catch (e) { toast('Vaier could not stop the backup.'); return; }
+            if (!res.ok && res.status !== 404) { toast('Fjord could not stop the backup.'); return; }
+        } catch (e) { toast('Fjord could not stop the backup.'); return; }
         const machineId = job.machineId;
         S.jobRuns.delete(job.machineId);
         await loadBackup();
@@ -5336,7 +5336,7 @@
             // The staged command was a standing instruction; a readying that landed on its own retires it.
             if (d.state === 'SUCCESS') S.readying.delete(d.machineId);
             // The other half of "one action": an operator who said yes to backing up as root on a machine
-            // that had no grant is not asked to come back and say it again. The grant has landed, so Vaier
+            // that had no grant is not asked to come back and say it again. The grant has landed, so Fjord
             // finishes what they started — once. Dropped from the set either way, so a host that will never
             // grant it (no visudo) gets one more try and then stops.
             if (S.rootAfterGrant.delete(d.machineId) && d.state === 'SUCCESS') {
@@ -5344,7 +5344,7 @@
             }
             toast(d.state === 'SUCCESS'
                 ? d.machineName + ' is ready — its backup will run tonight, or now if you like.'
-                : 'Vaier could not finish getting ' + d.machineName + ' ready — try backing it up again.');
+                : 'Fjord could not finish getting ' + d.machineName + ' ready — try backing it up again.');
             loadBackup();
             render();
         });
@@ -5391,11 +5391,11 @@
         // that id (never the machine), so it opens beside the machine's window instead of focusing it — that is
         // what lets you have several shells open on one machine at once.
         if (fresh) {
-            const pane = (window.VaierPanes && VaierPanes.newId) ? VaierPanes.newId() : ('p-' + Date.now());
+            const pane = (window.FjordPanes && FjordPanes.newId) ? FjordPanes.newId() : ('p-' + Date.now());
             const w = window.open('terminal.html?machine=' + encodeURIComponent(machineName)
                 + '&id=' + encodeURIComponent(machineId)
                 + '&pane=' + encodeURIComponent(pane), 'vaier-shell-' + encodeURIComponent(pane), features);
-            if (!w) { toast('Your browser blocked the shell window. Allow pop-ups for Vaier and try again.'); return; }
+            if (!w) { toast('Your browser blocked the shell window. Allow pop-ups for Fjord and try again.'); return; }
             w.focus();
             return;
         }
@@ -5403,15 +5403,15 @@
         // Named by identity: named by the display name, a rename opened a SECOND window onto the same machine
         // while the first sat there holding the live session.
         const w = window.open('', 'vaier-shell-' + encodeURIComponent(machineId), features);
-        if (!w) { toast('Your browser blocked the shell window. Allow pop-ups for Vaier and try again.'); return; }
+        if (!w) { toast('Your browser blocked the shell window. Allow pop-ups for Fjord and try again.'); return; }
         // A fresh window lands on about:blank — point it at the terminal, carrying the machine's *stable* primary
         // pane id so it reattaches to the same session every time (never a random orphan, and never a surprise
         // fresh shell). One that is already there is only focused, so its live session is never navigated away.
         let href = '';
         try { href = w.location.href; } catch (e) { href = ''; }
         if (!href || href === 'about:blank') {
-            const pane = (window.VaierPanes && VaierPanes.primary)
-                ? VaierPanes.primary(machineId, machineName) : '';
+            const pane = (window.FjordPanes && FjordPanes.primary)
+                ? FjordPanes.primary(machineId, machineName) : '';
             w.location.href = 'terminal.html?machine=' + encodeURIComponent(machineName)
                 + '&id=' + encodeURIComponent(machineId)
                 + (pane ? '&pane=' + encodeURIComponent(pane) : '');
@@ -5436,16 +5436,16 @@
             const res = await fetch('/security/decisions', { cache: 'no-store' });
             if (!res.ok) {
                 // A failed read is a 502 carrying CrowdSec's own reason, never an empty list — which is
-                // why the empty state below can honestly say "nobody is blocked". Saying that when Vaier
+                // why the empty state below can honestly say "nobody is blocked". Saying that when Fjord
                 // could not even ask is the one mistake this screen must never make.
                 const err = await res.json().catch(() => ({}));
-                S.threatsError = err.message || 'Vaier could not ask CrowdSec who is blocked.';
+                S.threatsError = err.message || 'Fjord could not ask CrowdSec who is blocked.';
             } else {
                 S.threats = await res.json();
                 S.threatsError = '';
             }
         } catch (e) {
-            S.threatsError = 'Vaier could not ask CrowdSec who is blocked.';
+            S.threatsError = 'Fjord could not ask CrowdSec who is blocked.';
         }
         S.threatsRead = true;
 
@@ -5455,13 +5455,13 @@
             const res = await fetch('/security/access-sources', { cache: 'no-store' });
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
-                S.accessSourcesError = err.message || 'Vaier could not read where allowed accesses came from.';
+                S.accessSourcesError = err.message || 'Fjord could not read where allowed accesses came from.';
             } else {
                 S.accessSources = await res.json();
                 S.accessSourcesError = '';
             }
         } catch (e) {
-            S.accessSourcesError = 'Vaier could not read where allowed accesses came from.';
+            S.accessSourcesError = 'Fjord could not read where allowed accesses came from.';
         }
     }
 
@@ -5471,14 +5471,14 @@
         try {
             const res = await fetch('/security/trusted-addresses', { cache: 'no-store' });
             if (!res.ok) {
-                S.trustedError = 'Vaier could not read which addresses you have trusted.';
+                S.trustedError = 'Fjord could not read which addresses you have trusted.';
                 S.trustedRead = true;
                 return;
             }
             S.trusted = await res.json();
             S.trustedError = '';
         } catch (e) {
-            S.trustedError = 'Vaier could not read which addresses you have trusted.';
+            S.trustedError = 'Fjord could not read which addresses you have trusted.';
         }
         S.trustedRead = true;
     }
@@ -5576,7 +5576,7 @@
             return;
         }
         if (!S.threats.length) {
-            body.appendChild(note('Nobody is blocked right now. CrowdSec is watching the edge, and Vaier '
+            body.appendChild(note('Nobody is blocked right now. CrowdSec is watching the edge, and Fjord '
                 + 'emails you the moment it starts turning someone away.', false));
             return;
         }
@@ -5587,10 +5587,10 @@
         body.appendChild(rows);
     }
 
-    // Only the addresses a person chose, because this is where the untrust verb lives. Vaier trusts more
+    // Only the addresses a person chose, because this is where the untrust verb lives. Fjord trusts more
     // than this — your VPN, this server's own container network, and every network it reaches through one of
     // your machines — but those are what stop CrowdSec turning away your own traffic, so removing one is the
-    // lockout Vaier emails you about. They are stated below and never drawn as a row: a list that mixed the
+    // lockout Fjord emails you about. They are stated below and never drawn as a row: a list that mixed the
     // two kinds would put a whole network one click from the same button.
     function renderTrusted(body) {
         if (!S.trustedRead) {
@@ -5610,7 +5610,7 @@
             S.trusted.forEach((a) => rows.appendChild(trustedRow(a)));
             body.appendChild(rows);
         }
-        body.appendChild(note('Your VPN, this server’s own container network, and every network Vaier '
+        body.appendChild(note('Your VPN, this server’s own container network, and every network Fjord '
             + 'reaches through one of your machines are trusted too. Those are not listed here and '
             + 'cannot be untrusted — they are what stops CrowdSec turning away your own traffic.', false));
     }
@@ -5689,40 +5689,40 @@
     // again — so this asks nothing first. Trusting an address is the lasting decision, and that one does.
     async function liftBlock(d) {
         if (!await securityAction('/security/decisions/' + encodeURIComponent(d.sourceIp), 'DELETE', null,
-            'Vaier could not lift the block on ' + d.sourceIp + '.')) return;
+            'Fjord could not lift the block on ' + d.sourceIp + '.')) return;
         toast('Lifted the block on ' + d.sourceIp + '.');
     }
 
     // The copy says how long the decision lasts, and since #348 the honest answer is "until you take it
     // back", not "forever". It stays honest about the delay, which has not changed: CrowdSec reads its
-    // whitelist at startup, and Vaier will not restart the thing guarding the door to apply a rule about who
+    // whitelist at startup, and Fjord will not restart the thing guarding the door to apply a rule about who
     // may pass it.
     async function trustAddress(d) {
         const ok = await confirmModal('Trust ' + d.sourceIp + '?',
-            'Vaier lifts the block now, and adds ' + d.sourceIp + ' to the networks it never blocks. That '
+            'Fjord lifts the block now, and adds ' + d.sourceIp + ' to the networks it never blocks. That '
             + 'lasts until you untrust it here. The trusted list itself reaches CrowdSec when CrowdSec next '
-            + 'restarts — Vaier will not restart it for you, because restarting the thing guarding the door '
+            + 'restarts — Fjord will not restart it for you, because restarting the thing guarding the door '
             + 'is how an operator ends up locked out.',
             'Trust this address');
         if (!ok) return;
         if (!await securityAction('/security/trusted-addresses', 'POST', { sourceIp: d.sourceIp },
-            'Vaier could not trust ' + d.sourceIp + '.')) return;
+            'Fjord could not trust ' + d.sourceIp + '.')) return;
         toast('Now trusting ' + d.sourceIp + '.');
     }
 
     // The mirror image, and it asks first for the same reason trusting does: this is a standing decision
-    // either way. What it is not is a ban — Vaier never blocks an address, so the worst an untrust can do is
+    // either way. What it is not is a ban — Fjord never blocks an address, so the worst an untrust can do is
     // let CrowdSec judge this one like any other.
     async function untrustAddress(a) {
         const ok = await confirmModal('Stop trusting ' + a.sourceIp + '?',
-            'Vaier forgets the decision now, and this blocks nobody — CrowdSec simply judges ' + a.sourceIp
+            'Fjord forgets the decision now, and this blocks nobody — CrowdSec simply judges ' + a.sourceIp
             + ' on its behaviour again. It leaves CrowdSec’s trusted list when CrowdSec next restarts — '
-            + 'Vaier will not restart it for you, because restarting the thing guarding the door is how an '
+            + 'Fjord will not restart it for you, because restarting the thing guarding the door is how an '
             + 'operator ends up locked out.',
             'Untrust');
         if (!ok) return;
         if (!await securityAction('/security/trusted-addresses/' + encodeURIComponent(a.sourceIp), 'DELETE',
-            null, 'Vaier could not untrust ' + a.sourceIp + '.')) return;
+            null, 'Fjord could not untrust ' + a.sourceIp + '.')) return;
         toast('No longer trusting ' + a.sourceIp + '.');
     }
 
@@ -5756,12 +5756,12 @@
         pane.appendChild(frame);
     }
 
-    // --- Settings: Vaier-wide, native, outside the fleet ------------------------------------------------
+    // --- Settings: Fjord-wide, native, outside the fleet ------------------------------------------------
     //
     // The one native global. It reads its config on view (like disk/archives — never polled) and saves each
-    // section on its own against the `/settings/*` endpoints Vaier already had. The nightly-backup schedule
+    // section on its own against the `/settings/*` endpoints Fjord already had. The nightly-backup schedule
     // lives here: it is the fleet-wide "when", the one backup knob that is the operator's to set — everything
-    // else about a backup is Vaier's.
+    // else about a backup is Fjord's.
 
     async function loadSettings() {
         if (S.settings.state === 'loading') return;
@@ -5770,7 +5770,7 @@
             const [cfg, ver, upd] = await Promise.all([
                 fetch('/settings/config', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)),
                 fetch('/settings/version').then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
-                // Whether a newer Vaier is being served, and how the last update went. Read with the rest of
+                // Whether a newer Fjord is being served, and how the last update went. Read with the rest of
                 // the page rather than polled: an image going stale is not news that decays in seconds.
                 fetch('/settings/update', { cache: 'no-store' })
                     .then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
@@ -5783,18 +5783,18 @@
         render();
     }
 
-    // Replace Vaier with the newer image. The answer comes back before the work is done and cannot come back
+    // Replace Fjord with the newer image. The answer comes back before the work is done and cannot come back
     // after: the container serving this request is the one being replaced. So the toast is the whole report —
     // it says what is about to happen and what to expect, rather than pretending to wait for an outcome this
     // page will not be here to receive. The host decides how it ends, and puts the old build back if the new
     // one never answers; that verdict is waiting on this page the next time it loads.
-    async function updateVaier() {
-        toast('Vaier is replacing itself. It will go quiet for a moment — reload in a minute.');
+    async function updateFjord() {
+        toast('Fjord is replacing itself. It will go quiet for a moment — reload in a minute.');
         try {
             const res = await fetch('/settings/update', { method: 'POST' });
             if (!res.ok) {
                 const body = await res.json().catch(() => ({}));
-                toast('Vaier could not start the update (' + (body.detail || 'unknown') + '). Nothing changed.');
+                toast('Fjord could not start the update (' + (body.detail || 'unknown') + '). Nothing changed.');
             }
         } catch (e) {
             // A dropped connection here is the expected shape of success: the container answering us died.
@@ -5834,7 +5834,7 @@
     //
     // The headline is the only question worth asking of a kit — is there now something out there that opens
     // without this server — so it is answered in those words rather than as a count of successful requests.
-    // Vaier chose these machines, so it says why for each one, the same way a nudge does: an operator can
+    // Fjord chose these machines, so it says why for each one, the same way a nudge does: an operator can
     // disagree with a stated reason, but should never have to derive one. Machines that were passed over are
     // folded away; they are reasoning, not trouble, and the fleet has more of them than kit hosts.
     function renderKitWrite(host, r, at) {
@@ -5842,22 +5842,22 @@
         const kept = (r.chosen || []).length;
         const when = at ? at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
 
-        if (r.survivesLossOfVaier) {
+        if (r.survivesLossOfFjord) {
             const line = el('div', 'ex-runline');
             line.textContent = (kept === 1 ? '1 machine holds a copy' : kept + ' machines hold a copy')
                 + ' you can read without this server. Written ' + when + '.';
             host.appendChild(line);
         } else {
-            // Vaier's own copy was still written, and saying so matters: the operator can open the kit right
+            // Fjord's own copy was still written, and saying so matters: the operator can open the kit right
             // here, today. It just does not survive the one event the kit exists for.
             host.appendChild(note('No machine took a copy, so nothing written just now outlives this server. '
-                + 'Vaier’s own copy is in place — it dies with the machine it is on. The failures below say '
+                + 'Fjord’s own copy is in place — it dies with the machine it is on. The failures below say '
                 + 'what each host refused with.', true));
         }
 
-        if (r.fewerCopiesThanIntended && r.survivesLossOfVaier) {
+        if (r.fewerCopiesThanIntended && r.survivesLossOfFjord) {
             const short = el('div', 'ex-hint');
-            short.textContent = 'Vaier keeps three copies where it can, never two in the same place. This '
+            short.textContent = 'Fjord keeps three copies where it can, never two in the same place. This '
                 + 'fleet had room for ' + kept + '.';
             host.appendChild(short);
         }
@@ -5896,7 +5896,7 @@
     }
 
     function renderSettings(pane) {
-        pane.appendChild(paneHead('Settings', false, 'Vaier-wide configuration'));
+        pane.appendChild(paneHead('Settings', false, 'Fjord-wide configuration'));
         const body = el('div', 'ex-pane-body');
 
         if (S.settings.state === 'idle' || S.settings.state === 'loading') {
@@ -5905,7 +5905,7 @@
             return pane.appendChild(body);
         }
         if (S.settings.state === 'error' || !S.settings.config) {
-            body.appendChild(note('Vaier could not read its settings.', true));
+            body.appendChild(note('Fjord could not read its settings.', true));
             return pane.appendChild(body);
         }
         const c = S.settings.config;
@@ -5955,14 +5955,14 @@
         //
         // Two controls, one decision. The passphrase is the operator's to choose and to keep — never
         // generated, because a strong random string is exactly what nobody carries in their head, and the
-        // kit's whole point is that it opens on a day Vaier cannot be asked anything. Typed twice, because a
+        // kit's whole point is that it opens on a day Fjord cannot be asked anything. Typed twice, because a
         // typo here is invisible until the one day it matters.
-        const kitForm = sectionForm('Reading your backups without Vaier');
+        const kitForm = sectionForm('Reading your backups without Fjord');
         const kitWhy = el('div', 'ex-hint');
-        kitWhy.textContent = 'Every passphrase that unlocks a machine’s backups lives in Vaier, and Vaier’s '
+        kitWhy.textContent = 'Every passphrase that unlocks a machine’s backups lives in Fjord, and Fjord’s '
             + 'own backup is encrypted with one of them — so losing this server would leave you holding '
             + 'archives nothing can open. A survival kit is that list, encrypted with a passphrase only you '
-            + 'know and copied onto machines Vaier does not run on. Each copy carries the one openssl '
+            + 'know and copied onto machines Fjord does not run on. Each copy carries the one openssl '
             + 'command that opens it, printed in the clear on the file itself.';
         kitForm.appendChild(kitWhy);
 
@@ -5971,7 +5971,7 @@
         const kitAgain = input('', 'Type it again', 'password');
         kitForm.append(
             field('Kit passphrase', 'The one thing you keep yourself. Write it down somewhere that is not a '
-                + 'computer — Vaier cannot recover it, and a kit nobody can open is not a kit.', kitPass),
+                + 'computer — Fjord cannot recover it, and a kit nobody can open is not a kit.', kitPass),
             field('Confirm', c.hasSurvivalKitPassphrase
                 ? 'Kits already on the fleet still open with the old passphrase until you write them again.'
                 : 'Typed twice because a mistyped passphrase looks like a saved one until the day you need it.',
@@ -6016,8 +6016,8 @@
         function armWrite() {
             writeBtn.disabled = !c.hasSurvivalKitPassphrase;
             writeBtn.title = c.hasSurvivalKitPassphrase
-                ? 'Write the kit and copy it onto the machines Vaier picks'
-                : 'Choose a passphrase first — Vaier will not write a kit that anyone could open';
+                ? 'Write the kit and copy it onto the machines Fjord picks'
+                : 'Choose a passphrase first — Fjord will not write a kit that anyone could open';
         }
         armWrite();
         if (_kitWrite) renderKitWrite(kitOut, _kitWrite.report, _kitWrite.at);
@@ -6039,22 +6039,22 @@
                 } else {
                     const err = await res.json().catch(() => ({}));
                     writeNote.className = 'ex-set-note is-err';
-                    writeNote.textContent = err.message || 'Vaier could not write the kit.';
+                    writeNote.textContent = err.message || 'Fjord could not write the kit.';
                 }
             } catch (e) {
                 writeNote.className = 'ex-set-note is-err';
-                writeNote.textContent = 'Vaier could not write the kit.';
+                writeNote.textContent = 'Fjord could not write the kit.';
             }
             armWrite();
         };
 
         // --- Wildcard DNS: the one record every published service depends on (#331) ---
         //
-        // Read-only, because there is nothing to configure here — Vaier checks the single
+        // Read-only, because there is nothing to configure here — Fjord checks the single
         // `*.<domain>` record at boot and reports what it found. A quiet confirmation when it
-        // resolves; a plain-language warning (in Vaier's own words) when it does not. Nothing is
+        // resolves; a plain-language warning (in Fjord's own words) when it does not. Nothing is
         // shown before the boot check has run — "not checked yet" is not a problem.
-        // Vaier grades the verdict (OK / WARNING / ERROR); this only picks a style from the grade.
+        // Fjord grades the verdict (OK / WARNING / ERROR); this only picks a style from the grade.
         if (c.wildcardDnsStatus) {
             body.appendChild(section('Wildcard DNS'));
             const wcCls = { OK: 'is-ok', WARNING: 'is-warn', ERROR: 'is-err' }[c.wildcardDnsSeverity]
@@ -6100,36 +6100,36 @@
         // were the only threshold there is, which made the per-disk levels look like they were being ignored.
         disk.appendChild(field('Default alert level',
             'Percent full. Every filesystem is judged at this unless you give it a level of its own on the '
-            + 'machine’s disk. Vaier emails the admins when a watched filesystem crosses its level.', thresh));
+            + 'machine’s disk. Fjord emails the admins when a watched filesystem crosses its level.', thresh));
         saveRow(disk, 'Save threshold', (n) => {
             const t = parseInt(thresh.value, 10);
             if (!t || t < 1 || t > 99) { n.className = 'ex-set-note is-err'; n.textContent = 'Enter 1–99.'; return; }
             saveSetting('/settings/disk-monitor', 'PUT', { diskMonitorThresholdPercent: t }, n, 'Threshold saved.');
         });
 
-        // --- Updating Vaier itself ---
+        // --- Updating Fjord itself ---
         //
-        // The one image Vaier may replace is its own, and only because a person pressed this. Everything else
+        // The one image Fjord may replace is its own, and only because a person pressed this. Everything else
         // in the fleet is detect-only (see ImageUpdateWatcher): pulling someone else's container on a hunch is
-        // not Vaier's business. Doing it to yourself, on request, is a different act.
+        // not Fjord's business. Doing it to yourself, on request, is a different act.
         const upd = S.settings.update || {};
-        body.appendChild(section('Vaier'));
-        // A rollback is the one outcome nothing else reveals: Vaier is running, just on the build from before.
+        body.appendChild(section('Fjord'));
+        // A rollback is the one outcome nothing else reveals: Fjord is running, just on the build from before.
         if (upd.trouble) {
             body.appendChild(note(upd.outcome === 'ROLLED_BACK'
-                ? 'The last update did not come up, so Vaier put the previous build back. You are running the '
+                ? 'The last update did not come up, so Fjord put the previous build back. You are running the '
                   + 'old one — nothing was lost, and it is safe to try again.'
                 : 'The last update could not be carried out (' + (upd.detail || 'unknown')
-                  + '). Vaier was not touched.', true));
+                  + '). Fjord was not touched.', true));
         }
         const upRow = el('div', 'ex-runline');
         upRow.textContent = upd.available
-            ? 'A newer Vaier image is being served.'
-            : 'Vaier is running the newest image it can see.';
+            ? 'A newer Fjord image is being served.'
+            : 'Fjord is running the newest image it can see.';
         body.appendChild(upRow);
         if (upd.available) {
             const upActs = el('div', 'ex-lactions is-static');
-            upActs.appendChild(selVerb('arrowup', 'Update Vaier', 'ex-btn is-accent', () => updateVaier()));
+            upActs.appendChild(selVerb('arrowup', 'Update Fjord', 'ex-btn is-accent', () => updateFjord()));
             body.appendChild(upActs);
         }
 
@@ -6172,9 +6172,9 @@
         return plural(days / 30, 'month');
     }
 
-    const archiveLabel = (a) => VaierListing.formatTime(a.createdAt) + ' · ' + timeAgo(a.createdAt);
+    const archiveLabel = (a) => FjordListing.formatTime(a.createdAt) + ' · ' + timeAgo(a.createdAt);
 
-    // A Unix epoch-seconds stamp — how WireGuard reports a peer's latest handshake and how Vaier records a LAN
+    // A Unix epoch-seconds stamp — how WireGuard reports a peer's latest handshake and how Fjord records a LAN
     // server's last-seen — rendered as a human "… ago". Zero or missing means never (an empty string, so the kv
     // shows a dash). timeAgo wants an ISO string, so seconds are lifted to milliseconds first.
     function agoFromEpochSeconds(epochSeconds) {
@@ -6194,7 +6194,7 @@
         // The rail takes its room from the first paint, before the archive list has landed. It has to: that
         // list is fetched while the directory is already on screen, so a rail that appears when it arrives
         // drops a whole bar into the page and shoves the rows down while the operator is reading them.
-        // "Is a rail coming?" is answered by a cheaper question Vaier can settle immediately — does a job
+        // "Is a rail coming?" is answered by a cheaper question Fjord can settle immediately — does a job
         // back this machine up? The job list is loaded at boot, before the first tree paint, so the answer
         // costs nothing and is in hand in time. The stops then fill into a track that is already there.
         if (ready ? !held.list.length : !jobsOn(machineId).length) return document.createDocumentFragment();
@@ -6224,7 +6224,7 @@
         const cur = currentArchive();
         if (cur) {
             const stamp = el('span', 'ex-rail-stamp');
-            stamp.textContent = VaierListing.formatTime(cur.createdAt);
+            stamp.textContent = FjordListing.formatTime(cur.createdAt);
             const ago = el('span', 'ex-rail-ago');
             ago.textContent = timeAgo(cur.createdAt);
             when.append(stamp, ago);
@@ -6250,7 +6250,7 @@
 
         // The path lives in the address bar and nowhere else — the head names the machine and how much is
         // here, not the location again. A refresh re-reads this one directory over SFTP: the fleet changes
-        // under Vaier (a Transfer just landed, a shell just wrote a file), and the cache is otherwise sticky.
+        // under Fjord (a Transfer just landed, a shell just wrote a file), and the cache is otherwise sticky.
         const loaded = S.dirs.get(dirKey(machineId, path, S.at));
         const head = paneHead(machineName, true, directorySubtitle(loaded));
 
@@ -6334,7 +6334,7 @@
             }, (ticked ? 'Deselect ' : 'Select ') + entry.name);
 
             // Three shapes for one name, and the entry decides which: a folder is a button (it navigates in
-            // place), a file Vaier can display is a link (it opens in a tab), and everything else is plain
+            // place), a file Fjord can display is a link (it opens in a tab), and everything else is plain
             // text. Whether a file can be displayed is the SERVER's verdict, riding on the entry — the
             // allowlist behind it is a security boundary, and a second copy of one in the browser is a copy
             // that drifts. Opening is an addition: the Download button stays on every row either way.
@@ -6369,11 +6369,11 @@
 
             const size = document.createElement('span');
             size.className = 'ex-lmeta';
-            size.textContent = VaierListing.formatSize(entry);
+            size.textContent = FjordListing.formatSize(entry);
 
             const time = document.createElement('span');
             time.className = 'ex-lmeta';
-            time.textContent = VaierListing.formatTime(entry.modifiedAt);
+            time.textContent = FjordListing.formatTime(entry.modifiedAt);
 
             // The same two facts again, joined into one quiet line under the name. A phone has no room for
             // columns — three of them leave a filename about twelve characters wide — so on a narrow screen
@@ -6466,7 +6466,7 @@
     //
     // The first clause is the point: with no server designated, "Back up" used to be offered, clicked, and
     // refused by the backend — the operator discovering the precondition by tripping over it. Everything else
-    // behind this button Vaier does for them without asking (it creates the repository, writes the job, folds
+    // behind this button Fjord does for them without asking (it creates the repository, writes the job, folds
     // the paths in, installs borg on the host and trusts its key on the server). The single thing it cannot
     // decide for them is which machine holds the fleet's data, and that decision has a nudge of its own. So
     // until it is made, the verb simply is not there.
@@ -6510,7 +6510,7 @@
         return '/machines/' + encodeURIComponent(machineId) + '/files/view?' + params.toString();
     }
 
-    // A download is a paste whose destination is the browser: Vaier streams the file's bytes straight through.
+    // A download is a paste whose destination is the browser: Fjord streams the file's bytes straight through.
     // The coordinate travels as the same (path, at) the listing carries, so a file from an archive downloads
     // its past self. A hidden anchor click is how a browser is handed a stream to save. `at` defaults to the
     // archive currently being viewed (a per-row download), but a selected item passes its own — the archive it
@@ -6542,13 +6542,13 @@
         const machineName = nameOf(machineId);
         const what = entry.directory ? 'folder' : 'file';
         // The same button means two different things depending on which machine you are standing on
-        // (#346). Where Vaier logs in as root it can delete what the machine needs to run, not merely
+        // (#346). Where Fjord logs in as root it can delete what the machine needs to run, not merely
         // what you wanted to keep — so the gate says which of the two this is.
         const m = machineById(machineId);
         const body = entry.path + ' on ' + machineName
             + (entry.directory ? '\n\nEverything inside this folder is deleted too.' : '')
             + (m && m.effectiveUserPrivileged
-                ? '\n\nVaier acts as ' + m.effectiveUsername + ' on ' + machineName + ', which is '
+                ? '\n\nFjord acts as ' + m.effectiveUsername + ' on ' + machineName + ', which is '
                   + 'privileged — this can remove something the machine needs to run.' : '')
             + '\n\nThis cannot be undone. Type the machine name to confirm.';
         const ok = await confirmTyped('Delete this ' + what + '?', body, machineName, 'Delete');
@@ -6563,7 +6563,7 @@
             toast('Deleted ' + entry.name + '.');
             refreshDir(machineId, remotePath(S.path));   // the listing no longer holds it
         } catch (e) {
-            toast('Could not reach Vaier to delete ' + entry.name + '.');
+            toast('Could not reach Fjord to delete ' + entry.name + '.');
         }
     }
 
@@ -6600,7 +6600,7 @@
         actions.appendChild(selVerb('copy', 'Copy', 'ex-btn', () => selCopy()));
         actions.appendChild(selVerb('download', 'Download', 'ex-btn', () => selDownload()));
         // Back up is the whole idea: pick what matters and protect it. Live items only, and never the backup
-        // server itself. Vaier makes the repository, the job and the schedule behind the one click, per machine.
+        // server itself. Fjord makes the repository, the job and the schedule behind the one click, per machine.
         if (backupItems.length) {
             actions.appendChild(selVerb('shield', 'Back up', 'ex-btn is-accent', () => selBackup()));
             if (unbackupItems.length) {
@@ -6645,7 +6645,7 @@
     }
 
     // The device-category picker, pre-selected to a machine's current shape. Shared by the add and edit forms —
-    // the empty option clears the override back to what Vaier detects.
+    // the empty option clears the override back to what Fjord detects.
     function catSelect(current) {
         const sel = el('select', 'ex-input');
         DEVICE_CATEGORIES.forEach(([v, t]) => {
@@ -6735,7 +6735,7 @@
     // Back the selection up — the one gesture that is the whole feature. Live items only, fanned out per machine:
     // for each, the browser sends only the paths, and the backend makes the repository if there is none, makes
     // the job if there is none, and folds the paths in (a child of something already protected just disappears
-    // into it). Then the jobs reload and the shields appear where the selection was. Vaier holds the complexity;
+    // into it). Then the jobs reload and the shields appear where the selection was. Fjord holds the complexity;
     // the operator held down a checkbox — on as many machines at once as they liked.
     async function selBackup() {
         const groups = groupByMachine(S.sel.filter((s) => !s.at && backupEligible(s.machine)));
@@ -6761,7 +6761,7 @@
         await loadBackup();   // the jobs changed — reload so the backup entries are current
         if (done) toast(done + (done === 1 ? ' item is' : ' items are') + ' backed up now, and nightly'
             + (groups.size > 1 ? ' across ' + groups.size + ' machines.' : '.'));
-        if (failed.length) toast('Vaier could not back up on ' + failed.join(', ') + '.');
+        if (failed.length) toast('Fjord could not back up on ' + failed.join(', ') + '.');
         S.sel = [];
         refreshCurrentDir();   // the shields are stamped by the backend — re-read to show them
         render();
@@ -6779,16 +6779,16 @@
             const res = await fetch('/backup-jobs/' + encodeURIComponent(job.machineId) + '/prepare-client',
                 { method: 'POST' });
             if (!res.ok) {
-                toast('Vaier could not start getting ' + machineName + ' ready.');
+                toast('Fjord could not start getting ' + machineName + ' ready.');
                 return;
             }
             startReadying(job.machineId, await res.json());
         } catch (e) {
-            toast('Vaier could not start getting ' + machineName + ' ready.');
+            toast('Fjord could not start getting ' + machineName + ' ready.');
         }
     }
 
-    // What Vaier does behind the first back-up: ready the host (install borg, trust its key). It's silent by
+    // What Fjord does behind the first back-up: ready the host (install borg, trust its key). It's silent by
     // design — a quiet "Getting X ready…" and nothing more — unless it hits the one wall it can't pass on its
     // own, a host where it lacks the root to install borg, in which case it names the single command to run.
     function startReadying(machineId, p) {
@@ -6846,8 +6846,8 @@
         }
         await loadBackup();
         if (done) toast('Stopped backing up ' + done + (done === 1 ? ' item.' : ' items.'));
-        else if (!failed.length) toast('Nothing changed — Vaier was not backing that up.');
-        if (failed.length) toast('Vaier could not stop backing up on ' + failed.join(', ') + '.');
+        else if (!failed.length) toast('Nothing changed — Fjord was not backing that up.');
+        if (failed.length) toast('Fjord could not stop backing up on ' + failed.join(', ') + '.');
         S.sel = [];
         refreshCurrentDir();   // re-read so the shields clear
         render();
@@ -7091,7 +7091,7 @@
             };
             xhr.onerror = () => {
                 record.state = 'failed';
-                record.error = 'Could not reach Vaier to upload ' + file.name + '.';
+                record.error = 'Could not reach Fjord to upload ' + file.name + '.';
                 renderClip();
                 resolve(false);
             };
@@ -7106,7 +7106,7 @@
             const body = JSON.parse(xhr.responseText);
             if (body && body.message) return body.message;
         } catch (e) { /* a non-JSON body is an infrastructure failure, not the domain speaking */ }
-        return 'Vaier could not upload the file.';
+        return 'Fjord could not upload the file.';
     }
 
     // Paste every held coordinate into the directory in front of you: one Transfer per item. A big file gets a
@@ -7121,7 +7121,7 @@
         const folders = items.filter((c) => c.directory);
         if (heavy.length || folders.length) {
             const lines = [];
-            heavy.forEach((c) => lines.push(c.name + ' — ' + VaierListing.formatSize({ size: c.size }) + ', over the fleet'));
+            heavy.forEach((c) => lines.push(c.name + ' — ' + FjordListing.formatSize({ size: c.size }) + ', over the fleet'));
             if (folders.length) lines.push(folders.length + (folders.length === 1 ? ' folder' : ' folders')
                 + ' — every file inside is copied');
             const ok = await confirmModal('Copy across the fleet?',
@@ -7160,7 +7160,7 @@
             S.transfers.set(t.id, t);
             render();
         } catch (e) {
-            toast('Could not reach Vaier to start the copy.');
+            toast('Could not reach Fjord to start the copy.');
         }
     }
 
@@ -7238,8 +7238,8 @@
 
             const meta = el('div', 'ex-xfer-meta');
             meta.textContent = up.state === 'done'
-                ? 'Uploaded · ' + VaierListing.formatSize({ size: up.total })
-                : VaierListing.formatSize({ size: up.sent }) + ' of ' + VaierListing.formatSize({ size: up.total });
+                ? 'Uploaded · ' + FjordListing.formatSize({ size: up.total })
+                : FjordListing.formatSize({ size: up.sent }) + ' of ' + FjordListing.formatSize({ size: up.total });
             row.appendChild(meta);
         }
 
@@ -7285,9 +7285,9 @@
 
             const meta = el('div', 'ex-xfer-meta');
             meta.textContent = tr.state === 'DONE'
-                ? 'Copied · ' + VaierListing.formatSize({ size: tr.bytesCopied })
-                : VaierListing.formatSize({ size: tr.bytesCopied })
-                  + (tr.totalBytes ? ' of ' + VaierListing.formatSize({ size: tr.totalBytes }) : '');
+                ? 'Copied · ' + FjordListing.formatSize({ size: tr.bytesCopied })
+                : FjordListing.formatSize({ size: tr.bytesCopied })
+                  + (tr.totalBytes ? ' of ' + FjordListing.formatSize({ size: tr.totalBytes }) : '');
             row.appendChild(meta);
         }
 
@@ -7390,7 +7390,7 @@
 
     // --- a refused host key, and the one action that clears it (#345) -----------------------------------
     //
-    // Vaier has always NAMED the remedy for a changed host key — "clear its pinned key and reconnect" — and
+    // Fjord has always NAMED the remedy for a changed host key — "clear its pinned key and reconnect" — and
     // then offered no way to perform it. The endpoint existed; nothing in the UI called it, so the only route
     // out was an API client. This is that route, put where the refusal is actually met.
     //
@@ -7408,7 +7408,7 @@
     }
 
     // A failed read, painted. The server's own sentence verbatim, as it has always been — plus, for the one
-    // failure Vaier can actually do something about, the action that does it.
+    // failure Fjord can actually do something about, the action that does it.
     function failureNote(host, machineId, held) {
         host.appendChild(note(held.error, true));
         if (held.errorCode !== 'HOST_KEY_MISMATCH') return;
@@ -7420,7 +7420,7 @@
 
     // The confirmation, and the confirmation is the point. A changed host key has two causes: a machine you
     // rebuilt, and a machine somebody is impersonating — and the pin exists for the second one. So this is
-    // not "are you sure". It shows what Vaier knows (both fingerprints, stacked to scan) and asks the operator
+    // not "are you sure". It shows what Fjord knows (both fingerprints, stacked to scan) and asks the operator
     // to assert the one thing only they can know: that they changed this machine. Typing its name is that
     // assertion; the mechanics are confirmTyped's, so the gate behaves exactly like every other one here.
     function clearHostKeyDialog(machineId, prints) {
@@ -7430,8 +7430,8 @@
         const h = el('div', 'ex-dialog-title');
         h.textContent = 'Clear the pinned key for ' + machineName + '?';
         const b = el('div', 'ex-dialog-body');
-        b.textContent = machineName + ' is presenting a different SSH host key than the one Vaier pinned, so '
-            + 'Vaier is refusing to connect.\n\nEither you rebuilt, reinstalled or changed this machine\u2019s '
+        b.textContent = machineName + ' is presenting a different SSH host key than the one Fjord pinned, so '
+            + 'Fjord is refusing to connect.\n\nEither you rebuilt, reinstalled or changed this machine\u2019s '
             + 'SSH server — or something is impersonating it. The pin exists for the second case.';
         dialog.append(h, b);
 
@@ -7442,7 +7442,7 @@
         }
 
         const ask = el('div', 'ex-dialog-body');
-        ask.textContent = 'Type ' + machineName + ' to confirm that you changed this machine. Vaier pins the '
+        ask.textContent = 'Type ' + machineName + ' to confirm that you changed this machine. Fjord pins the '
             + 'new key on the next connect, so it is never left unpinned.';
         const input = el('input', 'ex-dialog-input');
         input.type = 'text';
@@ -7492,7 +7492,7 @@
                 await loadFleet();
                 render();
             } catch (e) {
-                toast('Could not reach Vaier to clear the pinned key.');
+                toast('Could not reach Fjord to clear the pinned key.');
                 ok.disabled = false;
             }
         }
@@ -7543,7 +7543,7 @@
     // ever reads the cache. That is the whole trick: the palette can see every directory the operator has
     // already opened, and is structurally incapable of touching one they have not. A palette that crawled the
     // fleet over SFTP to build an index would hang the moment it met a sleeping machine.
-    // Every entry twice over: the path Vaier addresses it by, and the path a person reads it as. They differ at
+    // Every entry twice over: the path Fjord addresses it by, and the path a person reads it as. They differ at
     // exactly one segment — a machine is addressed by identity and read by name — and that one segment was the
     // whole bug. The index used to keep only the address, so the palette matched (and displayed)
     // /fleet/7a6d0e35-25d9-420c-b7bc-1815ce7e0dc1/files, and typing a machine's name found nothing at all.
@@ -7555,7 +7555,7 @@
             childrenOf(path).forEach((kid) =>
                 walk(path.concat([kid.name]), words.concat([kid.label || kid.name])));
         })(['fleet'], ['fleet']);
-        // Vaier's own entries are not of the fleet, so the walk above cannot reach them — and they are now
+        // Fjord's own entries are not of the fleet, so the walk above cannot reach them — and they are now
         // behind a menu rather than standing in the tree, which makes finding them here matter more, not less.
         GLOBALS.forEach((g) => out.push({ path: [g.name], kind: kindOf([g.name]), label: '/' + g.label }));
         return out;
@@ -7586,7 +7586,7 @@
             item.className = 'ex-pal-item' + (i === S.palSel ? ' is-on' : '');
             // The last segment, exactly as the tree's rows do it — a machine's icon reads off its identity and
             // a global's off its own name, and both of those are the tail of the path. Reading path[1] instead
-            // gave every Vaier entry the fallback file glyph.
+            // gave every Fjord entry the fallback file glyph.
             item.innerHTML = svg(iconFor(entry.kind, entry.path[entry.path.length - 1]), 'ex-ico');
 
             const pth = document.createElement('span');
@@ -7641,7 +7641,7 @@
     // fleet root and there was no way to hand anyone a link to a folder.
     //
     // A hash, deliberately, and not the History API: the shell is a static file, so a real path like
-    // /explorer/fleet/<id>/files/home would 404 unless Vaier grew a catch-all forward — new backend surface
+    // /explorer/fleet/<id>/files/home would 404 unless Fjord grew a catch-all forward — new backend surface
     // inside the forward-auth chain, bought for nothing the hash does not already give.
     //
     // Segments are percent-encoded, so a file called "report Q1?.pdf" survives the round trip: the only bare
@@ -7762,7 +7762,7 @@
     // The tree carries identities, so the listing reader and the terminal dock are handed one directly and
     // have no name to convert on the way. What they need from this scope is the other direction: what to
     // CALL a machine they are already addressing correctly.
-    window.vaierMachineName = nameOf;
+    window.fjordMachineName = nameOf;
 
     async function loadFleet() {
         try {
@@ -7843,14 +7843,14 @@
         try {
             const url = anchor ? '/lan-scan?anchor=' + encodeURIComponent(anchor) : '/lan-scan';
             const res = await fetch(url, { method: 'POST' });
-            if (res.status === 404) { toast('Vaier no longer knows that network.'); return; }
-            if (!res.ok && res.status !== 202) { toast('Vaier could not start the scan.'); return; }
+            if (res.status === 404) { toast('Fjord no longer knows that network.'); return; }
+            if (!res.ok && res.status !== 202) { toast('Fjord could not start the scan.'); return; }
             toast(anchor ? 'Scanning that network…' : 'Scanning the LAN…');
             if (S.lanScan) { S.lanScan.status = 'SCANNING'; render(); }
-        } catch (e) { toast('Vaier could not start the scan.'); }
+        } catch (e) { toast('Fjord could not start the scan.'); }
     }
 
-    // The LANs an operator can pick to scan — each relay's LAN plus the Vaier-server LAN, resolved server-side
+    // The LANs an operator can pick to scan — each relay's LAN plus the Fjord-server LAN, resolved server-side
     // so the browser never reconstructs the server's own CIDR. Read once when the picker opens.
     let _lanScanLansLoading = false;
     async function loadLanScanLans() {
@@ -7896,7 +7896,7 @@
     };
 
     // The one-line human name for a discovered thing: its guessed function when the ports say something
-    // ("Docker host", "Web service"), otherwise the device category Vaier inferred. Never the raw hostname.
+    // ("Docker host", "Web service"), otherwise the device category Fjord inferred. Never the raw hostname.
     function discoveredLabel(d) {
         switch (d.role) {
             case 'DOCKER_HOST': return 'Docker host';
@@ -7980,7 +7980,7 @@
 
     function watchFleet() {
         const events = new EventSource('/vpn/peers/events');
-        // SSE does not replay events missed while the stream was down (an idle tab, a network blip, a Vaier
+        // SSE does not replay events missed while the stream was down (an idle tab, a network blip, a Fjord
         // redeploy). EventSource reconnects on its own, but a dot flip or a peer up/down that fired during the
         // gap would sit stale until a manual refresh. So on every reconnect (onopen after the first), re-sync
         // the state those events carry — peer liveness and LAN status — and repaint. Not polling: this fires
@@ -8094,7 +8094,7 @@
             let profile = name;
             let photoUrl = null;
             try {
-                photoUrl = await VaierAvatar.photoUrl({
+                photoUrl = await FjordAvatar.photoUrl({
                     provider: me.provider, providerUserId: me.providerUserId, email: me.email, size: 48 });
             } catch (e) { /* keep the name text */ }
             if (photoUrl) {
@@ -8124,9 +8124,9 @@
     $('exTreeToggle').onclick = () => setTree(app.classList.contains('tree-hidden'));
     $('exScrim').onclick = (e) => { if (e.target === $('exScrim')) closePalette(); };
 
-    // --- the Vaier menu ---------------------------------------------------------------------------------
+    // --- the Fjord menu ---------------------------------------------------------------------------------
     //
-    // Settings, Users, Security and Concepts are Vaier's, not the fleet's — siblings of the fleet root rather
+    // Settings, Users, Security and Concepts are Fjord's, not the fleet's — siblings of the fleet root rather
     // than things inside it. Listing them in the fleet pane would say they are part of the fleet, so they sit
     // in the chrome, where they are one reach away from any depth on any screen.
 
@@ -8149,7 +8149,7 @@
     function renderVMenu() {
         const menu = $('exVMenu');
         menu.textContent = '';
-        // The two roots, in one place. The tree was a forest — Fleet and Vaier side by side — and that is
+        // The two roots, in one place. The tree was a forest — Fleet and Fjord side by side — and that is
         // exactly what this menu is now. Fleet has to be here: a global's crumb bar is one segment long
         // ("Settings" is not inside anything), so without this, standing on Settings with the tree folded
         // away left no way back to the fleet at all.

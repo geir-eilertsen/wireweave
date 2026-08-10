@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  SpotBugs exclusion filter for Vaier. Established as the V1 baseline (issue #255).
+  SpotBugs exclusion filter for Fjord. Established as the V1 baseline (issue #255).
   Each <Match> documents WHY it is suppressed. Suppress noise / verified false
   positives only — never a real bug. Re-run: mvn spotbugs:spotbugs, report in
   target/spotbugsXml.xml.
@@ -65,11 +65,11 @@
            mandatory '/' that is not in the inner character class, so there is no
            overlapping backtracking — the match is linear, not exponential. -->
     <Match>
-        <Class name="net.vaier.domain.PeerSetupScript"/>
+        <Class name="net.fjordomatic.domain.PeerSetupScript"/>
         <Bug pattern="POTENTIAL_XML_INJECTION"/>
     </Match>
     <Match>
-        <Class name="net.vaier.domain.ReverseProxyRoute"/>
+        <Class name="net.fjordomatic.domain.ReverseProxyRoute"/>
         <Bug pattern="REDOS"/>
     </Match>
 
@@ -79,7 +79,7 @@
          PeerId is therefore valid by construction — '../' can never reach a path. Mitigated by
          construction; PeerId itself no longer needs suppression (#256). -->
     <Match>
-        <Class name="net.vaier.application.service.VpnService"/>
+        <Class name="net.fjordomatic.application.service.VpnService"/>
         <Bug pattern="PATH_TRAVERSAL_IN"/>
     </Match>
 

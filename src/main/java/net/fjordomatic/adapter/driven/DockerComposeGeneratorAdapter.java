@@ -1,0 +1,29 @@
+package net.fjordomatic.adapter.driven;
+
+import lombok.extern.slf4j.Slf4j;
+import net.fjordomatic.domain.WireguardClientCompose;
+import net.fjordomatic.domain.port.ForGeneratingDockerComposeFiles;
+import org.springframework.stereotype.Component;
+
+@Component
+@Slf4j
+public class DockerComposeGeneratorAdapter implements ForGeneratingDockerComposeFiles {
+
+    @Override
+    public String generateWireguardClientDockerCompose(DockerComposeConfig config) {
+        log.debug("Generating docker-compose for peer: {}", config.peerId());
+
+        return WireguardClientCompose.standalone()
+            + "\n"
+            + String.format("""
+                # Setup Instructions:
+                # 1. Create config directory: mkdir -p ./wireguard-client/config
+                # 2. Copy peer config from server at ./wireguard/config/%s/%s.conf
+                #    to ./wireguard-client/config/wg0.conf
+                # 3. Start client: docker-compose up -d
+                # 4. Verify connection: docker exec wireguard-client wg show
+                #
+                # Server: %s:%s
+                """, config.peerId(), config.peerId(), config.serverUrl(), config.serverPort());
+    }
+}

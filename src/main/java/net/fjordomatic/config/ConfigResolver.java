@@ -1,0 +1,75 @@
+package net.fjordomatic.config;
+
+import java.util.function.Function;
+import lombok.extern.slf4j.Slf4j;
+import net.fjordomatic.domain.FjordConfig;
+import net.fjordomatic.domain.port.ForPersistingAppConfiguration;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+@Component
+@Slf4j
+public class ConfigResolver {
+
+    private final ForPersistingAppConfiguration configPersistence;
+    private final Function<String, String> envLookup;
+    private String domain;
+    private String acmeEmail;
+    private String smtpHost;
+    private Integer smtpPort;
+    private String smtpUsername;
+    private String smtpSender;
+    private int diskMonitorThresholdPercent;
+    private int backupScheduleHour;
+    private String googleClientId;
+
+    @Autowired
+    public ConfigResolver(ForPersistingAppConfiguration configPersistence) {
+        this(configPersistence, System::getenv);
+    }
+
+    ConfigResolver(ForPersistingAppConfiguration configPersistence, Function<String, String> envLookup) {
+        this.configPersistence = configPersistence;
+        this.envLookup = envLookup;
+        reload();
+    }
+
+    public void reload() {
+        FjordConfig config = configPersistence.load().orElseGet(() -> FjordConfig.builder().build());
+        this.domain = firstNonBlank(config.getDomain(), envLookup.apply("VAIER_DOMAIN"));
+        this.acmeEmail = firstNonBlank(config.getAcmeEmail(), envLookup.apply("ACME_EMAIL"));
+        this.smtpHost = config.getSmtpHost();
+        this.smtpPort = config.getSmtpPort();
+        this.smtpUsername = config.getSmtpUsername();
+        this.smtpSender = config.getSmtpSender();
+        this.diskMonitorThresholdPercent = config.effectiveDiskMonitorThresholdPercent();
+        this.backupScheduleHour = config.effectiveBackupScheduleHour();
+        this.googleClientId = envLookup.apply("VAIER_OIDC_GOOGLE_CLIENT_ID");
+        if (domain != null) {
+            log.info("Configuration resolved for domain: {}", domain);
+        }
+    }
+
+    private static String firstNonBlank(String a, String b) {
+        if (a != null && !a.isBlank()) return a;
+        if (b != null && !b.isBlank()) return b;
+        return null;
+    }
+
+    public String getDomain() { return domain; }
+    public String getAcmeEmail() { return acmeEmail; }
+    public String getSmtpHost() { return smtpHost; }
+    public Integer getSmtpPort() { return smtpPort; }
+    public String getSmtpUsername() { return smtpUsername; }
+    public String getSmtpSender() { return smtpSender; }
+    public int getDiskMonitorThresholdPercent() { return diskMonitorThresholdPercent; }
+    /** The hour of day (0–23) at which Fjord-owned nightly fleet-backup scheduling fires due jobs. */
+    public int getBackupScheduleHour() { return backupScheduleHour; }
+    /**
+     * Whether social login (#305) is configured: true once a Google OAuth client id is present. When
+     * false, the {@code social} auth mode isn't offered in the UI and oauth2-proxy need not run.
+     */
+    public boolean isSocialAuthAvailable() {
+        return googleClientId != null && !googleClientId.isBlank();
+    }
+}

@@ -1,0 +1,186 @@
+package net.fjordomatic.domain;
+
+/**
+ * The script Fjord runs on its own host to replace itself, and the command that launches it.
+ *
+ * <p>Everything about its shape follows from one fact: <b>the process that asks for the update dies in the
+ * middle of it</b>. A container cannot recreate itself — the instant {@code docker compose up -d} replaces
+ * it, whatever was driving the update is gone, along with any in-memory record that it was happening and any
+ * connection it might have reported to. So the work is handed to the host and detached, and it has to be able
+ * to finish, judge itself, undo itself and leave an account, with nobody listening.
+ *
+ * <p><b>The rollback is the feature.</b> If a bad image comes up, the thing that is down is the thing an
+ * operator would use to fix it — Fjord is the fleet's control plane, its web terminal and its file browser.
+ * So the script pins what was running <em>before</em> it touches anything, by digest and not by tag (the tag
+ * moves under it during the pull, so rolling "back" to {@code :latest} would roll forward to the broken image
+ * again), and puts that back if the new one does not answer.
+ *
+ * <p>Rendering the script here rather than in a service follows {@link BorgServerSetupScript} and
+ * {@link BorgClientSetupScript}: what the host is told to do is a domain rule, and the runner only carries it.
+ */
+public final class SelfUpdateScript {
+
+    /**
+     * Where the script leaves its account of what happened. Fjord is restarting while it runs, so there is no
+     * in-memory state to settle against — the outcome has to outlive both the old process and the script, and
+     * be waiting on disk when the new one boots.
+     *
+     * <p>Under the SSH user's own home, deliberately, and it is a shell expression rather than a path: a
+     * fixed {@code /var/lib/...} needs root to create, and Fjord does not always have root on the host it
+     * updates. It would not have failed loudly either — the update would have run correctly and simply left
+     * no account, so a rollback would have been silent and Settings would have gone on reporting that nothing
+     * had ever been updated. (The same trap as {@code /var/lib/vaier-backup} on a non-root host.) Both the
+     * script and the read run as the same SSH user, so both resolve it to the same place.
+     *
+     * <p>Still spelled "upgrade": the writer is the <em>old</em> Fjord's script and the reader is the new
+     * one, so renaming the path would lose the account of the very update that renamed it.
+     */
+    public static final String RESULT_FILE = "$HOME/.vaier-upgrade/last-upgrade";
+
+    /** How long to wait for the replacement to answer before deciding it will not. */
+    public static final int DEFAULT_HEALTH_TIMEOUT_SECONDS = 120;
+
+    private SelfUpdateScript() {}
+
+    /**
+     * Render the update script. It pins the running image, pulls, recreates, waits (bounded) for the new
+     * container to answer on the endpoint that reports Fjord's version — so "it came up" and "it is the build
+     * we asked for" are one check — and on silence puts the pinned image back. Every path out writes a single
+     * line to {@link #RESULT_FILE}: {@code UPGRADED}, {@code ROLLED_BACK} or {@code FAILED}, with the run id
+     * so a stale result from an earlier update is never mistaken for this one's. Those words are the on-disk
+     * protocol and are frozen — see {@link #RESULT_FILE}.
+     */
+    public static String generate(String composeDir, String service, String runId, int healthTimeoutSeconds) {
+        String dir = quote(composeDir);
+        String svc = quote(service);
+        StringBuilder sb = new StringBuilder();
+        sb.append("#!/usr/bin/env bash\n");
+        sb.append("#\n");
+        sb.append("# Fjord self-update. Runs detached on the host, because it replaces the container that\n");
+        sb.append("# asked for it. Rolls back to the previously running image if the new one does not answer.\n");
+        sb.append("#\n");
+        // Deliberately not `set -e`: a failing step must reach the result file, not abort the script and
+        // leave the host with no account of what happened.
+        sb.append("set -uo pipefail\n\n");
+
+        sb.append("RUN_ID=").append(quote(runId)).append("\n");
+        // Double-quoted, not single: $HOME has to expand.
+        sb.append("RESULT=\"").append(RESULT_FILE).append("\"\n");
+        sb.append("mkdir -p \"$(dirname \"$RESULT\")\"\n\n");
+
+        sb.append("say() { echo \"$RUN_ID $1 $(date -u +%Y-%m-%dT%H:%M:%SZ) ${2:-}\" > \"$RESULT\"; }\n\n");
+
+        sb.append("cd ").append(dir).append(" || { say FAILED 'no-compose-dir'; exit 2; }\n\n");
+
+        // Pin the running image by digest BEFORE the pull. A tag is not a rollback target: `:latest` means
+        // something different the moment the pull lands.
+        sb.append("CID=\"$(docker compose ps -q ").append(svc).append(" 2>/dev/null)\"\n");
+        sb.append("PREVIOUS_IMAGE=\"$(docker inspect --format '{{index .RepoDigests 0}}' \"$CID\" "
+            + "2>/dev/null)\"\n");
+        sb.append("if [ -z \"$PREVIOUS_IMAGE\" ]; then\n");
+        sb.append("    PREVIOUS_IMAGE=\"$(docker inspect --format '{{.Config.Image}}' \"$CID\" 2>/dev/null)\"\n");
+        sb.append("fi\n\n");
+
+        sb.append("docker compose pull ").append(svc)
+            .append(" || { say FAILED 'pull-failed'; exit 3; }\n");
+        sb.append("docker compose up -d --force-recreate ").append(svc)
+            .append(" || { say FAILED 'recreate-failed'; exit 4; }\n\n");
+
+        // The container is on a bridge network with no published port, so it is reached at its own address —
+        // the same way anything else on this host reaches it.
+        sb.append("healthy() {\n");
+        sb.append("    local cid ip\n");
+        sb.append("    cid=\"$(docker compose ps -q ").append(svc).append(" 2>/dev/null)\"\n");
+        sb.append("    [ -n \"$cid\" ] || return 1\n");
+        sb.append("    ip=\"$(docker inspect -f "
+            + "'{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \"$cid\" 2>/dev/null)\"\n");
+        sb.append("    [ -n \"$ip\" ] || return 1\n");
+        sb.append("    curl -fsS -m 5 \"http://$ip:8080/settings/version\" >/dev/null 2>&1\n");
+        sb.append("}\n\n");
+
+        sb.append("DEADLINE=$((SECONDS + ").append(Math.max(1, healthTimeoutSeconds)).append("))\n");
+        sb.append("while [ $SECONDS -lt $DEADLINE ]; do\n");
+        sb.append("    if healthy; then say UPGRADED \"$PREVIOUS_IMAGE\"; exit 0; fi\n");
+        sb.append("    sleep 3\n");
+        sb.append("done\n\n");
+
+        // It did not answer. Put back exactly what was running, by digest.
+        sb.append("if [ -n \"$PREVIOUS_IMAGE\" ]; then\n");
+        sb.append("    docker tag \"$PREVIOUS_IMAGE\" ")
+            .append(quote(SelfUpdate.IMAGE_REPOSITORY + ":latest")).append(" >/dev/null 2>&1\n");
+        sb.append("    docker compose up -d --force-recreate ").append(svc).append(" >/dev/null 2>&1\n");
+        sb.append("    say ROLLED_BACK \"$PREVIOUS_IMAGE\"\n");
+        sb.append("    exit 5\n");
+        sb.append("fi\n");
+        sb.append("say FAILED 'no-previous-image-to-restore'\n");
+        sb.append("exit 6\n");
+        return sb.toString();
+    }
+
+    /**
+     * The command that starts the script without tying it to the SSH session — or to the container — that
+     * launched it. {@code setsid} detaches it from the session and {@code nohup} from the hangup, so killing
+     * the Fjord container mid-update (which is the whole point of the exercise) cannot kill the update
+     * halfway through, which is the worst possible moment for it to stop.
+     */
+    public static String launch(String composeDir, String runId) {
+        return "setsid nohup bash " + quote(scriptPathFor(composeDir, runId))
+            + " >/dev/null 2>&1 < /dev/null &";
+    }
+
+    /** Where the rendered script is staged on the host, per run so two never collide. */
+    public static String scriptPathFor(String composeDir, String runId) {
+        return composeDir + "/.vaier-update-" + runId + ".sh";
+    }
+
+    /** Where a compose-started container's project lives, and what compose calls it there. */
+    public record ComposeLocation(String workingDir, String service) {}
+
+    /**
+     * Ask the host where Fjord's compose project is, rather than asking the operator. Docker stamps the
+     * project's working directory and the service's name onto every container compose starts, so both facts
+     * are already on the running container — and an env var the operator has to fill in is an env var they
+     * can fill in wrongly, on the one operation where being wrong takes Fjord down and leaves it down.
+     */
+    public static String inspectComposeLabels(String containerId) {
+        return "docker inspect --format "
+            + "'{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}"
+            + "\t{{index .Config.Labels \"com.docker.compose.service\"}}' "
+            + quote(containerId);
+    }
+
+    /**
+     * Read that answer. Empty when either label is missing, which means this container was <b>not</b> started
+     * by compose — there is no {@code docker compose up} that would bring it back, so an update would take
+     * Fjord down and leave it down. Refusing is the only safe reading. Never throws.
+     */
+    public static java.util.Optional<ComposeLocation> parseComposeLabels(String stdout) {
+        if (stdout == null || stdout.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        String[] parts = stdout.strip().split("\t", 2);
+        if (parts.length < 2 || parts[0].isBlank() || parts[1].isBlank()) {
+            return java.util.Optional.empty();
+        }
+        return java.util.Optional.of(new ComposeLocation(parts[0].strip(), parts[1].strip()));
+    }
+
+    /** Write the rendered script onto the host, the same base64 way the borg setup scripts are staged. */
+    public static String stage(String script, String path) {
+        return "mkdir -p \"$(dirname " + quote(path) + ")\"; "
+            + "printf %s " + quote(java.util.Base64.getEncoder()
+                .encodeToString(script.getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+            + " | base64 -d > " + quote(path) + "; "
+            + "chmod +x " + quote(path) + "; echo STAGED";
+    }
+
+    /** Read the account the last update left, if any. Absence is not an error — most hosts have none. */
+    public static String readResult() {
+        return "cat \"" + RESULT_FILE + "\" 2>/dev/null || true";
+    }
+
+    /** Single-quoted for the shell, with any embedded quote closed and re-opened — as {@code BorgCommand} does. */
+    private static String quote(String value) {
+        return "'" + value.replace("'", "'\\''") + "'";
+    }
+}

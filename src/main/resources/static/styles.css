@@ -3,7 +3,7 @@
        navigations and auth redirects don't flash white before this stylesheet's body background
        applies. Pair with the html background below and a color-scheme meta tag in each page head. */
     color-scheme: dark;
-    /* Vaier's own "night-ops" palette — a cool blue-black, deliberately off the VS Code Dark+
+    /* Fjord's own "night-ops" palette — a cool blue-black, deliberately off the VS Code Dark+
        defaults this used to borrow. Surfaces step up in luminance (bg → panel → card → hover)
        so cards read as objects, and a single signature cyan carries brand + primary action. */
     --bg:           #0e1116;
@@ -18,7 +18,7 @@
     --text-dim:     #586576;
     --accent:       #4cc9e6;
     --accent-hover: #7fdcef;
-    --brand-ai:     #4cc9e6;
+    --brand-o:      #4cc9e6;
     --green:        #4ec9b0;
     --red:          #f48771;
     --orange:       #ce9178;
@@ -27,7 +27,7 @@
        than --border, because a guide is not an edge. */
     --rail:         #1e2733;
     /* Two corners, and only two: --radius-1 for controls and inputs, --radius-2 for surfaces that read as
-       objects (cards, dialogs, the palette). Vaier's older pages predate these and still carry seven raw
+       objects (cards, dialogs, the palette). Fjord's older pages predate these and still carry seven raw
        radius values between them; new work uses the tokens. */
     --radius-1:     3px;
     --radius-2:     6px;
@@ -103,8 +103,8 @@ body {
 .topbar-brand:hover { text-decoration: none; color: var(--text); }
 .topbar-brand svg { flex-shrink: 0; color: var(--accent); filter: drop-shadow(0 0 5px rgba(76, 201, 230, 0.5)); }
 
-/* The "ai" in V-ai-er, lifted out in the signature cyan with a soft glow — the mesh node made type. */
-.brand-ai { color: var(--brand-ai); text-shadow: 0 0 8px rgba(76, 201, 230, 0.45); }
+/* The "-O-" of Fjord-O-Matic, lifted out in the signature cyan with a soft glow — the gadget infix made type. */
+.brand-o { color: var(--brand-o); text-shadow: 0 0 8px rgba(76, 201, 230, 0.45); }
 
 .topbar-nav {
     display: flex;

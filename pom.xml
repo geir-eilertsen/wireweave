@@ -12,12 +12,12 @@
         <relativePath/>
     </parent>
 
-    <groupId>net.vaier</groupId>
-    <artifactId>vaier</artifactId>
+    <groupId>net.fjordomatic</groupId>
+    <artifactId>fjordomatic</artifactId>
     <version>1.0.1</version>
     <packaging>jar</packaging>
 
-    <name>Vaier</name>
+    <name>Fjord-O-Matic</name>
     <description>Effortless WireGuard networking</description>
 
     <properties>

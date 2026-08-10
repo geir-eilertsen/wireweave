@@ -55,7 +55,7 @@
         // What to call a machine, asked of whichever page hosts this reader. The Explorer knows the fleet;
         // a page that does not simply shows the identity, which is honest rather than wrong.
         function machineName(machineId) {
-            return window.vaierMachineName ? window.vaierMachineName(machineId) : machineId;
+            return window.fjordMachineName ? window.fjordMachineName(machineId) : machineId;
         }
 
         async function list(machineId, path, at) {
@@ -71,13 +71,13 @@
                 if (ticket !== inFlight) return { stale: true };
 
                 if (!res.ok) {
-                    // Vaier answers a failure with an ApiError envelope, and its message is already written
+                    // Fjord answers a failure with an ApiError envelope, and its message is already written
                     // for the operator — "Not allowed to read /root as geir.", or "/volume2 is not reachable
                     // over SFTP; this machine's SFTP service is rooted at /volume1." — which says more than
                     // any status code could. Pass it through verbatim; only a silent server gets a message of
                     // ours. A refusal is never painted as an empty folder.
                     // The envelope's `code` and `detail` travel alongside the sentence (#345): a refused
-                    // host key is the one failure with a remedy Vaier can offer, and the caller can only
+                    // host key is the one failure with a remedy Fjord can offer, and the caller can only
                     // offer it if it can tell that failure from the others without reading the prose.
                     const err = await res.json().catch(() => null);
                     if (ticket !== inFlight) return { stale: true };
@@ -101,5 +101,5 @@
         return { list: list };
     }
 
-    window.VaierListing = { formatSize: formatSize, formatTime: formatTime, createBrowser: createBrowser };
+    window.FjordListing = { formatSize: formatSize, formatTime: formatTime, createBrowser: createBrowser };
 })();

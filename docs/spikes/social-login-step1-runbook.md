@@ -15,7 +15,7 @@ applied until your Google credentials exist in `.env`.
    VAIER_OIDC_GOOGLE_CLIENT_SECRET=...
    VAIER_ADMIN_EMAIL=you@gmail.com
    ```
-3. DNS (Vaier/Route53): `oauth2.<domain>` and `whoami.<domain>` → the Vaier server
+3. DNS (Fjord/Route53): `oauth2.<domain>` and `whoami.<domain>` → the Fjord server
    (CNAME to `vaier.<domain>`). Created as part of execution if Route53 mode.
 
 ## Compose additions (NOT yet applied)
@@ -49,7 +49,7 @@ applied until your Google credentials exist in `.env`.
       - --cookie-secret-file=/secrets/oauth2-cookie-secret
       - --cookie-domain=.${VAIER_DOMAIN}
       - --whitelist-domain=.${VAIER_DOMAIN}
-      - --email-domain=*                 # authN open; authZ is Vaier's /authz/verify
+      - --email-domain=*                 # authN open; authZ is Fjord's /authz/verify
       - --upstream=static://202          # forward-auth only
       - --reverse-proxy=true
       - --set-xauthrequest=true
@@ -103,7 +103,7 @@ http:
         address: http://oauth2-proxy:4180/oauth2/auth
         trustForwardHeader: true
         authResponseHeaders: [X-Auth-Request-Email, X-Auth-Request-User]
-    # Stage 2 — authorization (Vaier). Reads X-Auth-Request-Email + X-Forwarded-Host.
+    # Stage 2 — authorization (Fjord). Reads X-Auth-Request-Email + X-Forwarded-Host.
     vaier-authz:
       forwardAuth:
         address: http://vaier:8080/authz/verify

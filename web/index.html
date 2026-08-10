@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Vaier — Self-hosted infrastructure for homelab developers</title>
-    <meta name="description" content="Vaier wires together WireGuard, Traefik, and Google or GitHub sign-in (via oauth2-proxy) into a single web UI. One wildcard DNS record, made once, covers everything — add a Docker container on any VPN peer, pick a subdomain, and Vaier handles the reverse proxy and HTTPS automatically.">
+    <title>Fjord-O-Matic — Self-hosted infrastructure for homelab developers</title>
+    <meta name="description" content="Fjord wires together WireGuard, Traefik, and Google or GitHub sign-in (via oauth2-proxy) into a single web UI. One wildcard DNS record, made once, covers everything — add a Docker container on any VPN peer, pick a subdomain, and Fjord handles the reverse proxy and HTTPS automatically.">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22 fill=%22none%22 stroke=%22%234fc3f7%22 stroke-width=%221.5%22 stroke-linecap=%22round%22><circle cx=%228%22 cy=%228%22 r=%222.2%22 fill=%22%234fc3f7%22 stroke=%22none%22/><line x1=%222.5%22 y1=%223.5%22 x2=%226%22 y2=%226.5%22/><line x1=%2213.5%22 y1=%223.5%22 x2=%2210%22 y2=%226.5%22/><line x1=%222.5%22 y1=%2212.5%22 x2=%226%22 y2=%229.5%22/><line x1=%2213.5%22 y1=%2212.5%22 x2=%2210%22 y2=%229.5%22/><circle cx=%222.5%22 cy=%223.5%22 r=%221.5%22 fill=%22%234fc3f7%22 stroke=%22none%22/><circle cx=%2213.5%22 cy=%223.5%22 r=%221.5%22 fill=%22%234fc3f7%22 stroke=%22none%22/><circle cx=%222.5%22 cy=%2212.5%22 r=%221.5%22 fill=%22%234fc3f7%22 stroke=%22none%22/><circle cx=%2213.5%22 cy=%2212.5%22 r=%221.5%22 fill=%22%234fc3f7%22 stroke=%22none%22/></svg>">
     <link rel="stylesheet" href="styles.css">
     <style>
@@ -327,7 +327,7 @@
 </head>
 <body>
     <div class="topbar">
-        <a href="#top" class="topbar-brand" aria-label="Vaier">
+        <a href="#top" class="topbar-brand" aria-label="Fjord-O-Matic">
             <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
                 <circle cx="8" cy="8" r="2.2" fill="currentColor" stroke="none"/>
                 <line x1="2.5" y1="3.5" x2="6" y2="6.5"/><line x1="13.5" y1="3.5" x2="10" y2="6.5"/>
@@ -337,7 +337,7 @@
                 <circle cx="2.5" cy="12.5" r="1.5" fill="currentColor" stroke="none"/>
                 <circle cx="13.5" cy="12.5" r="1.5" fill="currentColor" stroke="none"/>
             </svg>
-            <span>V<span class="brand-ai">ai</span>er</span>
+            <span>Fjord<span class="brand-o">-O-</span>Matic</span>
         </a>
         <nav class="topbar-nav">
             <a href="#features" class="topbar-item">
@@ -409,10 +409,11 @@
         </div>
         <h1>Self-hosted infrastructure<br/>for <span class="accent">homelab developers</span>.</h1>
         <p class="lede">
-            <strong>Vaier</strong> — Norwegian for <em>wire</em>, pronounced <strong>VY-er</strong> — wires
+            <strong>Fjord<span class="brand-o">-O-</span>Matic</strong> — for the award-winning crinkly bits
+            of Norway — wires
             together WireGuard, Traefik, and Google or GitHub sign-in (via oauth2-proxy) into a single web
             UI. One wildcard DNS record, made once, covers everything from here: add a Docker container on
-            any VPN peer, pick a subdomain, and Vaier handles the reverse proxy and HTTPS automatically.
+            any VPN peer, pick a subdomain, and Fjord handles the reverse proxy and HTTPS automatically.
         </p>
         <div class="hero-actions">
             <a href="#quickstart" class="btn btn-primary btn-large">Get started</a>
@@ -447,7 +448,7 @@
                 <h3>One UI. One click. Zero DNS, ever again.</h3>
                 <p>
                     One wildcard DNS record, made once, before you ever run <code>docker compose up</code>.
-                    From then on, Vaier discovers containers on every connected peer, lets you pick a
+                    From then on, Fjord discovers containers on every connected peer, lets you pick a
                     subdomain, generates the Traefik route, provisions the cert, optionally gates it behind
                     Google or GitHub sign-in, and rolls back the flow if anything fails. Nothing to add to
                     DNS, ever — the name already resolves. Your homelab now feels like a PaaS.
@@ -468,7 +469,7 @@
                     <path d="M8 20h8M12 16v4"/>
                 </svg>
                 <h3>VPN peer management</h3>
-                <p>Create, delete, and monitor WireGuard peers. Download QR codes, <code>.conf</code> files, docker-compose, or setup scripts — whichever fits the peer type. And you never type a CIDR: Vaier reads the network a server sits on over the SSH connection it already has, then says <em>"Colina 27 sits on 192.168.1.0/24"</em> and names the interface it read it from. One click and the whole fleet reaches that network — never one that would cut a machine off its own uplink.</p>
+                <p>Create, delete, and monitor WireGuard peers. Download QR codes, <code>.conf</code> files, docker-compose, or setup scripts — whichever fits the peer type. And you never type a CIDR: Fjord reads the network a server sits on over the SSH connection it already has, then says <em>"Colina 27 sits on 192.168.1.0/24"</em> and names the interface it read it from. One click and the whole fleet reaches that network — never one that would cut a machine off its own uplink.</p>
             </div>
             <div class="feature">
                 <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -477,7 +478,7 @@
                     <line x1="13" y1="15" x2="17" y2="15"/>
                 </svg>
                 <h3>Web terminal</h3>
-                <p>Open a real, persistent SSH shell to any machine — peers, LAN servers, or the Vaier host itself — in its own window. Backed by tmux on the machine, it reattaches automatically across reconnects and even a Vaier redeploy. Credentials stay server-side; the browser never sees the secret. No key for a machine yet? Vaier mints an ed25519 keypair itself, keeps the private half, and hands you the one line to paste into <code>authorized_keys</code>. Paste your own key instead and it's checked while you're still looking at the form — a <code>.pub</code> or a PuTTY <code>.ppk</code> is caught there, not at the next thousand connects. Every machine says which user Vaier acts as on it, with <code>root</code> flagged on its card — so you know what a delete reaches before you click it. And when a host key changes, Vaier refuses the connection and hands you the way back: clear the pin, reconnect, re-pinned on first use.</p>
+                <p>Open a real, persistent SSH shell to any machine — peers, LAN servers, or the Fjord host itself — in its own window. Backed by tmux on the machine, it reattaches automatically across reconnects and even a Fjord redeploy. Credentials stay server-side; the browser never sees the secret. No key for a machine yet? Fjord mints an ed25519 keypair itself, keeps the private half, and hands you the one line to paste into <code>authorized_keys</code>. Paste your own key instead and it's checked while you're still looking at the form — a <code>.pub</code> or a PuTTY <code>.ppk</code> is caught there, not at the next thousand connects. Every machine says which user Fjord acts as on it, with <code>root</code> flagged on its card — so you know what a delete reaches before you click it. And when a host key changes, Fjord refuses the connection and hands you the way back: clear the pin, reconnect, re-pinned on first use.</p>
             </div>
             <div class="feature">
                 <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -510,7 +511,7 @@
                     <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>
                 </svg>
                 <h3>Wildcard DNS</h3>
-                <p>Vaier stays out of DNS entirely: one <code>*.yourdomain.com</code> record, made once at whatever host your domain lives on, covers the console, sign-in, and every service you'll ever publish — checked and reported at every boot.</p>
+                <p>Fjord stays out of DNS entirely: one <code>*.yourdomain.com</code> record, made once at whatever host your domain lives on, covers the console, sign-in, and every service you'll ever publish — checked and reported at every boot.</p>
             </div>
             <div class="feature">
                 <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -528,7 +529,7 @@
                     <path d="m3 7 9 7 9-7"/>
                 </svg>
                 <h3>Monitoring &amp; alerts</h3>
-                <p>Every disk on every machine is watched, with a fill-rate forecast that warns before it's full. A disk already too full when Vaier starts is mailed about on sight, then again only when it climbs five points — never "still full" on a timer. And you don't wait for the mail: every machine's card carries its worst disk, green, amber or red, from the reading Vaier already takes on its rounds — no machine is woken to draw it, and one Vaier hasn't read yet stays blank rather than looking fine. Plus container image-update detection with a one-click <strong>Update</strong> — pulls the newer image and recreates the container from its own compose file, over SSH — and up/down alerts. Email you can trust: routine bans at the edge are shown, never mailed, so a message from Vaier always means something.</p>
+                <p>Every disk on every machine is watched, with a fill-rate forecast that warns before it's full. A disk already too full when Fjord starts is mailed about on sight, then again only when it climbs five points — never "still full" on a timer. And you don't wait for the mail: every machine's card carries its worst disk, green, amber or red, from the reading Fjord already takes on its rounds — no machine is woken to draw it, and one Fjord hasn't read yet stays blank rather than looking fine. Plus container image-update detection with a one-click <strong>Update</strong> — pulls the newer image and recreates the container from its own compose file, over SSH — and up/down alerts. Email you can trust: routine bans at the edge are shown, never mailed, so a message from Fjord always means something.</p>
             </div>
             <div class="feature">
                 <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -536,7 +537,7 @@
                     <path d="m9 12 2 2 4-4"/>
                 </svg>
                 <h3>Threats you can see</h3>
-                <p>CrowdSec turns the internet's scanners away at the edge — and Vaier shows you who: every blocked address live, with its country and network, pinged red on the fleet map. Two buttons per row: let it back in, or trust it. Everything you've trusted is listed right below, one click to take it back. You're emailed only when it's a credential attack, or when one of your own networks gets caught. The map's other colour is who got let <em>in</em>: a green dot per city an allowed sign-in or request came from, with the count and who's behind it — VPN and LAN traffic has no city to show, so it's kept as a plain, honest count beside the map instead of vanishing.</p>
+                <p>CrowdSec turns the internet's scanners away at the edge — and Fjord shows you who: every blocked address live, with its country and network, pinged red on the fleet map. Two buttons per row: let it back in, or trust it. Everything you've trusted is listed right below, one click to take it back. You're emailed only when it's a credential attack, or when one of your own networks gets caught. The map's other colour is who got let <em>in</em>: a green dot per city an allowed sign-in or request came from, with the count and who's behind it — VPN and LAN traffic has no city to show, so it's kept as a plain, honest count beside the map instead of vanishing.</p>
             </div>
             <div class="feature">
                 <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -544,7 +545,7 @@
                     <path d="M8 20v-6h8v6M8 4v4h6"/>
                 </svg>
                 <h3>Fleet backup &amp; survival kit</h3>
-                <p>Automated borg backups to one designated backup server, with a self-updating "survival kit" so your archives stay readable even if Vaier itself is gone. An archive with holes in it doesn't stay quiet: the machine tells you which files it lost, and one click makes Vaier read all of them from the next run.</p>
+                <p>Automated borg backups to one designated backup server, with a self-updating "survival kit" so your archives stay readable even if Fjord itself is gone. An archive with holes in it doesn't stay quiet: the machine tells you which files it lost, and one click makes Fjord read all of them from the next run.</p>
             </div>
             <div class="feature">
                 <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -562,7 +563,7 @@
                     <path d="M3 9h18M9 3v18"/>
                 </svg>
                 <h3>Consistent branding</h3>
-                <p>The oauth2-proxy sign-in and the Dex broker screens share Vaier's dark theme — the Google/GitHub hand-off feels like one app, not three.</p>
+                <p>The oauth2-proxy sign-in and the Dex broker screens share Fjord's dark theme — the Google/GitHub hand-off feels like one app, not three.</p>
             </div>
         </div>
     </section>
@@ -588,7 +589,7 @@
 
                 <g transform="translate(220,110)">
                     <rect width="220" height="60" rx="4" fill="#2d2d30" stroke="#4fc3f7" stroke-width="1.5"/>
-                    <text x="110" y="26" text-anchor="middle" fill="#4fc3f7" font-family="-apple-system, Segoe UI, sans-serif" font-size="13" font-weight="600">Vaier server</text>
+                    <text x="110" y="26" text-anchor="middle" fill="#4fc3f7" font-family="-apple-system, Segoe UI, sans-serif" font-size="13" font-weight="600">Fjord server</text>
                     <text x="110" y="44" text-anchor="middle" fill="#858585" font-family="SF Mono, Consolas, monospace" font-size="10">Traefik · oauth2-proxy · WireGuard</text>
                 </g>
 
@@ -619,9 +620,9 @@
                 <text x="450" y="106" fill="#858585" font-family="SF Mono, Consolas, monospace" font-size="10">WireGuard tunnel</text>
             </svg>
             <p class="diagram-caption">
-                Every published service resolves under your one wildcard DNS record to the single Vaier
+                Every published service resolves under your one wildcard DNS record to the single Fjord
                 server, terminates TLS at Traefik, optionally passes social-login authorization (Google or
-                GitHub via oauth2-proxy, then Vaier's own access check), and is proxied over WireGuard to
+                GitHub via oauth2-proxy, then Fjord's own access check), and is proxied over WireGuard to
                 the container running on a peer. The peers never need a public IP.
             </p>
         </div>
@@ -653,7 +654,7 @@
                 <div class="step-num">03</div>
                 <div class="step-body">
                     <h3>Rig the machine</h3>
-                    <p>One script fetches the runtime files Vaier needs — the compose file and the assets it bind-mounts — and scaffolds a <code>.env</code> with three secrets already generated for you. No git clone.</p>
+                    <p>One script fetches the runtime files Fjord needs — the compose file and the assets it bind-mounts — and scaffolds a <code>.env</code> with three secrets already generated for you. No git clone.</p>
 <pre class="code"><span class="cmd">mkdir</span> -p vaier &amp;&amp; <span class="cmd">cd</span> vaier
 <span class="cmd">curl</span> -fsSL https://raw.githubusercontent.com/getvaier/vaier/main/install.sh | <span class="cmd">bash</span></pre>
                 </div>
@@ -676,7 +677,7 @@
                 <div class="step-num">05</div>
                 <div class="step-body">
                     <h3>Start the stack and sign in</h3>
-                    <p>Bring everything up, open <code>https://vaier.yourdomain.com</code>, and sign in with the account you set as <code>VAIER_ADMIN_EMAIL</code> — Vaier seeds it as the first admin, so you land straight in the console. Anyone else who signs in lands as a <strong>pending</strong> request until you approve them on the Users page.</p>
+                    <p>Bring everything up, open <code>https://vaier.yourdomain.com</code>, and sign in with the account you set as <code>VAIER_ADMIN_EMAIL</code> — Fjord seeds it as the first admin, so you land straight in the console. Anyone else who signs in lands as a <strong>pending</strong> request until you approve them on the Users page.</p>
 <pre class="code"><span class="cmd">docker</span> compose up -d
 <span class="comment"># then open https://vaier.yourdomain.com and sign in</span></pre>
                 </div>
@@ -695,7 +696,7 @@
                 <h3>One person. One server. A growing pile of containers.</h3>
                 <p>
                     You're done patching together Caddy/Traefik configs by hand every time you stand
-                    up Plex, a Git server, or yet another self-hosted toy. Vaier is the layer that
+                    up Plex, a Git server, or yet another self-hosted toy. Fjord is the layer that
                     makes a single Linux box behave like a tiny private cloud.
                 </p>
             </div>
@@ -723,7 +724,7 @@
                     <circle cx="2.5" cy="12.5" r="1.5" fill="currentColor" stroke="none"/>
                     <circle cx="13.5" cy="12.5" r="1.5" fill="currentColor" stroke="none"/>
                 </svg>
-                V<span class="brand-ai">ai</span>er
+                Fjord<span class="brand-o">-O-</span>Matic
             </a>
             <div class="footer-links">
                 <a href="https://github.com/getvaier/vaier">Source</a>

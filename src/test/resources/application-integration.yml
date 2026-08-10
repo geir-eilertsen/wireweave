@@ -15,5 +15,5 @@ crowdsec:
 
 logging:
   level:
-    net.vaier: WARN
+    net.fjordomatic: WARN
     org.springframework: WARN

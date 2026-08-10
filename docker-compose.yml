@@ -1,6 +1,6 @@
 # The wireguard container's bridge address, pinned so the host-netns route-sync container can name it
 # without Docker DNS. Sits high in the subnet, clear of the addresses Docker hands out sequentially from
-# .2, so it can never collide with a dynamically-assigned container. Everything else — Vaier's
+# .2, so it can never collide with a dynamically-assigned container. Everything else — Fjord's
 # LanRouteAdapter, traefik-lan-routes — still resolves the container by DNS name and is unaffected.
 x-wireguard-bridge-ip: &wireguard-bridge-ip "172.20.0.250"
 
@@ -69,7 +69,7 @@ configs:
           bind $${BIND_CONFIG}
           http-request deny unless METH_GET || { env(POST) -m bool }
 
-          # Vaier-specific explicit denies (placed BEFORE the broad CONTAINERS allow).
+          # Fjord-specific explicit denies (placed BEFORE the broad CONTAINERS allow).
           # These close the privesc chain that the upstream CONTAINERS=1 + POST=1
           # combination otherwise leaves open: an attacker with RCE in vaier could
           # otherwise POST /containers/create + POST /containers/{id}/start to launch
@@ -194,15 +194,15 @@ services:
         # policy cannot be a committed file — it is rendered here, on every boot, before Traefik is
         # started at the bottom of this script. That ordering is not cosmetic: the middlewares below are
         # referenced from Traefik's own static config (--entrypoints.websecure.http.middlewares) and from
-        # Vaier's compose labels, and a reference Traefik cannot resolve DISABLES the router that carries
-        # it. Rendering here — rather than from Vaier, which boots after Traefik — closes that window.
-        # This is a SECOND file in the watched directory. Vaier owns exactly one of its own, which it
+        # Fjord's compose labels, and a reference Traefik cannot resolve DISABLES the router that carries
+        # it. Rendering here — rather than from Fjord, which boots after Traefik — closes that window.
+        # This is a SECOND file in the watched directory. Fjord owns exactly one of its own, which it
         # rewrites by atomic move on every publish; writing into that one would be clobbered.
         mkdir -p /traefik/config
         cat > /traefik/config/.security.yml.tmp <<'VAIER_EDGE_POLICY'
         # GENERATED ON EVERY BOOT by the traefik entrypoint in docker-compose.yml. Edits here are lost.
         #
-        # There is deliberately NO Content-Security-Policy in this file. Vaier's file viewer
+        # There is deliberately NO Content-Security-Policy in this file. Fjord's file viewer
         # (GET /machines/{id}/files/view) already serves every previewed file under its own tight,
         # per-media-type CSP — see ViewableFile.SANDBOXED_POLICY / PDF_POLICY. A CSP set at the edge
         # would either overwrite that one, silently weakening a real security boundary, or stack with
@@ -225,7 +225,7 @@ services:
                 address: http://crowdsec-bouncer:8080/api/v1/forwardAuth
                 trustForwardHeader: true
             # Applied to EVERY router via the websecure entrypoint, published third-party services
-            # included. Only headers that are safe on an application Vaier did not write: nosniff
+            # included. Only headers that are safe on an application Fjord did not write: nosniff
             # cannot break a correctly-typed response, and strict-origin-when-cross-origin is already
             # the modern browser default, so replacing an app's own value never breaks a flow that
             # depends on the referrer.
@@ -234,7 +234,7 @@ services:
                 contentTypeNosniff: true
                 referrerPolicy: strict-origin-when-cross-origin
             # Applied to VAIER'S OWN routers only, via compose labels. Frame protection is not safe as
-            # a fleet-wide default: a published app may legitimately embed or be embedded, and Vaier
+            # a fleet-wide default: a published app may legitimately embed or be embedded, and Fjord
             # generates those routers, so a bad default would break them silently and at scale.
             # SAMEORIGIN rather than DENY because the Explorer frames its own pages same-origin (the
             # Users/Concepts bridge in explorer-shell.js) — DENY would blank those panes.
@@ -271,7 +271,7 @@ services:
           cidr=$$(grep -oE '"lanCidr":"[^"]+"' "$$f" 2>/dev/null | head -1 | sed -E 's/.*"lanCidr":"([^"]+)".*/\1/')
           [ -n "$$cidr" ] && ip route replace "$$cidr" via "$$WG_IP" 2>/dev/null || true
         done
-        # Fresh-install ACME race guard. Vaier writes no DNS (#331) — the operator's one `*.<domain>` A
+        # Fresh-install ACME race guard. Fjord writes no DNS (#331) — the operator's one `*.<domain>` A
         # record answers for all three infra names — but on a fresh install that record may have been made
         # minutes ago, or not at all. If we launch traefik before it answers, the first Let's Encrypt
         # request gets NXDOMAIN and the retry burst trips LE's "5 failed authorizations per host per hour"
@@ -311,7 +311,7 @@ services:
       - --providers.file.watch=true
       - --entrypoints.web.address=:80
       - --entrypoints.websecure.address=:443
-      # Every Vaier router is websecure-only, so a schemeless hostname (which browsers request as
+      # Every Fjord router is websecure-only, so a schemeless hostname (which browsers request as
       # http://) would hit no router and get Traefik's default 404. Globally redirect web->websecure.
       # Traefik serves the ACME HTTP-01 challenge below at higher priority than this redirect, so
       # Let's Encrypt issuance is unaffected.
@@ -320,14 +320,14 @@ services:
       # #258: the safe security headers ride the ENTRYPOINT, not individual routers. That is what makes
       # "every router carries them" true by construction — the compose-label routers, every route
       # TraefikReverseProxyAdapter generates into remote-apps.yml, and anything added by hand later — with
-      # no backfill and without touching the file Vaier owns. Deliberately NOT on the `web` entrypoint:
+      # no backfill and without touching the file Fjord owns. Deliberately NOT on the `web` entrypoint:
       # that one serves the ACME HTTP-01 challenge and 308s everything else, so headers there buy nothing.
-      # Frame protection is NOT here — it is per-router, on Vaier's own surfaces only (see the labels on
+      # Frame protection is NOT here — it is per-router, on Fjord's own surfaces only (see the labels on
       # the vaier, oauth2-proxy, dex and vaier-offline services). The middleware itself is rendered by
       # this service's entrypoint above, before traefik starts, so this reference always resolves.
       #
       # #329 Slice 1: crowdsec-bouncer goes FIRST — every router's effective chain gets it ahead of
-      # the security headers (and, on Vaier's own routers, ahead of the Social auth chain too), so a
+      # the security headers (and, on Fjord's own routers, ahead of the Social auth chain too), so a
       # CrowdSec block decision is refused before Traefik does anything else with the request.
       - --entrypoints.websecure.http.middlewares=crowdsec-bouncer@file,vaier-security-headers@file
       - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
@@ -338,10 +338,10 @@ services:
       - "80:80"
       - "443:443"
     # Traefik's API/dashboard listens on :8080 (--api.insecure=true above), but the upstream image
-    # only EXPOSEs 80 and 443 — and Vaier discovers publishable services from a container's exposed
+    # only EXPOSEs 80 and 443 — and Fjord discovers publishable services from a container's exposed
     # ports, so the one container of its own stack worth publishing never showed up. `expose` is
     # metadata: it publishes nothing to the host and changes no reachability (the port stays reachable
-    # only inside vaier-network, as it already was for TRAEFIK_API_URL), it just tells Vaier it exists.
+    # only inside vaier-network, as it already was for TRAEFIK_API_URL), it just tells Fjord it exists.
     expose:
       - "8080"
     volumes:
@@ -374,11 +374,11 @@ services:
     container_name: docker-proxy
     mem_limit: 64m
     environment:
-      # Allowlist flags for Vaier + Traefik. Combined with the haproxy_template
+      # Allowlist flags for Fjord + Traefik. Combined with the haproxy_template
       # config below (which adds explicit denies for /containers/create and
       # /containers/{id}/start), this closes the privesc chain from "RCE in
       # vaier" to "host root via docker run --privileged".
-      - CONTAINERS=1     # /containers and /containers/{id}/json — Vaier discovery + Traefik provider
+      - CONTAINERS=1     # /containers and /containers/{id}/json — Fjord discovery + Traefik provider
       - EVENTS=1         # /events — DockerEventListener + Traefik live updates
       - EXEC=1           # /exec — WireGuardVpnAdapter into wireguard, CrowdSecCliAdapter into crowdsec
       - IMAGES=1         # /images — DockerServerAdapter image inspect
@@ -405,7 +405,7 @@ services:
   #
   # BOUNCER_KEY_vaier: crowdsec's own docker_start.sh scans every BOUNCER_KEY_* env var at boot and
   # self-registers a bouncer named after the suffix with that value as its API key (see
-  # /docker_start.sh's register_bouncer loop) — no cscli exec from Vaier needed. The same value is
+  # /docker_start.sh's register_bouncer loop) — no cscli exec from Fjord needed. The same value is
   # handed to crowdsec-bouncer below as CROWDSEC_BOUNCER_API_KEY. VAIER_CROWDSEC_BOUNCER_KEY is
   # install.sh-generated exactly like VAIER_DEX_CLIENT_SECRET — not operator-authored.
   #
@@ -425,7 +425,7 @@ services:
       - ./crowdsec/acquis.d:/etc/crowdsec/acquis.d:ro
       # Single-file mount (not directory) — the image's parsers/s02-enrich already ships hub
       # parsers (geoip-enrich, the private-IP whitelist, ...); mounting the whole directory would
-      # shadow all of them. Vaier's SecurityService writes this file; vaier-init pre-touches it.
+      # shadow all of them. Fjord's SecurityService writes this file; vaier-init pre-touches it.
       - ./crowdsec/whitelist/vaier-trusted-networks.yaml:/etc/crowdsec/parsers/s02-enrich/vaier-trusted-networks.yaml:ro
       - ./traefik/logs:/var/log/traefik:ro
     depends_on:
@@ -484,10 +484,10 @@ services:
         done
     restart: unless-stopped
 
-  # The Vaier host is the one machine in the fleet that IS the Docker host rather than something behind
-  # the tunnel, so it inherits no LAN routes: `traefik-lan-routes` and Vaier's own LanRouteAdapter write
+  # The Fjord host is the one machine in the fleet that IS the Docker host rather than something behind
+  # the tunnel, so it inherits no LAN routes: `traefik-lan-routes` and Fjord's own LanRouteAdapter write
   # into container netns, never the host's. That left the host unable to reach a relay's LAN — so a backup
-  # job for the Vaier server itself couldn't reach the borg server, and neither could any host-level tool.
+  # job for the Fjord server itself couldn't reach the borg server, and neither could any host-level tool.
   #
   # This shares the HOST's network namespace and installs the same relay lanCidr routes there, via the
   # wireguard container. It can't use Docker DNS to find that container (the host has none), so it reads
@@ -605,14 +605,14 @@ services:
       - -c
       - |
         set -e
-        # Vaier container runs as UID 1000 (Dockerfile USER directive). Bind mounts inherit
+        # Fjord container runs as UID 1000 (Dockerfile USER directive). Bind mounts inherit
         # host ownership, so we chown the config dirs once on every start.
         for d in /vaier/config /traefik/config /wireguard/config /icons; do
           [ -d "$$d" ] && chown -R 1000:1000 "$$d"
         done
         # #329: crowdsec bind-mounts this exact file (read-only, single-file mount) into its
         # parsers/s02-enrich stage dir. A file that doesn't exist yet on the host makes Docker
-        # silently create a DIRECTORY at both ends instead — breaking both Vaier's write and
+        # silently create a DIRECTORY at both ends instead — breaking both Fjord's write and
         # crowdsec's read. Pre-touch it here, before crowdsec's own bind mount is ever set up
         # (crowdsec depends_on this container completing).
         mkdir -p /crowdsec-whitelist
@@ -636,12 +636,12 @@ services:
     # would fall back to its 25% default and starve itself down to a 192 MB heap.
     mem_limit: 768m
     # The host runs earlyoom with `--prefer '(java|mvn|buildkitd)$'` so a heavy build dies before
-    # anything else. Vaier is itself a JVM, which made the *running app* a preferred victim: memory
-    # pressure from a build would push the 1.9 GB box over the line and earlyoom would kill Vaier
+    # anything else. Fjord is itself a JVM, which made the *running app* a preferred victim: memory
+    # pressure from a build would push the 1.9 GB box over the line and earlyoom would kill Fjord
     # rather than the build.
     #
     # earlyoom ranks by /proc/<pid>/oom_score and adds +300 to a preferred name. -500 was NOT enough:
-    # it left Vaier at 362 + 300 = 662, still the highest-scoring process whenever no build was
+    # it left Fjord at 362 + 300 = 662, still the highest-scoring process whenever no build was
     # running, so it was killed anyway. -900 floors the app's own score at ~0, so even carrying the
     # +300 preference it sits below an idle agent (~300) and far below a surefire JVM (~1000).
     # It reserves no memory; it only decides who dies last.
@@ -655,7 +655,7 @@ services:
     environment:
       # Heap ceiling as a share of the mem_limit above. Read the mem_limit comment before changing.
       JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=55
-      # The zone Vaier reads local time in. The nightly fleet-backup schedule compares the configured
+      # The zone Fjord reads local time in. The nightly fleet-backup schedule compares the configured
       # hour against this zone, so "02:00" means 02:00 here — not 02:00 UTC. Defaults to UTC; set
       # VAIER_TZ in .env (e.g. Europe/Oslo) to schedule in your own local time.
       TZ: ${VAIER_TZ:-UTC}
@@ -712,7 +712,7 @@ services:
       # (Slice 4b) and per-LAN-server setup scripts to a bare box being onboarded, which has no oauth2
       # session yet. Each is anchored to a single id/name path segment + /setup only (NOT /setup.sh —
       # the in-console download stays admin-gated) — nothing else is exposed. Each route is self-guarded
-      # by a single-use, ~15-min setup token validated inside Vaier (over HTTPS via websecure).
+      # by a single-use, ~15-min setup token validated inside Fjord (over HTTPS via websecure).
       - traefik.http.routers.vaier-public.rule=Host(`vaier.${VAIER_DOMAIN}`) && (Path(`/`) || Path(`/index.html`) || Path(`/launchpad.html`) || Path(`/styles.css`) || Path(`/avatar.js`) || PathPrefix(`/icon`) || Path(`/favicon`) || Path(`/launchpad/services`) || Path(`/launchpad/events`) || Path(`/lan-servers/docker-setup.sh`) || PathRegexp(`^/vpn/peers/[^/]+/setup$`) || PathRegexp(`^/lan-servers/[^/]+/setup$`))
       - traefik.http.routers.vaier-public.entrypoints=websecure
       - traefik.http.routers.vaier-public.tls.certresolver=letsencrypt
@@ -747,14 +747,14 @@ services:
       - traefik.http.routers.vaier-oauth2.service=oauth2-proxy
       - traefik.http.routers.vaier-oauth2.middlewares=vaier-frame-guard@file
       - traefik.http.services.vaier.loadbalancer.server.port=8080
-      # When the Vaier backend itself is unreachable (502/503/504), the vaier-down errors middleware
+      # When the Fjord backend itself is unreachable (502/503/504), the vaier-down errors middleware
       # (defined on vaier-offline) serves the branded offline page instead of Traefik's bare "Bad
       # gateway". vaier-public also carries it so unauthenticated public paths degrade gracefully.
       - traefik.http.routers.vaier-public.middlewares=vaier-down,vaier-frame-guard@file
     networks:
       - vaier-network
 
-  # --- #305 social login: oauth2-proxy is the forward-auth gatekeeper; Vaier owns authorization
+  # --- #305 social login: oauth2-proxy is the forward-auth gatekeeper; Fjord owns authorization
   # via /authz/verify. This is mandatory infrastructure — the sole auth gateway — so it always
   # starts with `docker compose up -d` (no `social` profile). oauth2-proxy no longer talks to Google
   # directly: it federates through the Dex identity broker (see the dex service below), which fans
@@ -903,7 +903,7 @@ services:
       - --email-domain=*
       - --reverse-proxy=true
       - --redirect-url=https://oauth2.${VAIER_DOMAIN}/oauth2/callback
-      # Brand the sign-in page in Vaier's dark theme (overrides only sign_in.html + error.html).
+      # Brand the sign-in page in Fjord's dark theme (overrides only sign_in.html + error.html).
       # The rendered copy, not the committed source: oauth2-proxy-init trims the sign-in page down
       # to the providers this install actually has credentials for.
       - --custom-templates-dir=/oauth2/config/templates
@@ -921,7 +921,7 @@ services:
       - traefik.http.routers.oauth2-proxy.rule=Host(`oauth2.${VAIER_DOMAIN}`)
       - traefik.http.routers.oauth2-proxy.entrypoints=websecure
       - traefik.http.routers.oauth2-proxy.tls.certresolver=letsencrypt
-      # #258: a Vaier-owned surface, so it carries frame protection. Nothing frames the sign-in host.
+      # #258: a Fjord-owned surface, so it carries frame protection. Nothing frames the sign-in host.
       - traefik.http.routers.oauth2-proxy.middlewares=vaier-frame-guard@file
       - traefik.http.services.oauth2-proxy.loadbalancer.server.port=4180
     networks:
@@ -996,10 +996,10 @@ services:
         storage: {type: memory}
         web: {http: 0.0.0.0:5556}
         oauth2: {skipApprovalScreen: true}
-        frontend: {dir: /srv/dex/web, theme: vaier, issuer: Vaier}
+        frontend: {dir: /srv/dex/web, theme: vaier, issuer: Fjord}
         staticClients:
         - id: vaier-oauth2
-          name: Vaier
+          name: Fjord
           secret: $${VAIER_DEX_CLIENT_SECRET}
           redirectURIs: [https://oauth2.$${VAIER_DOMAIN}/oauth2/callback]
         connectors:
@@ -1035,7 +1035,7 @@ services:
     command: [dex, serve, /dex/config/config.yaml]
     volumes:
       - ./dex/config:/dex/config:ro
-      # Brand Dex's own screens (error, connector picker) in Vaier's dark theme. Only the theme dir is
+      # Brand Dex's own screens (error, connector picker) in Fjord's dark theme. Only the theme dir is
       # overlaid onto the image's built-in web assets; frontend.dir in config.yaml points Dex at the
       # on-disk copy so it picks up this theme (see dex-init).
       - ./dex/themes/vaier:/srv/dex/web/themes/vaier:ro
@@ -1048,14 +1048,14 @@ services:
       - traefik.http.routers.dex.rule=Host(`dex.${VAIER_DOMAIN}`)
       - traefik.http.routers.dex.entrypoints=websecure
       - traefik.http.routers.dex.tls.certresolver=letsencrypt
-      # #258: a Vaier-owned surface, so it carries frame protection. Dex's login page is never framed.
+      # #258: a Fjord-owned surface, so it carries frame protection. Dex's login page is never framed.
       - traefik.http.routers.dex.middlewares=vaier-frame-guard@file
       - traefik.http.services.dex.loadbalancer.server.port=5556
     networks:
       - vaier-network
 
-  # Tiny static page server that stands in for Vaier when Vaier is down. Deliberately independent of
-  # the vaier container so the branded offline page is still reachable while Vaier is unavailable.
+  # Tiny static page server that stands in for Fjord when Fjord is down. Deliberately independent of
+  # the vaier container so the branded offline page is still reachable while Fjord is unavailable.
   vaier-offline:
     image: nginx:1.27.5-alpine
     container_name: vaier-offline
@@ -1067,9 +1067,9 @@ services:
     labels:
       - traefik.enable=true
       - traefik.http.services.vaier-offline.loadbalancer.server.port=80
-      # Fallback router for the Vaier host. Its priority sits ABOVE the self-published file-provider
-      # router (priority 30 in remote-apps.yml, which still points at the dead backend when Vaier is
-      # down) but BELOW Vaier's own docker-label routers (priority 100/200). So while Vaier is up its
+      # Fallback router for the Fjord host. Its priority sits ABOVE the self-published file-provider
+      # router (priority 30 in remote-apps.yml, which still points at the dead backend when Fjord is
+      # down) but BELOW Fjord's own docker-label routers (priority 100/200). So while Fjord is up its
       # real routers win; when the vaier container stops, those drop away and this one becomes the
       # highest match — serving the branded offline page for any path instead of "Bad gateway".
       - traefik.http.routers.vaier-offline.rule=Host(`vaier.${VAIER_DOMAIN}`)
@@ -1077,7 +1077,7 @@ services:
       - traefik.http.routers.vaier-offline.entrypoints=websecure
       - traefik.http.routers.vaier-offline.tls.certresolver=letsencrypt
       - traefik.http.routers.vaier-offline.service=vaier-offline
-      # #258: the offline page is served on Vaier's own host, so it is a Vaier surface too.
+      # #258: the offline page is served on Fjord's own host, so it is a Fjord surface too.
       - traefik.http.routers.vaier-offline.middlewares=vaier-frame-guard@file
       # Also catch app-level gateway errors while the vaier container is still running (e.g. a
       # mid-restart 502/503/504): the errors middleware swaps in the same static page.

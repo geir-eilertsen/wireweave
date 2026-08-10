@@ -10,7 +10,7 @@ labels: enhancement
 
 ## Proposed solution
 
-<!-- What should Vaier do differently? Be specific about the user-facing behaviour. -->
+<!-- What should Fjord do differently? Be specific about the user-facing behaviour. -->
 
 ## Alternatives considered
 

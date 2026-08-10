@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="color-scheme" content="dark">
-    <title>Vaier</title>
+    <title>Fjord-O-Matic</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22 fill=%22none%22 stroke=%22%234cc9e6%22 stroke-width=%221.5%22 stroke-linecap=%22round%22><circle cx=%228%22 cy=%228%22 r=%222.2%22 fill=%22%234cc9e6%22 stroke=%22none%22/><line x1=%222.5%22 y1=%223.5%22 x2=%226%22 y2=%226.5%22/><line x1=%2213.5%22 y1=%223.5%22 x2=%2210%22 y2=%226.5%22/><line x1=%222.5%22 y1=%2212.5%22 x2=%226%22 y2=%229.5%22/><line x1=%2213.5%22 y1=%2212.5%22 x2=%2210%22 y2=%229.5%22/><circle cx=%222.5%22 cy=%223.5%22 r=%221.5%22 fill=%22%234cc9e6%22 stroke=%22none%22/><circle cx=%2213.5%22 cy=%223.5%22 r=%221.5%22 fill=%22%234cc9e6%22 stroke=%22none%22/><circle cx=%222.5%22 cy=%2212.5%22 r=%221.5%22 fill=%22%234cc9e6%22 stroke=%22none%22/><circle cx=%2213.5%22 cy=%2212.5%22 r=%221.5%22 fill=%22%234cc9e6%22 stroke=%22none%22/></svg>">
     <link rel="stylesheet" href="styles.css">
     <style>
@@ -298,7 +298,7 @@
 </head>
 <body>
     <div class="topbar">
-        <a href="/launchpad.html" class="topbar-brand" aria-label="Vaier">
+        <a href="/launchpad.html" class="topbar-brand" aria-label="Fjord-O-Matic">
             <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
                 <circle cx="8" cy="8" r="2.2" fill="currentColor" stroke="none"/>
                 <line x1="2.5" y1="3.5" x2="6" y2="6.5"/><line x1="13.5" y1="3.5" x2="10" y2="6.5"/>
@@ -308,7 +308,7 @@
                 <circle cx="2.5" cy="12.5" r="1.5" fill="currentColor" stroke="none"/>
                 <circle cx="13.5" cy="12.5" r="1.5" fill="currentColor" stroke="none"/>
             </svg>
-            <span>V<span class="brand-ai">ai</span>er</span>
+            <span>Fjord<span class="brand-o">-O-</span>Matic</span>
         </a>
         <nav class="topbar-nav" id="topbarNav"></nav>
         <div class="topbar-user" id="topbarUser"></div>
@@ -367,7 +367,7 @@
                 const logout = me.logoutUrl || '#';
                 // The console nav is admin-only. A signed-in non-admin viewer still gets their
                 // name and Logout — just no links into pages they can't open.
-                // One console, one link: the Explorer is Vaier's whole UI now — the fleet tree, and Users and
+                // One console, one link: the Explorer is Fjord's whole UI now — the fleet tree, and Users and
                 // Settings as entries within it — so the launchpad points at it and nothing else.
                 nav.innerHTML = me.isAdmin
                     ? `<a href="/explorer.html" class="topbar-item">${ICON_EXPLORER}<span class="link-label">Explorer</span></a>`
@@ -383,12 +383,12 @@
                 // rides along as tooltip/alt. On a load miss the photo swaps back to the name text.
                 let profile = nameSpan;
                 // The photo is a non-essential enhancement — never let it break the name + Logout
-                // controls. If avatar.js failed to load, the bare VaierAvatar reference throws a
+                // controls. If avatar.js failed to load, the bare FjordAvatar reference throws a
                 // ReferenceError the catch swallows (it's a top-level const, not a window property,
-                // so window.VaierAvatar wouldn't see it); on any miss we keep the name text.
+                // so window.FjordAvatar wouldn't see it); on any miss we keep the name text.
                 let photoUrl = null;
                 try {
-                    photoUrl = await VaierAvatar.photoUrl({
+                    photoUrl = await FjordAvatar.photoUrl({
                         provider: me.provider, providerUserId: me.providerUserId, email: me.email, size: 48 });
                 } catch (_) { /* keep the name text */ }
                 if (photoUrl) {
@@ -616,7 +616,7 @@
                 }
 
                 // Group by server-supplied peerName — the domain owns that label (and excludes the
-                // Vaier service's own infrastructure routes upstream).
+                // Fjord service's own infrastructure routes upstream).
                 const byPeer = new Map();
                 for (const s of services) {
                     if (!byPeer.has(s.peerName)) byPeer.set(s.peerName, []);

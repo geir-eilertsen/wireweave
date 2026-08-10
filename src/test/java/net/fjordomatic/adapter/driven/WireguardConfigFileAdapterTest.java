@@ -1,0 +1,759 @@
+package net.fjordomatic.adapter.driven;
+
+import net.fjordomatic.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.springframework.test.util.ReflectionTestUtils;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Optional;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class WireguardConfigFileAdapterTest {
+
+    @TempDir Path configDir;
+
+    WireguardConfigFileAdapter adapter;
+
+    @BeforeEach
+    void setUp() {
+        adapter = new WireguardConfigFileAdapter();
+        ReflectionTestUtils.setField(adapter, "wireguardConfigPath", configDir.toString());
+    }
+
+    // --- machine identity (#312 follow-up) ---
+
+    private static final String ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+
+    @Test
+    void getPeerConfigByName_readsTheMachineIdFromFjordMetadata() throws IOException {
+        createPeerConfWithFjordMetadata("laptop", "10.13.13.2",
+            "{\"id\":\"" + ID + "\",\"peerType\":\"UBUNTU_SERVER\"}");
+
+        assertThat(adapter.getPeerConfigByName("laptop")).get()
+            .extracting(p -> p.machineId().value()).isEqualTo(ID);
+    }
+
+    /**
+     * A peer's identity is read, never minted. A conf with no {@code id} is an unfinished hand-edit,
+     * and inventing one would produce a peer that is a stranger to its own credential and backup job.
+     */
+    @Test
+    void getPeerConfigByName_isEmptyWhenTheConfCarriesNoMachineId() throws IOException {
+        // Written raw: the shared fixture splices an id in, which is exactly what must be absent here.
+        Path peerDir = configDir.resolve("laptop");
+        Files.createDirectories(peerDir);
+        Files.writeString(peerDir.resolve("laptop.conf"),
+            "# VAIER: {\"peerType\":\"UBUNTU_SERVER\"}\n"
+            + "[Interface]\nAddress=10.13.13.2/32\nPrivateKey=testkey\n");
+
+        assertThat(adapter.getPeerConfigByName("laptop")).isEmpty();
+    }
+
+    @Test
+    void getPeerConfigByName_isEmptyWhenTheMachineIdIsMalformed() throws IOException {
+        createPeerConfWithFjordMetadata("laptop", "10.13.13.2",
+            "{\"id\":\"not-a-uuid\",\"peerType\":\"UBUNTU_SERVER\"}");
+
+        assertThat(adapter.getPeerConfigByName("laptop")).isEmpty();
+    }
+
+    /**
+     * The rename footgun, pinned: every {@code update*} rewrites the whole {@code # VAIER:} line, so a
+     * field dropped from that rewrite is a field erased from disk. Losing the id here would orphan the
+     * peer from everything keyed to it — the exact failure this identity work exists to end.
+     */
+    @Test
+    void updateName_preservesTheMachineId() throws IOException {
+        createPeerConfWithFjordMetadata("laptop", "10.13.13.2",
+            "{\"id\":\"" + ID + "\",\"peerType\":\"UBUNTU_SERVER\"}");
+
+        adapter.updateName("laptop", "Geir's laptop");
+
+        assertThat(adapter.getPeerConfigByName("laptop")).get()
+            .extracting(p -> p.machineId().value()).isEqualTo(ID);
+    }
+
+    @Test
+    void updateDescription_preservesTheMachineId() throws IOException {
+        createPeerConfWithFjordMetadata("laptop", "10.13.13.2",
+            "{\"id\":\"" + ID + "\",\"peerType\":\"UBUNTU_SERVER\"}");
+
+        adapter.updateDescription("laptop", "the one in the bag");
+
+        assertThat(adapter.getPeerConfigByName("laptop")).get()
+            .extracting(p -> p.machineId().value()).isEqualTo(ID);
+    }
+
+    // --- getPeerConfigByName ---
+
+    @Test
+    void getPeerConfigByName_returnsConfigWhenPeerExists() throws IOException {
+        createPeerConf("laptop", "10.13.13.2");
+
+        Optional<PeerConfiguration> result = adapter.getPeerConfigByName("laptop");
+
+        assertThat(result).isPresent();
+        assertThat(result.get().name()).isEqualTo("laptop");
+        assertThat(result.get().ipAddress()).isEqualTo("10.13.13.2");
+    }
+
+    @Test
+    void getPeerConfigByName_returnsEmptyWhenPeerDoesNotExist() {
+        assertThat(adapter.getPeerConfigByName("nonexistent")).isEmpty();
+    }
+
+    @Test
+    void getPeerConfigByName_parsesIpWithCidrNotation() throws IOException {
+        createPeerConf("server1", "10.13.13.5");
+
+        Optional<PeerConfiguration> result = adapter.getPeerConfigByName("server1");
+
+        assertThat(result).isPresent();
+        assertThat(result.get().ipAddress()).isEqualTo("10.13.13.5");
+    }
+
+    @Test
+    void getPeerConfigByName_handlesExtraWhitespaceAroundEquals() throws IOException {
+        Path peerDir = configDir.resolve("laptop");
+        Files.createDirectories(peerDir);
+        Files.writeString(peerDir.resolve("laptop.conf"),
+                "# VAIER: {\"id\":\"" + ID + "\"}\n"
+                + "[Interface]\nAddress = 10.13.13.3/32\nPrivateKey = abc123\n");
+
+        Optional<PeerConfiguration> result = adapter.getPeerConfigByName("laptop");
+
+        assertThat(result).isPresent();
+        assertThat(result.get().ipAddress()).isEqualTo("10.13.13.3");
+    }
+
+    // --- getPeerConfigByIp ---
+
+    @Test
+    void getPeerConfigByIp_findsPeerMatchingIp() throws IOException {
+        createPeerConf("laptop", "10.13.13.2");
+        createPeerConf("phone", "10.13.13.3");
+
+        Optional<PeerConfiguration> result = adapter.getPeerConfigByIp("10.13.13.3");
+
+        assertThat(result).isPresent();
+        assertThat(result.get().name()).isEqualTo("phone");
+    }
+
+    @Test
+    void getPeerConfigByIp_returnsEmptyWhenNoMatchFound() throws IOException {
+        createPeerConf("laptop", "10.13.13.2");
+
+        assertThat(adapter.getPeerConfigByIp("10.13.13.99")).isEmpty();
+    }
+
+    @Test
+    void getPeerConfigByIp_returnsEmptyWhenConfigDirMissing() {
+        ReflectionTestUtils.setField(adapter, "wireguardConfigPath", "/nonexistent/path");
+
+        assertThat(adapter.getPeerConfigByIp("10.13.13.2")).isEmpty();
+    }
+
+    @Test
+    void getPeerConfigByIp_ignoresWgConfsDirectory() throws IOException {
+        createPeerConf("laptop", "10.13.13.2");
+        Path wgConfsDir = configDir.resolve("wg_confs");
+        Files.createDirectories(wgConfsDir);
+
+        Optional<PeerConfiguration> result = adapter.getPeerConfigByIp("10.13.13.2");
+
+        assertThat(result).isPresent();
+        assertThat(result.get().name()).isEqualTo("laptop");
+    }
+
+    // --- resolvePeerIdByIp ---
+
+    @Test
+    void resolvePeerIdByIp_returnsPeerNameWhenFound() throws IOException {
+        createPeerConf("my-server", "10.13.13.4");
+
+        assertThat(adapter.resolvePeerIdByIp("10.13.13.4")).isEqualTo("my-server");
+    }
+
+    @Test
+    void resolvePeerIdByIp_returnsIpWhenNoPeerFound() throws IOException {
+        createPeerConf("laptop", "10.13.13.2");
+
+        assertThat(adapter.resolvePeerIdByIp("10.13.13.99")).isEqualTo("10.13.13.99");
+    }
+
+    @Test
+    void resolvePeerIdByIp_returnsIpWhenConfigDirMissing() {
+        ReflectionTestUtils.setField(adapter, "wireguardConfigPath", "/nonexistent/path");
+
+        assertThat(adapter.resolvePeerIdByIp("10.13.13.2")).isEqualTo("10.13.13.2");
+    }
+
+    // --- VAIER metadata (peerType / lanCidr) ---
+
+    @Test
+    void getPeerConfigByName_defaultsToUbuntuServerWhenNoFjordComment() throws IOException {
+        createPeerConf("server1", "10.13.13.2");
+
+        Optional<PeerConfiguration> result = adapter.getPeerConfigByName("server1");
+
+        assertThat(result).isPresent();
+        assertThat(result.get().peerType()).isEqualTo(net.fjordomatic.domain.MachineType.UBUNTU_SERVER);
+        assertThat(result.get().lanCidr()).isNull();
+    }
+
+    @Test
+    void getPeerConfigByName_parsesMobileClientFromFjordComment() throws IOException {
+        createPeerConfWithFjordMetadata("phone", "10.13.13.3",
+                "{\"peerType\":\"MOBILE_CLIENT\"}");
+
+        Optional<PeerConfiguration> result = adapter.getPeerConfigByName("phone");
+
+        assertThat(result).isPresent();
+        assertThat(result.get().peerType()).isEqualTo(net.fjordomatic.domain.MachineType.MOBILE_CLIENT);
+        assertThat(result.get().lanCidr()).isNull();
+    }
+
+    @Test
+    void getPeerConfigByName_parsesUbuntuServerWithLanCidrFromFjordComment() throws IOException {
+        createPeerConfWithFjordMetadata("spain", "10.13.13.4",
+                "{\"peerType\":\"UBUNTU_SERVER\",\"lanCidr\":\"192.168.1.0/24\"}");
+
+        Optional<PeerConfiguration> result = adapter.getPeerConfigByName("spain");
+
+        assertThat(result).isPresent();
+        assertThat(result.get().peerType()).isEqualTo(net.fjordomatic.domain.MachineType.UBUNTU_SERVER);
+        assertThat(result.get().lanCidr()).isEqualTo("192.168.1.0/24");
+    }
+
+    @Test
+    void getPeerConfigByName_parsesLanAddressFromFjordComment() throws IOException {
+        createPeerConfWithFjordMetadata("apalveien5", "10.13.13.6",
+                "{\"peerType\":\"UBUNTU_SERVER\",\"lanAddress\":\"192.168.3.121\"}");
+
+        Optional<PeerConfiguration> result = adapter.getPeerConfigByName("apalveien5");
+
+        assertThat(result).isPresent();
+        assertThat(result.get().lanAddress()).isEqualTo("192.168.3.121");
+    }
+
+    // --- updateLanAddress ---
+
+    @Test
+    void updateLanAddress_writesLanAddressIntoFjordMetadata() throws IOException {
+        createPeerConfWithFjordMetadata("apalveien5", "10.13.13.6",
+                "{\"peerType\":\"UBUNTU_SERVER\"}");
+
+        adapter.updateLanAddress("apalveien5", "192.168.3.121");
+
+        PeerConfiguration result = adapter.getPeerConfigByName("apalveien5").orElseThrow();
+        assertThat(result.lanAddress()).isEqualTo("192.168.3.121");
+        assertThat(result.peerType()).isEqualTo(net.fjordomatic.domain.MachineType.UBUNTU_SERVER);
+    }
+
+    @Test
+    void updateLanAddress_preservesExistingLanCidr() throws IOException {
+        createPeerConfWithFjordMetadata("apalveien5", "10.13.13.6",
+                "{\"peerType\":\"UBUNTU_SERVER\",\"lanCidr\":\"192.168.3.0/24\"}");
+
+        adapter.updateLanAddress("apalveien5", "192.168.3.121");
+
+        PeerConfiguration result = adapter.getPeerConfigByName("apalveien5").orElseThrow();
+        assertThat(result.lanCidr()).isEqualTo("192.168.3.0/24");
+        assertThat(result.lanAddress()).isEqualTo("192.168.3.121");
+    }
+
+    @Test
+    void updateLanAddress_blankClearsExistingValue() throws IOException {
+        createPeerConfWithFjordMetadata("apalveien5", "10.13.13.6",
+                "{\"peerType\":\"UBUNTU_SERVER\",\"lanAddress\":\"192.168.3.121\"}");
+
+        adapter.updateLanAddress("apalveien5", "");
+
+        PeerConfiguration result = adapter.getPeerConfigByName("apalveien5").orElseThrow();
+        assertThat(result.lanAddress()).isNull();
+    }
+
+    @Test
+    void updateLanAddress_addsFjordCommentWhenMissing() throws IOException {
+        createPeerConf("apalveien5", "10.13.13.6");
+
+        adapter.updateLanAddress("apalveien5", "192.168.3.121");
+
+        PeerConfiguration result = adapter.getPeerConfigByName("apalveien5").orElseThrow();
+        assertThat(result.lanAddress()).isEqualTo("192.168.3.121");
+        assertThat(result.peerType()).isEqualTo(net.fjordomatic.domain.MachineType.UBUNTU_SERVER);
+    }
+
+    @Test
+    void updateLanAddress_preservesRestOfConfigFile() throws IOException {
+        createPeerConfWithFjordMetadata("apalveien5", "10.13.13.6",
+                "{\"peerType\":\"UBUNTU_SERVER\"}");
+
+        adapter.updateLanAddress("apalveien5", "192.168.3.121");
+
+        String content = Files.readString(configDir.resolve("apalveien5").resolve("apalveien5.conf"));
+        assertThat(content).contains("Address=10.13.13.6/32");
+        assertThat(content).contains("PrivateKey=testkey");
+    }
+
+    @Test
+    void updateLanAddress_throwsWhenPeerDoesNotExist() {
+        assertThat(adapter.getPeerConfigByName("ghost")).isEmpty();
+        org.junit.jupiter.api.Assertions.assertThrows(net.fjordomatic.domain.PeerNotFoundException.class,
+            () -> adapter.updateLanAddress("ghost", "192.168.3.121"));
+    }
+
+    // --- updateLanCidr ---
+
+    @Test
+    void updateLanCidr_writesLanCidrIntoFjordMetadata() throws IOException {
+        createPeerConfWithFjordMetadata("apalveien5", "10.13.13.6",
+                "{\"peerType\":\"UBUNTU_SERVER\"}");
+
+        adapter.updateLanCidr("apalveien5", "192.168.3.0/24");
+
+        PeerConfiguration result = adapter.getPeerConfigByName("apalveien5").orElseThrow();
+        assertThat(result.lanCidr()).isEqualTo("192.168.3.0/24");
+        assertThat(result.peerType()).isEqualTo(net.fjordomatic.domain.MachineType.UBUNTU_SERVER);
+    }
+
+    @Test
+    void updateLanCidr_preservesExistingLanAddress() throws IOException {
+        createPeerConfWithFjordMetadata("apalveien5", "10.13.13.6",
+                "{\"peerType\":\"UBUNTU_SERVER\",\"lanAddress\":\"192.168.3.121\"}");
+
+        adapter.updateLanCidr("apalveien5", "192.168.3.0/24");
+
+        PeerConfiguration result = adapter.getPeerConfigByName("apalveien5").orElseThrow();
+        assertThat(result.lanCidr()).isEqualTo("192.168.3.0/24");
+        assertThat(result.lanAddress()).isEqualTo("192.168.3.121");
+    }
+
+    @Test
+    void updateLanCidr_blankClearsExistingValue() throws IOException {
+        createPeerConfWithFjordMetadata("apalveien5", "10.13.13.6",
+                "{\"peerType\":\"UBUNTU_SERVER\",\"lanCidr\":\"192.168.3.0/24\"}");
+
+        adapter.updateLanCidr("apalveien5", "");
+
+        PeerConfiguration result = adapter.getPeerConfigByName("apalveien5").orElseThrow();
+        assertThat(result.lanCidr()).isNull();
+    }
+
+    @Test
+    void updateLanCidr_addsFjordCommentWhenMissing() throws IOException {
+        createPeerConf("apalveien5", "10.13.13.6");
+
+        adapter.updateLanCidr("apalveien5", "192.168.3.0/24");
+
+        PeerConfiguration result = adapter.getPeerConfigByName("apalveien5").orElseThrow();
+        assertThat(result.lanCidr()).isEqualTo("192.168.3.0/24");
+        assertThat(result.peerType()).isEqualTo(net.fjordomatic.domain.MachineType.UBUNTU_SERVER);
+    }
+
+    @Test
+    void updateLanCidr_throwsWhenPeerDoesNotExist() {
+        assertThat(adapter.getPeerConfigByName("ghost")).isEmpty();
+        org.junit.jupiter.api.Assertions.assertThrows(net.fjordomatic.domain.PeerNotFoundException.class,
+            () -> adapter.updateLanCidr("ghost", "192.168.3.0/24"));
+    }
+
+    // --- VAIER metadata (description, #54) ---
+
+    @Test
+    void getPeerConfigByName_parsesDescriptionFromFjordComment() throws IOException {
+        createPeerConfWithFjordMetadata("nuc", "10.13.13.7",
+                "{\"peerType\":\"UBUNTU_SERVER\",\"description\":\"Home media server\"}");
+
+        Optional<PeerConfiguration> result = adapter.getPeerConfigByName("nuc");
+
+        assertThat(result).isPresent();
+        assertThat(result.get().description()).isEqualTo("Home media server");
+    }
+
+    @Test
+    void getPeerConfigByName_descriptionNullWhenAbsentFromFjordComment() throws IOException {
+        createPeerConfWithFjordMetadata("nuc", "10.13.13.7", "{\"peerType\":\"UBUNTU_SERVER\"}");
+
+        Optional<PeerConfiguration> result = adapter.getPeerConfigByName("nuc");
+
+        assertThat(result).isPresent();
+        assertThat(result.get().description()).isNull();
+    }
+
+    @Test
+    void getPeerConfigByName_parsesDescriptionWithEscapedCharacters() throws IOException {
+        createPeerConfWithFjordMetadata("nuc", "10.13.13.7",
+                "{\"peerType\":\"UBUNTU_SERVER\",\"description\":\"NAS \\\"box\\\" at C:\\\\data\"}");
+
+        Optional<PeerConfiguration> result = adapter.getPeerConfigByName("nuc");
+
+        assertThat(result).isPresent();
+        assertThat(result.get().description()).isEqualTo("NAS \"box\" at C:\\data");
+    }
+
+    @Test
+    void updateDescription_writesDescriptionIntoFjordMetadata() throws IOException {
+        createPeerConfWithFjordMetadata("nuc", "10.13.13.7", "{\"peerType\":\"UBUNTU_SERVER\"}");
+
+        adapter.updateDescription("nuc", "Raspberry Pi in garage");
+
+        PeerConfiguration result = adapter.getPeerConfigByName("nuc").orElseThrow();
+        assertThat(result.description()).isEqualTo("Raspberry Pi in garage");
+        assertThat(result.peerType()).isEqualTo(net.fjordomatic.domain.MachineType.UBUNTU_SERVER);
+    }
+
+    @Test
+    void updateDescription_preservesPeerTypeLanCidrAndLanAddress() throws IOException {
+        createPeerConfWithFjordMetadata("apalveien5", "10.13.13.6",
+                "{\"peerType\":\"UBUNTU_SERVER\",\"lanCidr\":\"192.168.3.0/24\",\"lanAddress\":\"192.168.3.121\"}");
+
+        adapter.updateDescription("apalveien5", "Spain relay");
+
+        PeerConfiguration result = adapter.getPeerConfigByName("apalveien5").orElseThrow();
+        assertThat(result.description()).isEqualTo("Spain relay");
+        assertThat(result.lanCidr()).isEqualTo("192.168.3.0/24");
+        assertThat(result.lanAddress()).isEqualTo("192.168.3.121");
+    }
+
+    @Test
+    void updateDescription_blankClearsExistingValue() throws IOException {
+        createPeerConfWithFjordMetadata("nuc", "10.13.13.7",
+                "{\"peerType\":\"UBUNTU_SERVER\",\"description\":\"old text\"}");
+
+        adapter.updateDescription("nuc", "");
+
+        PeerConfiguration result = adapter.getPeerConfigByName("nuc").orElseThrow();
+        assertThat(result.description()).isNull();
+    }
+
+    @Test
+    void updateDescription_addsFjordCommentWhenMissing() throws IOException {
+        createPeerConf("nuc", "10.13.13.7");
+
+        adapter.updateDescription("nuc", "Home media server");
+
+        PeerConfiguration result = adapter.getPeerConfigByName("nuc").orElseThrow();
+        assertThat(result.description()).isEqualTo("Home media server");
+        assertThat(result.peerType()).isEqualTo(net.fjordomatic.domain.MachineType.UBUNTU_SERVER);
+    }
+
+    @Test
+    void updateDescription_roundTripsSpecialCharacters() throws IOException {
+        createPeerConf("nuc", "10.13.13.7");
+
+        adapter.updateDescription("nuc", "NAS \"box\" — line1\nline2");
+
+        PeerConfiguration result = adapter.getPeerConfigByName("nuc").orElseThrow();
+        assertThat(result.description()).isEqualTo("NAS \"box\" — line1\nline2");
+    }
+
+    @Test
+    void updateDescription_throwsWhenPeerDoesNotExist() {
+        assertThat(adapter.getPeerConfigByName("ghost")).isEmpty();
+        org.junit.jupiter.api.Assertions.assertThrows(net.fjordomatic.domain.PeerNotFoundException.class,
+            () -> adapter.updateDescription("ghost", "anything"));
+    }
+
+    @Test
+    void updateLanAddress_preservesExistingDescription() throws IOException {
+        createPeerConfWithFjordMetadata("nuc", "10.13.13.7",
+                "{\"peerType\":\"UBUNTU_SERVER\",\"description\":\"keep me\"}");
+
+        adapter.updateLanAddress("nuc", "192.168.3.121");
+
+        assertThat(adapter.getPeerConfigByName("nuc").orElseThrow().description()).isEqualTo("keep me");
+    }
+
+    @Test
+    void updateLanCidr_preservesExistingDescription() throws IOException {
+        createPeerConfWithFjordMetadata("nuc", "10.13.13.7",
+                "{\"peerType\":\"UBUNTU_SERVER\",\"description\":\"keep me\"}");
+
+        adapter.updateLanCidr("nuc", "192.168.3.0/24");
+
+        assertThat(adapter.getPeerConfigByName("nuc").orElseThrow().description()).isEqualTo("keep me");
+    }
+
+    // --- updateName: the editable display name (#209) ---
+
+    @Test
+    void updateName_setsDisplayNameInMetadata() throws IOException {
+        createPeerConf("media-server", "10.13.13.2");
+
+        adapter.updateName("media-server", "Media Server");
+
+        PeerConfiguration result = adapter.getPeerConfigByName("media-server").orElseThrow();
+        assertThat(result.id()).isEqualTo("media-server");
+        assertThat(result.name()).isEqualTo("Media Server");
+    }
+
+    @Test
+    void updateName_storedNameOverridesTheHumanisedIdFallback() throws IOException {
+        // With no stored name a peer falls back to display(id); once set, the stored name wins —
+        // even when it contains a hyphen the operator typed deliberately.
+        createPeerConf("media-server", "10.13.13.2");
+        assertThat(adapter.getPeerConfigByName("media-server").orElseThrow().name())
+            .isEqualTo("media server");
+
+        adapter.updateName("media-server", "Living-room NAS");
+
+        assertThat(adapter.getPeerConfigByName("media-server").orElseThrow().name())
+            .isEqualTo("Living-room NAS");
+    }
+
+    @Test
+    void updateName_blankClearsNameBackToHumanisedIdFallback() throws IOException {
+        createPeerConf("media-server", "10.13.13.2");
+        adapter.updateName("media-server", "Media Server");
+
+        adapter.updateName("media-server", "  ");
+
+        assertThat(adapter.getPeerConfigByName("media-server").orElseThrow().name())
+            .isEqualTo("media server");
+    }
+
+    @Test
+    void updateName_preservesExistingMetadata() throws IOException {
+        createPeerConfWithFjordMetadata("spain", "10.13.13.4",
+                "{\"peerType\":\"UBUNTU_SERVER\",\"lanCidr\":\"192.168.1.0/24\",\"description\":\"Spain relay\"}");
+
+        adapter.updateName("spain", "Spain Relay");
+
+        PeerConfiguration result = adapter.getPeerConfigByName("spain").orElseThrow();
+        assertThat(result.name()).isEqualTo("Spain Relay");
+        assertThat(result.peerType()).isEqualTo(net.fjordomatic.domain.MachineType.UBUNTU_SERVER);
+        assertThat(result.lanCidr()).isEqualTo("192.168.1.0/24");
+        assertThat(result.description()).isEqualTo("Spain relay");
+    }
+
+    @Test
+    void updateName_throwsWhenPeerDoesNotExist() {
+        org.junit.jupiter.api.Assertions.assertThrows(net.fjordomatic.domain.PeerNotFoundException.class,
+            () -> adapter.updateName("ghost", "Phantom"));
+    }
+
+    // --- VAIER metadata (deviceCategory override) ---
+
+    @Test
+    void getPeerConfigByName_parsesDeviceCategoryFromFjordComment() throws IOException {
+        createPeerConfWithFjordMetadata("nas", "10.13.13.7",
+                "{\"peerType\":\"UBUNTU_SERVER\",\"deviceCategory\":\"NAS\"}");
+
+        PeerConfiguration result = adapter.getPeerConfigByName("nas").orElseThrow();
+
+        assertThat(result.deviceCategory()).isEqualTo(net.fjordomatic.domain.DeviceCategory.NAS);
+        assertThat(result.deviceCategoryOverridden()).isTrue();
+    }
+
+    @Test
+    void getPeerConfigByName_deviceCategoryNullWhenAbsentFromFjordComment() throws IOException {
+        createPeerConfWithFjordMetadata("nuc", "10.13.13.7", "{\"peerType\":\"UBUNTU_SERVER\"}");
+
+        PeerConfiguration result = adapter.getPeerConfigByName("nuc").orElseThrow();
+
+        assertThat(result.deviceCategory()).isNull();
+        assertThat(result.deviceCategoryOverridden()).isFalse();
+    }
+
+    @Test
+    void updateDeviceCategory_writesOverrideIntoFjordMetadata() throws IOException {
+        createPeerConfWithFjordMetadata("nuc", "10.13.13.7", "{\"peerType\":\"UBUNTU_SERVER\"}");
+
+        adapter.updateDeviceCategory("nuc", "NAS");
+
+        PeerConfiguration result = adapter.getPeerConfigByName("nuc").orElseThrow();
+        assertThat(result.deviceCategory()).isEqualTo(net.fjordomatic.domain.DeviceCategory.NAS);
+        assertThat(result.peerType()).isEqualTo(net.fjordomatic.domain.MachineType.UBUNTU_SERVER);
+    }
+
+    @Test
+    void updateDeviceCategory_preservesOtherMetadata() throws IOException {
+        createPeerConfWithFjordMetadata("apalveien5", "10.13.13.6",
+                "{\"peerType\":\"UBUNTU_SERVER\",\"lanCidr\":\"192.168.3.0/24\","
+                + "\"lanAddress\":\"192.168.3.121\",\"description\":\"Spain relay\",\"name\":\"Spain\"}");
+
+        adapter.updateDeviceCategory("apalveien5", "ROUTER");
+
+        PeerConfiguration result = adapter.getPeerConfigByName("apalveien5").orElseThrow();
+        assertThat(result.deviceCategory()).isEqualTo(net.fjordomatic.domain.DeviceCategory.ROUTER);
+        assertThat(result.lanCidr()).isEqualTo("192.168.3.0/24");
+        assertThat(result.lanAddress()).isEqualTo("192.168.3.121");
+        assertThat(result.description()).isEqualTo("Spain relay");
+        assertThat(result.name()).isEqualTo("Spain");
+    }
+
+    @Test
+    void updateDeviceCategory_blankClearsOverride() throws IOException {
+        createPeerConfWithFjordMetadata("nuc", "10.13.13.7",
+                "{\"peerType\":\"UBUNTU_SERVER\",\"deviceCategory\":\"NAS\"}");
+
+        adapter.updateDeviceCategory("nuc", "");
+
+        PeerConfiguration result = adapter.getPeerConfigByName("nuc").orElseThrow();
+        assertThat(result.deviceCategory()).isNull();
+    }
+
+    @Test
+    void updateDeviceCategory_addsFjordCommentWhenMissing() throws IOException {
+        createPeerConf("nuc", "10.13.13.7");
+
+        adapter.updateDeviceCategory("nuc", "PRINTER");
+
+        PeerConfiguration result = adapter.getPeerConfigByName("nuc").orElseThrow();
+        assertThat(result.deviceCategory()).isEqualTo(net.fjordomatic.domain.DeviceCategory.PRINTER);
+    }
+
+    @Test
+    void updateDeviceCategory_throwsWhenPeerDoesNotExist() {
+        org.junit.jupiter.api.Assertions.assertThrows(net.fjordomatic.domain.PeerNotFoundException.class,
+            () -> adapter.updateDeviceCategory("ghost", "NAS"));
+    }
+
+    @Test
+    void updateDescription_preservesExistingDeviceCategory() throws IOException {
+        createPeerConfWithFjordMetadata("nuc", "10.13.13.7",
+                "{\"peerType\":\"UBUNTU_SERVER\",\"deviceCategory\":\"NAS\"}");
+
+        adapter.updateDescription("nuc", "keep category");
+
+        assertThat(adapter.getPeerConfigByName("nuc").orElseThrow().deviceCategory())
+            .isEqualTo(net.fjordomatic.domain.DeviceCategory.NAS);
+    }
+
+    // --- getAllPeerConfigs ---
+
+    @Test
+    void getAllPeerConfigs_returnsEmptyListWhenNoPeers() {
+        assertThat(adapter.getAllPeerConfigs()).isEmpty();
+    }
+
+    @Test
+    void getAllPeerConfigs_returnsAllPeerConfigs() throws IOException {
+        createPeerConf("laptop", "10.13.13.2");
+        createPeerConf("phone", "10.13.13.3");
+
+        var result = adapter.getAllPeerConfigs();
+
+        assertThat(result).hasSize(2);
+        assertThat(result).extracting(PeerConfiguration::name)
+                .containsExactlyInAnyOrder("laptop", "phone");
+    }
+
+    @Test
+    void getAllPeerConfigs_ignoresWgConfsDirectory() throws IOException {
+        createPeerConf("laptop", "10.13.13.2");
+        Files.createDirectories(configDir.resolve("wg_confs"));
+
+        assertThat(adapter.getAllPeerConfigs()).hasSize(1);
+    }
+
+    @Test
+    void getAllPeerConfigs_ignoresDotDirectories() throws IOException {
+        createPeerConf("laptop", "10.13.13.2");
+        Files.createDirectories(configDir.resolve(".hidden"));
+
+        assertThat(adapter.getAllPeerConfigs()).hasSize(1);
+    }
+
+    @Test
+    void getAllPeerConfigs_returnsEmptyListWhenConfigDirMissing() {
+        ReflectionTestUtils.setField(adapter, "wireguardConfigPath", "/nonexistent/path");
+
+        assertThat(adapter.getAllPeerConfigs()).isEmpty();
+    }
+
+    // --- rewriteConfig (#247) ---
+
+    @Test
+    void rewriteConfig_overwritesTheEntireConfFile() throws IOException {
+        createPeerConf("apalveien5", "10.13.13.6");
+        String newContent = "# VAIER: {\"peerType\":\"UBUNTU_SERVER\"}\n[Interface]\n"
+                + "Address=10.13.13.6/32\nPrivateKey=testkey\n[Peer]\n"
+                + "AllowedIPs = 10.13.13.0/24,172.31.16.0/20\n";
+
+        adapter.rewriteConfig("apalveien5", newContent);
+
+        assertThat(Files.readString(configDir.resolve("apalveien5").resolve("apalveien5.conf")))
+                .isEqualTo(newContent);
+    }
+
+    @Test
+    void rewriteConfig_throwsWhenPeerDoesNotExist() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> adapter.rewriteConfig("ghost", "x"))
+            .isInstanceOf(net.fjordomatic.domain.PeerNotFoundException.class)
+            .hasMessageContaining("ghost");
+    }
+
+    // --- SSH access override (#307) ---
+
+    @Test
+    void updateSshAccess_writesOverrideIntoMetadata_andReadsBack() throws IOException {
+        createPeerConfWithFjordMetadata("apalveien5", "10.13.13.6",
+                "{\"peerType\":\"UBUNTU_SERVER\",\"deviceCategory\":\"NAS\"}");
+
+        adapter.updateSshAccess("apalveien5", false);
+
+        PeerConfiguration result = adapter.getPeerConfigByName("apalveien5").orElseThrow();
+        assertThat(result.sshAccess()).isFalse();
+        assertThat(result.effectiveSshAccess()).isFalse();
+        // Other metadata carries over untouched.
+        assertThat(result.deviceCategory()).isEqualTo(net.fjordomatic.domain.DeviceCategory.NAS);
+    }
+
+    @Test
+    void updateSshAccess_true_readsBackTrue() throws IOException {
+        createPeerConfWithFjordMetadata("phone", "10.13.13.10",
+                "{\"peerType\":\"MOBILE_CLIENT\"}");
+
+        adapter.updateSshAccess("phone", true);
+
+        PeerConfiguration result = adapter.getPeerConfigByName("phone").orElseThrow();
+        assertThat(result.sshAccess()).isTrue();
+        assertThat(result.effectiveSshAccess()).isTrue();
+    }
+
+    @Test
+    void getPeerConfig_legacyWithoutSshAccess_readsNullOverride_andUsesDefault() throws IOException {
+        // A pre-#307 config has no sshAccess key: override is null, effective = smart default (server → on).
+        createPeerConfWithFjordMetadata("apalveien5", "10.13.13.6",
+                "{\"peerType\":\"UBUNTU_SERVER\"}");
+
+        PeerConfiguration result = adapter.getPeerConfigByName("apalveien5").orElseThrow();
+        assertThat(result.sshAccess()).isNull();
+        assertThat(result.effectiveSshAccess()).isTrue();
+    }
+
+    // helpers
+
+    /**
+     * A well-formed peer conf. Every peer Fjord can read carries a machine {@code id}, so the fixture
+     * writes one — a test about anything else should not have to restate that.
+     */
+    private void createPeerConf(String peerName, String ip) throws IOException {
+        createPeerConfWithFjordMetadata(peerName, ip, "{}");
+    }
+
+    /**
+     * A peer conf carrying {@code fjordJson} as its {@code # VAIER:} line. A machine {@code id} is
+     * spliced in when the supplied JSON does not already name one, so the many tests that pin some
+     * other metadata field still describe a readable peer. Pass an explicit {@code "id"} to control it.
+     */
+    private void createPeerConfWithFjordMetadata(String peerName, String ip, String fjordJson)
+            throws IOException {
+        String json = fjordJson.contains("\"id\"")
+            ? fjordJson
+            : fjordJson.replaceFirst("^\\{", "{\"id\":\"" + java.util.UUID.randomUUID() + "\"" +
+                (fjordJson.trim().equals("{}") ? "" : ","));
+        Path peerDir = configDir.resolve(peerName);
+        Files.createDirectories(peerDir);
+        Files.writeString(peerDir.resolve(peerName + ".conf"),
+                "# VAIER: " + json + "\n[Interface]\nAddress=" + ip + "/32\nPrivateKey=testkey\n");
+    }
+}

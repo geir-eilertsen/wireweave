@@ -1,0 +1,219 @@
+package net.fjordomatic.application.service;
+
+import net.fjordomatic.domain.Icon;
+import net.fjordomatic.domain.ReverseProxyRoute;
+import net.fjordomatic.domain.port.ForFetchingIcons;
+import net.fjordomatic.domain.port.ForFetchingIcons.FetchedBytes;
+import net.fjordomatic.domain.port.ForPersistingReverseProxyRoutes;
+import net.fjordomatic.domain.port.ForStoringIcons;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.util.List;
+import java.util.Optional;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+class IconServiceTest {
+
+    @Mock ForFetchingIcons forFetchingIcons;
+
+    @Mock ForStoringIcons forStoringIcons;
+
+    @Mock ForPersistingReverseProxyRoutes forPersistingReverseProxyRoutes;
+
+    @InjectMocks IconService service;
+
+    private static byte[] png() {
+        return new byte[]{(byte) 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
+    }
+
+    private static ReverseProxyRoute route(String domain, String address, int port) {
+        return new ReverseProxyRoute("route", domain, address, port, "svc", null,
+            null, null, null, null, false, true, "http");
+    }
+
+    @Test
+    void getIcon_returnsCachedResultWithoutFetching() {
+        Icon cached = new Icon(png(), "image/png");
+        service.cache.put("cached.example.com", Optional.of(cached));
+
+        assertThat(service.getIcon("cached.example.com", null)).contains(cached);
+        verify(forFetchingIcons, never()).fetchHtml(org.mockito.ArgumentMatchers.anyString());
+        verify(forFetchingIcons, never()).fetchBytes(org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
+    void getIcon_cachesNegativeResults() {
+        // No HTML, no bytes anywhere — caching empty prevents repeated lookups against dead hosts.
+        when(forFetchingIcons.fetchHtml(org.mockito.ArgumentMatchers.anyString()))
+            .thenReturn(Optional.empty());
+        when(forFetchingIcons.fetchBytes(org.mockito.ArgumentMatchers.anyString()))
+            .thenReturn(Optional.empty());
+
+        Optional<Icon> first = service.getIcon("dead.example.com", null);
+        Optional<Icon> second = service.getIcon("dead.example.com", null);
+
+        assertThat(first).isEmpty();
+        assertThat(second).isEmpty();
+        assertThat(service.cache).containsKey("dead.example.com");
+    }
+
+    @Test
+    void getIcon_cachesSeparatelyPerPathPrefix() {
+        // Path-routed services share a hostname; each must resolve independently.
+        Icon grafana = new Icon(png(), "image/png");
+        Icon jenkins = new Icon(new byte[]{(byte) 0x89, 'P', 'N', 'J'}, "image/png");
+        service.cache.put("services.example.com/grafana", Optional.of(grafana));
+        service.cache.put("services.example.com/jenkins", Optional.of(jenkins));
+
+        assertThat(service.getIcon("services.example.com", "/grafana")).contains(grafana);
+        assertThat(service.getIcon("services.example.com", "/jenkins")).contains(jenkins);
+    }
+
+    @Test
+    void getIcon_hostOnlyAndNullAndEmptyPathPrefixShareCacheEntry() {
+        Icon cached = new Icon(png(), "image/png");
+        service.cache.put("solo.example.com", Optional.of(cached));
+
+        assertThat(service.getIcon("solo.example.com", null)).contains(cached);
+        assertThat(service.getIcon("solo.example.com", "")).contains(cached);
+    }
+
+    @Test
+    void getIcon_extractsFromHtmlHintWhenPresent() {
+        String html = "<html><head><link rel=\"icon\" href=\"/favicon.png\"></head></html>";
+        when(forFetchingIcons.fetchHtml("https://app.example.com/"))
+            .thenReturn(Optional.of(html));
+        when(forFetchingIcons.fetchBytes("https://app.example.com/favicon.png"))
+            .thenReturn(Optional.of(new FetchedBytes(png(), "image/png")));
+
+        Optional<Icon> result = service.getIcon("app.example.com", null);
+
+        assertThat(result).isPresent();
+        assertThat(result.get().contentType()).isEqualTo("image/png");
+    }
+
+    @Test
+    void getIcon_fallsThroughToIconIcoWhenHtmlHintMissing() {
+        when(forFetchingIcons.fetchHtml(org.mockito.ArgumentMatchers.anyString()))
+            .thenReturn(Optional.empty());
+        byte[] ico = {0, 0, 1, 0, 1, 0};
+        when(forFetchingIcons.fetchBytes("https://app.example.com/favicon.ico"))
+            .thenReturn(Optional.of(new FetchedBytes(ico, null)));
+
+        Optional<Icon> result = service.getIcon("app.example.com", null);
+
+        assertThat(result).isPresent();
+        assertThat(result.get().contentType()).isEqualTo("image/x-icon");
+    }
+
+    @Test
+    void getIcon_rejectsNonImageResponses() {
+        // A 200 from an SPA that returns its index.html for any URL — bytes are HTML, not an icon.
+        when(forFetchingIcons.fetchHtml(org.mockito.ArgumentMatchers.anyString()))
+            .thenReturn(Optional.empty());
+        when(forFetchingIcons.fetchBytes(org.mockito.ArgumentMatchers.anyString()))
+            .thenReturn(Optional.of(new FetchedBytes("not-an-image".getBytes(), "text/html")));
+
+        assertThat(service.getIcon("app.example.com", null)).isEmpty();
+    }
+
+    @Test
+    void getIcon_returnsDiskCachedWithoutFetchingOrResolving() {
+        Icon onDisk = new Icon(png(), "image/png");
+        when(forStoringIcons.load("disk.example.com")).thenReturn(Optional.of(onDisk));
+
+        Optional<Icon> result = service.getIcon("disk.example.com", null);
+
+        assertThat(result).contains(onDisk);
+        verify(forFetchingIcons, never()).fetchHtml(org.mockito.ArgumentMatchers.anyString());
+        verify(forFetchingIcons, never()).fetchBytes(org.mockito.ArgumentMatchers.anyString());
+        // A disk hit is promoted into the in-memory cache so the next call skips disk too.
+        assertThat(service.cache).containsEntry("disk.example.com", Optional.of(onDisk));
+    }
+
+    @Test
+    void getIcon_persistsResolvedIconToDisk() {
+        when(forFetchingIcons.fetchHtml(org.mockito.ArgumentMatchers.anyString()))
+            .thenReturn(Optional.empty());
+        byte[] ico = {0, 0, 1, 0, 1, 0};
+        when(forFetchingIcons.fetchBytes("https://app.example.com/favicon.ico"))
+            .thenReturn(Optional.of(new FetchedBytes(ico, null)));
+
+        Optional<Icon> result = service.getIcon("app.example.com", null);
+
+        assertThat(result).isPresent();
+        verify(forStoringIcons).store(eq("app.example.com"), eq(result.get()));
+    }
+
+    @Test
+    void getIcon_doesNotPersistNegativeResults() {
+        when(forFetchingIcons.fetchHtml(org.mockito.ArgumentMatchers.anyString()))
+            .thenReturn(Optional.empty());
+        when(forFetchingIcons.fetchBytes(org.mockito.ArgumentMatchers.anyString()))
+            .thenReturn(Optional.empty());
+
+        assertThat(service.getIcon("dead.example.com", null)).isEmpty();
+
+        verify(forStoringIcons, never()).store(any(), any());
+        // The negative is still remembered in memory to avoid hammering a dead host.
+        assertThat(service.cache).containsKey("dead.example.com");
+    }
+
+    @Test
+    void getIcon_resolvesFromTheServiceOriginWhenThePublicHostIsAuthGated() {
+        // A social-gated route answers 401 to Fjord's own fetch of https://<host>, so the site's
+        // own hint is unreachable there. The backend behind Traefik is un-gated and has it.
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
+            .thenReturn(List.of(route("rack.example.com", "192.168.3.132", 8080)));
+        when(forFetchingIcons.fetchHtml("http://192.168.3.132:8080/"))
+            .thenReturn(Optional.of("<link rel=\"icon\" type=\"image/svg+xml\" href=\"/assets/rack.svg\">"));
+        when(forFetchingIcons.fetchBytes("http://192.168.3.132:8080/assets/rack.svg"))
+            .thenReturn(Optional.of(new FetchedBytes("<svg/>".getBytes(), "image/svg+xml")));
+
+        Optional<Icon> result = service.getIcon("rack.example.com", null);
+
+        assertThat(result).isPresent();
+        assertThat(result.get().contentType()).isEqualTo("image/svg+xml");
+        verify(forFetchingIcons, never()).fetchHtml("https://rack.example.com/");
+    }
+
+    @Test
+    void getIcon_fallsBackToTheOriginFaviconBeforeThePublicHost() {
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
+            .thenReturn(List.of(route("rack.example.com", "192.168.3.132", 8080)));
+        when(forFetchingIcons.fetchHtml(anyString())).thenReturn(Optional.empty());
+        byte[] ico = {0, 0, 1, 0, 1, 0};
+        when(forFetchingIcons.fetchBytes("http://192.168.3.132:8080/favicon.ico"))
+            .thenReturn(Optional.of(new FetchedBytes(ico, null)));
+
+        assertThat(service.getIcon("rack.example.com", null)).isPresent();
+        verify(forFetchingIcons, never()).fetchBytes("https://rack.example.com/favicon.ico");
+    }
+
+    @Test
+    void getIcon_fallsBackToCdnUrlsWhenAllDirectFetchesFail() {
+        when(forFetchingIcons.fetchHtml(org.mockito.ArgumentMatchers.anyString()))
+            .thenReturn(Optional.empty());
+        when(forFetchingIcons.fetchBytes(org.mockito.ArgumentMatchers.anyString()))
+            .thenReturn(Optional.empty());
+        when(forFetchingIcons.fetchBytes("https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons@main/png/pihole.png"))
+            .thenReturn(Optional.of(new FetchedBytes(png(), "image/png")));
+
+        Optional<Icon> result = service.getIcon("pihole.example.com", null);
+
+        assertThat(result).isPresent();
+        assertThat(result.get().contentType()).isEqualTo("image/png");
+    }
+}

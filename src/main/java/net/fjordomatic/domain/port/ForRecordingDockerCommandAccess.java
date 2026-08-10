@@ -1,0 +1,23 @@
+package net.fjordomatic.domain.port;
+
+import net.fjordomatic.domain.DockerCommandAccess;
+import net.fjordomatic.domain.MachineId;
+
+import java.util.Set;
+
+/**
+ * Driven port for keeping what Fjord last saw of a machine's {@link DockerCommandAccess} — the write half,
+ * written by the sweep that observes it. Mirrors {@code ForRecordingSshServerPresence}: same trip, same
+ * shape, another fact about the machine rather than about anything on it.
+ */
+public interface ForRecordingDockerCommandAccess {
+
+    /** Keep {@code access} as what Fjord last saw for {@code machineId}. */
+    void record(MachineId machineId, DockerCommandAccess access);
+
+    /**
+     * Forget every machine outside {@code machineIds} — a machine deleted while Fjord was running must not
+     * leave its last-seen Docker access behind forever.
+     */
+    void retainOnly(Set<MachineId> machineIds);
+}

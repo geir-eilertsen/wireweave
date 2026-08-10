@@ -5,9 +5,9 @@
 // otherwise Gravatar keyed on the email's SHA-256 (d=404 so a miss errors out and the caller falls
 // back to its own placeholder — the roster's initials monogram, or the topbar's name text).
 // Returns null to stay on the placeholder (no provider id and no usable email, or no crypto.subtle).
-const VaierAvatar = (() => {
+const FjordAvatar = (() => {
     // SHA-256 hex of a string, for the Gravatar avatar hash. crypto.subtle needs a secure context
-    // (Vaier is served over HTTPS via Traefik); returns null if unavailable so callers stay on the
+    // (Fjord is served over HTTPS via Traefik); returns null if unavailable so callers stay on the
     // placeholder rather than break.
     async function sha256Hex(str) {
         if (!crypto.subtle) return null;

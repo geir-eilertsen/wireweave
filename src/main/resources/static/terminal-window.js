@@ -35,10 +35,10 @@
     let paneId = params.get('pane');
     function claimPane() {
         if (paneId) {
-            VaierPanes.adopt(machineId, paneId, machine);
+            FjordPanes.adopt(machineId, paneId, machine);
             return;
         }
-        paneId = VaierPanes.claim(machineId, machine);
+        paneId = FjordPanes.claim(machineId, machine);
         const url = new URL(window.location.href);
         url.searchParams.set('pane', paneId);
         window.history.replaceState(null, '', url);
@@ -51,7 +51,7 @@
         4403: 'The host key changed and was refused. If you rebuilt this host, clear its pinned key and reconnect.',
         4404: 'Machine not found.',
         4408: 'Could not reach the host (connection refused or timed out).',
-        4500: 'The terminal failed to open. Check the Vaier logs.',
+        4500: 'The terminal failed to open. Check the Fjord logs.',
     };
     const CLOSE_HOST_KEY_MISMATCH = 4403;
     const PERMANENT = new Set([1000, 4401, 4402, CLOSE_HOST_KEY_MISMATCH, 4404]);
@@ -123,7 +123,7 @@
     // Duplicate opens another, separate shell on this same machine in its own window — a fresh session id and a
     // unique window name, so several shells on one machine can be open side by side.
     const btnDup = actionButton('Duplicate', () => {
-        const pane = VaierPanes.newId();
+        const pane = FjordPanes.newId();
         window.open('terminal.html?machine=' + encodeURIComponent(machine)
             + '&id=' + encodeURIComponent(machineId) + '&pane=' + encodeURIComponent(pane),
             'vaier-shell-' + encodeURIComponent(pane), 'popup,width=1024,height=680');
@@ -134,7 +134,7 @@
     btnEnd.classList.add('tw-danger');
     // The one distinction people miss: closing the window keeps the shell alive to reattach; Exit stops it.
     btnEnd.title = 'Stop this shell for good on ' + machine + '. Just closing the window keeps it running — and '
-        + 'it even survives a Vaier restart — so reopening reattaches right where you left off.';
+        + 'it even survives a Fjord restart — so reopening reattaches right where you left off.';
     $('twActions').append(btnDup, btnPassword, btnEnd);
     refreshActions();
 
@@ -171,7 +171,7 @@
             setDot(null);
             setStatus(null);
             setPasswordPrompt(false);
-            VaierPanes.beat(paneId);
+            FjordPanes.beat(paneId);
             acquireWakeLock();   // a phone holds its screen awake while the shell is connected
             if (reconnected) armReconnectBanner();
             refit(); sendResize(); term.focus();
@@ -183,7 +183,7 @@
         ws.onclose = (ev) => {
             if (state.ended) return;
             // A clean exit means the remote shell ended — the session is gone, so let it go and close the window.
-            if (ev.code === 1000) { state.ended = true; VaierPanes.release(machineId, paneId, machine); window.close(); setStatus('The shell ended.'); return; }
+            if (ev.code === 1000) { state.ended = true; FjordPanes.release(machineId, paneId, machine); window.close(); setStatus('The shell ended.'); return; }
             setDot('error');
             setPasswordPrompt(false);
             if (!PERMANENT.has(ev.code) && state.retries < MAX_RECONNECTS) {
@@ -194,7 +194,7 @@
             } else if (!PERMANENT.has(ev.code)) {
                 setStatus('Connection lost. The host did not come back.', true, () => { state.retries = 0; connect(); });
             } else if (ev.code === CLOSE_HOST_KEY_MISMATCH) {
-                // The one permanent close with a remedy Vaier can carry out. Offered here rather than only
+                // The one permanent close with a remedy Fjord can carry out. Offered here rather than only
                 // in the Explorer: this window is where the operator met the refusal.
                 setStatus(CLOSE_REASONS[ev.code], true, null, {
                     label: 'Clear pinned key',
@@ -243,7 +243,7 @@
         SENT: { message: 'Password sent.', error: false },
         NOT_AT_PROMPT: { message: "The remote isn't asking for a password right now.", error: true },
         NO_PASSWORD_CREDENTIAL: { message: 'This machine has no stored password — it uses key auth.', error: true },
-        FAILED: { message: "Couldn't send the password. Check the Vaier logs.", error: true },
+        FAILED: { message: "Couldn't send the password. Check the Fjord logs.", error: true },
     };
     function showPasswordResult(status) {
         const r = PASSWORD_RESULTS[status] || PASSWORD_RESULTS.FAILED;
@@ -284,7 +284,7 @@
         }
     }
 
-    // Clearing this machine's pinned host key, from the one place the refusal is actually read. Vaier has
+    // Clearing this machine's pinned host key, from the one place the refusal is actually read. Fjord has
     // always named this remedy here and never offered it, so the only way out was an API client.
     //
     // The pin is not left off: the next connect pins whatever key the machine presents (trust on first use),
@@ -295,13 +295,13 @@
             const res = await fetch('/machines/' + encodeURIComponent(machineId) + '/host-key',
                 { method: 'DELETE' });
             if (!res.ok && res.status !== 204) {
-                setStatus('Could not clear the pinned key. Check the Vaier logs.', true);
+                setStatus('Could not clear the pinned key. Check the Fjord logs.', true);
                 return;
             }
             setStatus(`Pinned key cleared for ${machine}. Reconnect to pin the key it presents now.`, false,
                 () => { state.retries = 0; connect(); });
         } catch (e) {
-            setStatus('Could not reach Vaier to clear the pinned key.', true);
+            setStatus('Could not reach Fjord to clear the pinned key.', true);
         }
     }
     function refit() { try { fit.fit(); } catch (e) { /* not laid out yet */ } }
@@ -317,7 +317,7 @@
         state.ended = true;
         releaseWakeLock();
         send({ type: 'end-shell' });
-        VaierPanes.release(machineId, paneId, machine);
+        FjordPanes.release(machineId, paneId, machine);
         if (state.ws) try { state.ws.onclose = null; state.ws.close(); } catch (e) { /* ignore */ }
         window.close();
         // If the browser refuses to close a window it did not script-open, leave a clear end state behind.
@@ -430,7 +430,7 @@
     // --- keep the session claimed while this window holds it ------------------------------------------
     // Beat every few seconds so the dock (and other windows) know this session is held; the interval simply
     // stops when the window closes, and the id goes stale so the session becomes reattachable elsewhere.
-    setInterval(() => { if (state.ws && state.ws.readyState === WebSocket.OPEN) VaierPanes.beat(paneId); }, 5000);
+    setInterval(() => { if (state.ws && state.ws.readyState === WebSocket.OPEN) FjordPanes.beat(paneId); }, 5000);
 
     buildKeyBar();
     window.addEventListener('resize', refit);
@@ -471,7 +471,7 @@
                 }
                 if (matches.length > 1) {
                     setStatus('More than one machine is called "' + machine + '". Open its shell from the '
-                        + 'Explorer so Vaier knows which one you mean.', true);
+                        + 'Explorer so Fjord knows which one you mean.', true);
                     return;
                 }
                 machineId = matches[0].id;
@@ -483,6 +483,6 @@
                 claimPane();   // only now is there an identity to file the session under
                 connect();
             })
-            .catch(() => setStatus('Could not reach Vaier to find ' + machine + '.', true));
+            .catch(() => setStatus('Could not reach Fjord to find ' + machine + '.', true));
     }
 })();
