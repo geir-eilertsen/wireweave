@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="color-scheme" content="dark">
-    <title>Fjord-O-Matic Admin</title>
+    <title>Vaier Admin</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22 fill=%22none%22 stroke=%22%234fc3f7%22 stroke-width=%221.5%22 stroke-linecap=%22round%22><circle cx=%228%22 cy=%228%22 r=%222.2%22 fill=%22%234fc3f7%22 stroke=%22none%22/><line x1=%222.5%22 y1=%223.5%22 x2=%226%22 y2=%226.5%22/><line x1=%2213.5%22 y1=%223.5%22 x2=%2210%22 y2=%226.5%22/><line x1=%222.5%22 y1=%2212.5%22 x2=%226%22 y2=%229.5%22/><line x1=%2213.5%22 y1=%2212.5%22 x2=%2210%22 y2=%229.5%22/><circle cx=%222.5%22 cy=%223.5%22 r=%221.5%22 fill=%22%234fc3f7%22 stroke=%22none%22/><circle cx=%2213.5%22 cy=%223.5%22 r=%221.5%22 fill=%22%234fc3f7%22 stroke=%22none%22/><circle cx=%222.5%22 cy=%2212.5%22 r=%221.5%22 fill=%22%234fc3f7%22 stroke=%22none%22/><circle cx=%2213.5%22 cy=%2212.5%22 r=%221.5%22 fill=%22%234fc3f7%22 stroke=%22none%22/></svg>">
     <link rel="stylesheet" href="styles.css">
     <style>
@@ -46,7 +46,7 @@
 </head>
 <body>
     <div class="topbar">
-        <a href="/launchpad.html" class="topbar-brand" aria-label="Fjord-O-Matic">
+        <a href="/launchpad.html" class="topbar-brand" aria-label="Vaier">
             <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
                 <circle cx="8" cy="8" r="2.2" fill="currentColor" stroke="none"/>
                 <line x1="2.5" y1="3.5" x2="6" y2="6.5"/><line x1="13.5" y1="3.5" x2="10" y2="6.5"/>
@@ -56,7 +56,7 @@
                 <circle cx="2.5" cy="12.5" r="1.5" fill="currentColor" stroke="none"/>
                 <circle cx="13.5" cy="12.5" r="1.5" fill="currentColor" stroke="none"/>
             </svg>
-            <span>Fjord<span class="brand-o">-O-</span>Matic</span>
+            <span>V<span class="brand-ai">ai</span>er</span>
         </a>
         <nav class="topbar-nav" id="adminTabs">
             <!-- Infrastructure is gone from admin.html: its page (vpn-peers.html) was deleted once the Explorer
@@ -113,7 +113,7 @@
                     <circle cx="13.5" cy="12.5" r="1.5" fill="currentColor" stroke="none"/>
                 </svg>
             </div>
-            <h1>Fjord<span class="brand-o">-O-</span>Matic Admin</h1>
+            <h1>V<span class="brand-ai">ai</span>er Admin</h1>
             <p>Select a section above to get started</p>
         </div>
     </main>
@@ -185,12 +185,12 @@
                 // rides along as tooltip/alt. On a load miss the photo swaps back to the name text.
                 let profile = nameSpan;
                 // The photo is a non-essential enhancement — never let it break the name + Logout
-                // controls. If avatar.js failed to load, the bare FjordAvatar reference throws a
+                // controls. If avatar.js failed to load, the bare VaierAvatar reference throws a
                 // ReferenceError the catch swallows (it's a top-level const, not a window property,
-                // so window.FjordAvatar wouldn't see it); on any miss we keep the name text.
+                // so window.VaierAvatar wouldn't see it); on any miss we keep the name text.
                 let photoUrl = null;
                 try {
-                    photoUrl = await FjordAvatar.photoUrl({
+                    photoUrl = await VaierAvatar.photoUrl({
                         provider: me.provider, providerUserId: me.providerUserId, email: me.email, size: 48 });
                 } catch (_) { /* keep the name text */ }
                 if (photoUrl) {

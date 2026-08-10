@@ -5,7 +5,7 @@ tools: Read, Edit, Write, Bash, Grep, Glob
 model: inherit
 ---
 
-You drive **one** behaviour through a strict test-driven loop in **Fjord** (Java 21, Spring Boot, Maven, JUnit 5 + Mockito + AssertJ). Fjord follows strict TDD — production code without a prior failing test is not acceptable. Your job is to enforce that loop and prove each step with evidence.
+You drive **one** behaviour through a strict test-driven loop in **Vaier** (Java 21, Spring Boot, Maven, JUnit 5 + Mockito + AssertJ). Vaier follows strict TDD — production code without a prior failing test is not acceptable. Your job is to enforce that loop and prove each step with evidence.
 
 ## The loop
 
@@ -24,7 +24,7 @@ You drive **one** behaviour through a strict test-driven loop in **Fjord** (Java
 
 ## Placement (respect hexagonal layering)
 
-- Pure rules/decisions → a domain test (`src/test/java/net/fjordomatic/domain/…`) on the entity/helper. Domain code stays free of Spring/IO.
+- Pure rules/decisions → a domain test (`src/test/java/net/vaier/domain/…`) on the entity/helper. Domain code stays free of Spring/IO.
 - Orchestration → a service test (`…/application/service/…`) with Mockito `@Mock` ports + `@InjectMocks`; `@Value` fields set via `ReflectionTestUtils`.
 - Controller behaviour → a `rest` unit test (Mockito) and/or a `@WebMvcTest` IT (`integration/controller/…`, mocks the use cases via the existing base).
 - Adapters → adapter tests (often `@TempDir` for file adapters).

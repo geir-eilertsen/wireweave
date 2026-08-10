@@ -1,4 +1,4 @@
-/* Fjord theme for Dex — matches the branded oauth2-proxy sign-in card (sign_in.html) so the broker's
+/* Vaier theme for Dex — matches the branded oauth2-proxy sign-in card (sign_in.html) so the broker's
    own screens (error, connector picker) read as the same product. Overrides Dex's default theme
    classes; layout classes live in static/main.css. Dark VS Code palette, cyan accent, mono wordmark. */
 
@@ -52,7 +52,7 @@ html { background: #1e1e1e; }
   padding: 2.6rem 2rem 2rem;
 }
 
-/* The Fjord network-node mark, echoing the sign-in card. */
+/* The Vaier network-node mark, echoing the sign-in card. */
 .theme-panel::before {
   content: '';
   display: block;
@@ -64,7 +64,7 @@ html { background: #1e1e1e; }
 }
 
 .theme-panel::after {
-  content: 'Fjord';
+  content: 'Vaier';
   display: block;
   font-family: var(--mono);
   font-size: 1.4rem;

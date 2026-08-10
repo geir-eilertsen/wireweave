@@ -22,7 +22,7 @@ merge churn, so they ship together.
    - `WireGuardPeerConfigTest` (or new `ServerAllowedIpsTest`): pure function returning
      `<ip>/32` | `<ip>/32, <lanCidr>` | `<ip>/32, 0.0.0.0/0` | `<ip>/32, <lanCidr>, 0.0.0.0/0`
      based on `(ipAddress, lanCidr, isGateway)`.
-   - `FjordConfig`: add `gatewayPeerName`, `gatewayDns` (default `1.1.1.1`).
+   - `VaierConfig`: add `gatewayPeerName`, `gatewayDns` (default `1.1.1.1`).
 
 3. **VpnService — gateway toggle.**
    - New use case `SetGatewayPeerUseCase` (`set` / `clear`), implemented in `VpnService`.
@@ -33,7 +33,7 @@ merge churn, so they ship together.
 
 4. **Per-client `routeAllTrafficViaGateway` flag.**
    - Persisted in the per-peer `# VAIER:` JSON header
-     (`WireguardConfigFileAdapter.FjordMetadata`).
+     (`WireguardConfigFileAdapter.VaierMetadata`).
    - New port method `ForUpdatingPeerConfigurations.setRouteAllTrafficViaGateway(name, bool)`.
    - Tests: `WireguardConfigFileAdapterTest` round-trip.
 
@@ -69,7 +69,7 @@ merge churn, so they ship together.
   `git reset --hard ac4e9ed6a06e455239d764571e2b76252a160960` + rebuild + redeploy.
 - No `git push` during the change (per memory rule "No git push during working hours").
 - Server WG state safety: before the first toggle, snapshot `wg0.conf` to `wg0.conf.bak`.
-  Fjord admin path is via Traefik on the docker bridge, **not** wg0, so the admin UI stays
+  Vaier admin path is via Traefik on the docker bridge, **not** wg0, so the admin UI stays
   reachable even if wg0 routing is borked. "Clear gateway" in the UI reverts the change.
 - Client blast radius: only freshly fetched configs / freshly run install scripts are
   affected. Existing peers keep working.

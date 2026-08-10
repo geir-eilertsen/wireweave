@@ -1,0 +1,372 @@
+package net.vaier.adapter.driven;
+
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.extern.slf4j.Slf4j;
+import net.vaier.domain.MachineType;
+import net.vaier.domain.PeerId;
+import net.vaier.domain.WireGuardPeerConfig;
+import net.vaier.domain.port.ForGettingPeerConfigurations;
+import net.vaier.domain.port.ForResolvingPeerIds;
+import net.vaier.domain.port.ForUpdatingPeerConfigurations;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+
+@Component
+@Slf4j
+public class WireguardConfigFileAdapter implements ForGettingPeerConfigurations, ForResolvingPeerIds,
+        ForUpdatingPeerConfigurations {
+
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
+    @Value("${wireguard.config.path:/wireguard/config}")
+    private String wireguardConfigPath;
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    /**
+     * The peer's Vaier-owned fields, carried in its {@code # VAIER:} config comment.
+     *
+     * <p>{@code id} is the peer's {@link net.vaier.domain.MachineId} — its identity. Note that every
+     * {@code update*} rewrites this whole line, so a field omitted from a rewrite is erased from disk:
+     * each mutator must carry {@code id} through explicitly.
+     */
+    private record VaierMetadata(String peerType, String lanCidr, String lanAddress, String description,
+                                 String name, String deviceCategory, Boolean sshAccess, String id) {
+        VaierMetadata() { this(null, null, null, null, null, null, null, null); }
+    }
+
+    /**
+     * The peer's stored {@link net.vaier.domain.MachineId}, or null when it has none or the value is
+     * malformed — the peer then does not load at all.
+     *
+     * <p>A peer's identity is read, never minted. Inventing one here would hand back a peer that looks
+     * right but is a stranger to its own credential, host-key pin and backup job.
+     */
+    private static net.vaier.domain.MachineId readMachineId(String peerId, VaierMetadata meta) {
+        if (meta.id() == null || meta.id().isBlank()) {
+            log.error("Peer '{}' has no id in its # VAIER: metadata — refusing to load it. "
+                + "Add an \"id\" (a UUID) to that line.", peerId.replaceAll("[\r\n]+", "_"));
+            return null;
+        }
+        try {
+            return net.vaier.domain.MachineId.of(meta.id());
+        } catch (IllegalArgumentException e) {
+            log.error("Peer '{}' has a malformed id in its # VAIER: metadata — refusing to load it: {}",
+                peerId.replaceAll("[\r\n]+", "_"), e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * The display name to report for a peer: the operator-set name from metadata, or — for peers
+     * created before the id/name split, which have none — the humanised form of the id.
+     */
+    private static String effectiveName(String id, VaierMetadata meta) {
+        return (meta.name() != null && !meta.name().isBlank()) ? meta.name() : PeerId.display(id);
+    }
+
+    @Override
+    public Optional<PeerConfiguration> getPeerConfigByName(String peerId) {
+        try {
+            Path configDir = Paths.get(wireguardConfigPath);
+            Path peerConfigPath = configDir.resolve(peerId).resolve(peerId + ".conf");
+
+            if (!Files.exists(peerConfigPath)) {
+                log.warn("Peer config not found: {}", peerConfigPath);
+                return Optional.empty();
+            }
+
+            String configContent = Files.readString(peerConfigPath);
+            String ipAddress = WireGuardPeerConfig.readIpAddress(configContent);
+            VaierMetadata meta = extractVaierMetadata(configContent);
+            net.vaier.domain.MachineId machineId = readMachineId(peerId, meta);
+            if (machineId == null) {
+                return Optional.empty();
+            }
+
+            return Optional.of(new PeerConfiguration(peerId, effectiveName(peerId, meta), ipAddress,
+                    configContent, parseMachineType(meta.peerType()), meta.lanCidr(), meta.lanAddress(),
+                    meta.description(), parseDeviceCategory(meta.deviceCategory()), meta.sshAccess(),
+                    machineId));
+        } catch (Exception e) {
+            log.error("Failed to read peer config: {}", e.getMessage(), e);
+            return Optional.empty();
+        }
+    }
+
+    @Override
+    public Optional<PeerConfiguration> getPeerConfigByIp(String ipAddress) {
+        try {
+            Path configDir = Paths.get(wireguardConfigPath);
+            log.info("Searching for peer with IP {} in directory: {}", ipAddress, configDir.toAbsolutePath());
+
+            if (!Files.exists(configDir)) {
+                log.warn("Config directory does not exist: {}", configDir.toAbsolutePath());
+                return Optional.empty();
+            }
+
+            try (var stream = Files.list(configDir)) {
+                Optional<Path> foundPeerDir = stream
+                    .filter(Files::isDirectory)
+                    .filter(dir -> !dir.getFileName().toString().equals("wg_confs"))
+                    .filter(dir -> !dir.getFileName().toString().startsWith("."))
+                    .filter(dir -> matchesIpAddress(dir, ipAddress))
+                    .findFirst();
+
+                if (foundPeerDir.isEmpty()) {
+                    log.warn("No peer directory found for IP: {}", ipAddress);
+                    return Optional.empty();
+                }
+
+                String peerId = foundPeerDir.get().getFileName().toString();
+                Path peerConfigPath = foundPeerDir.get().resolve(peerId + ".conf");
+                String configContent = Files.readString(peerConfigPath);
+                VaierMetadata meta = extractVaierMetadata(configContent);
+                net.vaier.domain.MachineId machineId = readMachineId(peerId, meta);
+                if (machineId == null) {
+                    return Optional.empty();
+                }
+
+                return Optional.of(new PeerConfiguration(peerId, effectiveName(peerId, meta), ipAddress,
+                        configContent, parseMachineType(meta.peerType()), meta.lanCidr(), meta.lanAddress(),
+                        meta.description(), parseDeviceCategory(meta.deviceCategory()), meta.sshAccess(),
+                        machineId));
+            }
+        } catch (Exception e) {
+            log.error("Failed to find peer by IP {}: {}", ipAddress, e.getMessage(), e);
+            return Optional.empty();
+        }
+    }
+
+    @Override
+    public List<PeerConfiguration> getAllPeerConfigs() {
+        List<PeerConfiguration> configs = new ArrayList<>();
+        Path configDir = Paths.get(wireguardConfigPath);
+
+        if (!Files.exists(configDir)) {
+            return configs;
+        }
+
+        try (var stream = Files.list(configDir)) {
+            stream.filter(Files::isDirectory)
+                    .filter(dir -> !dir.getFileName().toString().equals("wg_confs"))
+                    .filter(dir -> !dir.getFileName().toString().startsWith("."))
+                    .forEach(dir -> {
+                        String peerId = dir.getFileName().toString();
+                        getPeerConfigByName(peerId).ifPresent(configs::add);
+                    });
+        } catch (Exception e) {
+            log.error("Failed to list peer configs: {}", e.getMessage(), e);
+        }
+
+        return configs;
+    }
+
+    @Override
+    public String resolvePeerIdByIp(String ipAddress) {
+        try {
+            Path configDir = Paths.get(wireguardConfigPath);
+            log.debug("Searching for peer with IP {} in directory: {}", ipAddress, configDir.toAbsolutePath());
+
+            if (!Files.exists(configDir)) {
+                log.warn("Config directory does not exist: {}", configDir.toAbsolutePath());
+                return ipAddress;
+            }
+
+            try (var stream = Files.list(configDir)) {
+                return stream
+                    .filter(Files::isDirectory)
+                    .filter(dir -> !dir.getFileName().toString().equals("wg_confs"))
+                    .filter(dir -> !dir.getFileName().toString().startsWith("."))
+                    .filter(dir -> matchesIpAddress(dir, ipAddress))
+                    .map(path -> path.getFileName().toString())
+                    .findFirst()
+                    .orElseGet(() -> {
+                        log.warn("No peer directory found for IP: {}", ipAddress);
+                        return ipAddress;
+                    });
+            }
+        } catch (Exception e) {
+            log.error("Error finding peer name for IP {}: {}", ipAddress, e.getMessage(), e);
+            return ipAddress;
+        }
+    }
+
+    private boolean matchesIpAddress(Path peerDir, String ipAddress) {
+        try {
+            String dirName = peerDir.getFileName().toString();
+            Path confFile = peerDir.resolve(dirName + ".conf");
+            log.debug("Checking config file: {}", confFile);
+
+            if (Files.exists(confFile)) {
+                String content = Files.readString(confFile);
+                String foundIp = WireGuardPeerConfig.readIpAddress(content);
+                log.debug("Found IP {} in peer {}", foundIp, dirName);
+                return foundIp.equals(ipAddress);
+            } else {
+                log.debug("Config file does not exist: {}", confFile);
+            }
+        } catch (Exception e) {
+            log.warn("Error checking peer dir {}: {}", peerDir, e.getMessage());
+        }
+        return false;
+    }
+
+    private VaierMetadata extractVaierMetadata(String configContent) {
+        for (String line : configContent.split("\n")) {
+            if (line.trim().startsWith("# VAIER:")) {
+                String json = line.substring(line.indexOf(':') + 1).trim();
+                try {
+                    return OBJECT_MAPPER.readValue(json, VaierMetadata.class);
+                } catch (Exception e) {
+                    log.warn("Failed to parse VAIER metadata: {}", e.getMessage());
+                }
+            }
+        }
+        return new VaierMetadata();
+    }
+
+    @Override
+    public void updateLanAddress(String peerId, String lanAddress) {
+        String normalized = blankToNull(lanAddress);
+        rewriteVaierMetadata(peerId, "lanAddress", normalized,
+            existing -> new VaierMetadata(existing.peerType(), existing.lanCidr(),
+                normalized, existing.description(), existing.name(), existing.deviceCategory(),
+                existing.sshAccess(), existing.id()));
+    }
+
+    @Override
+    public void updateLanCidr(String peerId, String lanCidr) {
+        String normalized = blankToNull(lanCidr);
+        rewriteVaierMetadata(peerId, "lanCidr", normalized,
+            existing -> new VaierMetadata(existing.peerType(), normalized,
+                existing.lanAddress(), existing.description(), existing.name(), existing.deviceCategory(),
+                existing.sshAccess(), existing.id()));
+    }
+
+    @Override
+    public void updateDescription(String peerId, String description) {
+        String normalized = blankToNull(description);
+        rewriteVaierMetadata(peerId, "description", normalized,
+            existing -> new VaierMetadata(existing.peerType(), existing.lanCidr(),
+                existing.lanAddress(), normalized, existing.name(), existing.deviceCategory(),
+                existing.sshAccess(), existing.id()));
+    }
+
+    @Override
+    public void updateName(String peerId, String name) {
+        String normalized = blankToNull(name);
+        rewriteVaierMetadata(peerId, "name", normalized,
+            existing -> new VaierMetadata(existing.peerType(), existing.lanCidr(),
+                existing.lanAddress(), existing.description(), normalized, existing.deviceCategory(),
+                existing.sshAccess(), existing.id()));
+    }
+
+    @Override
+    public void updateDeviceCategory(String peerId, String deviceCategory) {
+        String normalized = blankToNull(deviceCategory);
+        rewriteVaierMetadata(peerId, "deviceCategory", normalized,
+            existing -> new VaierMetadata(existing.peerType(), existing.lanCidr(),
+                existing.lanAddress(), existing.description(), existing.name(), normalized,
+                existing.sshAccess(), existing.id()));
+    }
+
+    @Override
+    public void updateSshAccess(String peerId, boolean enabled) {
+        // Always writes an explicit override (true/false); the effective state then equals it,
+        // never falling back to the smart default until the field is cleared out-of-band.
+        rewriteVaierMetadata(peerId, "sshAccess", String.valueOf(enabled),
+            existing -> new VaierMetadata(existing.peerType(), existing.lanCidr(),
+                existing.lanAddress(), existing.description(), existing.name(), existing.deviceCategory(),
+                enabled, existing.id()));
+    }
+
+    @Override
+    public void rewriteConfig(String peerId, String newContent) {
+        Path peerConfigPath = Paths.get(wireguardConfigPath, peerId, peerId + ".conf");
+        if (!Files.exists(peerConfigPath)) {
+            throw new net.vaier.domain.PeerNotFoundException("Peer not found: " + peerId);
+        }
+        try {
+            Files.writeString(peerConfigPath, newContent);
+            log.info("Rewrote config for peer {}", peerId);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to rewrite config for peer " + peerId + ": " + e.getMessage(), e);
+        }
+    }
+
+    private static String blankToNull(String value) {
+        return (value == null || value.isBlank()) ? null : value.trim();
+    }
+
+    /**
+     * Rewrites the single-line {@code # VAIER:} metadata comment in a peer's {@code .conf},
+     * preserving every field the {@code mutator} does not touch. Adds the comment if missing.
+     */
+    private void rewriteVaierMetadata(String peerId, String fieldName, String newValue,
+                                      java.util.function.UnaryOperator<VaierMetadata> mutator) {
+        Path peerConfigPath = Paths.get(wireguardConfigPath, peerId, peerId + ".conf");
+        if (!Files.exists(peerConfigPath)) {
+            throw new net.vaier.domain.PeerNotFoundException("Peer not found: " + peerId);
+        }
+        try {
+            String content = Files.readString(peerConfigPath);
+            VaierMetadata existing = extractVaierMetadata(content);
+            // A peer without a # VAIER comment predates metadata — default its type so the
+            // rewritten comment is well-formed rather than missing peerType entirely.
+            VaierMetadata withType = new VaierMetadata(
+                existing.peerType() != null ? existing.peerType() : MachineType.UBUNTU_SERVER.name(),
+                existing.lanCidr(), existing.lanAddress(), existing.description(), existing.name(),
+                existing.deviceCategory(), existing.sshAccess(), existing.id());
+            VaierMetadata updated = mutator.apply(withType);
+            String newLine = "# VAIER: " + OBJECT_MAPPER.writeValueAsString(updated);
+
+            String rewritten;
+            if (content.contains("# VAIER:")) {
+                rewritten = content.replaceAll("(?m)^# VAIER:.*$", java.util.regex.Matcher.quoteReplacement(newLine));
+            } else {
+                rewritten = newLine + "\n" + content;
+            }
+            Files.writeString(peerConfigPath, rewritten);
+            log.info("Updated {} for peer {} to {}", fieldName, peerId, newValue);
+        } catch (Exception e) {
+            throw new RuntimeException(
+                "Failed to update " + fieldName + " for peer " + peerId + ": " + e.getMessage(), e);
+        }
+    }
+
+    private MachineType parseMachineType(String value) {
+        if (value == null) return MachineType.UBUNTU_SERVER;
+        try {
+            return MachineType.valueOf(value);
+        } catch (IllegalArgumentException e) {
+            log.warn("Unknown peer type '{}', defaulting to UBUNTU_SERVER", value);
+            return MachineType.UBUNTU_SERVER;
+        }
+    }
+
+    /**
+     * The device-category override stored in metadata, or null when absent. An unrecognised value
+     * reads as "no override" (logged) rather than failing the whole config read — the category just
+     * falls back to auto-detection.
+     */
+    private net.vaier.domain.DeviceCategory parseDeviceCategory(String value) {
+        try {
+            return net.vaier.domain.DeviceCategory.fromString(value);
+        } catch (IllegalArgumentException e) {
+            // value comes from the on-disk # VAIER metadata, which can be hand-edited — collapse any
+            // CR/LF so a malformed value can't forge multiline log entries.
+            log.warn("Unknown device category '{}', treating as no override", value.replaceAll("[\r\n]+", "_"));
+            return null;
+        }
+    }
+}

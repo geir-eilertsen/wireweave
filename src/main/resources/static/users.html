@@ -609,7 +609,7 @@
             // entry on initials. Shared with the topbar via avatar.js.
             const photoUrls = {};
             await Promise.all(accessEntries.map(async e => {
-                photoUrls[e.email] = await FjordAvatar.photoUrl({
+                photoUrls[e.email] = await VaierAvatar.photoUrl({
                     provider: e.provider, providerUserId: e.providerUserId, email: e.email, size: 80 });
             }));
 

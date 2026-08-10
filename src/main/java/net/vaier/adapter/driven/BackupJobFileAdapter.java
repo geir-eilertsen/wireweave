@@ -1,0 +1,180 @@
+package net.vaier.adapter.driven;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import lombok.extern.slf4j.Slf4j;
+import net.vaier.domain.BackupJob;
+import net.vaier.domain.MachineId;
+import net.vaier.domain.port.ForPersistingBackupJobs;
+import org.springframework.stereotype.Component;
+import org.yaml.snakeyaml.DumperOptions;
+import org.yaml.snakeyaml.Yaml;
+
+/**
+ * File-backed store for fleet-backup {@link BackupJob} definitions: one entry per job in
+ * {@code backup-jobs.yml}, keyed on {@code name}. Jobs hold no secrets, so every field is stored in
+ * the clear; the {@code sourcePaths} and {@code excludes} list fields are serialized as YAML lists.
+ *
+ * <p>A job names its machine by {@code machineId}, never by display name. An entry whose id is missing or
+ * unreadable is skipped <b>loudly</b>, for the same reason as {@code DiskWatchFileAdapter}: a job that
+ * quietly fails to load is a machine that silently stops being backed up, and nothing else in Vaier would
+ * ever say so. (Two dead jobs against machines in no registry — {@code NUC 02} and {@code NUC02} — are what
+ * name-keying cost here.)
+ */
+@Component
+@Slf4j
+public class BackupJobFileAdapter implements ForPersistingBackupJobs {
+
+    private static final String FILE_NAME = "backup-jobs.yml";
+    private final String filePath;
+
+    public BackupJobFileAdapter() {
+        this(System.getenv().getOrDefault("VAIER_CONFIG_PATH", "/vaier/config"));
+    }
+
+    public BackupJobFileAdapter(String configDir) {
+        this.filePath = configDir + "/" + FILE_NAME;
+    }
+
+    @Override
+    public synchronized List<BackupJob> getAll() {
+        File file = new File(filePath);
+        if (!file.exists()) return List.of();
+        try (FileInputStream fis = new FileInputStream(file)) {
+            Map<String, Object> data = new Yaml().load(fis);
+            if (data == null) return List.of();
+            Object rawJobs = data.get("jobs");
+            if (!(rawJobs instanceof List<?> list)) return List.of();
+            List<BackupJob> result = new ArrayList<>();
+            for (Object entry : list) {
+                if (entry instanceof Map<?, ?> m) {
+                    BackupJob job = deserialize(m);
+                    if (job != null) result.add(job);
+                }
+            }
+            return result;
+        } catch (Exception e) {
+            log.warn("Failed to load backup jobs from {}", filePath, e);
+            return List.of();
+        }
+    }
+
+    @Override
+    public synchronized Optional<BackupJob> getByName(String name) {
+        return getAll().stream().filter(j -> j.name().equals(name)).findFirst();
+    }
+
+    @Override
+    public synchronized List<BackupJob> getByMachine(MachineId machineId) {
+        return getAll().stream().filter(j -> j.machineId().equals(machineId)).toList();
+    }
+
+    @Override
+    public synchronized void save(BackupJob job) {
+        List<BackupJob> current = new ArrayList<>(getAll());
+        current.removeIf(j -> j.machineId().equals(job.machineId()));
+        current.add(job);
+        writeAll(current);
+    }
+
+    @Override
+    public synchronized void deleteByMachine(MachineId machineId) {
+        List<BackupJob> current = new ArrayList<>(getAll());
+        boolean removed = current.removeIf(j -> j.machineId().equals(machineId));
+        if (removed) writeAll(current);
+    }
+
+    private BackupJob deserialize(Map<?, ?> m) {
+        String name = asString(m.get("name"));
+        String rawMachineId = asString(m.get("machineId"));
+        String repositoryName = asString(m.get("repositoryName"));
+        List<String> sourcePaths = asStringList(m.get("sourcePaths"));
+        List<String> excludes = asStringList(m.get("excludes"));
+        Integer keepDaily = m.get("keepDaily") instanceof Number n ? n.intValue() : null;
+        Integer keepWeekly = m.get("keepWeekly") instanceof Number n ? n.intValue() : null;
+        Integer keepMonthly = m.get("keepMonthly") instanceof Number n ? n.intValue() : null;
+        String compression = asString(m.get("compression"));
+        boolean enabled = m.get("enabled") instanceof Boolean b && b;
+        // Absent in every job file written before "Back up as root" existed -> false. A job is never escalated
+        // to root merely because a new key appeared in the schema; opting in is always an explicit act.
+        boolean backupAsRoot = m.get("backupAsRoot") instanceof Boolean r && r;
+        if (name == null || repositoryName == null
+            || sourcePaths.isEmpty() || keepDaily == null || keepWeekly == null || keepMonthly == null) {
+            log.warn("Skipping malformed backup-job entry in {}", FILE_NAME);
+            return null;
+        }
+        MachineId machineId;
+        try {
+            machineId = MachineId.of(rawMachineId);
+        } catch (IllegalArgumentException e) {
+            // Loud, not quiet: this job now backs up nothing, and a machine that stops being backed up is
+            // exactly the failure a backup tool must never keep to itself.
+            log.error("Skipping backup-job entry '{}' in {} with an unusable machineId: {}",
+                name.replaceAll("[\\r\\n]+", "_"), FILE_NAME, e.getMessage());
+            return null;
+        }
+        try {
+            return new BackupJob(name, machineId, repositoryName, sourcePaths, excludes,
+                keepDaily, keepWeekly, keepMonthly, compression, enabled, backupAsRoot);
+        } catch (IllegalArgumentException e) {
+            log.warn("Skipping invalid backup-job entry '{}' in {}: {}",
+                name.replaceAll("[\r\n]+", "_"), FILE_NAME, e.getMessage());
+            return null;
+        }
+    }
+
+    private void writeAll(List<BackupJob> jobs) {
+        File file = new File(filePath);
+        File parentDir = file.getParentFile();
+        if (parentDir != null && !parentDir.exists()) parentDir.mkdirs();
+
+        DumperOptions options = new DumperOptions();
+        options.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
+        Yaml yaml = new Yaml(options);
+
+        List<Map<String, Object>> serialized = new ArrayList<>();
+        for (BackupJob j : jobs) {
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("name", j.name());
+            entry.put("machineId", j.machineId().value());
+            entry.put("repositoryName", j.repositoryName());
+            entry.put("sourcePaths", new ArrayList<>(j.sourcePaths()));
+            entry.put("excludes", new ArrayList<>(j.excludes()));
+            entry.put("keepDaily", j.keepDaily());
+            entry.put("keepWeekly", j.keepWeekly());
+            entry.put("keepMonthly", j.keepMonthly());
+            entry.put("compression", j.compression());
+            entry.put("enabled", j.enabled());
+            entry.put("backupAsRoot", j.backupAsRoot());
+            serialized.add(entry);
+        }
+        Map<String, Object> root = new LinkedHashMap<>();
+        root.put("jobs", serialized);
+
+        try (FileWriter writer = new FileWriter(file)) {
+            yaml.dump(root, writer);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to save backup jobs to " + filePath, e);
+        }
+    }
+
+    private static String asString(Object o) {
+        return o == null ? null : o.toString();
+    }
+
+    private static List<String> asStringList(Object o) {
+        if (!(o instanceof List<?> list)) return List.of();
+        List<String> result = new ArrayList<>();
+        for (Object item : list) {
+            if (item != null) result.add(item.toString());
+        }
+        return result;
+    }
+}

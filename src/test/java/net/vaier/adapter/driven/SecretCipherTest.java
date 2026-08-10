@@ -1,0 +1,146 @@
+package net.vaier.adapter.driven;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
+import java.util.Base64;
+import java.util.Set;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+class SecretCipherTest {
+
+    @TempDir
+    Path tempDir;
+
+    private SecretCipher cipher() {
+        return new SecretCipher(tempDir.toString());
+    }
+
+    /**
+     * The survival kit has to carry this key: restoring Vaier from one of its own archives yields a config
+     * whose every secret is {@code enc:v1:} ciphertext, and without the key that restore is a dead end. The
+     * kit is encrypted with the operator's passphrase, so the key is not in the clear anywhere it lands.
+     */
+    @Test
+    void configKey_isTheVaultKeyThatDecryptsEverythingElse() throws Exception {
+        SecretCipher cipher = cipher();
+        String ciphertext = cipher.encrypt("a stored secret");
+
+        String configKey = cipher.configKey().orElseThrow();
+
+        // Exactly what is in the key file — an operator who has this can decrypt the config store by hand.
+        assertThat(configKey).isEqualTo(Files.readString(tempDir.resolve("vault.key")).trim());
+        // And it really is the key: a cipher told to use it reads the other one's ciphertext.
+        assertThat(new SecretCipher(tempDir.toString()).decrypt(ciphertext)).isEqualTo("a stored secret");
+    }
+
+    /**
+     * Never generated on the way out. A key minted by the act of writing a kit would be a key that decrypts
+     * nothing, printed on the one page that claims it decrypts everything.
+     */
+    @Test
+    void configKey_isEmptyWhenNoKeyHasBeenGeneratedYet() {
+        assertThat(cipher().configKey()).isEmpty();
+    }
+
+    @Test
+    void roundTrips_multiLinePrivateKeyLikeString() {
+        String pem = """
+            -----BEGIN OPENSSH PRIVATE KEY-----
+            b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtz
+            c2gtZWQyNTUxOQAAACD= line two with spaces
+            -----END OPENSSH PRIVATE KEY-----
+            """;
+        SecretCipher cipher = cipher();
+
+        assertThat(cipher.decrypt(cipher.encrypt(pem))).isEqualTo(pem);
+    }
+
+    @Test
+    void roundTrips_unicode() {
+        String secret = "påsswørd-æøå-你好-🔐";
+        SecretCipher cipher = cipher();
+
+        assertThat(cipher.decrypt(cipher.encrypt(secret))).isEqualTo(secret);
+    }
+
+    @Test
+    void encrypt_producesEnvelopeThatHidesPlaintext() {
+        String secret = "super-secret-value";
+
+        String encrypted = cipher().encrypt(secret);
+
+        assertThat(encrypted).startsWith("enc:v1:");
+        assertThat(encrypted).doesNotContain(secret);
+    }
+
+    @Test
+    void encrypt_isNonDeterministic() {
+        SecretCipher cipher = cipher();
+        String secret = "same-input";
+
+        assertThat(cipher.encrypt(secret)).isNotEqualTo(cipher.encrypt(secret));
+    }
+
+    @Test
+    void decrypt_legacyPlaintext_isReturnedUnchanged() {
+        assertThat(cipher().decrypt("plain-value")).isEqualTo("plain-value");
+    }
+
+    @Test
+    void decrypt_null_returnsNull() {
+        assertThat(cipher().decrypt(null)).isNull();
+    }
+
+    @Test
+    void construction_touchesNoFilesystem_soWiringNeverDependsOnAWritableConfigDir() {
+        // The full-context smoke test builds every bean with the default config dir (/vaier/config),
+        // which is not writable on a CI runner. Resolving/generating the key must therefore be lazy:
+        // merely constructing the cipher must not create (or require) the key file (#308 CI failure).
+        Path keyFile = tempDir.resolve("vault.key");
+
+        new SecretCipher(tempDir.toString());
+
+        assertThat(Files.exists(keyFile)).isFalse();
+    }
+
+    @Test
+    void keyFile_isWrittenWith0600Perms_onFirstUse() throws Exception {
+        cipher().encrypt("anything");
+
+        Path keyFile = tempDir.resolve("vault.key");
+        assertThat(Files.exists(keyFile)).isTrue();
+        Set<PosixFilePermission> perms = Files.getPosixFilePermissions(keyFile);
+        assertThat(perms).containsExactlyInAnyOrder(
+            PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE);
+    }
+
+    @Test
+    void keyIsStableAcrossInstances_secondInstanceDecryptsWhatFirstWrote() {
+        SecretCipher first = cipher();
+        String encrypted = first.encrypt("cross-instance");
+
+        SecretCipher second = new SecretCipher(tempDir.toString());
+
+        assertThat(second.decrypt(encrypted)).isEqualTo("cross-instance");
+    }
+
+    @Test
+    void decrypt_tamperedCiphertext_throws() {
+        SecretCipher cipher = cipher();
+        String encrypted = cipher.encrypt("authentic");
+        // Decode the envelope body, flip a bit in the last byte (inside the GCM tag), and re-encode.
+        // Mutating a decoded byte guarantees a real content change — flipping a base64 character
+        // instead can hit low bits discarded by the final padded quartet, leaving the plaintext intact.
+        byte[] body = Base64.getDecoder().decode(encrypted.substring(SecretCipher.PREFIX.length()));
+        body[body.length - 1] ^= 0x01;
+        String tampered = SecretCipher.PREFIX + Base64.getEncoder().encodeToString(body);
+
+        assertThatThrownBy(() -> cipher.decrypt(tampered)).isInstanceOf(RuntimeException.class);
+    }
+}

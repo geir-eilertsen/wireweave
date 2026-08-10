@@ -1,19 +1,17 @@
 <div align="center">
-  <img src="docs/logo.svg" width="80" alt="Fjord-O-Matic logo"/>
+  <img src="docs/logo.svg" width="80" alt="Vaier logo"/>
 </div>
 
-# Fjord-O-Matic
+# Vaier
 
 [![Build](https://github.com/getvaier/vaier/actions/workflows/build-deploy.yml/badge.svg)](https://github.com/getvaier/vaier/actions/workflows/build-deploy.yml)
 [![Docker Pulls](https://img.shields.io/docker/pulls/getvaier/vaier)](https://hub.docker.com/r/getvaier/vaier)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 [![Java](https://img.shields.io/badge/Java-21-orange)](https://openjdk.org/projects/jdk/21/)
 
-**Fjord-O-Matic** — for the award-winning crinkly bits of Norway, and for every Sirius Cybernetics gadget that ever ended in *-O-Matic* — is the glue for your homelab. **Fjord** for short.
+**Vaier** — Norwegian for *wire* (as in cable), pronounced **VY-er** — is the glue for your homelab.
 
 One box on the internet. Your machines at home, behind WireGuard. Every service gets an HTTPS address, a login, and a dashboard tile — nothing to configure by hand: no Traefik files, no WireGuard configs, no DNS record beyond the one wildcard you make on day one.
-
-> **On the name.** This was called **Vaier** until August 2026. The rename is deliberately skin-deep: the container, the Docker network, the config paths, the `VAIER_*` environment variables, the `getvaier/vaier` image and the `vaier.<domain>` console host all keep their old names. An existing install upgrades with nothing to migrate. Renaming *those* is a separate job — it re-issues certificates and strands WireGuard peers that have cached the old endpoint.
 
 ---
 
@@ -21,20 +19,20 @@ One box on the internet. Your machines at home, behind WireGuard. Every service 
 
 | Feature | Description |
 |---------|-------------|
-| **VPN mesh** | WireGuard peers and LAN servers (NAS, printers, extra Docker hosts) join one mesh, with cross-site routing between your networks. You're never asked for a CIDR: Fjord reads the network a machine sits on — over the SSH connection it already has — and asks only whether the fleet should reach it, naming the machine and the interface it read it from. See [`docs/NETWORKING.md`](docs/NETWORKING.md). |
+| **VPN mesh** | WireGuard peers and LAN servers (NAS, printers, extra Docker hosts) join one mesh, with cross-site routing between your networks. You're never asked for a CIDR: Vaier reads the network a machine sits on — over the SSH connection it already has — and asks only whether the fleet should reach it, naming the machine and the interface it read it from. See [`docs/NETWORKING.md`](docs/NETWORKING.md). |
 | **Reverse proxy & edge hardening** | Traefik terminates HTTPS with Let's Encrypt, enforces a security-header and TLS floor on every route, blocks malicious traffic at the edge with a CrowdSec Security Engine and bouncer — every blocked address listed in the Explorer with where it came from, one click to let it back in or trust it, and everything you have trusted listed beside it, one click to untrust — and shows a branded offline page when a backend is down. The other direction is on the map too: every place someone has been *let in* from, one green dot per city, with the count and the people allowed from there, kept for a month. Accesses from your own LAN or VPN have no place on a map and are shown as a plain count beside it rather than quietly dropped. See [`docs/NETWORKING.md`](docs/NETWORKING.md). |
 | **Wildcard DNS** | One `*.yourdomain.com` record, made once, covers the console, sign-in, and every service you ever publish. See [`docs/NETWORKING.md`](docs/NETWORKING.md). |
 | **Service publishing & launchpad** | Publish any container's web interface in one click; a viewer-adaptive dashboard links to whatever each visitor is allowed to reach. See [`docs/NETWORKING.md`](docs/NETWORKING.md). |
 | **Access management** | Google or GitHub sign-in via oauth2-proxy and Dex, with roles (pending → user → admin) and per-service access groups. See [`docs/AUTH.md`](docs/AUTH.md). |
-| **Fleet backup & survival kit** | Automated borg backups to one designated backup server, plus a self-updating "survival kit" so your backups stay readable even if Fjord itself is gone. A run that came back missing files says so on the machine — naming the files it lost — and one click makes Fjord read everything there from the next run. See [`docs/BACKUP.md`](docs/BACKUP.md). |
-| **Monitoring & alerts** | Disk-usage watching with a fill-rate forecast — a disk already too full when Fjord starts is mailed about immediately, then again only when it gets five points worse, never on a timer — and you don't have to wait for the mail: every machine's card in the Explorer carries its worst disk, green, amber or red, from the reading Fjord already takes on its rounds, so nothing is asked of a sleeping machine to draw it. A machine Fjord hasn't read yet is left blank rather than painted healthy. Plus image-update detection for **your** containers — Fjord's own stack is deliberately never marked, since it moves with a Fjord release and Settings speaks for that — with an **Update** button on any of your own containers once a newer image is available, pulling and recreating it from its own compose file over SSH, and a plain reason instead when Fjord won't (started outside compose, or part of Fjord's own stack, which updates with Fjord itself) — and email that stays quiet — routine bans at the edge are listed in the Explorer, never mailed; only a credential attack, or CrowdSec blocking one of your own networks, reaches your inbox. See [`docs/MONITORING.md`](docs/MONITORING.md). |
-| **Explorer** | One tree for the whole fleet — browse files, containers and services, select and transfer across machines, upload files into a folder by dropping them on it (a name already taken is never silently replaced — Fjord asks first), step back in time through backup archives, and see live who's blocked at the edge and which addresses you've trusted. Every place you stand on has its own link: reload, Back, Forward, a bookmark or a pasted URL all land back on the same folder, machine and archive. The fleet's own page cards every machine with what it's saying — what it can do, how its last backup went, which of its disks is closest to full, how many containers want a newer image — so the tree beside it is optional on a desktop (fold it away and it stays folded) and absent on a phone, where the cards, the crumbs and ⌘K (which searches by machine name) do the moving. Settings, Users, Security and Concepts sit in the topbar's **Fjord** menu. See [`docs/EXPLORER.md`](docs/EXPLORER.md). |
-| **Web terminal** | A real, persistent SSH shell to any machine, opened in its own window and reattached automatically across reconnects and redeploys. If a machine's SSH host key changes, Fjord refuses to connect and offers **Clear pinned key** right where the refusal appears — in the terminal window, and wherever a file or disk read was turned away. See [`docs/EXPLORER.md`](docs/EXPLORER.md). |
-| **Host credentials** | One encrypted vault holds the SSH login for every machine; the browser never sees a secret. Each machine states which user Fjord acts as on it, machines where that user is `root` are tagged in the fleet, and a delete there says so before it runs. Have no key for a machine? Fjord generates an ed25519 keypair for it — the private half never leaves the server — and shows you the one line to add to that machine's `authorized_keys`. Paste your own key instead (ed25519, ECDSA or RSA) and Fjord tells you at the form if it isn't private-key material, rather than saving a `.pub` or a PuTTY `.ppk` that then fails at every connect. See [`docs/EXPLORER.md`](docs/EXPLORER.md). |
-| **Suggested next steps** | Each machine's pane nudges you toward the next thing worth doing with it, with the evidence shown alongside — publish its services, back it up, host the fleet's backups, read every file when a backup came back with holes, or let the fleet reach the network it sits on. Each is one yes, and a nudge that grants Fjord more reach on a machine links to what that means. See [`docs/EXPLORER.md`](docs/EXPLORER.md). |
+| **Fleet backup & survival kit** | Automated borg backups to one designated backup server, plus a self-updating "survival kit" so your backups stay readable even if Vaier itself is gone. A run that came back missing files says so on the machine — naming the files it lost — and one click makes Vaier read everything there from the next run. See [`docs/BACKUP.md`](docs/BACKUP.md). |
+| **Monitoring & alerts** | Disk-usage watching with a fill-rate forecast — a disk already too full when Vaier starts is mailed about immediately, then again only when it gets five points worse, never on a timer — and you don't have to wait for the mail: every machine's card in the Explorer carries its worst disk, green, amber or red, from the reading Vaier already takes on its rounds, so nothing is asked of a sleeping machine to draw it. A machine Vaier hasn't read yet is left blank rather than painted healthy. Plus image-update detection for **your** containers — Vaier's own stack is deliberately never marked, since it moves with a Vaier release and Settings speaks for that — with an **Update** button on any of your own containers once a newer image is available, pulling and recreating it from its own compose file over SSH, and a plain reason instead when Vaier won't (started outside compose, or part of Vaier's own stack, which updates with Vaier itself) — and email that stays quiet — routine bans at the edge are listed in the Explorer, never mailed; only a credential attack, or CrowdSec blocking one of your own networks, reaches your inbox. See [`docs/MONITORING.md`](docs/MONITORING.md). |
+| **Explorer** | One tree for the whole fleet — browse files, containers and services, select and transfer across machines, upload files into a folder by dropping them on it (a name already taken is never silently replaced — Vaier asks first), step back in time through backup archives, and see live who's blocked at the edge and which addresses you've trusted. Every place you stand on has its own link: reload, Back, Forward, a bookmark or a pasted URL all land back on the same folder, machine and archive. The fleet's own page cards every machine with what it's saying — what it can do, how its last backup went, which of its disks is closest to full, how many containers want a newer image — so the tree beside it is optional on a desktop (fold it away and it stays folded) and absent on a phone, where the cards, the crumbs and ⌘K (which searches by machine name) do the moving. Settings, Users, Security and Concepts sit in the topbar's **Vaier** menu. See [`docs/EXPLORER.md`](docs/EXPLORER.md). |
+| **Web terminal** | A real, persistent SSH shell to any machine, opened in its own window and reattached automatically across reconnects and redeploys. If a machine's SSH host key changes, Vaier refuses to connect and offers **Clear pinned key** right where the refusal appears — in the terminal window, and wherever a file or disk read was turned away. See [`docs/EXPLORER.md`](docs/EXPLORER.md). |
+| **Host credentials** | One encrypted vault holds the SSH login for every machine; the browser never sees a secret. Each machine states which user Vaier acts as on it, machines where that user is `root` are tagged in the fleet, and a delete there says so before it runs. Have no key for a machine? Vaier generates an ed25519 keypair for it — the private half never leaves the server — and shows you the one line to add to that machine's `authorized_keys`. Paste your own key instead (ed25519, ECDSA or RSA) and Vaier tells you at the form if it isn't private-key material, rather than saving a `.pub` or a PuTTY `.ppk` that then fails at every connect. See [`docs/EXPLORER.md`](docs/EXPLORER.md). |
+| **Suggested next steps** | Each machine's pane nudges you toward the next thing worth doing with it, with the evidence shown alongside — publish its services, back it up, host the fleet's backups, read every file when a backup came back with holes, or let the fleet reach the network it sits on. Each is one yes, and a nudge that grants Vaier more reach on a machine links to what that means. See [`docs/EXPLORER.md`](docs/EXPLORER.md). |
 | **Fleet-wide polish** | Inline field help, an in-app Concepts glossary, consistent sign-in branding, and device-category icons. See [`docs/EXPLORER.md`](docs/EXPLORER.md). |
 
-![The Fjord launchpad](docs/fjord-launchpad.png)
+![The Vaier launchpad](docs/vaier-launchpad.png)
 
 ---
 
@@ -43,7 +41,7 @@ One box on the internet. Your machines at home, behind WireGuard. Every service 
 ```mermaid
 flowchart LR
     browser([User browser])
-    server[Fjord server]
+    server[Vaier server]
     p1[Peer 1 container]
     p2[Peer 2 container]
 
@@ -52,7 +50,7 @@ flowchart LR
     server <-->|WG tunnel| p2
 ```
 
-Every published service resolves to the single Fjord server through your one `*.yourdomain.com` record, terminates TLS at Traefik, optionally passes social-login authorization (Google or GitHub via oauth2-proxy, then Fjord's own access check), and is proxied over WireGuard to the container running on a peer. More in [`docs/NETWORKING.md`](docs/NETWORKING.md).
+Every published service resolves to the single Vaier server through your one `*.yourdomain.com` record, terminates TLS at Traefik, optionally passes social-login authorization (Google or GitHub via oauth2-proxy, then Vaier's own access check), and is proxied over WireGuard to the container running on a peer. More in [`docs/NETWORKING.md`](docs/NETWORKING.md).
 
 ---
 
@@ -82,7 +80,7 @@ curl -fsSL https://get.docker.com | sh
 sudo usermod -aG docker $USER   # then log out and back in
 ```
 
-Confirm with `docker ps` (no `sudo`). Then fetch the runtime files Fjord needs (the compose file, and the assets it bind-mounts) and scaffold a `.env` — **no git clone**:
+Confirm with `docker ps` (no `sudo`). Then fetch the runtime files Vaier needs (the compose file, and the assets it bind-mounts) and scaffold a `.env` — **no git clone**:
 
 ```bash
 mkdir -p vaier && cd vaier
@@ -97,7 +95,7 @@ Make one DNS record, before first boot, at whatever DNS host your domain lives o
 |--------|------|-------|
 | `*.yourdomain.com` | A | the public IP of this server |
 
-That single wildcard covers the console, the sign-in hosts, and every service you publish from now on — nothing to add, ever, when you publish a service. Fjord checks it for you at every boot and reports the verdict in the boot log and in **Settings**. Caveats and the full mechanics are in [`docs/NETWORKING.md`](docs/NETWORKING.md).
+That single wildcard covers the console, the sign-in hosts, and every service you publish from now on — nothing to add, ever, when you publish a service. Vaier checks it for you at every boot and reports the verdict in the boot log and in **Settings**. Caveats and the full mechanics are in [`docs/NETWORKING.md`](docs/NETWORKING.md).
 
 ### 3. Configure `.env`
 
@@ -162,7 +160,7 @@ Contributions are welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the deve
 
 ## Disclaimer
 
-Fjord is a personal homelab tool provided as-is. Use it at your own risk. The authors accept no responsibility for security incidents, data loss, service outages, misconfigured firewalls, exposed services, or any other damage arising from its use. Running this software means exposing infrastructure to the internet — you are responsible for understanding what you are deploying.
+Vaier is a personal homelab tool provided as-is. Use it at your own risk. The authors accept no responsibility for security incidents, data loss, service outages, misconfigured firewalls, exposed services, or any other damage arising from its use. Running this software means exposing infrastructure to the internet — you are responsible for understanding what you are deploying.
 
 The Apache License 2.0 (below) contains the full warranty disclaimer and limitation of liability in sections 7 and 8.
 

@@ -20,7 +20,7 @@ labels: bug
 
 ## Environment
 
-- Fjord version / commit:
+- Vaier version / commit:
 - Docker / Docker Compose version:
 - Host OS:
 - Browser (if UI issue):

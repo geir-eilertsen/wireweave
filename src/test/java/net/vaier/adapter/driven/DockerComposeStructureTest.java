@@ -1,0 +1,1026 @@
+package net.vaier.adapter.driven;
+
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
+import net.vaier.domain.AuthMode;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.yaml.snakeyaml.Yaml;
+import static org.assertj.core.api.Assertions.assertThat;
+
+class DockerComposeStructureTest {
+
+    @SuppressWarnings("unchecked")
+    private Map<String, String> vaierLabels() throws Exception {
+        Map<String, Object> compose = (Map<String, Object>) new Yaml()
+            .load(Files.readString(Path.of("docker-compose.yml")));
+        Map<String, Object> services = (Map<String, Object>) compose.get("services");
+        Map<String, Object> vaier = (Map<String, Object>) services.get("vaier");
+        List<String> labels = (List<String>) vaier.get("labels");
+        Map<String, String> byKey = new LinkedHashMap<>();
+        for (String label : labels) {
+            int eq = label.indexOf('=');
+            if (eq > 0) {
+                byKey.put(label.substring(0, eq), label.substring(eq + 1));
+            }
+        }
+        return byKey;
+    }
+
+    // --- Public, viewer-adaptive launchpad: three-tier routing on the console host ---
+
+    @Test
+    void publicRouter_servesTheLaunchpadShellAndAssetsWithNoAuthMiddleware() throws Exception {
+        Map<String, String> labels = vaierLabels();
+        String rule = labels.get("traefik.http.routers.vaier-public.rule");
+        String mw = labels.get("traefik.http.routers.vaier-public.middlewares");
+
+        // The launchpad shell + assets + public data must be anonymously reachable.
+        assertThat(rule).contains("Path(`/`)");
+        assertThat(rule).contains("Path(`/launchpad.html`)");
+        assertThat(rule).contains("Path(`/styles.css`)");
+        // avatar.js is loaded by the public launchpad shell; it must be anonymously reachable too,
+        // or a non-admin viewer 403s on it, VaierAvatar never loads, and the topbar breaks.
+        assertThat(rule).contains("Path(`/avatar.js`)");
+        assertThat(rule).contains("PathPrefix(`/icon`)");
+        assertThat(rule).contains("Path(`/launchpad/services`)");
+        // The launchpad's public live-update stream — signal-only, so anonymous viewers get live
+        // tile refreshes without the private-subdomain payload the full SSE stream carries.
+        assertThat(rule).contains("Path(`/launchpad/events`)");
+
+        // But no admin surface may be whitelisted as public.
+        assertThat(rule).doesNotContain("admin.html");
+        assertThat(rule).doesNotContain("/access");
+        assertThat(rule).doesNotContain("services-authenticated");
+        assertThat(rule).doesNotContain("/users/me");
+
+        // Public tier carries the offline middleware and the #258 frame guard — never any auth link.
+        assertThat(mw).isEqualTo("vaier-down,vaier-frame-guard@file");
+        assertThat(mw).doesNotContain("oauth2");
+        assertThat(mw).doesNotContain("authz");
+    }
+
+    @Test
+    void identityRouter_carriesOnlyOauth2AuthnForTheViewerAdaptiveEndpoints() throws Exception {
+        Map<String, String> labels = vaierLabels();
+        String rule = labels.get("traefik.http.routers.vaier-identity.rule");
+        String mw = labels.get("traefik.http.routers.vaier-identity.middlewares");
+        String priority = labels.get("traefik.http.routers.vaier-identity.priority");
+
+        // The viewer-adaptive endpoints: the two data/identity APIs plus the launchpad's live-update
+        // SSE stream. The SSE payload carries service subdomains, so it belongs behind oauth2-authn
+        // (authenticated non-admins get it; anonymous get a clean 401) — never on the public tier.
+        assertThat(rule).contains("Path(`/launchpad/services-authenticated`)");
+        assertThat(rule).contains("Path(`/users/me`)");
+        assertThat(rule).contains("Path(`/published-services/events`)");
+
+        // oauth2-authn injects identity when a session exists and 401s anonymous — but NO
+        // forced-login redirect (oauth2-signin) and NO admin gate (vaier-authz).
+        assertThat(mw).contains("oauth2-authn@file");
+        assertThat(mw).contains("vaier-down");
+        assertThat(mw).doesNotContain("oauth2-signin");
+        assertThat(mw).doesNotContain("vaier-authz");
+
+        // Must out-rank the admin catch-all so these paths aren't swept into the full auth chain.
+        assertThat(priority).isEqualTo("250");
+    }
+
+    @Test
+    void adminCatchAll_stillEnforcesTheFullSocialChainWithAuthz() throws Exception {
+        Map<String, String> labels = vaierLabels();
+        String rule = labels.get("traefik.http.routers.vaier.rule");
+        String mw = labels.get("traefik.http.routers.vaier.middlewares");
+        String priority = labels.get("traefik.http.routers.vaier.priority");
+
+        // The catch-all still matches the whole host (admin.html + all admin APIs land here).
+        assertThat(rule).isEqualTo("Host(`vaier.${VAIER_DOMAIN}`)");
+        // And it still carries the full chain including the admin-enforcing vaier-authz.
+        assertThat(mw).contains("oauth2-signin@file");
+        assertThat(mw).contains("oauth2-authn@file");
+        assertThat(mw).contains("vaier-authz@file");
+        // Lowest priority of the real routers, so the specific public/identity/oauth2 routers win.
+        assertThat(priority).isEqualTo("100");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void autheliaAndRedisAreDecommissioned_noLongerInTheStack() throws Exception {
+        // Every gated service moved to social login (#305). Authelia and its Redis session store
+        // are removed from the running stack, along with their init sidecars.
+        Map<String, Object> compose = (Map<String, Object>) new Yaml()
+            .load(Files.readString(Path.of("docker-compose.yml")));
+        Map<String, Object> services = (Map<String, Object>) compose.get("services");
+
+        assertThat(services)
+            .as("Authelia and Redis are decommissioned and must not appear in the stack")
+            .doesNotContainKeys("authelia", "authelia-init", "redis", "redis-init");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void oauth2Proxy_isMandatoryInfrastructure_notBehindAProfile() throws Exception {
+        // With Authelia gone, oauth2-proxy is the sole auth gateway — it must always start with
+        // `docker compose up -d`, so neither it nor its init may be gated behind the `social` profile.
+        Map<String, Object> compose = (Map<String, Object>) new Yaml()
+            .load(Files.readString(Path.of("docker-compose.yml")));
+        Map<String, Object> services = (Map<String, Object>) compose.get("services");
+        Map<String, Object> oauth2Proxy = (Map<String, Object>) services.get("oauth2-proxy");
+        Map<String, Object> oauth2ProxyInit = (Map<String, Object>) services.get("oauth2-proxy-init");
+
+        assertThat(oauth2Proxy).as("oauth2-proxy must always start").doesNotContainKey("profiles");
+        assertThat(oauth2ProxyInit).as("oauth2-proxy-init must always start").doesNotContainKey("profiles");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void traefik_declaresItsDashboardPortSoVaierCanOfferItForPublishing() throws Exception {
+        // Traefik runs its API/dashboard on :8080 (--api.insecure=true), and the catalogue has always
+        // meant to offer exactly that port. But the upstream image only EXPOSEs 80 and 443, and Vaier
+        // discovers publishable services from a container's exposed ports — so the one container of
+        // Vaier's own stack worth publishing never appeared. `expose` is metadata only: it publishes
+        // nothing to the host and changes no reachability, it just tells Vaier the port is there.
+        Map<String, Object> compose = (Map<String, Object>) new Yaml()
+            .load(Files.readString(Path.of("docker-compose.yml")));
+        Map<String, Object> services = (Map<String, Object>) compose.get("services");
+        Map<String, Object> traefik = (Map<String, Object>) services.get("traefik");
+
+        List<Object> exposed = (List<Object>) traefik.get("expose");
+        assertThat(exposed).as("Traefik must declare its dashboard port").isNotNull();
+        assertThat(exposed.stream().map(Object::toString).toList()).contains("8080");
+
+        List<Object> published = (List<Object>) traefik.get("ports");
+        assertThat(published.stream().map(Object::toString).toList())
+            .as("the dashboard must stay unpublished to the host — it is reached through Traefik itself")
+            .noneMatch(p -> p.contains("8080"));
+    }
+
+    // --- #305 follow-up: Dex OIDC broker federates Google + GitHub behind oauth2-proxy ---
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void dex_isMandatoryVersionPinnedInfrastructure_onPort5556() throws Exception {
+        // Dex is the identity broker behind oauth2-proxy (federates Google + GitHub). Like
+        // oauth2-proxy it is the sole auth path, so it is mandatory infrastructure (no profile),
+        // version-pinned (no floating :latest), and Traefik routes to it on Dex's HTTP port 5556.
+        Map<String, Object> compose = (Map<String, Object>) new Yaml()
+            .load(Files.readString(Path.of("docker-compose.yml")));
+        Map<String, Object> services = (Map<String, Object>) compose.get("services");
+        Map<String, Object> dex = (Map<String, Object>) services.get("dex");
+
+        assertThat(dex).as("dex service must exist").isNotNull();
+        assertThat((String) dex.get("image"))
+            .as("dex image must be version-pinned").contains("dexidp/dex:v2.45.1");
+        assertThat(dex).as("dex must always start — no profile gate").doesNotContainKey("profiles");
+
+        List<String> labels = (List<String>) dex.get("labels");
+        Map<String, String> byKey = new LinkedHashMap<>();
+        for (String label : labels) {
+            int eq = label.indexOf('=');
+            if (eq > 0) {
+                byKey.put(label.substring(0, eq), label.substring(eq + 1));
+            }
+        }
+        assertThat(byKey.get("traefik.http.services.dex.loadbalancer.server.port"))
+            .as("Traefik must route to Dex on its HTTP port 5556").isEqualTo("5556");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void dexInit_isMandatoryInfrastructure_notBehindAProfile() throws Exception {
+        // dex-init renders Dex's config (mirrors oauth2-proxy-init). It must always run so Dex has
+        // a config on every start — no profile gate.
+        Map<String, Object> compose = (Map<String, Object>) new Yaml()
+            .load(Files.readString(Path.of("docker-compose.yml")));
+        Map<String, Object> services = (Map<String, Object>) compose.get("services");
+        Map<String, Object> dexInit = (Map<String, Object>) services.get("dex-init");
+
+        assertThat(dexInit).as("dex-init service must exist").isNotNull();
+        assertThat(dexInit).as("dex-init must always run — no profile gate").doesNotContainKey("profiles");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void oauth2ProxyAlphaRender_pointsAtTheDexIssuer_notGoogleDirect() throws Exception {
+        // oauth2-proxy no longer talks to Google directly — it federates through Dex via a generic
+        // OIDC provider. The rendered alpha.yaml lives in the gitignored runtime dir, so the
+        // committed source of truth is the heredoc oauth2-proxy-init renders it from.
+        Map<String, Object> compose = (Map<String, Object>) new Yaml()
+            .load(Files.readString(Path.of("docker-compose.yml")));
+        Map<String, Object> services = (Map<String, Object>) compose.get("services");
+        Map<String, Object> init = (Map<String, Object>) services.get("oauth2-proxy-init");
+        String render = String.join("\n", (List<String>) init.get("command"));
+
+        assertThat(render).as("provider must be generic oidc, brokered by Dex").contains("provider: oidc");
+        assertThat(render).as("issuer must be Dex").contains("issuerURL: https://dex.$${VAIER_DOMAIN}");
+        assertThat(render).as("must no longer talk to Google directly").doesNotContain("provider: google");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void oauth2ProxyRender_allowListsConnectorIdSoTheSelectorJumpsStraightToTheProvider() throws Exception {
+        // The sign-in buttons pass connector_id=google|github. oauth2-proxy only forwards a
+        // user-supplied login param when it matches an `allow` rule — without it, Dex would show its
+        // own second chooser instead of jumping straight to the picked provider. Guard the allow-list.
+        Map<String, Object> compose = (Map<String, Object>) new Yaml()
+            .load(Files.readString(Path.of("docker-compose.yml")));
+        Map<String, Object> services = (Map<String, Object>) compose.get("services");
+        Map<String, Object> init = (Map<String, Object>) services.get("oauth2-proxy-init");
+        String render = String.join("\n", (List<String>) init.get("command"));
+
+        assertThat(render).as("connector_id must be an allow-listed login param")
+            .contains("name: connector_id, allow:");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void dexRender_inlinesAllSecrets_becauseDexHasNoFileBasedSecretOption() throws Exception {
+        // Dex honours clientSecretFile on only a handful of connectors — NOT the google/github/oidc
+        // ones — and staticClients have no file option at all. Referencing a file silently yields an
+        // empty secret ("client_secret is missing"). So all three secrets render inline into the
+        // 0600, dex-owned, gitignored config.yaml. Guard against a regression back to file refs.
+        Map<String, Object> compose = (Map<String, Object>) new Yaml()
+            .load(Files.readString(Path.of("docker-compose.yml")));
+        Map<String, Object> services = (Map<String, Object>) compose.get("services");
+        Map<String, Object> dexInit = (Map<String, Object>) services.get("dex-init");
+        String render = String.join("\n", (List<String>) dexInit.get("command"));
+
+        assertThat(render).as("static client secret inlined").contains("secret: $${VAIER_DEX_CLIENT_SECRET}");
+        assertThat(render).as("google connector secret inlined").contains("clientSecret: $${VAIER_OIDC_GOOGLE_CLIENT_SECRET}");
+        assertThat(render).as("github connector secret inlined").contains("clientSecret: $${VAIER_OIDC_GITHUB_CLIENT_SECRET}");
+        assertThat(render).as("Dex connectors/clients cannot read a secret from a file")
+            .doesNotContain("clientSecretFile").doesNotContain("secretFile");
+    }
+
+    // --- #332: each identity provider is independently optional, not both-mandatory ---
+
+    private record DexInitResult(int exitCode, String stdout, String stderr) {}
+
+    @SuppressWarnings("unchecked")
+    private String dexInitScript() throws Exception {
+        Map<String, Object> compose = (Map<String, Object>) new Yaml()
+            .load(Files.readString(Path.of("docker-compose.yml")));
+        Map<String, Object> services = (Map<String, Object>) compose.get("services");
+        Map<String, Object> dexInit = (Map<String, Object>) services.get("dex-init");
+        List<String> command = (List<String>) dexInit.get("command");
+        // command is ["sh", "-c", "<script>"] — the script itself is the last element.
+        return command.get(command.size() - 1);
+    }
+
+    // Runs the ACTUAL rendered dex-init script under sh, so these tests pin real shell behaviour
+    // rather than a regex over the YAML. Two test-only substitutions make that practical without
+    // requiring root in the test JVM: /dex/config is redirected to a temp dir (the real path is
+    // root-owned), and `chown` is stubbed to a no-op via a PATH-prepended shim (unprivileged users
+    // cannot chown to an arbitrary uid). Neither substitution touches the script's own logic.
+    private DexInitResult runDexInit(Path tempDir, Map<String, String> providerEnv) throws Exception {
+        // docker-compose itself collapses the $${...} escaping to a single $ before the shell ever
+        // sees the command — we bypass compose entirely here, so that collapse has to happen in the
+        // test too, or the shell reads a literal "$$" as its own PID special parameter.
+        String script = dexInitScript()
+            .replace("$$", "$")
+            .replace("/dex/config", tempDir.toString());
+
+        Path stubBin = Files.createDirectories(tempDir.resolve("stub-bin"));
+        Path chownStub = stubBin.resolve("chown");
+        Files.writeString(chownStub, "#!/bin/sh\nexit 0\n");
+        chownStub.toFile().setExecutable(true);
+
+        ProcessBuilder builder = new ProcessBuilder("sh", "-c", script);
+        Map<String, String> env = builder.environment();
+        env.put("PATH", stubBin + File.pathSeparator + env.get("PATH"));
+        env.put("VAIER_DOMAIN", "example.com");
+        env.put("VAIER_DEX_CLIENT_SECRET", providerEnv.getOrDefault("VAIER_DEX_CLIENT_SECRET", "dex-shared-secret"));
+        env.put("VAIER_OIDC_GOOGLE_CLIENT_ID", providerEnv.getOrDefault("VAIER_OIDC_GOOGLE_CLIENT_ID", ""));
+        env.put("VAIER_OIDC_GOOGLE_CLIENT_SECRET", providerEnv.getOrDefault("VAIER_OIDC_GOOGLE_CLIENT_SECRET", ""));
+        env.put("VAIER_OIDC_GITHUB_CLIENT_ID", providerEnv.getOrDefault("VAIER_OIDC_GITHUB_CLIENT_ID", ""));
+        env.put("VAIER_OIDC_GITHUB_CLIENT_SECRET", providerEnv.getOrDefault("VAIER_OIDC_GITHUB_CLIENT_SECRET", ""));
+
+        Process process = builder.start();
+        boolean finished = process.waitFor(10, TimeUnit.SECONDS);
+        if (!finished) {
+            process.destroyForcibly();
+            throw new IllegalStateException("dex-init script did not finish within 10s");
+        }
+        String stdout = new String(process.getInputStream().readAllBytes());
+        String stderr = new String(process.getErrorStream().readAllBytes());
+        return new DexInitResult(process.exitValue(), stdout, stderr);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void dexInit_emitsOnlyTheGoogleConnector_whenOnlyGoogleCredentialsAreSet(@TempDir Path tempDir) throws Exception {
+        DexInitResult result = runDexInit(tempDir, Map.of(
+            "VAIER_OIDC_GOOGLE_CLIENT_ID", "google-id",
+            "VAIER_OIDC_GOOGLE_CLIENT_SECRET", "google-secret"));
+
+        assertThat(result.exitCode()).as("stderr: %s", result.stderr()).isEqualTo(0);
+        String rendered = Files.readString(tempDir.resolve("config.yaml"));
+        Map<String, Object> configYaml = (Map<String, Object>) new Yaml().load(rendered);
+        List<Map<String, Object>> connectors = (List<Map<String, Object>>) configYaml.get("connectors");
+
+        assertThat(connectors).hasSize(1);
+        assertThat(connectors.get(0).get("type")).isEqualTo("google");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void dexInit_emitsOnlyTheGithubConnector_whenOnlyGithubCredentialsAreSet(@TempDir Path tempDir) throws Exception {
+        DexInitResult result = runDexInit(tempDir, Map.of(
+            "VAIER_OIDC_GITHUB_CLIENT_ID", "github-id",
+            "VAIER_OIDC_GITHUB_CLIENT_SECRET", "github-secret"));
+
+        assertThat(result.exitCode()).as("stderr: %s", result.stderr()).isEqualTo(0);
+        String rendered = Files.readString(tempDir.resolve("config.yaml"));
+        Map<String, Object> configYaml = (Map<String, Object>) new Yaml().load(rendered);
+        List<Map<String, Object>> connectors = (List<Map<String, Object>>) configYaml.get("connectors");
+
+        assertThat(connectors).hasSize(1);
+        assertThat(connectors.get(0).get("type")).isEqualTo("github");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void dexInit_emitsBothConnectors_whenBothProvidersAreSet(@TempDir Path tempDir) throws Exception {
+        DexInitResult result = runDexInit(tempDir, Map.of(
+            "VAIER_OIDC_GOOGLE_CLIENT_ID", "google-id",
+            "VAIER_OIDC_GOOGLE_CLIENT_SECRET", "google-secret",
+            "VAIER_OIDC_GITHUB_CLIENT_ID", "github-id",
+            "VAIER_OIDC_GITHUB_CLIENT_SECRET", "github-secret"));
+
+        assertThat(result.exitCode()).as("stderr: %s", result.stderr()).isEqualTo(0);
+        String rendered = Files.readString(tempDir.resolve("config.yaml"));
+        Map<String, Object> configYaml = (Map<String, Object>) new Yaml().load(rendered);
+        List<Map<String, Object>> connectors = (List<Map<String, Object>>) configYaml.get("connectors");
+
+        assertThat(connectors).hasSize(2);
+        assertThat(connectors.stream().map(c -> c.get("type"))).containsExactlyInAnyOrder("google", "github");
+    }
+
+    @Test
+    void dexInit_failsFastNamingTheMissingVariables_whenNoProviderIsConfigured(@TempDir Path tempDir) throws Exception {
+        DexInitResult result = runDexInit(tempDir, Map.of());
+
+        assertThat(result.exitCode()).as("must fail fast, never render two empty connectors").isNotEqualTo(0);
+        assertThat(result.stderr())
+            .contains("VAIER_OIDC_GOOGLE_CLIENT_ID")
+            .contains("VAIER_OIDC_GOOGLE_CLIENT_SECRET")
+            .contains("VAIER_OIDC_GITHUB_CLIENT_ID")
+            .contains("VAIER_OIDC_GITHUB_CLIENT_SECRET");
+        assertThat(Files.exists(tempDir.resolve("config.yaml")))
+            .as("must never write a config with two empty connectors").isFalse();
+    }
+
+    @Test
+    void dexInit_failsFast_whenDexClientSecretIsBlank(@TempDir Path tempDir) throws Exception {
+        Map<String, String> providerEnv = new LinkedHashMap<>();
+        providerEnv.put("VAIER_DEX_CLIENT_SECRET", "");
+        providerEnv.put("VAIER_OIDC_GOOGLE_CLIENT_ID", "google-id");
+        providerEnv.put("VAIER_OIDC_GOOGLE_CLIENT_SECRET", "google-secret");
+
+        DexInitResult result = runDexInit(tempDir, providerEnv);
+
+        assertThat(result.exitCode())
+            .as("a blank shared secret must fail fast, never crash-loop Dex behind the login wall")
+            .isNotEqualTo(0);
+        assertThat(result.stderr()).contains("VAIER_DEX_CLIENT_SECRET");
+        assertThat(Files.exists(tempDir.resolve("config.yaml"))).isFalse();
+    }
+
+    // --- #332 follow-up: the sign-in page must offer only the providers that are configured ---
+    //
+    // The connector list became per-provider optional, but the sign-in page kept both buttons
+    // hard-coded — so on an install with only Google credentials, "Continue with GitHub" was still
+    // offered and Dex answered the click with "Bad Request: Connector ID does not match a valid
+    // Connector". oauth2-proxy-init now renders the template the same way dex-init renders the
+    // connectors, from the same four variables, so the buttons and the connectors cannot diverge.
+
+    private record InitResult(int exitCode, String stdout, String stderr) {}
+
+    @SuppressWarnings("unchecked")
+    private String oauth2ProxyInitScript() throws Exception {
+        Map<String, Object> compose = (Map<String, Object>) new Yaml()
+            .load(Files.readString(Path.of("docker-compose.yml")));
+        Map<String, Object> services = (Map<String, Object>) compose.get("services");
+        Map<String, Object> init = (Map<String, Object>) services.get("oauth2-proxy-init");
+        List<String> command = (List<String>) init.get("command");
+        // command is ["sh", "-c", "<script>"] — the script itself is the last element.
+        return command.get(command.size() - 1);
+    }
+
+    // Runs the ACTUAL rendered oauth2-proxy-init script under sh, same substitutions as runDexInit:
+    // the runtime config dir is redirected to a temp dir and chown is stubbed out. The committed
+    // template mount is redirected at the repo's own oauth2/templates, so these tests render the
+    // real sign-in page.
+    private InitResult runOauth2ProxyInit(Path tempDir, Map<String, String> providerEnv) throws Exception {
+        String script = oauth2ProxyInitScript()
+            .replace("$$", "$")
+            .replace("/oauth2/config", tempDir.toString())
+            .replace("/templates-src", Path.of("oauth2/templates").toAbsolutePath().toString());
+
+        Path stubBin = Files.createDirectories(tempDir.resolve("stub-bin"));
+        Path chownStub = stubBin.resolve("chown");
+        Files.writeString(chownStub, "#!/bin/sh\nexit 0\n");
+        chownStub.toFile().setExecutable(true);
+
+        ProcessBuilder builder = new ProcessBuilder("sh", "-c", script);
+        Map<String, String> env = builder.environment();
+        env.put("PATH", stubBin + File.pathSeparator + env.get("PATH"));
+        env.put("VAIER_DOMAIN", "example.com");
+        env.put("VAIER_DEX_CLIENT_SECRET", "dex-shared-secret");
+        env.put("VAIER_OIDC_GOOGLE_CLIENT_ID", providerEnv.getOrDefault("VAIER_OIDC_GOOGLE_CLIENT_ID", ""));
+        env.put("VAIER_OIDC_GOOGLE_CLIENT_SECRET", providerEnv.getOrDefault("VAIER_OIDC_GOOGLE_CLIENT_SECRET", ""));
+        env.put("VAIER_OIDC_GITHUB_CLIENT_ID", providerEnv.getOrDefault("VAIER_OIDC_GITHUB_CLIENT_ID", ""));
+        env.put("VAIER_OIDC_GITHUB_CLIENT_SECRET", providerEnv.getOrDefault("VAIER_OIDC_GITHUB_CLIENT_SECRET", ""));
+
+        Process process = builder.start();
+        boolean finished = process.waitFor(10, TimeUnit.SECONDS);
+        if (!finished) {
+            process.destroyForcibly();
+            throw new IllegalStateException("oauth2-proxy-init script did not finish within 10s");
+        }
+        String stdout = new String(process.getInputStream().readAllBytes());
+        String stderr = new String(process.getErrorStream().readAllBytes());
+        return new InitResult(process.exitValue(), stdout, stderr);
+    }
+
+    private static final Map<String, String> GOOGLE_ONLY = Map.of(
+        "VAIER_OIDC_GOOGLE_CLIENT_ID", "google-id",
+        "VAIER_OIDC_GOOGLE_CLIENT_SECRET", "google-secret");
+
+    private static final Map<String, String> GITHUB_ONLY = Map.of(
+        "VAIER_OIDC_GITHUB_CLIENT_ID", "github-id",
+        "VAIER_OIDC_GITHUB_CLIENT_SECRET", "github-secret");
+
+    private static final Map<String, String> BOTH_PROVIDERS = Map.of(
+        "VAIER_OIDC_GOOGLE_CLIENT_ID", "google-id",
+        "VAIER_OIDC_GOOGLE_CLIENT_SECRET", "google-secret",
+        "VAIER_OIDC_GITHUB_CLIENT_ID", "github-id",
+        "VAIER_OIDC_GITHUB_CLIENT_SECRET", "github-secret");
+
+    @Test
+    void signInPage_offersOnlyGoogle_whenOnlyGoogleCredentialsAreSet(@TempDir Path tempDir) throws Exception {
+        InitResult result = runOauth2ProxyInit(tempDir, GOOGLE_ONLY);
+
+        assertThat(result.exitCode()).as("stderr: %s", result.stderr()).isEqualTo(0);
+        String page = Files.readString(tempDir.resolve("templates/sign_in.html"));
+
+        assertThat(page).contains("value=\"google\"").contains("Continue with Google");
+        assertThat(page).as("a button for an unconfigured provider dead-ends in a Dex Bad Request")
+            .doesNotContain("value=\"github\"").doesNotContain("Continue with GitHub");
+    }
+
+    @Test
+    void signInPage_offersOnlyGithub_whenOnlyGithubCredentialsAreSet(@TempDir Path tempDir) throws Exception {
+        InitResult result = runOauth2ProxyInit(tempDir, GITHUB_ONLY);
+
+        assertThat(result.exitCode()).as("stderr: %s", result.stderr()).isEqualTo(0);
+        String page = Files.readString(tempDir.resolve("templates/sign_in.html"));
+
+        assertThat(page).contains("value=\"github\"").contains("Continue with GitHub");
+        assertThat(page).doesNotContain("value=\"google\"").doesNotContain("Continue with Google");
+        // GitHub is styled as the secondary choice next to Google. Left alone as the only way in,
+        // it must not render muted — the lone button is the primary action.
+        assertThat(page).as("the only remaining provider is the primary action")
+            .doesNotContain("class=\"btn btn-secondary\"");
+    }
+
+    @Test
+    void signInPage_offersBothProviders_whenBothAreConfigured(@TempDir Path tempDir) throws Exception {
+        InitResult result = runOauth2ProxyInit(tempDir, BOTH_PROVIDERS);
+
+        assertThat(result.exitCode()).as("stderr: %s", result.stderr()).isEqualTo(0);
+        String page = Files.readString(tempDir.resolve("templates/sign_in.html"));
+
+        assertThat(page).contains("Continue with Google").contains("Continue with GitHub");
+        assertThat(page).as("two choices keep their primary/secondary hierarchy")
+            .contains("class=\"btn btn-secondary\"");
+    }
+
+    @Test
+    void signInPage_keepsTheErrorTemplate_soBothOverridesStayInOneDir(@TempDir Path tempDir) throws Exception {
+        // oauth2-proxy takes a single --custom-templates-dir. Rendering sign_in.html into it means
+        // error.html has to travel along, or the branded error page silently reverts to the default.
+        InitResult result = runOauth2ProxyInit(tempDir, BOTH_PROVIDERS);
+
+        assertThat(result.exitCode()).as("stderr: %s", result.stderr()).isEqualTo(0);
+        assertThat(Files.readString(tempDir.resolve("templates/error.html")))
+            .isEqualTo(Files.readString(Path.of("oauth2/templates/error.html")));
+    }
+
+    @Test
+    void loginParamAllowList_matchesTheConfiguredProviders(@TempDir Path tempDir) throws Exception {
+        // A connector_id oauth2-proxy forwards for a provider Dex has no connector for is the same
+        // Bad Request by another route (a hand-crafted /oauth2/start URL), so the allow-list is
+        // rendered from the same credentials as the buttons.
+        InitResult googleOnly = runOauth2ProxyInit(tempDir, GOOGLE_ONLY);
+        assertThat(googleOnly.exitCode()).as("stderr: %s", googleOnly.stderr()).isEqualTo(0);
+        String alpha = Files.readString(tempDir.resolve("alpha.yaml"));
+
+        assertThat(alpha).contains("name: connector_id, allow: [{value: google}]");
+    }
+
+    @Test
+    void loginParamAllowList_carriesBothProviders_whenBothAreConfigured(@TempDir Path tempDir) throws Exception {
+        InitResult both = runOauth2ProxyInit(tempDir, BOTH_PROVIDERS);
+        assertThat(both.exitCode()).as("stderr: %s", both.stderr()).isEqualTo(0);
+        String alpha = Files.readString(tempDir.resolve("alpha.yaml"));
+
+        assertThat(alpha).contains("name: connector_id, allow: [{value: google}, {value: github}]");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void oauth2Proxy_readsItsTemplatesFromTheRenderedDir_notTheCommittedSource() throws Exception {
+        // The committed template still carries both buttons; only the rendered copy is trimmed to
+        // the configured providers. Pointing oauth2-proxy back at the source would restore the bug.
+        Map<String, Object> compose = (Map<String, Object>) new Yaml()
+            .load(Files.readString(Path.of("docker-compose.yml")));
+        Map<String, Object> services = (Map<String, Object>) compose.get("services");
+        Map<String, Object> proxy = (Map<String, Object>) services.get("oauth2-proxy");
+        List<String> command = (List<String>) proxy.get("command");
+
+        assertThat(command).contains("--custom-templates-dir=/oauth2/config/templates");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void oauth2ProxyRender_extractsFederatedClaimsLeavesSoTheProviderHeadersPopulate() throws Exception {
+        // oauth2-proxy only injects a claim into a header if it is first extracted into the session
+        // via additionalClaims, stored under the FULL dotted key; the injection then does a flat
+        // lookup of that same key. Without the two federated_claims leaves here, X-Auth-Request-
+        // Connector[-Uid] ship empty and the Users provider badge + photo never populate. The strings
+        // in additionalClaims must be byte-identical to the claimSource.claim values.
+        Map<String, Object> compose = (Map<String, Object>) new Yaml()
+            .load(Files.readString(Path.of("docker-compose.yml")));
+        Map<String, Object> services = (Map<String, Object>) compose.get("services");
+        Map<String, Object> init = (Map<String, Object>) services.get("oauth2-proxy-init");
+        String render = String.join("\n", (List<String>) init.get("command"));
+
+        assertThat(render).as("federated:id scope is the Dex-side prerequisite for federated_claims")
+            .contains("scope: openid email profile federated:id");
+        assertThat(render).as("both federated_claims leaves must be extracted for injection")
+            .contains("additionalClaims: [name, federated_claims.connector_id, federated_claims.user_id]");
+        assertThat(render).as("connector header injected from the connector_id leaf")
+            .contains("X-Auth-Request-Connector, values: [{claimSource: {claim: federated_claims.connector_id}}]");
+        assertThat(render).as("connector uid header injected from the user_id leaf")
+            .contains("X-Auth-Request-Connector-Uid, values: [{claimSource: {claim: federated_claims.user_id}}]");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void httpEntrypointRedirectsToHttps_soBareHostnameVisitsDoNotHitABare404() throws Exception {
+        // Every Vaier router is bound to the `websecure` (:443) entrypoint only. A browser given a
+        // schemeless hostname (`vaier.example.com`) requests `http://` on :80 — which matches no
+        // router and gets Traefik's default "404 page not found". The `web` entrypoint must globally
+        // redirect to `websecure`. This coexists with the Let's Encrypt HTTP-01 challenge that also
+        // lives on `web`: Traefik serves the ACME challenge at higher priority than the redirect.
+        Map<String, Object> compose = (Map<String, Object>) new Yaml()
+            .load(Files.readString(Path.of("docker-compose.yml")));
+        Map<String, Object> services = (Map<String, Object>) compose.get("services");
+        Map<String, Object> traefik = (Map<String, Object>) services.get("traefik");
+        List<String> command = (List<String>) traefik.get("command");
+
+        assertThat(command)
+            .as("http://<host> must 308 to https, not fall through to Traefik's default 404")
+            .contains("--entrypoints.web.http.redirections.entrypoint.to=websecure")
+            .contains("--entrypoints.web.http.redirections.entrypoint.scheme=https");
+
+        // The ACME HTTP-01 challenge must still run on `web` — the redirect doesn't replace it.
+        assertThat(command).contains("--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void wireguardMasquerade_usesInterfaceNameAgnosticRuleForVpnEgress() throws Exception {
+        // The linuxserver/wireguard wg0.conf PostUp masquerades only on `-o eth+`. On a
+        // Vaier server whose primary NIC is not named eth* (e.g. AWS EC2's ens5, or when
+        // wireguard runs with host networking) that rule is a silent no-op, so traffic
+        // from a LAN behind a server peer that egresses a non-WG interface keeps its
+        // original source and the destination has no return route — it drops. #248.
+        //
+        // The wireguard-masquerade sidecar must therefore install a name-agnostic rule
+        // that masquerades anything leaving a non-wg0 interface (`! -o wg0`), regardless
+        // of the kernel's name for that interface.
+        Map<String, Object> compose = (Map<String, Object>) new Yaml()
+            .load(Files.readString(Path.of("docker-compose.yml")));
+        Map<String, Object> services = (Map<String, Object>) compose.get("services");
+        Map<String, Object> masquerade = (Map<String, Object>) services.get("wireguard-masquerade");
+        List<String> entrypoint = (List<String>) masquerade.get("entrypoint");
+        String script = String.join("\n", entrypoint);
+
+        assertThat(script)
+            .as("masquerade sidecar must NAT VPN egress by NOT matching wg0, not by guessing the NIC name")
+            .contains("! -o wg0 -j MASQUERADE");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void traefikEntrypoint_waitsForInfraDnsToResolvePublicly_beforeExecSoTheFirstAcmeAttemptDoesNotBurnLeQuota() throws Exception {
+        // Fresh-install race. Vaier no longer creates any DNS record (#331) — the operator's one
+        // *.<domain> wildcard answers for vaier/oauth2/dex from the moment it exists, so this wait is
+        // normally satisfied instantly. It stays as a fail-open net for the install where the wildcard
+        // is missing or has not propagated: Traefik, started by the same `up`, would otherwise ask Let's
+        // Encrypt for certs before those names resolve. LE's validator then gets NXDOMAIN, and Traefik's
+        // tight retry burst trips LE's "5 failed authorizations per hostname per hour" limit: issuance
+        // locks out for an hour and the stack sits on Traefik's self-signed default cert (browsers show
+        // ERR_CERT_AUTHORITY_INVALID).
+        //
+        // The fix lives in Traefik's OWN entrypoint: it holds until the three infra names resolve on a
+        // PUBLIC resolver (the class LE queries — not the container's split-horizon/VPC view) BEFORE it
+        // execs traefik, and thus before any ACME. It deliberately is NOT a separate gate service that
+        // traefik depends_on: `vaier` depends_on `traefik: service_started`, which fires the instant this
+        // container starts — so Vaier creates the records WHILE the entrypoint waits here. A completion-
+        // gated sidecar would instead deadlock (vaier waits for traefik waits for the gate waits for the
+        // records vaier never got to create). Fail-open on a timeout so broken DNS never leaves the box
+        // without a reverse proxy forever.
+        Map<String, Object> compose = (Map<String, Object>) new Yaml()
+            .load(Files.readString(Path.of("docker-compose.yml")));
+        Map<String, Object> services = (Map<String, Object>) compose.get("services");
+        Map<String, Object> traefik = (Map<String, Object>) services.get("traefik");
+
+        List<String> entrypoint = (List<String>) traefik.get("entrypoint");
+        String script = String.join("\n", entrypoint);
+
+        // Waits on all three infra hostnames, built from the base domain...
+        assertThat(script)
+            .as("entrypoint must wait on the three infra hostnames")
+            .contains("vaier oauth2 dex");
+        // ...against a PUBLIC resolver, so the wait matches Let's Encrypt's view, not the split-horizon VPC one.
+        assertThat(script)
+            .as("must query a public resolver, not the container's local/VPC resolver LE never sees")
+            .contains("1.1.1.1");
+        // ...and the wait must run BEFORE `exec traefik` — otherwise ACME still fires against dead DNS.
+        assertThat(script.indexOf("1.1.1.1"))
+            .as("the DNS wait must precede `exec traefik`, or Traefik asks ACME before the wait")
+            .isGreaterThanOrEqualTo(0)
+            .isLessThan(script.indexOf("exec traefik"));
+        // ...and fail-open so a genuinely broken DNS never leaves the box permanently proxy-less.
+        assertThat(script.toLowerCase())
+            .as("the wait must fail-open on a timeout")
+            .contains("timed out");
+
+        // The entrypoint needs the base domain to build the hostnames it waits on.
+        Map<String, Object> env = (Map<String, Object>) traefik.get("environment");
+        assertThat(env)
+            .as("traefik needs VAIER_DOMAIN in its environment to build the infra hostnames")
+            .containsKey("VAIER_DOMAIN");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void traefikCarriesInternalAliasesForInfraHostnames_soServiceToServiceCallsSkipPublicDnsAndItsNegativeCache() throws Exception {
+        // oauth2-proxy (and Vaier) run OIDC discovery against https://dex.<domain> BY ITS PUBLIC NAME — the
+        // issuer must match, so an internal http://dex:5556 shortcut is not an option. If the wildcard
+        // record is missing or still propagating, a container that resolves dex.<domain> too early gets
+        // NXDOMAIN and poisons its resolver's NEGATIVE cache (a zone's SOA negative TTL is commonly
+        // ~15 min) — which crash-looped oauth2-proxy on "no such host" long after the name resolved.
+        // Aliasing each infra
+        // hostname onto Traefik makes Docker's embedded DNS answer them from its own registry (straight to
+        // Traefik) before ever forwarding externally: no public DNS, no negative cache. Traefik then
+        // terminates TLS with the real cert and routes on. This is the internal-resolution complement to the
+        // entrypoint's public-DNS ACME wait.
+        Map<String, Object> compose = (Map<String, Object>) new Yaml()
+            .load(Files.readString(Path.of("docker-compose.yml")));
+        Map<String, Object> services = (Map<String, Object>) compose.get("services");
+        Map<String, Object> traefik = (Map<String, Object>) services.get("traefik");
+
+        Object networks = traefik.get("networks");
+        assertThat(networks)
+            .as("traefik must join vaier-network in long form so it can carry aliases")
+            .isInstanceOf(Map.class);
+        Map<String, Object> vaierNet = (Map<String, Object>) ((Map<String, Object>) networks).get("vaier-network");
+        assertThat(vaierNet).as("traefik must still be on vaier-network").isNotNull();
+
+        List<String> aliases = (List<String>) vaierNet.get("aliases");
+        assertThat(aliases)
+            .as("the three infra hostnames must resolve to Traefik from inside the stack")
+            .contains("vaier.${VAIER_DOMAIN}", "oauth2.${VAIER_DOMAIN}", "dex.${VAIER_DOMAIN}");
+    }
+
+    // --- #258 edge hardening: security headers + TLS options -------------------------------------
+    //
+    // `traefik/` is gitignored in its entirety, so the edge's security policy cannot be a committed
+    // file. It is RENDERED by Traefik's own entrypoint before `exec traefik`. These tests run that
+    // real entrypoint under `sh` (stubbing only the binaries a test JVM cannot have — getent, ip,
+    // nslookup, traefik) and assert on the file it actually produces, rather than regexing YAML.
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> composeServices() throws Exception {
+        Map<String, Object> compose = (Map<String, Object>) new Yaml()
+            .load(Files.readString(Path.of("docker-compose.yml")));
+        return (Map<String, Object>) compose.get("services");
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> traefikCommand() throws Exception {
+        Map<String, Object> traefik = (Map<String, Object>) composeServices().get("traefik");
+        return (List<String>) traefik.get("command");
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, String> labelsOf(String serviceName) throws Exception {
+        Map<String, Object> service = (Map<String, Object>) composeServices().get(serviceName);
+        List<String> labels = (List<String>) service.get("labels");
+        Map<String, String> byKey = new LinkedHashMap<>();
+        for (String label : labels) {
+            int eq = label.indexOf('=');
+            if (eq > 0) {
+                byKey.put(label.substring(0, eq), label.substring(eq + 1));
+            }
+        }
+        return byKey;
+    }
+
+    /** The lines of {@code text} that are not comments — what a parser actually sees. */
+    private String withoutComments(String text) {
+        return text.lines()
+            .filter(line -> !line.trim().startsWith("#"))
+            .collect(Collectors.joining("\n"));
+    }
+
+    /**
+     * Runs the real traefik entrypoint under {@code sh} and returns the dynamic-config directory it
+     * wrote into. {@code VAIER_DOMAIN} is left empty so the ACME DNS wait short-circuits; the
+     * container-only binaries are stubbed on PATH exactly the way {@link #runDexInit} stubs chown.
+     */
+    @SuppressWarnings("unchecked")
+    private Path runTraefikEntrypoint(Path tempDir) throws Exception {
+        Map<String, Object> traefik = (Map<String, Object>) composeServices().get("traefik");
+        List<String> entrypoint = (List<String>) traefik.get("entrypoint");
+        Path configDir = Files.createDirectories(tempDir.resolve("traefik-config"));
+
+        // docker-compose collapses $${...} to a single $ before the shell sees it; we bypass compose
+        // here, so the collapse has to happen in the test too.
+        String script = entrypoint.get(entrypoint.size() - 1)
+            .replace("$$", "$")
+            .replace("/traefik/config", configDir.toString());
+
+        Path stubBin = Files.createDirectories(tempDir.resolve("stub-bin"));
+        for (String binary : List.of("getent", "ip", "nslookup", "traefik")) {
+            Path stub = stubBin.resolve(binary);
+            Files.writeString(stub, "#!/bin/sh\nexit 0\n");
+            stub.toFile().setExecutable(true);
+        }
+
+        ProcessBuilder builder = new ProcessBuilder("sh", "-c", script);
+        Map<String, String> env = builder.environment();
+        env.put("PATH", stubBin + File.pathSeparator + env.get("PATH"));
+        env.put("VAIER_DOMAIN", "");
+
+        Process process = builder.start();
+        boolean finished = process.waitFor(10, TimeUnit.SECONDS);
+        if (!finished) {
+            process.destroyForcibly();
+            throw new IllegalStateException("traefik entrypoint did not finish within 10s");
+        }
+        String stderr = new String(process.getErrorStream().readAllBytes());
+        assertThat(process.exitValue()).as("traefik entrypoint failed. stderr: %s", stderr).isEqualTo(0);
+        return configDir;
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void traefikEntrypoint_rendersTheSafeSecurityHeadersMiddlewareBeforeTraefikStarts(@TempDir Path tempDir)
+            throws Exception {
+        // nosniff and a referrer policy are the two headers that are safe on a THIRD-PARTY app Vaier
+        // did not write: nosniff cannot break a correctly-typed response, and
+        // strict-origin-when-cross-origin is already the modern browser default, so overwriting an
+        // app's own value can never break a flow that depends on the referrer.
+        Path configDir = runTraefikEntrypoint(tempDir);
+        Path securityFile = configDir.resolve("security.yml");
+
+        assertThat(Files.exists(securityFile))
+            .as("the edge policy must exist before traefik parses a router — traefik/ is gitignored, "
+                + "so it has to be rendered at boot")
+            .isTrue();
+
+        Map<String, Object> rendered = (Map<String, Object>) new Yaml().load(Files.readString(securityFile));
+        Map<String, Object> middlewares =
+            (Map<String, Object>) ((Map<String, Object>) rendered.get("http")).get("middlewares");
+        Map<String, Object> headers =
+            (Map<String, Object>) ((Map<String, Object>) middlewares.get("vaier-security-headers")).get("headers");
+
+        assertThat(headers.get("contentTypeNosniff")).isEqualTo(true);
+        assertThat(headers.get("referrerPolicy")).isEqualTo("strict-origin-when-cross-origin");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void safeHeaders_ridePerEntrypointSoEveryRouterCarriesThem_publishedServicesIncluded(@TempDir Path tempDir)
+            throws Exception {
+        // Applying the safe headers at the `websecure` ENTRYPOINT rather than per router is what makes
+        // "every router" true by construction: it covers the compose-label routers, every route
+        // TraefikReverseProxyAdapter generates, and any route added by hand later — with no backfill
+        // and without touching remote-apps.yml, so the adapter's middleware readers cannot regress.
+        assertThat(traefikCommand())
+            .as("the safe headers must be bound to the entrypoint, not to individual routers")
+            .contains("--entrypoints.websecure.http.middlewares=crowdsec-bouncer@file,vaier-security-headers@file");
+
+        // ...and the middleware it names has to exist, or Traefik disables every websecure router.
+        Path configDir = runTraefikEntrypoint(tempDir);
+        Map<String, Object> rendered = (Map<String, Object>) new Yaml()
+            .load(Files.readString(configDir.resolve("security.yml")));
+        assertThat((Map<String, Object>) ((Map<String, Object>) rendered.get("http")).get("middlewares"))
+            .as("the entrypoint reference must resolve in the file provider")
+            .containsKey("vaier-security-headers");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void crowdsecBouncer_ridesTheEntrypointFirst_soABlockDecisionIsRefusedBeforeAnythingElse(@TempDir Path tempDir)
+            throws Exception {
+        // #329 Slice 1: crowdsec-bouncer must come BEFORE vaier-security-headers (and, on Vaier's
+        // own routers, before the Social auth chain) in the entrypoint chain — a CrowdSec block
+        // decision is refused before Traefik does anything else with the request.
+        assertThat(traefikCommand())
+            .as("crowdsec-bouncer must be the first entry in the entrypoint's middleware chain")
+            .contains("--entrypoints.websecure.http.middlewares=crowdsec-bouncer@file,vaier-security-headers@file");
+
+        // ...and the middleware it names has to exist and point at the bouncer's forwardAuth
+        // endpoint, or Traefik disables every websecure router.
+        Path configDir = runTraefikEntrypoint(tempDir);
+        Map<String, Object> rendered = (Map<String, Object>) new Yaml()
+            .load(Files.readString(configDir.resolve("security.yml")));
+        Map<String, Object> middlewares =
+            (Map<String, Object>) ((Map<String, Object>) rendered.get("http")).get("middlewares");
+        Map<String, Object> forwardAuth =
+            (Map<String, Object>) ((Map<String, Object>) middlewares.get("crowdsec-bouncer")).get("forwardAuth");
+
+        assertThat(forwardAuth.get("address")).isEqualTo("http://crowdsec-bouncer:8080/api/v1/forwardAuth");
+        assertThat(forwardAuth.get("trustForwardHeader")).isEqualTo(true);
+    }
+
+    @Test
+    void frameProtection_neverRidesTheEntrypoint_soAPublishedThirdPartyAppIsUnaffected() throws Exception {
+        // A published app may legitimately embed, or be embedded by, another site. Vaier generates
+        // those routers, so a frame default would break them silently and at scale.
+        String entrypointChain = traefikCommand().stream()
+            .filter(arg -> arg.startsWith("--entrypoints.websecure.http.middlewares="))
+            .findFirst()
+            .orElse("");
+        assertThat(entrypointChain)
+            .as("frame protection must not be applied fleet-wide")
+            .doesNotContain("vaier-frame-guard");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void frameGuard_isSameOriginNotDeny_becauseTheExplorerFramesItsOwnPages(@TempDir Path tempDir) throws Exception {
+        // explorer-shell.js renders the not-yet-ported globals (Users, Concepts) in a same-origin
+        // iframe. X-Frame-Options: DENY would blank those panes, so the guard is SAMEORIGIN.
+        Path configDir = runTraefikEntrypoint(tempDir);
+        Map<String, Object> rendered = (Map<String, Object>) new Yaml()
+            .load(Files.readString(configDir.resolve("security.yml")));
+        Map<String, Object> middlewares =
+            (Map<String, Object>) ((Map<String, Object>) rendered.get("http")).get("middlewares");
+        Map<String, Object> headers =
+            (Map<String, Object>) ((Map<String, Object>) middlewares.get("vaier-frame-guard")).get("headers");
+
+        assertThat(headers.get("customFrameOptionsValue")).isEqualTo("SAMEORIGIN");
+        assertThat(headers.get("frameDeny"))
+            .as("DENY would break the Explorer's own bridged panes")
+            .isNotEqualTo(true);
+    }
+
+    @Test
+    void frameGuard_ridesEveryVaierOwnedRouter() throws Exception {
+        Map<String, String> vaierLabels = labelsOf("vaier");
+        for (String router : List.of("vaier", "vaier-public", "vaier-identity", "vaier-oauth2")) {
+            assertThat(vaierLabels.get("traefik.http.routers." + router + ".middlewares"))
+                .as("%s is one of Vaier's own surfaces and must carry frame protection", router)
+                .contains("vaier-frame-guard@file");
+        }
+        assertThat(labelsOf("oauth2-proxy").get("traefik.http.routers.oauth2-proxy.middlewares"))
+            .contains("vaier-frame-guard@file");
+        assertThat(labelsOf("dex").get("traefik.http.routers.dex.middlewares"))
+            .contains("vaier-frame-guard@file");
+        assertThat(labelsOf("vaier-offline").get("traefik.http.routers.vaier-offline.middlewares"))
+            .contains("vaier-frame-guard@file");
+    }
+
+    @Test
+    void frameGuard_isAppendedAfterTheAuthChain_soTheAdaptersMiddlewareReadersAreUnaffected() throws Exception {
+        // TraefikReverseProxyAdapter.extractAuthInfoFromMiddlewareNames returns the FIRST auth
+        // middleware on a router. The guard is not one of Vaier's auth middlewares and it is appended
+        // last, so what the console reports for its own routers is byte-identical to before.
+        Map<String, String> labels = labelsOf("vaier");
+        String consoleChain = labels.get("traefik.http.routers.vaier.middlewares");
+        assertThat(consoleChain).startsWith("oauth2-signin@file,oauth2-authn@file,vaier-authz@file,vaier-down");
+        assertThat(consoleChain.indexOf("vaier-frame-guard"))
+            .isGreaterThan(consoleChain.indexOf("vaier-authz@file"));
+
+        assertThat(AuthMode.isAuthMiddlewareName("vaier-frame-guard@file"))
+            .as("the guard must not read as an auth middleware, or a public route reports as gated")
+            .isFalse();
+        assertThat(AuthMode.isAuthMiddlewareName("vaier-security-headers@file"))
+            .isFalse();
+    }
+
+    @Test
+    void edgePolicy_setsNoContentSecurityPolicy_becauseTheApplicationOwnsIt(@TempDir Path tempDir) throws Exception {
+        // GET /machines/{id}/files/view serves every previewed file under its own tight, per-media-type
+        // CSP (ViewableFile.SANDBOXED_POLICY / PDF_POLICY). A CSP at the edge would either overwrite
+        // that one — silently weakening a security boundary — or stack with it, and a browser enforces
+        // the INTERSECTION of every CSP header it receives, which breaks file viewing outright.
+        String rendered = Files.readString(runTraefikEntrypoint(tempDir).resolve("security.yml"));
+
+        assertThat(rendered.toLowerCase())
+            .as("the edge must never set a CSP — the application owns it")
+            .doesNotContain("contentsecuritypolicy:")
+            .doesNotContain("content-security-policy:");
+        assertThat(rendered)
+            .as("a reader must find out WHY the CSP is absent without going digging")
+            .contains("Content-Security-Policy");
+    }
+
+    @Test
+    void edgePolicy_setsNoHsts_becauseItIsDeferredToItsOwnIssue(@TempDir Path tempDir) throws Exception {
+        // HSTS cannot be taken back once a browser has seen it, so it is a deliberate decision of its
+        // own (issue #342) rather than a side effect of this file — not even commented out.
+        String rendered = Files.readString(runTraefikEntrypoint(tempDir).resolve("security.yml"));
+
+        assertThat(withoutComments(rendered).toLowerCase())
+            .doesNotContain("stsseconds")
+            .doesNotContain("strict-transport-security")
+            .doesNotContain("includesubdomains")
+            .doesNotContain("preload");
+        assertThat(rendered)
+            .as("a reader must find the deferral, and where it is tracked, in the file itself")
+            .contains("#342");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void tlsOptions_defaultRaisesTheFloorToTls12AndPrunesWeakSuites(@TempDir Path tempDir) throws Exception {
+        // `default` is Traefik's implicit option set: every router that does not name one gets it, so
+        // this covers the compose-label routers AND every generated published-service router without
+        // touching a single router definition.
+        Map<String, Object> rendered = (Map<String, Object>) new Yaml()
+            .load(Files.readString(runTraefikEntrypoint(tempDir).resolve("security.yml")));
+        Map<String, Object> options =
+            (Map<String, Object>) ((Map<String, Object>) rendered.get("tls")).get("options");
+        Map<String, Object> defaults = (Map<String, Object>) options.get("default");
+
+        assertThat(defaults.get("minVersion")).isEqualTo("VersionTLS12");
+
+        List<String> suites = (List<String>) defaults.get("cipherSuites");
+        assertThat(suites).isNotEmpty();
+        assertThat(suites).allSatisfy(suite -> assertThat(suite)
+            .as("forward secrecy only — no static RSA key exchange")
+            .startsWith("TLS_ECDHE_"));
+        assertThat(suites).allSatisfy(suite -> assertThat(suite)
+            .as("AEAD only — CBC/RC4/3DES suites are the weak ones being pruned")
+            .matches(".*(_GCM_|CHACHA20_POLY1305).*"));
+        assertThat(suites).noneMatch(suite -> suite.contains("_CBC_")
+            || suite.contains("_RC4_")
+            || suite.contains("3DES"));
+    }
+
+    @Test
+    void tlsOptions_cannotInterfereWithAcme_becauseTheHttp01ChallengeIsServedOverPlainHttp() throws Exception {
+        List<String> command = traefikCommand();
+
+        assertThat(command)
+            .as("HTTP-01 stays on the plain `web` entrypoint, which terminates no TLS at all")
+            .contains("--certificatesresolvers.letsencrypt.acme.httpchallenge=true")
+            .contains("--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web");
+        assertThat(command)
+            .as("no TLS-ALPN challenge, so the pruned suites and TLS floor are not on the issuance path")
+            .noneMatch(arg -> arg.contains("tlschallenge"));
+        assertThat(command)
+            .as("the safe headers must not be bolted onto the entrypoint that serves the ACME challenge")
+            .noneMatch(arg -> arg.startsWith("--entrypoints.web.http.middlewares"));
+    }
+
+    @Test
+    void edgePolicy_isRewrittenOnEveryBoot_soAStaleOrDeletedFileSelfHeals(@TempDir Path tempDir) throws Exception {
+        Path configDir = runTraefikEntrypoint(tempDir);
+        Path securityFile = configDir.resolve("security.yml");
+        String first = Files.readString(securityFile);
+
+        Files.writeString(securityFile, "http: {}\n");
+        Path second = runTraefikEntrypoint(tempDir);
+
+        assertThat(Files.readString(second.resolve("security.yml")))
+            .as("the rendered policy is generated state, not operator state")
+            .isEqualTo(first);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void edgePolicy_neverLandsInTheFileVaierOwns() throws Exception {
+        // Vaier writes exactly one file into the watched directory, by atomic move. A second file is
+        // safe; writing INTO remote-apps.yml would be clobbered by the next publish.
+        String script = String.join("\n",
+            (List<String>) ((Map<String, Object>) composeServices().get("traefik")).get("entrypoint"));
+        assertThat(withoutComments(script))
+            .as("the edge policy is a second file; the one Vaier owns must never be a write target here")
+            .doesNotContain("remote-apps.yml");
+    }
+
+}

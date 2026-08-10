@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fjord pre-flight check. Run from the directory that holds docker-compose.yml.
+# Vaier pre-flight check. Run from the directory that holds docker-compose.yml.
 # Validates the host, the downloaded files, the .env contents, and DNS state.
 set -u
 
@@ -52,7 +52,7 @@ if [[ -f .env ]]; then
   set -a; . ./.env; set +a
   [[ -n "${VAIER_DOMAIN:-}" ]] && pass "VAIER_DOMAIN=$VAIER_DOMAIN" || fail "VAIER_DOMAIN is not set"
   [[ -n "${ACME_EMAIL:-}"  ]] && pass "ACME_EMAIL=$ACME_EMAIL"   || fail "ACME_EMAIL is not set"
-  info "DNS: Fjord never writes records. Create one — *.\$VAIER_DOMAIN A <this server's public IP> — before first boot"
+  info "DNS: Vaier never writes records. Create one — *.\$VAIER_DOMAIN A <this server's public IP> — before first boot"
   PERM=$(stat -c '%a' .env 2>/dev/null || stat -f '%A' .env 2>/dev/null || echo "?")
   [[ "$PERM" == "600" ]] && pass ".env perms 600" || warn ".env perms $PERM (README suggests 600)"
 else
@@ -91,7 +91,7 @@ if [[ -n "$TOKEN" ]]; then
     fi
   fi
 else
-  warn "IMDSv2 not reachable; Fjord cannot auto-detect public IP. Set VAIER_PUBLIC_IP in .env."
+  warn "IMDSv2 not reachable; Vaier cannot auto-detect public IP. Set VAIER_PUBLIC_IP in .env."
 fi
 
 section "Host port conflicts"
@@ -118,7 +118,7 @@ elif [[ -n "${VAIER_DOMAIN:-}" ]]; then
   else
     pass "${VAIER_DOMAIN} has NS records: $(echo "$NS" | tr '\n' ' ')"
   fi
-  # Probe the wildcard TWO labels deep, the same way Fjord does at boot. Fjord publishes
+  # Probe the wildcard TWO labels deep, the same way Vaier does at boot. Vaier publishes
   # machine-qualified names (<service>.<machine>.<domain>) and a wildcard matches by closest
   # encloser (RFC 4592): a one-label probe is answered even on a zone where every
   # machine-qualified service is dead. Both labels are random so no resolver can have them cached.

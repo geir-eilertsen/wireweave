@@ -1,0 +1,863 @@
+package net.vaier.application.service;
+
+import net.vaier.application.DeletePublishedServiceUseCase;
+import net.vaier.application.PublishedServicesCacheInvalidator;
+import net.vaier.domain.NotFoundException;
+import net.vaier.domain.ConflictException;
+import net.vaier.domain.ReverseProxyRoute;
+import net.vaier.domain.port.ForGettingLanServers.LanServerView;
+import net.vaier.domain.LanServer;
+import net.vaier.domain.MachineId;
+import net.vaier.domain.MachineType;
+import net.vaier.domain.port.ForGettingPeerConfigurations;
+import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
+import net.vaier.domain.port.ForPersistingLanServers;
+import net.vaier.domain.port.ForPersistingReverseProxyRoutes;
+import net.vaier.domain.port.ForResolvingServerLanCidr;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.util.List;
+import java.util.Optional;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+class LanServerServiceTest {
+
+    private static net.vaier.domain.MachineId mid(String name) {
+        return net.vaier.domain.TestMachineIds.of(name);
+    }
+
+    @Mock private ForPersistingLanServers forPersistingLanServers;
+    @Mock private net.vaier.domain.port.ForGettingLanServers forGettingLanServers;
+    @Mock private ForGettingPeerConfigurations forGettingPeerConfigurations;
+    @Mock private ForResolvingServerLanCidr forResolvingServerLanCidr;
+    @Mock private ForPersistingReverseProxyRoutes forPersistingReverseProxyRoutes;
+    @Mock private DeletePublishedServiceUseCase deletePublishedServiceUseCase;
+    @Mock private PublishedServicesCacheInvalidator publishedServicesCacheInvalidator;
+    @Mock private net.vaier.domain.port.ForPersistingHostCredentials forPersistingHostCredentials;
+    @Mock private net.vaier.domain.port.ForTrackingHostKeys forTrackingHostKeys;
+    @Mock private net.vaier.domain.port.ForGettingDiscoveredLanMachines forGettingDiscoveredLanMachines;
+    @Mock private net.vaier.domain.port.ForForgettingDiscoveredLanMachines forForgettingDiscoveredLanMachines;
+    @Mock private net.vaier.domain.port.ForVerifyingSshCredentials forVerifyingSshCredentials;
+
+    @InjectMocks private LanServerService service;
+
+    private static ReverseProxyRoute lanRoute(String name, String fqdn, String address, int port,
+                                              String pathPrefix) {
+        return new ReverseProxyRoute(name, fqdn, address, port, name + "-service", null, null, null,
+            null, null, false, true, "http", pathPrefix);
+    }
+
+    @BeforeEach
+    void setUp() {
+        // register()/getAll() resolve the server LAN CIDR; default it to "absent" so the relay-only
+        // tests behave as before. Tests exercising the server-LAN-CIDR path override it.
+        lenient().when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.empty());
+    }
+
+    private static PeerConfiguration relay(String name, String ip, String lanCidr) {
+        return new PeerConfiguration(name, ip, "", MachineType.UBUNTU_SERVER, lanCidr, null);
+    }
+
+    // --- register ---
+
+    @Test
+    void register_runsDockerTrue_lanAddressInsideRelayLanCidr_persists() {
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
+        ));
+
+        service.register("nas", "192.168.3.50", true, 2375);
+
+        ArgumentCaptor<LanServer> captor = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(captor.capture());
+        assertThat(captor.getValue()).usingRecursiveComparison().ignoringFields("machineId").isEqualTo(new LanServer("nas", "192.168.3.50", true, 2375));
+    }
+
+    @Test
+    void register_runsDockerFalse_lanAddressInsideRelayLanCidr_persists() {
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
+        ));
+
+        service.register("printer", "192.168.3.20", false, null);
+
+        ArgumentCaptor<LanServer> captor = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(captor.capture());
+        assertThat(captor.getValue()).usingRecursiveComparison().ignoringFields("machineId").isEqualTo(new LanServer("printer", "192.168.3.20", false, null));
+    }
+
+    @Test
+    void register_invalidatesPublishedServicesCacheSoLanServerNameResolvesAfresh() {
+        // #300: a route already pointing at this address resolves its lanServerName to null until a
+        // matching LAN server exists. Registering one changes that derived field, so the cached
+        // published-services view must be invalidated or the new machine card stays serviceless.
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
+        ));
+
+        service.register("nas", "192.168.3.50", true, 2375);
+
+        verify(publishedServicesCacheInvalidator).invalidatePublishedServicesCache();
+    }
+
+    // --- register with an optional SSH credential (manual add-by-address parity with adopt) ---
+
+    @Test
+    void register_withVerifiedCredential_registersMachineAndStoresCredentialUnderItsName() {
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
+        ));
+        when(forVerifyingSshCredentials.probe(any())).thenReturn("SHA256:abc");
+
+        var draft = new net.vaier.domain.SshCredentialDraft(
+            "root", net.vaier.domain.AuthMethod.PASSWORD, "pw", null);
+        var outcome = service.register("roon", "192.168.3.50", true, 2375, "Roon core",
+            net.vaier.domain.DeviceCategory.NAS, draft);
+
+        // The machine is registered exactly as the credential-free register does.
+        ArgumentCaptor<LanServer> saved = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(saved.capture());
+        assertThat(saved.getValue()).usingRecursiveComparison().ignoringFields("machineId")
+            .isEqualTo(new LanServer(
+                "roon", "192.168.3.50", true, 2375, "Roon core", net.vaier.domain.DeviceCategory.NAS));
+        // The credential is keyed to the machine that was just registered — its identity, not its
+        // label — so it is still that machine's login after any later rename.
+        ArgumentCaptor<net.vaier.domain.HostCredential> cred =
+            ArgumentCaptor.forClass(net.vaier.domain.HostCredential.class);
+        verify(forPersistingHostCredentials).save(cred.capture());
+        assertThat(cred.getValue().machineId()).isEqualTo(saved.getValue().machineId());
+        assertThat(cred.getValue().username()).isEqualTo("root");
+        assertThat(cred.getValue().managed()).isFalse();
+        // The probe targeted the machine's LAN address, with nothing pinned yet.
+        ArgumentCaptor<net.vaier.domain.SshTarget> target =
+            ArgumentCaptor.forClass(net.vaier.domain.SshTarget.class);
+        verify(forVerifyingSshCredentials).probe(target.capture());
+        assertThat(target.getValue().host()).isEqualTo("192.168.3.50");
+        assertThat(target.getValue().pinnedFingerprint()).isNull();
+        assertThat(outcome.server().name()).isEqualTo("roon");
+        assertThat(outcome.credentialStored()).isTrue();
+        assertThat(outcome.credentialVerification().authenticated()).isTrue();
+    }
+
+    @Test
+    void register_withRejectedCredential_stillRegistersButDoesNotStoreItAndFlagsTheOutcome() {
+        // A bad credential must never roll back the registration — the machine is still added.
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
+        ));
+        when(forVerifyingSshCredentials.probe(any()))
+            .thenThrow(new net.vaier.domain.SshAuthException("rejected"));
+
+        var draft = new net.vaier.domain.SshCredentialDraft(
+            "root", net.vaier.domain.AuthMethod.PASSWORD, "wrong", null);
+        var outcome = service.register("roon", "192.168.3.50", true, 2375, null, null, draft);
+
+        verify(forPersistingLanServers).save(any());
+        verify(forPersistingHostCredentials, never()).save(any());
+        assertThat(outcome.server().name()).isEqualTo("roon");
+        assertThat(outcome.credentialStored()).isFalse();
+        assertThat(outcome.credentialVerification().authenticated()).isFalse();
+    }
+
+    @Test
+    void register_withNoCredential_registersAndReportsNoCredentialInTheOutcome() {
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
+        ));
+
+        var outcome = service.register("roon", "192.168.3.50", true, 2375, null, null, null);
+
+        verify(forPersistingLanServers).save(any());
+        verify(forPersistingHostCredentials, never()).save(any());
+        assertThat(outcome.server().name()).isEqualTo("roon");
+        assertThat(outcome.credentialStored()).isFalse();
+        assertThat(outcome.credentialVerification()).isNull();
+    }
+
+    // --- adopt (slice 1 of "Add a machine") ---
+
+    @Test
+    void adopt_registersLanServerFromTheDomainDerivedProfileAndForgetsTheCandidate() {
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
+        ));
+        when(forGettingDiscoveredLanMachines.findByIpAddress("192.168.3.50")).thenReturn(Optional.of(
+            new net.vaier.domain.DiscoveredLanMachine("192.168.3.50", "synology-nas",
+                List.of(22, 2375, 5000), "apalveien5")));
+
+        net.vaier.domain.LanServer created = service.adopt("192.168.3.50", null);
+
+        // Registered with every field derived in the domain: name from hostname, docker from the
+        // open 2375, category (NAS) pinned as the override.
+        ArgumentCaptor<LanServer> captor = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(captor.capture());
+        assertThat(captor.getValue()).usingRecursiveComparison().ignoringFields("machineId").isEqualTo(new LanServer(
+            "synology-nas", "192.168.3.50", true, 2375, null, net.vaier.domain.DeviceCategory.NAS));
+        // The candidate is dropped from the snapshot so it stops surfacing as a discovered machine.
+        verify(forForgettingDiscoveredLanMachines).forget("192.168.3.50");
+        assertThat(created.name()).isEqualTo("synology-nas");
+        assertThat(created.effectiveDeviceCategory()).isEqualTo(net.vaier.domain.DeviceCategory.NAS);
+    }
+
+    @Test
+    void adopt_usesTheNameOverrideWhenSupplied() {
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
+        ));
+        when(forGettingDiscoveredLanMachines.findByIpAddress("192.168.3.20")).thenReturn(Optional.of(
+            new net.vaier.domain.DiscoveredLanMachine("192.168.3.20", "epson-printer",
+                List.of(9100), "apalveien5")));
+
+        service.adopt("192.168.3.20", "hallway-printer");
+
+        ArgumentCaptor<LanServer> captor = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(captor.capture());
+        assertThat(captor.getValue()).usingRecursiveComparison().ignoringFields("machineId").isEqualTo(new LanServer(
+            "hallway-printer", "192.168.3.20", false, null, null,
+            net.vaier.domain.DeviceCategory.PRINTER));
+    }
+
+    // --- adopt with an optional SSH credential (slice 2 of "Add a machine") ---
+
+    @Test
+    void adopt_withVerifiedCredential_registersMachineAndStoresCredentialUnderTheNewName() {
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
+        ));
+        when(forGettingDiscoveredLanMachines.findByIpAddress("192.168.3.50")).thenReturn(Optional.of(
+            new net.vaier.domain.DiscoveredLanMachine("192.168.3.50", "synology-nas",
+                List.of(22, 2375, 5000), "apalveien5")));
+        // Server-side re-verify authenticates against the adopted machine's LAN address.
+        when(forVerifyingSshCredentials.probe(any())).thenReturn("SHA256:abc");
+
+        var draft = new net.vaier.domain.SshCredentialDraft(
+            "root", net.vaier.domain.AuthMethod.PASSWORD, "pw", null);
+        var outcome = service.adopt("192.168.3.50", null, draft);
+
+        // The machine is registered exactly as the 2-arg adopt does.
+        ArgumentCaptor<LanServer> adopted = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(adopted.capture());
+        assertThat(adopted.getValue()).usingRecursiveComparison().ignoringFields("machineId")
+            .isEqualTo(new LanServer(
+                "synology-nas", "192.168.3.50", true, 2375, null, net.vaier.domain.DeviceCategory.NAS));
+        verify(forForgettingDiscoveredLanMachines).forget("192.168.3.50");
+        // Keyed to the identity of the machine the adoption just created, not to its derived name.
+        ArgumentCaptor<net.vaier.domain.HostCredential> cred =
+            ArgumentCaptor.forClass(net.vaier.domain.HostCredential.class);
+        verify(forPersistingHostCredentials).save(cred.capture());
+        assertThat(cred.getValue().machineId()).isEqualTo(adopted.getValue().machineId());
+        assertThat(cred.getValue().username()).isEqualTo("root");
+        assertThat(cred.getValue().managed()).isFalse();
+        // The probe targeted the machine's LAN address, with nothing pinned yet.
+        ArgumentCaptor<net.vaier.domain.SshTarget> target =
+            ArgumentCaptor.forClass(net.vaier.domain.SshTarget.class);
+        verify(forVerifyingSshCredentials).probe(target.capture());
+        assertThat(target.getValue().host()).isEqualTo("192.168.3.50");
+        assertThat(target.getValue().pinnedFingerprint()).isNull();
+        assertThat(outcome.server().name()).isEqualTo("synology-nas");
+        assertThat(outcome.credentialStored()).isTrue();
+        assertThat(outcome.credentialVerification().authenticated()).isTrue();
+    }
+
+    @Test
+    void adopt_withRejectedCredential_stillRegistersMachineButDoesNotStoreItAndFlagsTheOutcome() {
+        // A bad credential must never roll back the registration — the machine is still added.
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
+        ));
+        when(forGettingDiscoveredLanMachines.findByIpAddress("192.168.3.50")).thenReturn(Optional.of(
+            new net.vaier.domain.DiscoveredLanMachine("192.168.3.50", "synology-nas",
+                List.of(22, 2375), "apalveien5")));
+        when(forVerifyingSshCredentials.probe(any()))
+            .thenThrow(new net.vaier.domain.SshAuthException("rejected"));
+
+        var draft = new net.vaier.domain.SshCredentialDraft(
+            "root", net.vaier.domain.AuthMethod.PASSWORD, "wrong", null);
+        var outcome = service.adopt("192.168.3.50", null, draft);
+
+        verify(forPersistingLanServers).save(any());
+        verify(forForgettingDiscoveredLanMachines).forget("192.168.3.50");
+        verify(forPersistingHostCredentials, never()).save(any());
+        assertThat(outcome.server().name()).isEqualTo("synology-nas");
+        assertThat(outcome.credentialStored()).isFalse();
+        assertThat(outcome.credentialVerification().authenticated()).isFalse();
+    }
+
+    @Test
+    void adopt_unknownCandidate_throwsNotFoundAndPersistsNothing() {
+        when(forGettingDiscoveredLanMachines.findByIpAddress("192.168.3.99"))
+            .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.adopt("192.168.3.99", null))
+            .isInstanceOf(NotFoundException.class);
+        verify(forPersistingLanServers, never()).save(any());
+        verify(forForgettingDiscoveredLanMachines, never()).forget(any());
+    }
+
+    @Test
+    void register_lanAddressOutsideAllRelayLanCidrs_throwsAndDoesNotPersist() {
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
+        ));
+
+        assertThatThrownBy(() -> service.register("nas", "10.99.99.99", true, 2375))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("lanCidr");
+        verify(forPersistingLanServers, never()).save(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void register_allowsANameAnotherMachineAlreadyWears() {
+        // The payoff of §6.22. Machine names had to be unique because save() upserted by name and a
+        // duplicate silently overwrote a real machine; the store is keyed by MachineId now, so it does
+        // not. Two houses may each have a "NAS", which is what an operator would naturally call them.
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
+        ));
+
+        service.register("nas", "192.168.3.51", true, 2375);
+
+        ArgumentCaptor<LanServer> saved = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(saved.capture());
+        assertThat(saved.getValue().name()).isEqualTo("nas");
+        assertThat(saved.getValue().lanAddress()).isEqualTo("192.168.3.51");
+    }
+
+    @Test
+    void register_givesTheDuplicateItsOwnIdentity() {
+        // Sharing a name must not mean sharing anything else. The second machine gets an identity of its
+        // own, which is what keeps its credential, its backups and its disk watches separate.
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
+        ));
+        LanServer first = new LanServer("nas", "192.168.3.50", true, 2375);
+
+        service.register("nas", "192.168.3.51", true, 2375);
+
+        ArgumentCaptor<LanServer> saved = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(saved.capture());
+        assertThat(saved.getValue().machineId()).isNotEqualTo(first.machineId());
+    }
+
+    @Test
+    void register_allowsAVpnPeersName() {
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
+        ));
+
+        service.register("apalveien5", "192.168.3.50", true, 2375);
+
+        ArgumentCaptor<LanServer> saved = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(saved.capture());
+        assertThat(saved.getValue().name()).isEqualTo("apalveien5");
+    }
+
+    @Test
+    void register_allowsTheVaierServersOwnName() {
+        // "Vaier server" was reserved because the Vaier server was recognised BY that name. It is
+        // recognised by its identity now, so the string is just a string an operator may reuse.
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
+        ));
+
+        service.register(net.vaier.domain.LanAnchor.VAIER_SERVER_NAME, "192.168.3.50", true, 2375);
+
+        ArgumentCaptor<LanServer> saved = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(saved.capture());
+        assertThat(saved.getValue().name()).isEqualTo(net.vaier.domain.LanAnchor.VAIER_SERVER_NAME);
+    }
+
+    @Test
+    void register_trimsSurroundingWhitespaceFromNameAndAddress() {
+        // #284 review: the persisted identity must match the trimmed uniqueness-comparison rule,
+        // and stay a clean /lan-servers/{name} path segment.
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
+        ));
+
+        service.register("  nas  ", " 192.168.3.50 ", true, 2375);
+
+        ArgumentCaptor<LanServer> captor = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(captor.capture());
+        assertThat(captor.getValue().name()).isEqualTo("nas");
+        assertThat(captor.getValue().lanAddress()).isEqualTo("192.168.3.50");
+    }
+
+    @Test
+    void register_runsDockerTrueWithoutPort_throws() {
+        assertThatThrownBy(() -> service.register("nas", "192.168.3.50", true, null))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("dockerPort");
+        verify(forPersistingLanServers, never()).save(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void register_runsDockerTrueWithPortOutOfRange_throws() {
+        assertThatThrownBy(() -> service.register("nas", "192.168.3.50", true, 70000))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("dockerPort");
+        verify(forPersistingLanServers, never()).save(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void register_blankName_throws() {
+        assertThatThrownBy(() -> service.register("", "192.168.3.50", true, 2375))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("name");
+    }
+
+    @Test
+    void register_noRelayPeersExist_throws() {
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.register("nas", "192.168.3.50", true, 2375))
+            .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void register_lanAddressInsideServerLanCidr_noRelayPeers_persists() {
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of());
+        when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.of("172.31.0.0/16"));
+
+        service.register("vpc-box", "172.31.5.20", true, 2375);
+
+        ArgumentCaptor<LanServer> captor = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(captor.capture());
+        assertThat(captor.getValue()).usingRecursiveComparison().ignoringFields("machineId").isEqualTo(new LanServer("vpc-box", "172.31.5.20", true, 2375));
+    }
+
+    @Test
+    void register_lanAddressOutsideRelaysAndServerLanCidr_throwsAndDoesNotPersist() {
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
+        ));
+        when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.of("172.31.0.0/16"));
+
+        assertThatThrownBy(() -> service.register("x", "10.99.99.99", false, null))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("lanCidr");
+        verify(forPersistingLanServers, never()).save(org.mockito.ArgumentMatchers.any());
+    }
+
+    // --- resolveLanAnchor ---
+
+    @Test
+    void resolveLanAnchor_addressInsideRelayLanCidr_returnsRelayAnchor() {
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
+        ));
+
+        var anchor = service.resolveLanAnchor("192.168.3.50");
+
+        assertThat(anchor).isPresent();
+        assertThat(anchor.get().isVaierServer()).isFalse();
+        assertThat(anchor.get().name()).isEqualTo("apalveien5");
+        assertThat(anchor.get().cidr()).isEqualTo("192.168.3.0/24");
+    }
+
+    @Test
+    void resolveLanAnchor_addressInsideServerLanCidr_returnsVaierServerAnchor() {
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of());
+        when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.of("172.31.0.0/16"));
+
+        var anchor = service.resolveLanAnchor("172.31.5.20");
+
+        assertThat(anchor).isPresent();
+        assertThat(anchor.get().isVaierServer()).isTrue();
+        assertThat(anchor.get().name()).isEqualTo("Vaier server");
+        assertThat(anchor.get().cidr()).isEqualTo("172.31.0.0/16");
+    }
+
+    @Test
+    void resolveLanAnchor_addressInNeither_empty() {
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
+        ));
+        when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.of("172.31.0.0/16"));
+
+        assertThat(service.resolveLanAnchor("10.99.99.99")).isEmpty();
+    }
+
+    @Test
+    void resolveLanAnchor_blankOrNullAddress_empty() {
+        assertThat(service.resolveLanAnchor("")).isEmpty();
+        assertThat(service.resolveLanAnchor("   ")).isEmpty();
+        assertThat(service.resolveLanAnchor(null)).isEmpty();
+    }
+
+    // --- delete ---
+
+    @Test
+    void delete_unknownIdentity_is404AndTouchesNothing() {
+        // Under name-keying an unknown machine still "succeeded" — deleteByName removed nothing and the
+        // caller got a 200 for a machine that was never there. An identity has one answer: no such machine.
+        when(forPersistingLanServers.getAll()).thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.delete(MachineId.generate()))
+            .isInstanceOf(NotFoundException.class);
+        verify(forPersistingLanServers, never()).deleteById(any());
+        verify(deletePublishedServiceUseCase, never()).deleteService(any(), any());
+    }
+
+    @Test
+    void delete_cascadesIntoPublishedServiceOnMatchingLanAddress() {
+        LanServer pump = new LanServer("pump", "192.168.1.101", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(pump));
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(
+            lanRoute("pump-router", "pump.eilertsen.family", "192.168.1.101", 80, null)));
+
+        service.delete(pump.machineId());
+
+        verify(deletePublishedServiceUseCase).deleteService("pump.eilertsen.family", null);
+        verify(forPersistingLanServers).deleteById(pump.machineId());
+    }
+
+    @Test
+    void delete_doesNotDeleteRouteBelongingToADifferentMachine() {
+        LanServer pump = new LanServer("pump", "192.168.1.101", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(pump));
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(
+            lanRoute("nas-router", "nas.eilertsen.family", "192.168.1.50", 80, null)));
+
+        service.delete(pump.machineId());
+
+        verify(deletePublishedServiceUseCase, never()).deleteService(any(), any());
+        verify(forPersistingLanServers).deleteById(pump.machineId());
+    }
+
+    @Test
+    void delete_noMatchingRoutes_deletesRecordAndNeverCascades() {
+        LanServer pump = new LanServer("pump", "192.168.1.101", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(pump));
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of());
+
+        service.delete(pump.machineId());
+
+        verify(deletePublishedServiceUseCase, never()).deleteService(any(), any());
+        verify(forPersistingLanServers).deleteById(pump.machineId());
+    }
+
+    @Test
+    void delete_doesNotCascadeIntoApiOnlyDockerRouteOnSameLanAddress() {
+        // A Traefik API-only route (name@provider, e.g. @docker) has no file entry, so deleting it
+        // would throw "Router not found" and abort the LAN-server deletion. Even when it happens to
+        // share the LAN server's address, the cascade must skip it — only Vaier-managed file routes cascade.
+        LanServer pump = new LanServer("pump", "192.168.1.101", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(pump));
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(
+            lanRoute("pump@docker", "pump.eilertsen.family", "192.168.1.101", 80, null)));
+
+        service.delete(pump.machineId());
+
+        verify(deletePublishedServiceUseCase, never()).deleteService(any(), any());
+        verify(forPersistingLanServers).deleteById(pump.machineId());
+    }
+
+    @Test
+    void delete_cascadesIntoEveryRouteOnTheSameLanAddress() {
+        LanServer pump = new LanServer("pump", "192.168.1.101", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(pump));
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(
+            lanRoute("pump-router", "pump.eilertsen.family", "192.168.1.101", 80, null),
+            lanRoute("pump-ui-router", "pump.eilertsen.family", "192.168.1.101", 8080, "/ui")));
+
+        service.delete(pump.machineId());
+
+        verify(deletePublishedServiceUseCase).deleteService("pump.eilertsen.family", null);
+        verify(deletePublishedServiceUseCase).deleteService("pump.eilertsen.family", "/ui");
+        verify(forPersistingLanServers).deleteById(pump.machineId());
+    }
+
+    // --- getAll ---
+    // The LAN-server view assembly moved to LanServerViewAdapter (a *Service must not implement a
+    // driven For* port). getAll() now just delegates to the injected ForGettingLanServers; the
+    // view-building coverage lives in LanServerViewAdapterTest.
+
+    @Test
+    void getAll_delegatesToForGettingLanServers() {
+        List<LanServerView> expected = List.of(
+            new LanServerView(new LanServer("nas", "192.168.3.50", true, 2375), "apalveien5"));
+        when(forGettingLanServers.getAll()).thenReturn(expected);
+
+        assertThat(service.getAll()).isSameAs(expected);
+    }
+
+    // --- rename (#55) ---
+
+    @Test
+    void rename_persistsNewNameAndRemovesOldKeepingAddressAndDockerSettings() {
+        LanServer nas = new LanServer("nas", "192.168.1.50", true, 2375);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nas));
+
+        service.rename(nas.machineId(), "media-nas");
+
+        ArgumentCaptor<LanServer> saved = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(saved.capture());
+        assertThat(saved.getValue().name()).isEqualTo("media-nas");
+        assertThat(saved.getValue().lanAddress()).isEqualTo("192.168.1.50");
+        assertThat(saved.getValue().runsDocker()).isTrue();
+        assertThat(saved.getValue().dockerPort()).isEqualTo(2375);
+        // The renamed copy keeps its identity, so save() replaces the entry it came from — nothing is
+        // deleted, which is the whole difference between an identity-keyed store and a name-keyed one.
+        assertThat(saved.getValue().machineId()).isEqualTo(nas.machineId());
+        verify(forPersistingLanServers, never()).deleteById(any());
+    }
+
+    @Test
+    void rename_invalidatesPublishedServicesCacheSoLanServerNameResolvesAfresh() {
+        // #300: a published LAN service's lanServerName is a derived field cached in the
+        // published-services view. It's resolved by matching the route's address to a LAN server,
+        // so a rename changes it — but without invalidating the cache the discover endpoint keeps
+        // serving the old name and the renamed machine card shows no services. Renaming back made
+        // the stale key match again, which is exactly how the bug surfaced.
+        LanServer nas = new LanServer("nas", "192.168.1.50", true, 2375);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nas));
+
+        service.rename(nas.machineId(), "media-nas");
+
+        verify(publishedServicesCacheInvalidator).invalidatePublishedServicesCache();
+    }
+
+    /**
+     * A rename no longer migrates anything, because nothing is keyed to the name any more. The vault and
+     * the host-key store hang off the machine's identity, and a rename does not change it — so the
+     * credential the machine had before the rename is, without anyone moving it, the credential it has
+     * after. The old carry-it-over dance was only ever compensating for the name being the key.
+     */
+    @Test
+    void rename_leavesTheSshCredentialAndHostKeyPinUntouched() {
+        LanServer nas = new LanServer("nas", "192.168.1.50", true, 2375);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nas));
+
+        service.rename(nas.machineId(), "media-nas");
+
+        verify(forPersistingHostCredentials, never()).save(any());
+        verify(forPersistingHostCredentials, never()).deleteByMachine(any());
+        verify(forTrackingHostKeys, never()).pin(any(), any());
+        verify(forTrackingHostKeys, never()).clear(any());
+    }
+
+
+    @Test
+    void rename_noOpSameName_leavesSshStateIntact() {
+        LanServer nas = new LanServer("nas", "192.168.1.50", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nas));
+
+        service.rename(nas.machineId(), "nas");
+
+        verify(forPersistingHostCredentials, never()).deleteByMachine(any());
+        verify(forTrackingHostKeys, never()).clear(any());
+    }
+
+    @Test
+    void rename_noOp_doesNotInvalidatePublishedServicesCache() {
+        // No name change means no derived-field change, so don't churn the cache.
+        LanServer nas = new LanServer("nas", "192.168.1.50", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nas));
+
+        service.rename(nas.machineId(), "nas");
+
+        verify(publishedServicesCacheInvalidator, never()).invalidatePublishedServicesCache();
+    }
+
+    @Test
+    void rename_throwsWhenLanServerNotFound() {
+        when(forPersistingLanServers.getAll()).thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.rename(MachineId.generate(), "phantom"))
+            .isInstanceOf(NotFoundException.class);
+        verify(forPersistingLanServers, never()).save(any());
+        verify(forPersistingLanServers, never()).deleteById(any());
+    }
+
+    @Test
+    void rename_allowsANameAnotherMachineAlreadyWears() {
+        LanServer nas = new LanServer("nas", "192.168.1.50", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(
+            nas,
+            new LanServer("printer", "192.168.1.60", false, null)
+        ));
+
+        service.rename(nas.machineId(), "printer");
+
+        ArgumentCaptor<LanServer> saved = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(saved.capture());
+        assertThat(saved.getValue().name()).isEqualTo("printer");
+        // And it is still its own machine — the rename moved a label, not an identity.
+        assertThat(saved.getValue().machineId()).isEqualTo(nas.machineId());
+    }
+
+    @Test
+    void rename_isNoOpWhenNameUnchanged() {
+        LanServer nas = new LanServer("nas", "192.168.1.50", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nas));
+
+        service.rename(nas.machineId(), "nas");
+
+        verify(forPersistingLanServers, never()).save(any());
+        verify(forPersistingLanServers, never()).deleteById(any());
+    }
+
+    @Test
+    void rename_rejectsBlankNewName() {
+        LanServer nas = new LanServer("nas", "192.168.1.50", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nas));
+
+        assertThatThrownBy(() -> service.rename(nas.machineId(), "  "))
+            .isInstanceOf(IllegalArgumentException.class);
+        verify(forPersistingLanServers, never()).save(any());
+        verify(forPersistingLanServers, never()).deleteById(any());
+    }
+
+    // --- description (#54) ---
+
+    @Test
+    void register_withDescription_persistsItOnTheLanServer() {
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
+        ));
+
+        service.register("nas", "192.168.3.50", true, 2375, "Synology NAS");
+
+        ArgumentCaptor<LanServer> captor = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(captor.capture());
+        assertThat(captor.getValue().description()).isEqualTo("Synology NAS");
+    }
+
+    @Test
+    void updateDescription_savesLanServerWithNewDescription() {
+        LanServer nas = new LanServer("nas", "192.168.1.50", true, 2375);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nas));
+
+        service.updateDescription(nas.machineId(), "Synology in the closet");
+
+        ArgumentCaptor<LanServer> captor = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(captor.capture());
+        assertThat(captor.getValue().name()).isEqualTo("nas");
+        assertThat(captor.getValue().description()).isEqualTo("Synology in the closet");
+        assertThat(captor.getValue().lanAddress()).isEqualTo("192.168.1.50");
+    }
+
+    @Test
+    void updateDescription_throwsWhenLanServerNotFound() {
+        when(forPersistingLanServers.getAll()).thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.updateDescription(MachineId.generate(), "anything"))
+            .isInstanceOf(NotFoundException.class);
+        verify(forPersistingLanServers, never()).save(any());
+    }
+
+    // --- register with optional device-category override ---
+
+    @Test
+    void register_withDeviceCategoryOverride_persistsIt() {
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
+        ));
+
+        service.register("box", "192.168.3.50", true, 2375, null, net.vaier.domain.DeviceCategory.NAS);
+
+        ArgumentCaptor<LanServer> captor = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(captor.capture());
+        assertThat(captor.getValue().deviceCategory()).isEqualTo(net.vaier.domain.DeviceCategory.NAS);
+    }
+
+    @Test
+    void register_withoutDeviceCategoryOverride_persistsNullOverride() {
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            relay("apalveien5", "10.13.13.5", "192.168.3.0/24")
+        ));
+
+        service.register("box", "192.168.3.50", true, 2375);
+
+        ArgumentCaptor<LanServer> captor = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(captor.capture());
+        assertThat(captor.getValue().deviceCategory()).isNull();
+    }
+
+    // --- updateDeviceCategory ---
+
+    @Test
+    void updateDeviceCategory_savesOverrideKeepingEverythingElse() {
+        LanServer nas = new LanServer("nas", "192.168.1.50", true, 2375, "desc");
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nas));
+
+        service.updateDeviceCategory(nas.machineId(), "NAS");
+
+        ArgumentCaptor<LanServer> captor = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(captor.capture());
+        assertThat(captor.getValue().deviceCategory()).isEqualTo(net.vaier.domain.DeviceCategory.NAS);
+        assertThat(captor.getValue().description()).isEqualTo("desc");
+        assertThat(captor.getValue().lanAddress()).isEqualTo("192.168.1.50");
+    }
+
+    @Test
+    void updateDeviceCategory_blankClearsOverride() {
+        LanServer nas = new LanServer("nas", "192.168.1.50", false, null, null,
+            net.vaier.domain.DeviceCategory.NAS);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nas));
+
+        service.updateDeviceCategory(nas.machineId(), "  ");
+
+        ArgumentCaptor<LanServer> captor = ArgumentCaptor.forClass(LanServer.class);
+        verify(forPersistingLanServers).save(captor.capture());
+        assertThat(captor.getValue().deviceCategory()).isNull();
+    }
+
+    @Test
+    void updateDeviceCategory_rejectsInvalidValueWithoutSaving() {
+        assertThatThrownBy(() -> service.updateDeviceCategory(MachineId.generate(), "BANANA"))
+            .isInstanceOf(IllegalArgumentException.class);
+        verify(forPersistingLanServers, never()).save(any());
+    }
+
+    @Test
+    void updateDeviceCategory_throwsWhenLanServerNotFound() {
+        when(forPersistingLanServers.getAll()).thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.updateDeviceCategory(MachineId.generate(), "NAS"))
+            .isInstanceOf(NotFoundException.class);
+        verify(forPersistingLanServers, never()).save(any());
+    }
+
+    // --- generateSetupScript (#249) — orchestration only; the decision matrix is in
+    //     LanServerSetupScriptTest.forHost_* (domain). These verify the service reads the right
+    //     ports and passes the configured vpnSubnet through. ---
+
+    @Test
+    void generateSetupScript_relayAnchored_passesPortDataAndVpnSubnetToDomain() {
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "vpnSubnet", "10.13.13.0/24");
+        LanServer nuc02 = new LanServer("nuc02", "192.168.3.50", false, null, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nuc02));
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            new PeerConfiguration("apalveien5", "apalveien5", "10.13.13.9", "[Interface]",
+                MachineType.UBUNTU_SERVER, "192.168.3.0/24", "192.168.3.121", null)));
+        when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.of("172.31.16.0/20"));
+
+        String s = service.generateSetupScript(nuc02.machineId()).orElseThrow();
+
+        assertThat(s).contains("ip route replace 172.31.16.0/20 via 192.168.3.121"); // server LAN CIDR
+        assertThat(s).contains("ip route replace 10.13.13.0/24 via 192.168.3.121");  // the vpnSubnet
+    }
+
+    @Test
+    void generateSetupScript_unknownServer_empty() {
+        when(forPersistingLanServers.getAll()).thenReturn(List.of());
+
+        assertThat(service.generateSetupScript(MachineId.generate())).isEmpty();
+    }
+}

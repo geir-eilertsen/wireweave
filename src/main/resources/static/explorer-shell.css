@@ -129,8 +129,8 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
    what carries the state, so the button does not also need to shout it. */
 .ex-app.tree-hidden .ex-treetoggle svg line { opacity: .25; }
 
-/* --- the Fjord menu -------------------------------------------------------------------------------- */
-/* Settings, Users, Security, Concepts: Fjord's own, siblings of the fleet rather than things inside it, so
+/* --- the Vaier menu -------------------------------------------------------------------------------- */
+/* Settings, Users, Security, Concepts: Vaier's own, siblings of the fleet rather than things inside it, so
    they live in the chrome and are one reach from any depth on any screen. */
 
 .ex-vmenu-wrap { position: relative; flex: none; }
@@ -186,7 +186,7 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 .ex-vmenu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .ex-vmenu-item .ex-ico { flex: none; color: var(--text-dim); }
 .ex-vmenu-item:hover .ex-ico { color: var(--text-muted); }
-/* Separates the two roots — the fleet above, Fjord's own below. The tree said the same thing with two column
+/* Separates the two roots — the fleet above, Vaier's own below. The tree said the same thing with two column
    headings; a menu this short says it with one line. */
 .ex-vmenu-rule { height: 1px; margin: 5px 9px; background: var(--border); }
 
@@ -244,7 +244,7 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 }
 .ex-row:hover { background: var(--bg-hover); color: var(--text); }
 .ex-row.is-sel { background: var(--bg-card); color: var(--text); }
-/* A tree entry Fjord cannot open right now (no SSH server on last check) — greyed and inert, never
+/* A tree entry Vaier cannot open right now (no SSH server on last check) — greyed and inert, never
    removed: the entry still names what is there, and the state is transient and self-healing. */
 .ex-row:disabled { opacity: .4; cursor: not-allowed; }
 .ex-row:disabled:hover { background: none; color: var(--text-muted); }
@@ -293,7 +293,7 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 .ex-lbl { font-size: 14px; }
 
 /* The domain's four-state MachineStatus, in four colours — the same four the fleet page uses. UNKNOWN is
-   grey on purpose: it means no probe has run, and a green dot there would be a claim Fjord cannot make. */
+   grey on purpose: it means no probe has run, and a green dot there would be a claim Vaier cannot make. */
 /* A machine's capability glyphs (Docker, relay), riding just before its liveness dot. Dim by default so they
    read as quiet metadata, not controls; they lift to full colour with the row on hover/selection. */
 .ex-caps { flex: none; display: inline-flex; align-items: center; gap: 4px; }
@@ -562,7 +562,7 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
     color: var(--text);
 }
 .ex-lname .ex-nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* A file Fjord can display is an <a>, a folder is a <button>. Two elements, one affordance: both are names
+/* A file Vaier can display is an <a>, a folder is a <button>. Two elements, one affordance: both are names
    that do something when you click them, so they share the hover and focus treatment rather than the link
    growing a look of its own. The link is not underlined at rest — a listing where half the rows are underlined
    reads as a page of links, not a folder — it earns the underline on hover like the folder beside it. */
@@ -701,7 +701,7 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 }
 .ex-card:hover { border-color: var(--accent); background: var(--bg-hover); }
 .ex-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-/* Same "greyed, not removed" treatment as .ex-btn:disabled — a card Fjord cannot open right now still
+/* Same "greyed, not removed" treatment as .ex-btn:disabled — a card Vaier cannot open right now still
    names what is there. */
 .ex-card:disabled { opacity: .4; cursor: not-allowed; }
 .ex-card:disabled:hover { border-color: var(--border); background: var(--bg-card); }
@@ -742,7 +742,7 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 /* An archive is how things stood then; a registry verdict and a tunnel are about now. Both stand down in the
    past, the same way the liveness dots already do. */
 [data-past='1'] .ex-pane .ex-card-marks { display: none; }
-/* "Fjord is root here" (#346), on the fleet card so the question "where am I root?" is answered without
+/* "Vaier is root here" (#346), on the fleet card so the question "where am I root?" is answered without
    opening every machine. Amber rather than red: it is a consequence to know about, not a fault. */
 .ex-card-root {
     display: inline-block; margin-left: 7px; padding: 0 5px; border-radius: var(--radius-1);
@@ -796,7 +796,7 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 .ex-nudge-text { flex: 1 1 auto; min-width: 0; }
 .ex-nudge-title { color: var(--text); font-weight: 600; }
 .ex-nudge-why { color: var(--text-muted); font-size: 13px; margin-top: 3px; line-height: 1.45; }
-/* "What that means ›" — the way out to the Concepts entry, on the one nudge whose answer changes what Fjord
+/* "What that means ›" — the way out to the Concepts entry, on the one nudge whose answer changes what Vaier
    may do on a machine. Deliberately a quiet muted link rather than a second button: the card has one action,
    and a second thing shaped like an action is a second thing to weigh. */
 .ex-nudge-more {
@@ -860,7 +860,7 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 
 /* --- filesystems and their meters -------------------------------------------------------------------- */
 
-/* One block per real filesystem (#325). Fjord used to show a single number from `df -P /` — on the NAS that
+/* One block per real filesystem (#325). Vaier used to show a single number from `df -P /` — on the NAS that
    is the 2.3 GB DSM system partition, 88% by design, while /volume1 (11.6 TB of borg backups) was invisible.
    The block reuses the card's surface rather than inventing one: same background, same border, same radius. */
 .ex-fs {
@@ -874,7 +874,7 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 }
 /* A breaching filesystem borrows the error note's exact framing — one red, one meaning, page-wide. */
 .ex-fs.is-over { border-color: rgba(244, 135, 113, .35); background: rgba(244, 135, 113, .04); }
-/* Muted: Fjord is not judging this disk, and the block recedes to say so. Never hidden — a muted filesystem
+/* Muted: Vaier is not judging this disk, and the block recedes to say so. Never hidden — a muted filesystem
    the operator has forgotten about is still theirs to see. */
 .ex-fs.is-muted { opacity: .55; }
 
@@ -912,7 +912,7 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 
 /* The shell's one figure, now once per filesystem. The bar is how full it is; the tick is what that is being
    judged against — its own threshold or the fleet-wide fallback, drawn where it actually falls. Without it
-   the operator would do the comparison in their head, and that comparison is a decision Fjord has already
+   the operator would do the comparison in their head, and that comparison is a decision Vaier has already
    made (RemoteDiskUsage.breaches) and emails about. Two filesystems with two different ticks is the whole
    point of #325 made visible. */
 .ex-meter {
@@ -1209,7 +1209,7 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 .ex-brepo-name { color: var(--text); white-space: nowrap; }
 .ex-brepo-path { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* --- discovered on the LAN: an icon and what Fjord thinks each thing is, not its reverse-DNS name ---- */
+/* --- discovered on the LAN: an icon and what Vaier thinks each thing is, not its reverse-DNS name ---- */
 .ex-disc { display: flex; flex-direction: column; }
 .ex-disc-row {
     display: flex; align-items: center; gap: 12px;
@@ -1251,7 +1251,7 @@ button.ex-brepo-name:focus-visible { outline: 2px solid var(--accent); outline-o
 .ex-btn.is-quiet { border-color: transparent; background: none; color: var(--text-dim); }
 .ex-btn.is-quiet:hover { color: var(--accent); border-color: transparent; background: none; }
 
-/* The fork: two choices, the one question Fjord can't infer. */
+/* The fork: two choices, the one question Vaier can't infer. */
 .ex-choice-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .ex-choice {
     text-align: left; padding: 16px; cursor: pointer;
@@ -1294,7 +1294,7 @@ button.ex-brepo-name:focus-visible { outline: 2px solid var(--accent); outline-o
 .ex-lanpick-go { flex: none; display: flex; color: var(--text-dim); }
 .ex-lanpick-row:hover .ex-lanpick-go { color: var(--accent); }
 
-/* Adopt: the "Detected by Fjord" readout — everything the scan already knows, none of it typed. */
+/* Adopt: the "Detected by Vaier" readout — everything the scan already knows, none of it typed. */
 .ex-detected {
     border: 1px solid var(--border); border-radius: var(--radius-1);
     background: rgba(78, 201, 176, .04); padding: 12px 13px; margin-bottom: 4px;
@@ -1402,7 +1402,7 @@ button.ex-brepo-name:focus-visible { outline: 2px solid var(--accent); outline-o
 @media (prefers-reduced-motion: reduce) {
     .threat-ping::after { animation: none; opacity: .4; transform: scale(1); }
 }
-/* The mirror image of .threat-ping: green where Fjord let someone in, red where CrowdSec turned someone away.
+/* The mirror image of .threat-ping: green where Vaier let someone in, red where CrowdSec turned someone away.
    It carries none of either existing marker's vocabulary — not the fleet's bordered icon chip, not the threat's
    pulsing ring — because it is neither a machine nor an ongoing alarm, just a quiet fact about where allowed
    traffic has come from. A small solid dot says that at a glance; the count lives in its popup rather than in
@@ -1475,7 +1475,7 @@ select.ex-input { cursor: pointer; }
 .ex-set-note.is-warn { color: var(--yellow); }
 
 /* Where the survival kit's copies went, and why. The same two-line shape as a nudge — a name, and the
-   reasoning under it — because it is the same act: Fjord stating a decision it made on the operator's
+   reasoning under it — because it is the same act: Vaier stating a decision it made on the operator's
    behalf. No icon and no button, since there is nothing here to do; a host that refused takes the red edge,
    because that one is not reasoning, it is a copy the fleet does not have. */
 .ex-kit-out:not(:empty) { margin-top: 14px; }
@@ -1564,7 +1564,7 @@ select.ex-input { cursor: pointer; }
 }
 
 @media (max-width: 760px) {
-    /* The chrome loses its words but not its actions: the address bar keeps the room, search and the Fjord
+    /* The chrome loses its words but not its actions: the address bar keeps the room, search and the Vaier
        menu fall back to their glyphs. */
     .ex-addressbar { margin: 0 6px; }
     .ex-kbd-lbl, .ex-kbd-chip { display: none; }
@@ -1726,7 +1726,7 @@ select.ex-input { cursor: pointer; }
     .ex-app.has-sel .ex-pane-body { padding-bottom: 148px; }
 }
 
-/* The narrowest phones. The topbar now carries one control more than it used to (the Fjord menu, which is
+/* The narrowest phones. The topbar now carries one control more than it used to (the Vaier menu, which is
    where Settings, Users, Security and Concepts went when the tree left), and at this width the wordmark is
    the only thing on the bar that is decoration rather than a destination. The mark stays — it is still the
    link — but the letters give their room to the address bar, which is what actually says where you are. */

@@ -10,8 +10,8 @@ first factor, which cannot do social login at all.
 **Decided requirements:**
 - Role model: `pending → user → admin`. A fresh Google identity lands as **pending**
   (authenticated but blocked, "awaiting approval"). An admin promotes to **user**
-  (reaches approved services) or **admin** (administers Fjord).
-- Authorization scope: the role/group gates **both** the Fjord console **and**
+  (reaches approved services) or **admin** (administers Vaier).
+- Authorization scope: the role/group gates **both** the Vaier console **and**
   per-service access (`group family → [plex, photos]`, `group admins → *`).
 
 ---
@@ -19,9 +19,9 @@ first factor, which cannot do social login at all.
 ## The forcing finding
 
 Authelia today plays two roles (see the integration map): it is the **forward-auth
-gateway** Traefik calls (`http://authelia:9091/api/verify`) for both Fjord's own
+gateway** Traefik calls (`http://authelia:9091/api/verify`) for both Vaier's own
 write endpoints and every published service with `requiresAuth=true`. Its identity
-is asserted to Fjord via `Remote-User` / `Remote-Groups` headers. Fjord itself has
+is asserted to Vaier via `Remote-User` / `Remote-Groups` headers. Vaier itself has
 **no in-process auth** — it is purely the control plane that *generates* Authelia +
 Traefik config.
 
@@ -30,18 +30,18 @@ Stack the four requirements together and the topology is essentially forced:
 | Requirement | Consequence |
 |---|---|
 | Social login (Google) | Authelia is out as the authenticator (file/LDAP only) — need oauth2-proxy or a full IdP |
-| Arbitrary per-service **group** rules | *Something in the request data-path must know Fjord's `email → groups` map* |
+| Arbitrary per-service **group** rules | *Something in the request data-path must know Vaier's `email → groups` map* |
 | No database | Rules out heavy IdPs (Authentik/Keycloak need Postgres) without a big departure |
-| Gateway independent of Fjord (today's property) | In tension with the row above |
+| Gateway independent of Vaier (today's property) | In tension with the row above |
 
 The middle two collide: arbitrary per-service group authorization needs a runtime
-component that knows each user's Fjord-assigned groups. Google doesn't supply them;
-oauth2-proxy can't invent them. So either **Fjord injects the decision at request
-time** (Fjord enters the data-path) or you adopt a **heavier IdP that loads
-Fjord-generated group rules** (Authelia could — but it can't do social).
+component that knows each user's Vaier-assigned groups. Google doesn't supply them;
+oauth2-proxy can't invent them. So either **Vaier injects the decision at request
+time** (Vaier enters the data-path) or you adopt a **heavier IdP that loads
+Vaier-generated group rules** (Authelia could — but it can't do social).
 
 There is no option that keeps *all four*. The spike picks the one that best fits
-Fjord's identity and is honest about the cost.
+Vaier's identity and is honest about the cost.
 
 ---
 
@@ -50,36 +50,36 @@ Fjord's identity and is honest about the cost.
 ### Option A — oauth2-proxy replaces Authelia; tiers only
 oauth2-proxy does Google authn + Redis session + domain-wide cookie. Authorization
 is its global `authenticated-emails-file` (+ a second admin-only instance for the
-console). **Pros:** no DB, Fjord stays control-plane, gateway stays independent of
-Fjord. **Cons:** authorization is coarse — one allow-list per proxy instance, so
+console). **Pros:** no DB, Vaier stays control-plane, gateway stays independent of
+Vaier. **Cons:** authorization is coarse — one allow-list per proxy instance, so
 arbitrary `group → services` needs one proxy per group. Fine for `pending/user/admin`
 (≈2 access tiers), painful for arbitrary groups. **Fails the per-service-group requirement.**
 
 ### Option B — full IdP (Authentik / Keycloak) replaces Authelia
 Social + groups + per-app authz + Traefik forward-auth, all in one, maintained.
-**Cons:** needs Postgres (+Redis+worker) → breaks Fjord's "no database" tenet;
-heaviest infra; Fjord would drive it via API instead of generating YAML.
+**Cons:** needs Postgres (+Redis+worker) → breaks Vaier's "no database" tenet;
+heaviest infra; Vaier would drive it via API instead of generating YAML.
 
-### Option C — oauth2-proxy (authn) + Fjord authz endpoint (authz) ✅ recommended
+### Option C — oauth2-proxy (authn) + Vaier authz endpoint (authz) ✅ recommended
 - **oauth2-proxy** does *only* authentication: the Google dance, the Redis-backed
   domain-wide SSO session, and injects `X-Auth-Request-Email` downstream.
-- **Fjord** owns authorization (it's literally Fjord's domain): a file-based
+- **Vaier** owns authorization (it's literally Vaier's domain): a file-based
   `email → role + groups` store, the pending/approve flow, and a small forward-auth
   endpoint `GET /authz/verify` that answers "may *this email* reach *this host*?".
 - Traefik chains the two middlewares per protected route: `oauth2-proxy → vaier-authz → service`.
 
-**Why C:** it's the smallest conceptual leap from today (Fjord already reads
+**Why C:** it's the smallest conceptual leap from today (Vaier already reads
 forward-auth headers; now it also answers one), keeps the file-based / no-DB model
 (the access store is a sibling of today's `users_database.yml`), and supports
 arbitrary per-service groups because the decision lives where the data lives.
 
-**The cost (stated plainly):** Fjord's authz endpoint is now in the request path for
-protected services, so **Fjord being down means protected services fail authz** — a
+**The cost (stated plainly):** Vaier's authz endpoint is now in the request path for
+protected services, so **Vaier being down means protected services fail authz** — a
 regression from Authelia's independence. Mitigations: the decision is a trivial
-in-memory map lookup (Fjord "up" is the only dependency, no I/O per request);
-oauth2-proxy still independently handles authn so sessions/login survive Fjord being
+in-memory map lookup (Vaier "up" is the only dependency, no I/O per request);
+oauth2-proxy still independently handles authn so sessions/login survive Vaier being
 down (only the final yes/no fails); and the existing `vaier-offline` fallback already
-acknowledges Fjord can blip. If that coupling is unacceptable, fall back to Option B.
+acknowledges Vaier can blip. If that coupling is unacceptable, fall back to Option B.
 
 ---
 
@@ -129,7 +129,7 @@ acknowledges Fjord can blip. If that coupling is unacceptable, fall back to Opti
       - --cookie-secret-file=/secrets/oauth2-cookie-secret
       - --cookie-domain=.${VAIER_DOMAIN}          # domain-wide SSO cookie
       - --whitelist-domain=.${VAIER_DOMAIN}
-      - --email-domain=*                          # authN is open; authZ is Fjord's job
+      - --email-domain=*                          # authN is open; authZ is Vaier's job
       - --upstream=static://202                    # forward-auth only, no proxying
       - --reverse-proxy=true
       - --set-xauthrequest=true                    # emit X-Auth-Request-Email/User
@@ -151,7 +151,7 @@ acknowledges Fjord can blip. If that coupling is unacceptable, fall back to Opti
       - vaier-network
 ```
 
-### 3. Traefik forward-auth chain (generated by Fjord, replaces `vaier-auth`)
+### 3. Traefik forward-auth chain (generated by Vaier, replaces `vaier-auth`)
 
 ```yaml
 http:
@@ -164,7 +164,7 @@ http:
         authResponseHeaders:
           - X-Auth-Request-Email
           - X-Auth-Request-User
-    # Stage 2: authorization (Fjord). Reads X-Auth-Request-Email + X-Forwarded-Host,
+    # Stage 2: authorization (Vaier). Reads X-Auth-Request-Email + X-Forwarded-Host,
     # returns 200 (allow) / 403 (pending or not in the service's group).
     vaier-authz:
       forwardAuth:
@@ -186,7 +186,7 @@ routing browser requests through oauth2-proxy's own sign-in path
 
 ---
 
-## Fjord-side authorization model (the genuinely new, testable code)
+## Vaier-side authorization model (the genuinely new, testable code)
 
 File-based, a sibling of `users_database.yml`. **Access store** at
 `${VAIER_CONFIG_PATH}/access.yml`:
@@ -233,7 +233,7 @@ backed by an in-memory snapshot refreshed on file change.
 ---
 
 ## What this spike does NOT settle (open questions)
-- **Availability coupling** of the Fjord-in-path authz stage — accept, or take Option B?
+- **Availability coupling** of the Vaier-in-path authz stage — accept, or take Option B?
 - **2FA/TOTP**: Authelia gave it free; Google login covers MFA for Google accounts,
   but local/non-Google identities would have none. Probably fine if *all* logins are social.
 - **Bootstrap admin**: with social login there's no password file — instead seed the
@@ -244,7 +244,7 @@ backed by an in-memory snapshot refreshed on file change.
   Recommended path: put **Dex** (an OIDC broker) between oauth2-proxy and the upstream
   providers. Dex federates many connectors (Google, GitHub, Microsoft, GitLab, generic
   OIDC/SAML) behind one OIDC endpoint plus a "choose how to sign in" screen, is
-  config-file driven, and needs **no database** — so Fjord would generate its connector
+  config-file driven, and needs **no database** — so Vaier would generate its connector
   config the same way it generates Traefik/Authelia config today. Alternatives: one
   oauth2-proxy instance per provider behind a chooser (clunky session coordination), or a
   full IdP (Authentik/Keycloak, Postgres-backed — only if Option B is taken anyway).
@@ -270,7 +270,7 @@ not before — merging while the stores are distinct would conflate a Google ema
 Authelia account.
 
 ## Recommendation
-Build **Option C**. Next concrete step: implement the Fjord authorization core
+Build **Option C**. Next concrete step: implement the Vaier authorization core
 (`AccessEntry` domain + `AccessFileAdapter` + `VerifyAccessUseCase` + the admin
 endpoints) **TDD-first** — it's provider-agnostic and fully testable without Google
 credentials, and it's the part that carries the real product logic. Wire oauth2-proxy

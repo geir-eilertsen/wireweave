@@ -8,11 +8,11 @@ I am basically tired of maintaining a VPN server with reverse proxy pointing to 
 - **Maintain a VPN server** with WireGuard and Traefik
 - **Create and maintain VPN clients** by providing docker compose files and other client config that can be used to connect to the VPN server
 - **Create a reverse proxy** with Let's Encrypt and Traefik
-- **Stay out of DNS entirely** — one `*.<domain>` A record, made once by the operator, covers every service Fjord will ever publish
+- **Stay out of DNS entirely** — one `*.<domain>` A record, made once by the operator, covers every service Vaier will ever publish
 - **Manage containers remotely** with Docker
-- **Manage users** with Google social login (oauth2-proxy) and Fjord's own access store
-- **Web interface for managing everything** with Fjord
-- **Self-generated dashboard for linking to all my services** with Fjord
+- **Manage users** with Google social login (oauth2-proxy) and Vaier's own access store
+- **Web interface for managing everything** with Vaier
+- **Self-generated dashboard for linking to all my services** with Vaier
 
 ## Architecture
 
@@ -70,7 +70,7 @@ Project Lombok is on the classpath — use `@Data`, `@Builder`, etc. Never hand-
 ## Import types, never write them fully qualified
 
 Every type reference in Java source is an unqualified name backed by an `import`. Never write
-`net.fjordomatic.domain.MachineId machineId`, `java.util.Optional<String>`, or
+`net.vaier.domain.MachineId machineId`, `java.util.Optional<String>`, or
 `org.mockito.Mockito.mock(...)` inline — **including in tests**, and including a type used exactly once.
 
 A fully-qualified name inline is almost always a shortcut taken by whoever was editing: it lets a
@@ -109,33 +109,6 @@ This project follows strict TDD. Always write a failing test before writing any 
 3. Refactor if needed, keeping tests green
 
 Never write implementation code without a corresponding test written first. PRs that add features without prior failing tests are not acceptable.
-
-## The product is Fjord-O-Matic; the stack is still called `vaier`
-
-The product was renamed from **Vaier** to **Fjord-O-Matic** (short form **Fjord**) in August 2026. Two
-vocabularies now coexist, and the split is deliberate:
-
-- **`Fjord-O-Matic` / `Fjord`** — the product name and every code identifier: the `net.fjordomatic`
-  package, `Fjord*` types, `fjord*` fields, and all operator-facing copy. `Fjord-O-Matic` in full is
-  reserved for the wordmark, page titles, and notification subjects; prose and identifiers use `Fjord`.
-- **`vaier` (lowercase) and `VAIER_*`** — **stack identifiers, not the product name.** The container,
-  the Docker network, `/vaier/config`, `vaier-config.yml` and its `vaierServer*` keys, the `vaier-authz`
-  middleware, `getvaier/vaier` on Docker Hub and GitHub, `/var/lib/vaier-backup`, and the
-  `vaier.<domain>` console host.
-
-**Do not "finish" the rename by renaming the second list.** It is not tidying, it is a migration with a
-fleet-wide blast radius: new Let's Encrypt certificates, borg repository paths moved on every host, and a
-changed WireGuard `SERVERURL` that peers cache indefinitely — recovering those means power-cycling each
-site by hand. It is tracked as a backlog item in `PRD.md` §1.1 and needs its own plan.
-
-The one guard rail that exists in code: `FjordConfigFileAdapterTest.load_readsTheOnDiskVaierServerKeys`
-pins the `vaierServer*` keys as they are written on disk. The round-trip tests cannot catch a rename there
-— they save and load through the same literal — and a renamed key reads as `null`, which makes the server
-mint itself a *new* identity and orphan everything keyed to the old one.
-
-A constant keeps a `VAIER_` name when its **value** is a stack identifier (`ServiceNames.VAIER_AUTHZ_MIDDLEWARE
-= "vaier-authz"`), so the name never drifts from the thing it names. Constants that are pure domain
-vocabulary were renamed (`FJORD_SERVER_NAME`, `FJORD_OWN_STACK`).
 
 ## Keeping docs in sync
 

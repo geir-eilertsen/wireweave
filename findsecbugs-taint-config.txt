@@ -1,1 +1,1 @@
-net/fjordomatic/rest/LogSafe.forLog(Ljava/lang/String;)Ljava/lang/String;:SAFE
+net/vaier/rest/LogSafe.forLog(Ljava/lang/String;)Ljava/lang/String;:SAFE

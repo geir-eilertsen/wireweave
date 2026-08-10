@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Fjord one-shot installer — rigs a machine to run the stack with NO git clone.
+# Vaier one-shot installer — rigs a machine to run the stack with NO git clone.
 #
 # The compose stack bind-mounts a handful of committed asset files (the nginx offline page,
 # oauth2-proxy templates, the Dex sign-in theme). A plain `curl docker-compose.yml` leaves those
@@ -49,7 +49,7 @@ command -v tar  >/dev/null 2>&1 || die "tar is required."
 if ! command -v docker >/dev/null 2>&1; then
   warn "docker not found. Install it first:  curl -fsSL https://get.docker.com | sh"
 elif ! docker compose version >/dev/null 2>&1; then
-  warn "docker compose v2 not found. Fjord needs Compose v2.23+ (bundled with current Docker)."
+  warn "docker compose v2 not found. Vaier needs Compose v2.23+ (bundled with current Docker)."
 fi
 
 # A premature `docker compose up` (before these files existed) makes dockerd create the bind-mount
@@ -67,7 +67,7 @@ if [ "${#blocked[@]}" -gt 0 ]; then
    then re-run this installer."
 fi
 
-say "Fetching Fjord runtime files (${REPO}@${REF}) — no git history."
+say "Fetching Vaier runtime files (${REPO}@${REF}) — no git history."
 # Extract only the runtime members from the tarball. The archive's top dir is vaier-<ref>; the
 # leading */ glob absorbs it (tar's wildcards match '/'), and --strip-components=1 removes it so the
 # files land in the current directory. Naming a directory member pulls its whole subtree.
@@ -92,7 +92,7 @@ if [ -f .env ]; then
 else
   say "Scaffolding .env template."
   cat > .env <<'EOF'
-# --- Fjord configuration — fill these in, then run: docker compose up -d ---
+# --- Vaier configuration — fill these in, then run: docker compose up -d ---
 
 # Your base domain, and the Let's Encrypt contact email.
 VAIER_DOMAIN=yourdomain.com
@@ -109,12 +109,12 @@ VAIER_OIDC_GITHUB_CLIENT_SECRET=
 # The email that becomes the first admin.
 VAIER_ADMIN_EMAIL=you@gmail.com
 
-# The zone Fjord reads local time in (the nightly backup hour is this zone, not UTC). Defaults to UTC.
+# The zone Vaier reads local time in (the nightly backup hour is this zone, not UTC). Defaults to UTC.
 VAIER_TZ=UTC
 
 # DNS is one record, made once at your DNS host before the first 'up' — any provider will do:
 #   *.yourdomain.com   A   <this server's public IP>
-# Fjord never writes DNS; every service it publishes resolves through that one record.
+# Vaier never writes DNS; every service it publishes resolves through that one record.
 EOF
   chmod 600 .env
 fi

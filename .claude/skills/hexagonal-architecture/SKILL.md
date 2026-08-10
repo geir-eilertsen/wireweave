@@ -1,11 +1,11 @@
 ---
 name: hexagonal-architecture
-description: Authoritative reference for Fjord's hexagonal (ports & adapters) architecture — the pattern as Cockburn defined it, plus the rules Fjord enforces. Read BEFORE writing or reviewing any backend (Java) code, or before spawning a backend agent, so decisions land in the domain and infrastructure is reached only through driven ports.
+description: Authoritative reference for Vaier's hexagonal (ports & adapters) architecture — the pattern as Cockburn defined it, plus the rules Vaier enforces. Read BEFORE writing or reviewing any backend (Java) code, or before spawning a backend agent, so decisions land in the domain and infrastructure is reached only through driven ports.
 ---
 
 # Hexagonal Architecture (Ports & Adapters)
 
-The pattern Alistair Cockburn coined (originally "hexagonal architecture", renamed **Ports & Adapters** in 2005). Fjord's whole backend is built on it. Getting it wrong means rebuilding features — so this is enforced, not just documented (see the bottom).
+The pattern Alistair Cockburn coined (originally "hexagonal architecture", renamed **Ports & Adapters** in 2005). Vaier's whole backend is built on it. Getting it wrong means rebuilding features — so this is enforced, not just documented (see the bottom).
 
 ## The pattern, at its source
 
@@ -23,7 +23,7 @@ The pattern Alistair Cockburn coined (originally "hexagonal architecture", renam
 
 A use case is something a **driving actor invokes**. A **side-effect** the core produces (e.g. "provision a host because these paths are now protected") is **NOT a use case** — the domain triggers it through a **driven port**.
 
-## How Fjord applies it (the enforced rules)
+## How Vaier applies it (the enforced rules)
 
 Layers: `domain/` (entities, value objects, port interfaces — no Spring) · `application/` (`*UseCase` interfaces + `*Service` implementations) · `adapter/driven/` (driven-port implementations) · `rest/` (driving adapters / controllers).
 
