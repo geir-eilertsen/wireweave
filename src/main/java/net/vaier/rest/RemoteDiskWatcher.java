@@ -23,6 +23,7 @@ import net.vaier.domain.DockerCommandAccess;
 import net.vaier.domain.RemoteDiskUsage;
 import net.vaier.domain.SshServerPresence;
 import net.vaier.domain.port.ForHoldingMachineDiskStandings;
+import net.vaier.domain.port.ForPersistingDiskFillTrends;
 import net.vaier.domain.port.ForPersistingDiskPressureState;
 import net.vaier.domain.port.ForPublishingEvents;
 import net.vaier.domain.port.ForRecordingDockerCommandAccess;
@@ -75,11 +76,14 @@ import java.util.stream.Collectors;
  * failure can never masquerade as a full disk.
  *
  * <p>The same readings feed a second, forward-looking consumer: a per-filesystem
- * {@link RemoteDiskForecastTracker} projects the disk-fill <b>runway</b> from the recent trend and emails an
- * early warning when a filesystem is projected to fill within the forecast horizon <em>while still below</em>
- * its threshold — so a filling disk pages once as a forecast and then the level alert takes over. No extra
- * SSH round-trip: the forecast reads the readings the level check already took, and a failed or unparseable
- * {@code df} records no sample (the failure paths {@code return} before the forecast feed).
+ * {@link RemoteDiskForecastTracker} projects the disk-fill <b>runway</b> from a week of retained free-space
+ * samples and emails an early warning when a filesystem is projected to fill within the forecast horizon
+ * <em>while still below</em> its threshold — so a filling disk pages once as a forecast and then the level
+ * alert takes over. Its samples and its already-warned latch live behind
+ * {@link ForPersistingDiskFillTrends}, because a week of baseline cannot accumulate in a field wiped by
+ * every redeploy. No extra SSH round-trip: the forecast reads the readings the level check already took, and
+ * a failed or unparseable {@code df} records no sample (the failure paths {@code return} before the forecast
+ * feed).
  *
  * <p>A third consumer rides the same SSH attempt: whether the machine has an SSH server listening at all.
  * A refused connect surfaces from the shared {@code SshConnector} as {@link NoSshServerException} — the one
@@ -123,8 +127,9 @@ public class RemoteDiskWatcher {
     // A second fact this same trip can teach, and the only place Vaier can learn it: the container scrape
     // reads Docker's API over the tunnel and never needs the docker group this asks about.
     private final ForRecordingDockerCommandAccess dockerAccessRecorder;
+    private final ForPersistingDiskFillTrends diskFillTrends;
     private final RemoteDiskPressureTracker tracker;
-    private final RemoteDiskForecastTracker forecastTracker = new RemoteDiskForecastTracker();
+    private final RemoteDiskForecastTracker forecastTracker;
 
     // The stream the Explorer already holds open for fleet liveness (peers, LAN reachability) — piggybacking
     // here costs no new connection and no timer.
@@ -145,7 +150,8 @@ public class RemoteDiskWatcher {
                              DetectMachineNetworksUseCase detectMachineNetworks,
                              ForgetMachineNetworksUseCase forgetMachineNetworks,
                              ForHoldingMachineDiskStandings diskStandings,
-                             ForRecordingDockerCommandAccess dockerAccessRecorder) {
+                             ForRecordingDockerCommandAccess dockerAccessRecorder,
+                             ForPersistingDiskFillTrends diskFillTrends) {
         this.machines = machines;
         this.credentials = credentials;
         this.remoteCommand = remoteCommand;
@@ -160,9 +166,12 @@ public class RemoteDiskWatcher {
         this.forgetMachineNetworks = forgetMachineNetworks;
         this.diskStandings = diskStandings;
         this.dockerAccessRecorder = dockerAccessRecorder;
-        // The domain owns the port call; this watcher only hands it in. Its state is on disk precisely so
-        // that a redeploy — several a day here — no longer wipes what admins have already been told.
+        this.diskFillTrends = diskFillTrends;
+        // The domain owns the port call; this watcher only hands it in. Both trackers' state is on disk
+        // precisely so that a redeploy — several a day here — no longer wipes what admins have already been
+        // told, nor the week of samples the forecast projects from.
         this.tracker = new RemoteDiskPressureTracker(diskPressureState);
+        this.forecastTracker = new RemoteDiskForecastTracker(diskFillTrends);
     }
 
     @Scheduled(fixedDelay = 300000)
@@ -179,6 +188,7 @@ public class RemoteDiskWatcher {
         sshPresenceRecorder.retainOnly(fleet);
         dockerAccessRecorder.retainOnly(fleet);
         diskStandings.retainOnly(fleet);
+        diskFillTrends.retainOnly(fleet);
         forgetMachineNetworks.forgetMachineNetworksExcept(fleet);
     }
 
@@ -315,8 +325,7 @@ public class RemoteDiskWatcher {
         }
         int threshold = verdict.thresholdPercent();
 
-        RemoteDiskPressureTracker.Verdict pressure =
-            tracker.observe(machine.id(), filesystem, verdict.breaching());
+        RemoteDiskPressureTracker.Verdict pressure = tracker.observe(machine.id(), filesystem, verdict);
         switch (pressure.outcome()) {
             case ALERT -> notifier.notifyAdminsOfRemoteDiskPressure(filesystem, threshold);
             case RECOVERED -> notifier.notifyAdminsOfRemoteDiskRecovery(filesystem, threshold);
@@ -326,6 +335,13 @@ public class RemoteDiskWatcher {
             case SUPPRESSED -> log.info(
                 "{} {} is at {}% — above its {}% threshold, already notified at band {}; staying quiet",
                 machine.name(), filesystem.mountPoint(), filesystem.usedPercent(), threshold,
+                pressure.notifiedBand().map(Object::toString).orElse("none"));
+            // Equally visible, for the same reason: a disk in the recovery margin is quiet but not clear.
+            case EASING -> log.info(
+                "{} {} is at {}% — under its {}% threshold but not by the {}-point recovery margin, still "
+                    + "in pressure at band {}; staying quiet",
+                machine.name(), filesystem.mountPoint(), filesystem.usedPercent(), threshold,
+                RemoteDiskUsage.RECOVERY_MARGIN_PERCENT,
                 pressure.notifiedBand().map(Object::toString).orElse("none"));
             case QUIET -> { /* below its threshold and never alerted about; nothing to say */ }
         }

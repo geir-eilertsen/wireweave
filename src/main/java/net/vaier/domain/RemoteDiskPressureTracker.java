@@ -32,8 +32,16 @@ import java.util.Optional;
  *
  * <p><b>Slipping back down a band is not a reset.</b> A disk wobbling either side of an edge (91 → 89 → 91)
  * never left pressure, so nothing new has happened and it must not page on every wobble. Only a genuine
- * recovery — back below the threshold, which is the {@link Outcome#RECOVERED} email — clears the state and
- * puts the ladder back at the bottom, so a disk that recovers and re-fills is alerted about again.
+ * recovery — the {@link Outcome#RECOVERED} email — clears the state and puts the ladder back at the bottom,
+ * so a disk that recovers and re-fills is alerted about again.
+ *
+ * <p><b>And neither is dipping under the threshold.</b> That same reasoning had never been applied to the
+ * recovery edge, and the wobble it missed is the one this host actually does: {@code /} sits against its 80%
+ * threshold, a Docker build pushes it over and the nightly prune pulls it back — an alert <em>and</em> a
+ * recovery every single day about a disk that never changed state. So recovery requires a meaningful drop,
+ * not merely crossing back over the line: a filesystem is recovered only once it is clear of its threshold
+ * by {@link RemoteDiskUsage#RECOVERY_MARGIN_PERCENT}. In between it is {@link Outcome#EASING} — still in
+ * pressure, silent, and re-crossing upward says nothing new.
  *
  * <p>Keyed on {@link MachineId} and mount point together. Not on the machine's <em>name</em>: two machines
  * in this fleet are both called "Printer", so a name-keyed tracker had them sharing one slot and swallowing
@@ -49,7 +57,12 @@ public class RemoteDiskPressureTracker {
         ALERT,
         /** Still in pressure, still in the band already alerted at — stay quiet, but say so in the log. */
         SUPPRESSED,
-        /** Back below its threshold after having been in pressure — send the recovery. */
+        /**
+         * Under its threshold but not clear of it by the recovery margin — still in pressure, waiting to
+         * clear. Stay quiet, and say so in the log so it is never mistaken for an unwatched disk.
+         */
+        EASING,
+        /** Clear of its threshold by the recovery margin after having been in pressure — send the recovery. */
         RECOVERED
     }
 
@@ -69,18 +82,24 @@ public class RemoteDiskPressureTracker {
     }
 
     /**
-     * Record a reading of {@code filesystem} on {@code machineId} — already judged {@code breaching} or not
-     * by {@link RemoteDiskUsage#judge} — and decide what admins should hear.
+     * Record a reading of {@code filesystem} on {@code machineId}, already judged by
+     * {@link RemoteDiskUsage#judge}, and decide what admins should hear. The whole {@code verdict} is handed
+     * in rather than its {@code breaching} flag alone: recovery is decided against the threshold too, and
+     * re-deriving it here is how the email and the Explorer would drift apart.
      */
-    public synchronized Verdict observe(MachineId machineId, RemoteDiskUsage filesystem, boolean breaching) {
+    public synchronized Verdict observe(MachineId machineId, RemoteDiskUsage filesystem,
+                                        RemoteDiskUsage.DiskVerdict verdict) {
         String mountPoint = filesystem.mountPoint();
         Optional<DiskPressureState> stored = states.find(machineId, mountPoint);
         Optional<DiskPressureBand> notifiedBand = stored.map(DiskPressureState::notifiedBand);
         DiskPressureBand band = DiskPressureBand.of(filesystem.usedPercent());
 
-        if (!breaching) {
+        if (!verdict.breaching()) {
             if (stored.isEmpty()) {
                 return new Verdict(Outcome.QUIET, band, notifiedBand);
+            }
+            if (!filesystem.isClearOf(verdict.thresholdPercent())) {
+                return new Verdict(Outcome.EASING, band, notifiedBand);
             }
             states.clear(machineId, mountPoint);
             return new Verdict(Outcome.RECOVERED, band, notifiedBand);

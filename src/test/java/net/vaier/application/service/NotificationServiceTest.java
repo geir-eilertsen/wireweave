@@ -1,5 +1,6 @@
 package net.vaier.application.service;
 
+import java.time.Duration;
 import java.time.Instant;
 import net.vaier.config.ConfigResolver;
 import net.vaier.domain.BackupJob;
@@ -7,6 +8,8 @@ import net.vaier.domain.BackupRun;
 import net.vaier.domain.BackupServer;
 import net.vaier.domain.BlockDecision;
 import net.vaier.domain.BreachAttemptRollup;
+import net.vaier.domain.DiskFillForecast;
+import net.vaier.domain.DiskFillForecastCleared;
 import net.vaier.domain.LockoutWarning;
 import net.vaier.domain.MachineType;
 import net.vaier.domain.PeerSnapshot;
@@ -86,13 +89,16 @@ class NotificationServiceTest {
         when(configResolver.getDomain()).thenReturn("example.com");
 
         service.notifyAdminsOfDiskFillForecast(
-                new net.vaier.domain.DiskFillForecast("nas", "/volume1", 80, 1.0, java.time.Duration.ofHours(18)));
+                DiskFillForecast.builder()
+                        .machineName("nas").mountPoint("/volume1")
+                        .currentPercent(74).thresholdPercent(80)
+                        .fillRateKbPerHour(43_690.0).runway(Duration.ofDays(5)).build());
 
         ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
         verify(adminNotifier).sendToAdmins(subject.capture(), body.capture(), any());
-        assertThat(subject.getValue()).contains("nas").contains("18h");
-        assertThat(body.getValue()).contains("nas").contains("80%").contains("vaier.example.com");
+        assertThat(subject.getValue()).contains("nas").contains("80% threshold").contains("5.0 days");
+        assertThat(body.getValue()).contains("nas").contains("74%").contains("vaier.example.com");
     }
 
     @Test
@@ -100,7 +106,7 @@ class NotificationServiceTest {
         when(configResolver.getDomain()).thenReturn("example.com");
 
         service.notifyAdminsOfDiskFillForecastCleared(
-                new net.vaier.domain.DiskFillForecastCleared("nas", "/volume1", 60));
+                new DiskFillForecastCleared("nas", "/volume1", 60));
 
         ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);

@@ -271,4 +271,23 @@ class RemoteDiskUsageTest {
     private static RemoteDiskUsage fsSized(long sizeKb) {
         return new RemoteDiskUsage("NAS", "/dev/sda1", "/", sizeKb, 0L, sizeKb, 0);
     }
+
+    @Test
+    void availableKbAt_isTheFreeSpaceLeftWhenTheFilesystemReadsThatFull() {
+        // ext4 keeps 5% for root, so df's own Use% is used/(used+available) — 60/95 here, not 60/100. The
+        // forecast's floor must use that same base, or it would count down to a percentage the level alert
+        // never fires at.
+        RemoteDiskUsage reserved =
+            new RemoteDiskUsage("NAS", "/dev/sda1", "/", 100_000L, 60_000L, 35_000L, 63);
+
+        assertThat(reserved.availableKbAt(80)).isEqualTo(19_000L);
+        assertThat(reserved.availableKbAt(100)).isZero();
+    }
+
+    @Test
+    void availableKbAt_theCurrentPercent_isRoughlyWhereItAlreadyIs() {
+        RemoteDiskUsage half = new RemoteDiskUsage("NAS", "/dev/sda1", "/", 1000L, 500L, 500L, 50);
+
+        assertThat(half.availableKbAt(50)).isEqualTo(500L);
+    }
 }

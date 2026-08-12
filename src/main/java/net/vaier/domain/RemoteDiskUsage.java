@@ -161,6 +161,29 @@ public record RemoteDiskUsage(String machineName, String device, String mountPoi
     }
 
     /**
+     * How far below its threshold a filesystem must fall before Vaier will call it <b>recovered</b> — the
+     * hysteresis on the way down, and one whole {@link DiskPressureBand} wide so the margin is the same size
+     * as the step Vaier escalates in rather than a number of its own.
+     *
+     * <p>Merely dipping under the line is not a recovery. This very host's root filesystem sits against its
+     * 80% threshold: a Docker build adds ~1.2 GiB and pushes it over, the nightly prune pulls it back, and
+     * with no margin that was an alert <em>and</em> a recovery email every day about a disk that never
+     * changed state.
+     */
+    public static final int RECOVERY_MARGIN_PERCENT = DiskPressureBand.STEP;
+
+    /**
+     * Whether this filesystem has drained clear of {@code thresholdPercent} by the
+     * {@link #RECOVERY_MARGIN_PERCENT} — the reading that ends {@code remote disk pressure}. Between the
+     * margin and the threshold a filesystem is neither breaching nor recovered: it stays in pressure,
+     * silently. Floored at empty, so a filesystem watched at a threshold narrower than the margin can still
+     * recover.
+     */
+    public boolean isClearOf(int thresholdPercent) {
+        return usedPercent <= Math.max(0, thresholdPercent - RECOVERY_MARGIN_PERCENT);
+    }
+
+    /**
      * The threshold this filesystem is judged against: its own when its {@link DiskWatch} carries one,
      * otherwise the global disk alert threshold.
      */
@@ -177,6 +200,18 @@ public record RemoteDiskUsage(String machineName, String device, String mountPoi
     }
 
     /**
+     * The free space this filesystem still has when it reads as {@code thresholdPercent} full — the floor a
+     * {@link DiskFillForecast}'s runway counts down to.
+     *
+     * <p>Measured against {@code used + available}, not {@link #sizeKb}, because that is the ratio {@code df}
+     * reports as {@code Use%} and therefore the one {@link #isAbove} fires on. Reserved blocks would otherwise
+     * put the forecast's floor and the level alert's trigger at two different places on the same disk.
+     */
+    public long availableKbAt(int thresholdPercent) {
+        return Math.round((usedKb + availableKb) * (100 - thresholdPercent) / 100.0);
+    }
+
+    /**
      * <b>The verdict, asked once.</b> Resolves mute, this filesystem's own threshold and the global fallback,
      * and hands back the whole answer: is Vaier watching, what is it judging against, and is this disk in
      * trouble.
@@ -186,6 +221,10 @@ public record RemoteDiskUsage(String machineName, String device, String mountPoi
      * is the reason the constant, the parser and the verdict all live together on this entity: the email and
      * the tree must never be able to disagree about a disk, and the only way to guarantee that is for neither
      * of them to decide it.
+     *
+     * <p>They can still differ on whether admins have been <em>told</em>: a filesystem easing back under its
+     * threshold is no longer breaching here, while {@link RemoteDiskPressureTracker} keeps it in pressure
+     * until it clears the recovery margin. That margin silences mail; it does not rewrite the level.
      */
     public DiskVerdict judge(DiskWatch watch, int globalThresholdPercent) {
         return new DiskVerdict(watch.watched(), effectiveThreshold(watch, globalThresholdPercent),
@@ -231,8 +270,11 @@ public record RemoteDiskUsage(String machineName, String device, String mountPoi
      * 1024-byte blocks rendered the way {@code df -h} renders them — binary divisors, and IEC units that say
      * so. A number labelled "TB" that is really tebibytes is exactly the kind of quiet lie #325 is about, so
      * the unit tells the truth and the operator can reproduce it with {@code df -h} on the host.
+     *
+     * <p>Shared with {@link DiskFillForecast}, which renders a fill <em>rate</em> in the same blocks — one
+     * renderer, so a size and a rate can never disagree about what a GiB is.
      */
-    private static String humanBlocks(long kb) {
+    public static String humanBlocks(long kb) {
         if (kb <= 0) {
             return "0 B";
         }

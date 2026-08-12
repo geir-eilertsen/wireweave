@@ -7,7 +7,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Which CrowdSec block decisions the operator has already been told about (#329 Slice 2). The
- * sibling of {@link ImageUpdateTracker}, not {@link DiskPressureTracker} or
+ * sibling of {@link ImageUpdateTracker}, not {@link RemoteDiskPressureTracker} or
  * {@link BackupFailureTracker}: it is deliberately <b>not</b> baseline-quiet. A ban already active
  * the very first time Vaier's watcher polls — including right after a restart — is exactly the
  * case the operator needs to hear about, the same reasoning {@link ImageUpdateTracker} documents

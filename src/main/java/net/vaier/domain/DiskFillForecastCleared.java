@@ -2,8 +2,8 @@ package net.vaier.domain;
 
 /**
  * The all-clear for a machine whose {@link DiskFillForecast} early warning has ended in a genuine
- * recovery — the disk was drained, or its fill slowed enough that the projected runway rose back past the
- * {@link DiskFillForecast#FORECAST_HORIZON}, all while staying below the disk-pressure threshold.
+ * recovery — the disk was drained, or its fill slowed enough that the projected runway rose clear of the
+ * {@link DiskFillForecast#EARLY_WARNING_CLEAR_HORIZON}, all while staying below the disk-pressure threshold.
  *
  * <p>Deliberately runway-free: a draining disk has no finite runway, so this carries only the machine and
  * its current fullness rather than fabricating a bogus projection. It is <em>not</em> emitted when the
@@ -31,7 +31,8 @@ public record DiskFillForecastCleared(String machineName, String mountPoint, int
         body.append("Machine: ").append(machineName).append("\n");
         body.append("Filesystem: ").append(mountPoint).append("\n");
         body.append(mountPoint).append(" on ").append(machineName)
-            .append(" is no longer trending toward full, now at ").append(currentPercent).append("%.\n");
+            .append(" is no longer trending toward its alert threshold, now at ").append(currentPercent)
+            .append("%.\n");
         if (baseDomain != null && !baseDomain.isBlank()) {
             body.append("\nVaier UI: https://")
                 .append(new VaierHostnames(baseDomain).vaierServerFqdn())

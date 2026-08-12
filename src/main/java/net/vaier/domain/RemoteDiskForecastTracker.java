@@ -1,43 +1,47 @@
 package net.vaier.domain;
 
+import net.vaier.domain.port.ForPersistingDiskFillTrends;
+
 import java.time.Instant;
-import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Per-filesystem disk-fill-forecast state, the trend-watching sibling of {@link RemoteDiskPressureTracker}
- * (which watches the level). Each filesystem gets its own {@link DiskFillHistory} feeding the recent readings
- * and its own {@link DiskPressureTracker} keyed on the {@code warrantsEarlyWarning} boolean, so the watcher
- * is told only when a filesystem <em>crosses</em> into or out of the early-warning condition — never on every
- * poll — and one filesystem's crossing never disturbs another's. The first observation for a filesystem is a
- * baseline and produces no transition, so a restart never pages.
+ * Decides, per filesystem, whether admins should hear that it is heading for its alert threshold — the
+ * trend-watching sibling of {@link RemoteDiskPressureTracker}, which watches the level. It reaches its own
+ * state through
+ * {@link ForPersistingDiskFillTrends}; the watcher hands the port in and then only decides <em>whom to
+ * tell</em>. The runway it judges runs to that threshold, not to 100% — see {@link DiskFillForecast}.
  *
- * <p><b>#325: keyed on machine AND mount point</b>, like {@link RemoteDiskPressureTracker}. Keyed on the
- * machine alone, the samples of every filesystem on a host would land in one history and the least-squares
- * slope would be fitted through a sawtooth of unrelated disks — a flat {@code /} at 88% interleaved with a
- * climbing {@code /volume1} projects nothing meaningful. A runway belongs to a filesystem, not to a host.
+ * <p><b>The same latch bug, one line further down.</b> When the disk-pressure tracker's boolean latch was
+ * moved onto disk, this one was left as a field on the scheduled watcher — so every redeploy still wiped
+ * both the already-warned latch <em>and</em> the sample history it projects from. A trend needs days of
+ * baseline and a redeploy happens several times a day here, so the forecast could not have fired even if the
+ * arithmetic had been right. It was not: see {@link DiskFillTrend}.
  *
- * <p><b>And keyed on the machine's {@link MachineId}, never its name.</b> {@code lan-servers.yml} really
- * does hold two machines both called "Printer": keyed on the name their samples landed in one history and
- * were fitted through each other, and renaming a machine silently discarded its whole trend. A name is a
- * label; only the id is identity.
+ * <p>Keyed on {@link MachineId} and mount point together, never the machine's name — {@code lan-servers.yml}
+ * really does hold two machines both called "Printer", and a runway belongs to a filesystem, not a host.
  */
 public class RemoteDiskForecastTracker {
 
-    private final Map<String, DiskFillHistory> histories = new ConcurrentHashMap<>();
-    private final Map<String, DiskPressureTracker> crossings = new ConcurrentHashMap<>();
+    /** Whether this reading crossed into, out of, or neither, the early-warning condition. */
+    public enum Transition { NONE, CROSSED_ABOVE, CROSSED_BELOW }
+
+    private final ForPersistingDiskFillTrends trends;
+
+    public RemoteDiskForecastTracker(ForPersistingDiskFillTrends trends) {
+        this.trends = trends;
+    }
 
     /**
      * Record a reading of {@code filesystem} on {@code machineId} and decide what admins should hear. All
-     * the decisions — slope, runway, the level-threshold gate, and crucially whether a cleared crossing is a
-     * genuine recovery or a hand-off to the disk-pressure alert — live here in the domain; the watcher only
-     * sends whichever payload comes back.
+     * the decisions — retention, slope, runway, the level-threshold gate, and crucially whether a cleared
+     * crossing is a genuine recovery or a hand-off to the disk-pressure alert — live in the domain; the
+     * watcher only sends whichever payload comes back.
      *
      * <p>{@code levelThreshold} is the threshold <em>this filesystem</em> is judged against — its own when
      * its {@link DiskWatch} carries one, otherwise the global disk alert threshold — already resolved by the
      * caller, so the forecast hands off to the pressure alert at exactly the level the pressure alert fires
-     * at. The two can never disagree about where the boundary is.
+     * at.
      *
      * <p>A crossing <em>into</em> the early-warning condition yields the {@link DiskFillForecast} to warn
      * with. A crossing <em>out</em> is split by why the gate flipped false:
@@ -49,32 +53,40 @@ public class RemoteDiskForecastTracker {
      *       now speaks for it, so raising an all-clear at the same poll would contradict it.</li>
      * </ul>
      */
-    public Observation observe(MachineId machineId, RemoteDiskUsage filesystem, Instant at,
-                               int levelThreshold) {
-        String machineName = filesystem.machineName();
+    public synchronized Observation observe(MachineId machineId, RemoteDiskUsage filesystem, Instant at,
+                                            int levelThreshold) {
         String mountPoint = filesystem.mountPoint();
-        int usedPercent = filesystem.usedPercent();
-        String key = machineId.value() + '\0' + mountPoint;
-        DiskFillHistory history = histories.computeIfAbsent(key, k -> new DiskFillHistory());
-        history.record(at, usedPercent);
-        Optional<DiskFillForecast> forecast = history.forecast(machineName, mountPoint);
-        boolean warrants = forecast.map(f -> f.warrantsEarlyWarning(levelThreshold)).orElse(false);
-        DiskPressureTracker.Transition transition = crossings
-            .computeIfAbsent(key, k -> new DiskPressureTracker())
-            .update(warrants);
+        Optional<DiskFillTrend> stored = trends.find(machineId, mountPoint);
+        DiskFillTrend trend = stored
+            .orElseGet(() -> DiskFillTrend.startFor(machineId, mountPoint))
+            .observing(at, filesystem.availableKb());
 
+        Optional<DiskFillForecast> forecast = trend.forecast(filesystem, levelThreshold);
+        boolean warrants = forecast
+            .map(f -> f.warrantsEarlyWarning(levelThreshold, trend.warned()))
+            .orElse(false);
+
+        DiskFillTrend updated = trend.withWarned(warrants);
+        // Written only when something actually moved, so a five-minute sweep that retains no new sample and
+        // changes no latch touches no file.
+        if (!stored.map(updated::equals).orElse(false)) {
+            trends.save(updated);
+        }
+
+        Transition transition = Transition.NONE;
         Optional<DiskFillForecast> earlyWarning = Optional.empty();
         Optional<DiskFillForecastCleared> cleared = Optional.empty();
-        switch (transition) {
-            case CROSSED_ABOVE -> earlyWarning = forecast;
-            case CROSSED_BELOW -> {
-                if (usedPercent <= levelThreshold) {
-                    // Genuine recovery: drained, or fill slowed so the runway rose past the horizon.
-                    cleared = Optional.of(new DiskFillForecastCleared(machineName, mountPoint, usedPercent));
-                }
-                // else: hand-off to the disk-pressure alert — suppress the forecast clear.
+        if (warrants && !trend.warned()) {
+            transition = Transition.CROSSED_ABOVE;
+            earlyWarning = forecast;
+        } else if (!warrants && trend.warned()) {
+            transition = Transition.CROSSED_BELOW;
+            if (filesystem.usedPercent() <= levelThreshold) {
+                // Genuine recovery: drained, or fill slowed so the runway rose past the horizon.
+                cleared = Optional.of(new DiskFillForecastCleared(filesystem.machineName(), mountPoint,
+                    filesystem.usedPercent()));
             }
-            case NONE -> { /* no boundary crossed */ }
+            // else: hand-off to the disk-pressure alert — suppress the forecast clear.
         }
         return new Observation(transition, earlyWarning, cleared);
     }
@@ -83,7 +95,7 @@ public class RemoteDiskForecastTracker {
      * The outcome of an {@link #observe} call: the boundary crossing, plus the ready-to-send payloads —
      * an early warning on a crossing in, an all-clear on a genuine recovery out, both empty otherwise.
      */
-    public record Observation(DiskPressureTracker.Transition transition,
+    public record Observation(Transition transition,
                               Optional<DiskFillForecast> earlyWarning,
                               Optional<DiskFillForecastCleared> cleared) { }
 }

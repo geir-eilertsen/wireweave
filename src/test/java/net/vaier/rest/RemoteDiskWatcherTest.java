@@ -4,10 +4,12 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import net.vaier.adapter.driven.InMemoryDiskFillTrendAdapter;
 import net.vaier.adapter.driven.InMemoryDiskPressureStateAdapter;
 import net.vaier.adapter.driven.InMemoryMachineDiskStandingCache;
 import net.vaier.domain.MachineId;
 import net.vaier.domain.TestMachineIds;
+import net.vaier.domain.port.ForPersistingDiskFillTrends;
 import net.vaier.domain.port.ForPersistingDiskPressureState;
 import net.vaier.application.GetDiskWatchesUseCase;
 import net.vaier.application.GetHostCredentialUseCase;
@@ -48,8 +50,10 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.IntToLongFunction;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -83,6 +87,7 @@ class RemoteDiskWatcherTest {
     ForgetMachineNetworksUseCase forgetMachineNetworks;
     ForPublishingEvents eventPublisher;
     ForPersistingDiskPressureState pressureState;
+    ForPersistingDiskFillTrends fillTrends;
     InMemoryMachineDiskStandingCache standings;
     ForRecordingDockerCommandAccess dockerAccessRecorder;
     SteppableClock clock;
@@ -113,6 +118,7 @@ class RemoteDiskWatcherTest {
         forgetMachineNetworks = mock(ForgetMachineNetworksUseCase.class);
         eventPublisher = mock(ForPublishingEvents.class);
         pressureState = new InMemoryDiskPressureStateAdapter();
+        fillTrends = new InMemoryDiskFillTrendAdapter();
         standings = new InMemoryMachineDiskStandingCache();
         dockerAccessRecorder = mock(ForRecordingDockerCommandAccess.class);
         clock = new SteppableClock();
@@ -126,7 +132,64 @@ class RemoteDiskWatcherTest {
     private RemoteDiskWatcher newWatcher() {
         return new RemoteDiskWatcher(machines, credentials, runner, notifier, forecastNotifier,
             diskWatches, configResolver, clock, sshPresenceRecorder, eventPublisher, pressureState,
-            detectMachineNetworks, forgetMachineNetworks, standings, dockerAccessRecorder);
+            detectMachineNetworks, forgetMachineNetworks, standings, dockerAccessRecorder, fillTrends);
+    }
+
+    /** 1024-blocks in a GiB, and a 100 GiB filesystem to spend them on. */
+    private static final long GIB = 1024L * 1024L;
+    private static final long CAPACITY = 100 * GIB;
+
+    /** What a Docker build takes on this host, and what the nightly prune gives back. */
+    private static final long BUILD = Math.round(1.2 * GIB);
+
+    private static long buildSpike(int hour) {
+        return hour % 24 >= 12 ? BUILD : 0;
+    }
+
+    /** Free space lost to a genuine 0.9%-of-capacity-per-day fill by {@code hour}. */
+    private static long filledBy(int hour) {
+        return Math.round(0.9 * GIB * hour / 24.0);
+    }
+
+    private static String dfRow(String device, String mountPoint, long availableKb) {
+        long used = CAPACITY - availableKb;
+        return device + " " + CAPACITY + " " + used + " " + availableKb + " "
+            + Math.round(used * 100.0 / CAPACITY) + "% " + mountPoint + "\n";
+    }
+
+    /** A {@code df} of one 100 GiB root filesystem with the given free space. */
+    private CommandResult dfFree(long availableKb) {
+        return new CommandResult(0, DF_HEADER + dfRow("/dev/root", "/", availableKb), "", false, "SHA256:abc");
+    }
+
+    /** A {@code df} of a machine with two 100 GiB filesystems, each driven where the test needs it. */
+    private CommandResult dfFree(long rootAvailableKb, long volume1AvailableKb) {
+        return new CommandResult(0, DF_HEADER + dfRow("/dev/root", "/", rootAvailableKb)
+            + dfRow("/dev/mapper/cachedev_1", "/volume1", volume1AvailableKb), "", false, "SHA256:abc");
+    }
+
+    private static final String DF_HEADER =
+        "Filesystem 1024-blocks Used Available Capacity Mounted on\n";
+
+    /**
+     * A week of hourly sweeps of {@code nas}, free space following {@code freeAtHour}. A week because that is
+     * what the forecast projects from — anything shorter is the one-hour window that could never see a
+     * ~1%/day fill at all.
+     */
+    private void sweepAWeek(IntToLongFunction freeAtHour) {
+        for (int hour = 0; hour <= 167; hour++) {
+            when(runner.run(eq(mid("nas")), any())).thenReturn(dfFree(freeAtHour.applyAsLong(hour)));
+            watcher.checkRemoteDiskUsage();
+            clock.advance(Duration.ofHours(1));
+        }
+    }
+
+    /** The threshold the forecast counts down to in these tests, and hands off to the level alert at. */
+    private static final int LEVEL = 80;
+
+    private void watchedAtLevel(String machine, String mountPoint) {
+        when(diskWatches.getDiskWatches()).thenReturn(new DiskWatches(List.of(
+            new DiskWatch(mid(machine), mountPoint, true, LEVEL))));
     }
 
     /** An SSH-capable server-type machine (effectiveSshAccess() true by default). */
@@ -257,48 +320,114 @@ class RemoteDiskWatcherTest {
         hasCredential("nas");
         when(runner.run(eq(mid("nas")), any())).thenThrow(new RuntimeException("unreachable"));
 
-        org.assertj.core.api.Assertions.assertThatCode(() -> watcher.checkRemoteDiskUsage())
+        assertThatCode(() -> watcher.checkRemoteDiskUsage())
             .doesNotThrowAnyException();
         verify(notifier, never()).notifyAdminsOfRemoteDiskPressure(any(), anyInt());
     }
 
     @Test
-    void risingSeriesAcrossPolls_notifiesForecastOnce_whileStillBelowLevel() {
+    void aWeekOfBuildSawtoothOverAFlatDisk_neverWarns() {
+        // This host's disk gains and loses ~1.2 GiB every day to a Docker build and the nightly prune. The
+        // old one-hour window sat inside a single build and read it as a catastrophic fill.
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("nas")));
         hasCredential("nas");
+        watchedAtLevel("nas", "/");
 
-        // A steady 1%/h climb, well below the 85 level: 74 → 75 → 76 (runway 24h) → 77 (runway 23h, crosses).
-        int[] series = {74, 75, 76, 77, 78};
-        for (int used : series) {
-            when(runner.run(eq(mid("nas")), any())).thenReturn(df(used));
+        sweepAWeek(hour -> 30 * GIB - buildSpike(hour));
+
+        verify(forecastNotifier, never()).notifyAdminsOfDiskFillForecast(any());
+    }
+
+    @Test
+    void aWeekOfTheSameSawtoothOverARealFill_warnsOnce_whileStillBelowLevel() {
+        // 0.9% of capacity a day — the rate the Vaier host really climbed 70% → 81% over twelve days, and a
+        // rate df's integer percent column cannot resolve at all.
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("nas")));
+        hasCredential("nas");
+        watchedAtLevel("nas", "/");
+
+        sweepAWeek(hour -> 30 * GIB - filledBy(hour) - buildSpike(hour));
+
+        ArgumentCaptor<DiskFillForecast> forecast = ArgumentCaptor.forClass(DiskFillForecast.class);
+        verify(forecastNotifier, times(1)).notifyAdminsOfDiskFillForecast(forecast.capture());
+        assertThat(forecast.getValue().runway()).isBetween(Duration.ofDays(5), Duration.ofDays(7));
+        assertThat(forecast.getValue().currentPercent()).isLessThan(LEVEL);
+        // Never a level alert — the disk stayed at or below its own 95% threshold throughout.
+        verify(notifier, never()).notifyAdminsOfRemoteDiskPressure(any(), anyInt());
+    }
+
+    @Test
+    void aDiskInItsSeventies_isMailedAboutAWeekBeforeItCrossesItsThreshold() {
+        // End to end, on the numbers this was commissioned for. Measured to 100% the runway only dropped
+        // under a week once the disk was past 93% — by which point the hand-off gate had already given it to
+        // the level alert, so not one early warning could ever be sent. Measured to the threshold, the mail
+        // arrives with a week still to act in.
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("nas")));
+        hasCredential("nas");
+        watchedAtLevel("nas", "/");
+
+        int crossedAtHour = 0;
+        for (int hour = 0; hour <= 12 * 24; hour++) {
+            long free = 30 * GIB - filledBy(hour) - buildSpike(hour);
+            if (crossedAtHour == 0 && Math.round((CAPACITY - free) * 100.0 / CAPACITY) > LEVEL) {
+                crossedAtHour = hour;
+            }
+            when(runner.run(eq(mid("nas")), any())).thenReturn(dfFree(free));
             watcher.checkRemoteDiskUsage();
             clock.advance(Duration.ofHours(1));
         }
 
-        verify(forecastNotifier, times(1)).notifyAdminsOfDiskFillForecast(any(DiskFillForecast.class));
-        // Never a level alert — the disk stayed below the disk-pressure threshold throughout.
-        verify(notifier, never()).notifyAdminsOfRemoteDiskPressure(any(), anyInt());
+        ArgumentCaptor<DiskFillForecast> forecast = ArgumentCaptor.forClass(DiskFillForecast.class);
+        verify(forecastNotifier, times(1)).notifyAdminsOfDiskFillForecast(forecast.capture());
+        assertThat(forecast.getValue().currentPercent()).isBetween(71, 77);
+        assertThat(forecast.getValue().forecastSubject()).contains("80% threshold").doesNotContain("full");
+        // The level alert only speaks a week later, which is exactly what the forecast was predicting — and
+        // exactly once: this is the sawtooth that used to alert and recover daily, before the recovery edge
+        // got the same hysteresis the bands have.
+        assertThat(crossedAtHour).isGreaterThan(7 * 24);
+        verify(notifier, times(1)).notifyAdminsOfRemoteDiskPressure(any(RemoteDiskUsage.class), eq(LEVEL));
+    }
+
+    @Test
+    void aRedeployMidWeek_neitherLosesTheTrendNorRePages() {
+        // The bug: the forecast tracker was a field on this watcher, so a redeploy — several a day here —
+        // wiped both the week of samples and the already-warned latch.
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("nas")));
+        hasCredential("nas");
+        watchedAtLevel("nas", "/");
+
+        sweepAWeek(hour -> 30 * GIB - filledBy(hour) - buildSpike(hour));
+        watcher = newWatcher();                       // a redeploy
+        for (int hour = 168; hour <= 180; hour++) {
+            when(runner.run(eq(mid("nas")), any()))
+                .thenReturn(dfFree(30 * GIB - filledBy(hour) - buildSpike(hour)));
+            watcher.checkRemoteDiskUsage();
+            clock.advance(Duration.ofHours(1));
+        }
+
+        // Still exactly the one warning the pre-redeploy week earned, not a second one.
+        verify(forecastNotifier, times(1)).notifyAdminsOfDiskFillForecast(any());
+        verify(forecastNotifier, never()).notifyAdminsOfDiskFillForecastCleared(any());
     }
 
     @Test
     void drainingBelowThreshold_afterWarning_sendsAllClearWithCurrentPercent() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("nas")));
         hasCredential("nas");
+        watchedAtLevel("nas", "/");
 
-        // Climb below the level threshold until the early warning fires...
-        for (int used : new int[]{74, 75, 76, 77}) {
-            when(runner.run(eq(mid("nas")), any())).thenReturn(df(used));
+        sweepAWeek(hour -> 30 * GIB - filledBy(hour) - buildSpike(hour));
+        // ...then 45 GiB is freed while the disk stays below its threshold → genuine recovery.
+        for (int hour = 168; hour <= 200; hour++) {
+            when(runner.run(eq(mid("nas")), any())).thenReturn(dfFree(45 * GIB));
             watcher.checkRemoteDiskUsage();
             clock.advance(Duration.ofHours(1));
         }
-        // ...then space is freed (sharp drop) while still below threshold → genuine recovery.
-        when(runner.run(eq(mid("nas")), any())).thenReturn(df(50));
-        watcher.checkRemoteDiskUsage();
 
-        org.mockito.ArgumentCaptor<DiskFillForecastCleared> cleared =
-            org.mockito.ArgumentCaptor.forClass(DiskFillForecastCleared.class);
+        ArgumentCaptor<DiskFillForecastCleared> cleared =
+            ArgumentCaptor.forClass(DiskFillForecastCleared.class);
         verify(forecastNotifier).notifyAdminsOfDiskFillForecastCleared(cleared.capture());
-        org.assertj.core.api.Assertions.assertThat(cleared.getValue().currentPercent()).isEqualTo(50);
+        assertThat(cleared.getValue().currentPercent()).isEqualTo(55);
         verify(notifier, never()).notifyAdminsOfRemoteDiskPressure(any(), anyInt());
     }
 
@@ -306,19 +435,15 @@ class RemoteDiskWatcherTest {
     void climbingPastThreshold_afterWarning_suppressesForecastClear_onlyPressureAlerts() {
         when(machines.getAllMachines()).thenReturn(List.of(sshMachine("nas")));
         hasCredential("nas");
+        watchedAtLevel("nas", "/");
 
-        // Climb below threshold until the early warning fires...
-        for (int used : new int[]{74, 75, 76, 77}) {
-            when(runner.run(eq(mid("nas")), any())).thenReturn(df(used));
-            watcher.checkRemoteDiskUsage();
-            clock.advance(Duration.ofHours(1));
-        }
-        // ...then it crosses the level threshold → the disk-pressure alert speaks; the forecast clear
-        // must be suppressed so admins aren't double-paged at the same poll.
-        when(runner.run(eq(mid("nas")), any())).thenReturn(df(90));
+        sweepAWeek(hour -> 30 * GIB - filledBy(hour) - buildSpike(hour));
+        // ...then it crosses its level threshold → the disk-pressure alert speaks; the forecast clear must
+        // be suppressed so admins aren't double-paged at the same poll.
+        when(runner.run(eq(mid("nas")), any())).thenReturn(dfFree(2 * GIB));
         watcher.checkRemoteDiskUsage();
 
-        verify(notifier).notifyAdminsOfRemoteDiskPressure(any(RemoteDiskUsage.class), eq(85));
+        verify(notifier).notifyAdminsOfRemoteDiskPressure(any(RemoteDiskUsage.class), eq(LEVEL));
         verify(forecastNotifier, never()).notifyAdminsOfDiskFillForecastCleared(any());
     }
 
@@ -330,7 +455,7 @@ class RemoteDiskWatcherTest {
         // Every poll fails; a failed df must record no sample, so a forecast can never form.
         when(runner.run(eq(mid("nas")), any()))
             .thenReturn(new CommandResult(-1, "", "", true, "SHA256:abc"));
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < 200; i++) {
             watcher.checkRemoteDiskUsage();
             clock.advance(Duration.ofHours(1));
         }
@@ -500,16 +625,17 @@ class RemoteDiskWatcherTest {
 
     @Test
     void theForecastIsKeptPerFilesystem_notPerMachine() {
-        // The forecast tracker is keyed on machine AND mount too. /volume1 climbing must forecast on its own
-        // trend — a flat / on the same machine must not dilute or mask it.
-        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("NAS")));
-        hasCredential("NAS");
+        // Keyed on machine AND mount: /volume1 filling must forecast on its own trend, and a flat / on the
+        // same machine must neither dilute nor mask it.
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("nas")));
+        hasCredential("nas");
         when(diskWatches.getDiskWatches()).thenReturn(new DiskWatches(List.of(
-            new DiskWatch(mid("NAS"), "/", true, 95))));      // keep / quiet so only /volume1 can speak
+            new DiskWatch(mid("nas"), "/", true, LEVEL),
+            new DiskWatch(mid("nas"), "/volume1", true, LEVEL))));
 
-        // /volume1 climbs 1%/h toward full while / sits at its usual 88%.
-        for (int used : new int[]{74, 75, 76, 77, 78}) {
-            when(runner.run(eq(mid("NAS")), any())).thenReturn(nasDf(used));
+        for (int hour = 0; hour <= 167; hour++) {
+            when(runner.run(eq(mid("nas")), any())).thenReturn(
+                dfFree(30 * GIB, 30 * GIB - filledBy(hour) - buildSpike(hour)));
             watcher.checkRemoteDiskUsage();
             clock.advance(Duration.ofHours(1));
         }
@@ -517,23 +643,17 @@ class RemoteDiskWatcherTest {
         ArgumentCaptor<DiskFillForecast> forecast = ArgumentCaptor.forClass(DiskFillForecast.class);
         verify(forecastNotifier, times(1)).notifyAdminsOfDiskFillForecast(forecast.capture());
         assertThat(forecast.getValue().mountPoint()).isEqualTo("/volume1");
-        assertThat(forecast.getValue().machineName()).isEqualTo("NAS");
+        assertThat(forecast.getValue().machineName()).isEqualTo("nas");
     }
 
     @Test
     void aMutedFilesystem_isNotForecastEither() {
-        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("NAS")));
-        hasCredential("NAS");
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("nas")));
+        hasCredential("nas");
         when(diskWatches.getDiskWatches()).thenReturn(new DiskWatches(List.of(
-            new DiskWatch(mid("NAS"), "/", false, null),
-            new DiskWatch(mid("NAS"), "/volume1", false, null),
-            new DiskWatch(mid("NAS"), "/volume2", false, null))));
+            new DiskWatch(mid("nas"), "/", false, null))));
 
-        for (int used : new int[]{74, 75, 76, 77, 78}) {
-            when(runner.run(eq(mid("NAS")), any())).thenReturn(nasDf(used));
-            watcher.checkRemoteDiskUsage();
-            clock.advance(Duration.ofHours(1));
-        }
+        sweepAWeek(hour -> 30 * GIB - filledBy(hour) - buildSpike(hour));
 
         verify(forecastNotifier, never()).notifyAdminsOfDiskFillForecast(any());
     }
@@ -851,6 +971,52 @@ class RemoteDiskWatcherTest {
 
         verify(notifier, times(2)).notifyAdminsOfRemoteDiskPressure(any(), anyInt());
         verify(notifier, times(1)).notifyAdminsOfRemoteDiskRecovery(any(), anyInt());
+    }
+
+    @Test
+    void aDiskSawtoothingAcrossItsThreshold_isMailedAboutOnce_andNeverRecovered() {
+        // The daily reality on this host: a Docker build pushes / over its 80% threshold and the nightly
+        // prune pulls it back. Recovering on any dip under the line mailed the operator a pair a day.
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("vaier")));
+        hasCredential("vaier");
+        watchedAtLevel("vaier", "/");
+
+        for (int day = 0; day < 7; day++) {
+            when(runner.run(eq(mid("vaier")), any())).thenReturn(df(82));
+            watcher.checkRemoteDiskUsage();
+            when(runner.run(eq(mid("vaier")), any())).thenReturn(df(78));
+            watcher.checkRemoteDiskUsage();
+        }
+
+        verify(notifier, times(1)).notifyAdminsOfRemoteDiskPressure(any(), anyInt());
+        verify(notifier, never()).notifyAdminsOfRemoteDiskRecovery(any(), anyInt());
+    }
+
+    @Test
+    void aDiskWaitingInTheRecoveryMargin_saysSoInTheLog_notMerelyNothing() {
+        // A filesystem in the gap is in pressure and staying quiet, exactly like a suppressed one, so it has
+        // to be as visible in the log — otherwise it is indistinguishable from a disk nobody watches.
+        Logger watcherLog = (Logger) LoggerFactory.getLogger(RemoteDiskWatcher.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        watcherLog.addAppender(appender);
+        try {
+            when(machines.getAllMachines()).thenReturn(List.of(sshMachine("vaier")));
+            hasCredential("vaier");
+            watchedAtLevel("vaier", "/");
+            when(runner.run(eq(mid("vaier")), any())).thenReturn(df(82));
+            watcher.checkRemoteDiskUsage();   // alerts
+            when(runner.run(eq(mid("vaier")), any())).thenReturn(df(78));
+
+            watcher.checkRemoteDiskUsage();   // under the line but not clear of it — and must say so
+
+            assertThat(appender.list)
+                .filteredOn(event -> event.getLevel().isGreaterOrEqual(Level.INFO))
+                .anySatisfy(event -> assertThat(event.getFormattedMessage())
+                    .contains("78").contains("80").contains("still in pressure"));
+        } finally {
+            watcherLog.detachAppender(appender);
+        }
     }
 
     @Test

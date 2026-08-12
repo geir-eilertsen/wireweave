@@ -117,6 +117,23 @@ class DiskPressureStateFileAdapterTest {
     }
 
     @Test
+    void aFileWrittenBeforeTheRecoveryMargin_loadsUnchanged() throws Exception {
+        // The live file on this host was written by the version with no hysteresis on the recovery edge.
+        // Adding the margin added nothing to the entry — the gap is derived from the reading and the
+        // threshold — so an existing file keeps every filesystem's notified band across the upgrade rather
+        // than dropping it and re-alerting.
+        Files.writeString(configDir.resolve("disk-pressure.yml"), """
+            pressure:
+            - machineId: %s
+              mountPoint: /
+              notifiedBandPercent: 80
+            """.formatted(NAS.value()));
+
+        assertThat(adapter().find(NAS, "/")).map(DiskPressureState::notifiedBand)
+            .contains(DiskPressureBand.of(80));
+    }
+
+    @Test
     void aMalformedFile_isNotAnError_itJustMeansNoStateYet() throws Exception {
         Files.writeString(configDir.resolve("disk-pressure.yml"), "\t: not: yaml: at: all\n[");
 
