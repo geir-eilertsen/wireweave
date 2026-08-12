@@ -2774,4 +2774,36 @@ class ExplorerShellTest {
 
         assertThat(js).contains("/files/upload");
     }
+
+    // --- a phone's pane says only what is true of a phone ------------------------------------------------
+
+    @Test
+    void whetherVaierCanReachInsideAMachine_isOneNamedRule_notTwoInlineCopies() throws IOException {
+        // It decides two things — whether the SSH section renders, and whether "Inside this machine" does.
+        // Written out twice they drift, which is exactly what happened: the phone's pane skipped the SSH
+        // section and then told the operator to turn on SSH access below it.
+        String js = read("explorer-shell.js");
+
+        assertThat(js).contains("function reachesInside(m)");
+        assertThat(js.split("'MOBILE_CLIENT'", -1).length - 1)
+            .as("the client-type literal belongs in the named rule and nowhere else")
+            .isEqualTo(1);
+    }
+
+    @Test
+    void aPhonesPane_neverPointsAtAnSshControlItDoesNotRender() throws IOException {
+        // Vaier cannot reach inside a phone — no SSH, so no files, shell or disk. That is structural, not a
+        // setting, so the pane says nothing rather than spending a section header and a paragraph on an
+        // absence that will never change, on the narrowest screen in the product.
+        String js = read("explorer-shell.js");
+
+        assertThat(js).contains("if (reachesInside(m) || inside.length) {");
+        int from = js.indexOf("Turn on SSH access below");
+        assertThat(from)
+            .as("the instruction still exists for machines that DO have the toggle")
+            .isGreaterThan(0);
+        assertThat(js.lastIndexOf("if (reachesInside(m) || inside.length) {", from))
+            .as("...and is only reachable from inside that guard")
+            .isGreaterThan(0);
+    }
 }

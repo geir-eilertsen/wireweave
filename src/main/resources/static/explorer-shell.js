@@ -1713,6 +1713,13 @@
         return (rec.description || '').trim();
     }
 
+    // Whether Vaier has any way inside this machine. A phone or a laptop has none — nothing listens for SSH,
+    // so there are no files, no shell and no disk, and never will be. One rule, because it decides two things
+    // that have to agree: whether the SSH section renders, and whether "Inside this machine" does.
+    function reachesInside(m) {
+        return m.type !== 'MOBILE_CLIENT' && m.type !== 'WINDOWS_CLIENT';
+    }
+
     function renderMachine(pane) {
         const m = machineOf(S.path);
         if (!m) return pane.appendChild(note('That machine is no longer in the fleet.', true));
@@ -1762,36 +1769,41 @@
         wires.appendChild(kv(wireRows));
         body.appendChild(wires);
 
-        body.appendChild(section('Inside this machine'));
+        // Skipped entirely for a phone or a laptop: there is no inside to report, that will never change, and
+        // saying so cost a section header and a paragraph on the narrowest screen in the product — a paragraph
+        // that pointed at an SSH toggle this pane deliberately does not render.
         const inside = childrenOf(S.path);
-        if (!inside.length) {
-            body.appendChild(note('Vaier cannot reach anything inside this machine. It has no SSH access, so '
-                + 'no files, no shell and no disk reading; it runs no Docker Vaier knows of; and nothing is '
-                + 'published from it. Turn on SSH access below and give it a credential, and it opens up.',
-                false));
-        } else {
-            const grid = document.createElement('div');
-            grid.className = 'ex-grid';
-            const NOTE = {
-                files:      'Browse over SFTP',
-                containers: containersOn(m.id).length + ' seen by Vaier',
-                services:   servicesOn(m.id).length + ' published from here',
-                disk:       'Its filesystems, and how full they are',
-                backup:     'The fleet backs up here',
-            };
-            // Files and disk both ride on SSH — a credential alone got them into the tree, but a machine
-            // whose last check found no SSH server would just relocate the same dead end one click deeper.
-            // Grey them out rather than remove them: the entry still names what is there, and the next sweep
-            // (or an SSH server put back) lifts the greying on its own.
-            const noSshServer = m.sshServerPresence === 'ABSENT';
-            const SSH_ENTRY_KINDS = new Set(['files', 'disk']);
-            inside.forEach((kid) => {
-                const disabledTitle = (noSshServer && SSH_ENTRY_KINDS.has(kid.kind))
-                    ? 'No SSH server detected on last check' : null;
-                grid.appendChild(card(iconFor(kid.kind, kid.name), kid.name, true,
-                    NOTE[kid.name], () => go(['fleet', m.id, kid.name]), null, disabledTitle));
-            });
-            body.appendChild(grid);
+        if (reachesInside(m) || inside.length) {
+            body.appendChild(section('Inside this machine'));
+            if (!inside.length) {
+                body.appendChild(note('Vaier cannot reach anything inside this machine. It has no SSH access, '
+                    + 'so no files, no shell and no disk reading; it runs no Docker Vaier knows of; and nothing '
+                    + 'is published from it. Turn on SSH access below and give it a credential, and it opens up.',
+                    false));
+            } else {
+                const grid = document.createElement('div');
+                grid.className = 'ex-grid';
+                const NOTE = {
+                    files:      'Browse over SFTP',
+                    containers: containersOn(m.id).length + ' seen by Vaier',
+                    services:   servicesOn(m.id).length + ' published from here',
+                    disk:       'Its filesystems, and how full they are',
+                    backup:     'The fleet backs up here',
+                };
+                // Files and disk both ride on SSH — a credential alone got them into the tree, but a machine
+                // whose last check found no SSH server would just relocate the same dead end one click deeper.
+                // Grey them out rather than remove them: the entry still names what is there, and the next
+                // sweep (or an SSH server put back) lifts the greying on its own.
+                const noSshServer = m.sshServerPresence === 'ABSENT';
+                const SSH_ENTRY_KINDS = new Set(['files', 'disk']);
+                inside.forEach((kid) => {
+                    const disabledTitle = (noSshServer && SSH_ENTRY_KINDS.has(kid.kind))
+                        ? 'No SSH server detected on last check' : null;
+                    grid.appendChild(card(iconFor(kid.kind, kid.name), kid.name, true,
+                        NOTE[kid.name], () => go(['fleet', m.id, kid.name]), null, disabledTitle));
+                });
+                body.appendChild(grid);
+            }
         }
 
         // What Vaier suggests doing next with this machine — progressive-adoption nudges (§6.15.1): publish its
@@ -1812,7 +1824,7 @@
         // credential), and the shell itself, opened right here (a terminal is the most direct thing SSH is for).
         // Offered on any machine Vaier would SSH (a server or a LAN server), never on a phone or laptop client.
         // Turning access off hides the files and disk entries in the tree — it stops claiming a reach it lost.
-        if (m.type !== 'MOBILE_CLIENT' && m.type !== 'WINDOWS_CLIENT') {
+        if (reachesInside(m)) {
             body.appendChild(section('SSH access'));
             // Vaier's last-known belief about whether this machine has an SSH server at all — pushed live by
             // the same 5-minute sweep that already reaches every SSH-accessible, credentialed machine
@@ -1887,10 +1899,8 @@
                 const claimRow = el('div', 'ex-lactions is-static');
                 claimRow.appendChild(selVerb('locate', 'This browser is ' + m.name, 'ex-btn', () => claimDevice(m)));
                 body.appendChild(claimRow);
-                body.appendChild(note('Claim ' + m.name + ' from the browser running on it, and that browser '
-                    + 'can report where it actually is — the fix for exactly the case the map used to get '
-                    + 'wrong: a phone whose tunnel has been down for hours, still drawn at a day-old guess.',
-                    false));
+                body.appendChild(note('Claim ' + m.name + ' from the browser running on it, and it can report '
+                    + 'where it actually is — with the tunnel down too.', false));
             }
         }
 
@@ -1950,13 +1960,12 @@
         const box = el('input'); box.type = 'checkbox'; box.checked = autoShareEnabled(m.id);
         box.onchange = () => setAutoShare(m.id, box.checked);
         const atxt = el('span');
-        atxt.textContent = 'Keep this device’s position up to date — refresh it quietly whenever this browser '
-            + 'opens Vaier, with no new permission prompt';
+        atxt.textContent = 'Keep it up to date whenever this browser opens Vaier';
         auto.append(box, atxt);
         wrap.appendChild(auto);
 
-        wrap.appendChild(note('This browser is claimed as ' + m.name + '. Forget erases its position and this '
-            + 'claim together — sharing again starts over with the claim.', false));
+        wrap.appendChild(note('This browser is ' + m.name + '. Forget erases its position, its trail and this '
+            + 'claim together.', false));
         return wrap;
     }
 
