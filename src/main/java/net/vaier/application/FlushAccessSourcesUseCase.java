@@ -14,6 +14,11 @@ import java.util.Optional;
  * collection a second time and pushing something subtly different. Empty means there was nothing to write —
  * nothing has changed since the last successful save — and the caller has nothing to push either. An idle
  * fleet would otherwise rewrite the same file, and repaint the same map, every minute forever.
+ *
+ * <p>The clock that drives this is also the only clock Vaier has off the forward-auth path, so the
+ * implementation re-reads the server's own public address here too — the fact a <b>hairpinned access</b> is
+ * recognised by. Resolving it costs an HTTP call, and every other way into the access sources is a request
+ * to a gated service.
  */
 public interface FlushAccessSourcesUseCase {
 

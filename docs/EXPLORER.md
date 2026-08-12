@@ -38,7 +38,7 @@ A machine's **backup** entry carries a dot of its own, coloured by that machine'
 
 Infrastructure has moved into the tree wholesale — adding a machine, scanning a LAN, the world map (a **Map** entry at the fleet root, offered on the fleet's own listing), storing SSH credentials, running setup scripts, editing allowed groups, and publishing a discovered container are all native entries now, and the old Infrastructure page is gone. Vaier's own entries — **Settings**, **Security**, **Users** and **Concepts** — are not of the fleet, so they sit in the topbar's **Vaier menu** rather than on the rail, alongside a **Fleet** entry back to the fleet root. Settings and Security are native; Users and Concepts still open today's page unchanged (**Backups** is native too — the standalone Backups page is gone), and the **admin console** (`/admin.html`) survives only as a redirect for old links until those last sections move across.
 
-![The fleet's Map entry, plotting each machine's approximate location](vaier-map.png)
+![The fleet's Map entry, plotting each machine at its placement, alongside green dots for where people were let in from and red pings for blocked addresses](vaier-map.png)
 
 ### Files and the SFTP root
 

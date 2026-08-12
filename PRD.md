@@ -3392,6 +3392,20 @@ Persisted to `access-sources.yml` (§8; distinct from `access.yml`, which holds 
 
 **Tested as a race, not merely as a sequence.** Two threads released from a `CyclicBarrier` — a position report and a Forget — run against the real file store 25 times per run, and nothing is left behind whichever order they take. Putting identity resolution back outside the monitor fails that test and only that test.
 
+### 6.50 A green dot in Frankfurt nobody had ever been to ✅ (implemented 2026-08-12)
+
+**The last dishonest marker on the Map.** §6.45 removed the phone-at-Fornebu lie — a carrier's whole `/13` collapsing to one point — and left a second one of the same species. `Geirs-Android` and `Geir-pc` are **client peers**, so `AllowedIPs = 0.0.0.0/0`: with the tunnel up, a request to any gated service leaves through the **Vaier server** and arrives at forward-auth wearing the server's *own* public address. DB-IP places that address at Frankfurt am Main, and the live `access-sources.yml` had accumulated **264 accesses at `50.1109, 8.68213`**, all attributed to the operator, all real authenticated sessions, none of them from Germany. The recorded coordinates matched the EIP's geolocation to the decimal, and the dot stopped growing the moment the tunnel dropped while the carrier-collapsed Fornebu dot kept climbing. A VPN hairpin drawn as a place.
+
+**A hairpinned access has no place, so it joins the unplaceable source.** That bucket already existed for exactly this — "the bucket every access from a private, VPN or LAN address falls into" — and a hairpin is a VPN access that happens to be wearing a public address. It is *kept* as a count, never dropped, for §6.44's reason: dropping it would make the map read as "nobody came". The geolocation database is not consulted at all for one, since there is nothing to place.
+
+**Unknown is not "no".** `ServerPublicAddress` is either a resolved address or `unknown()`, and an unknown one calls **nothing** a hairpin — off EC2, in the first moments after boot, or after a failed lookup, every access is placed exactly as it was before this existed. The mirror also holds: a refresh that resolves nothing leaves the address already known in place, so one quiet minute at IMDS cannot put the Frankfurt dot back. Withholding a dot on the strength of a lookup that never happened would have traded one lie for a blank map.
+
+**Resolved off the request path, and never on it.** `AccessSources.recording` reaches forward-auth — the gate for every request to every service Vaier fronts — and resolving the address is a live HTTP call to the EC2 metadata endpoint. So the address is *handed in*, held on `SecurityService` in a volatile field, and refreshed in exactly two places: at boot, and inside `flushAccessSources()`, which the `AllowedAccessFlushScheduler` already drives once a minute for the same "off the critical path" reason. No new port, no new adapter, no new scheduler and no new use case — the four-tier fallback in `ServerLocationResolver` (IMDS → configured public host → `vaier.<domain>`) is reused rather than a second path to the same fact invented. A test counts the port's invocations across 500 recordings and asserts the count never moves.
+
+**The decision is the domain's.** `ServerPublicAddress.isHairpin(callerIp)` is a value object's predicate with its own test, not a comparison in the service or the controller; `AccessSources.recording` takes the address alongside the geolocation port and owns which place — or no place — an access counts towards. Nothing new can throw on the forward-auth path, and the existing guard asserting a `200` while the recorder throws is untouched.
+
+**Historical entries are not migrated.** Only new accesses are affected. The Frankfurt entry already on disk keeps its 264 and stops growing, then ages out 30 days after its last access like any other place — Vaier prunes by `lastSeen` and has no migration step. Folding its count into the unplaceable entry by hand, with Vaier stopped, is the way to make the totals true today.
+
 ---
 
 ## 7. End-to-End Workflows

@@ -48,9 +48,16 @@ public record AccessSources(List<AccessSource> sources) {
      * towards. A lookup that fails, for any reason, is simply an access with no place: it still counts, in
      * the unplaceable source. Losing the count would be the worse answer, and this runs on the path that
      * authenticates every request to every gated service, where nothing may throw.
+     *
+     * <p>{@code server} is Vaier's own public address, resolved off this path and handed in — never looked
+     * up here. A {@link ServerPublicAddress#isHairpin} caller is a full-tunnel peer's request turning
+     * around through the server, so the address places the server and not the person: no place at all, and
+     * the geolocation database is not asked. An unresolved address calls nothing a hairpin, which is what
+     * keeps a lookup that has not happened yet from blanking the map.
      */
-    public AccessSources recording(String callerIp, String person, Instant at, ForGeolocatingIps geo) {
-        GeoLocation where = locate(callerIp, geo);
+    public AccessSources recording(String callerIp, String person, Instant at, ForGeolocatingIps geo,
+                                   ServerPublicAddress server) {
+        GeoLocation where = server != null && server.isHairpin(callerIp) ? null : locate(callerIp, geo);
         List<AccessSource> updated = new ArrayList<>(sources.size() + 1);
         boolean merged = false;
         for (AccessSource source : sources) {

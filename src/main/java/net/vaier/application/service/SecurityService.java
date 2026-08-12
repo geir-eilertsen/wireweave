@@ -12,10 +12,14 @@ import net.vaier.application.RecordAllowedAccessUseCase;
 import net.vaier.application.RefreshTrustedNetworksUseCase;
 import net.vaier.application.TrustAddressUseCase;
 import net.vaier.application.UntrustAddressUseCase;
+import net.vaier.config.ConfigResolver;
 import net.vaier.domain.AccessSource;
 import net.vaier.domain.AccessSources;
 import net.vaier.domain.BlockDecision;
 import net.vaier.domain.LastServiceReached;
+import net.vaier.domain.ServerLocationResolver;
+import net.vaier.domain.ServerLocationResolver.ResolvedHost;
+import net.vaier.domain.ServerPublicAddress;
 import net.vaier.domain.SourceAddress;
 import net.vaier.domain.TrustedNetworks;
 import net.vaier.domain.port.ForDetectingIntrusions;
@@ -25,6 +29,8 @@ import net.vaier.domain.port.ForLiftingBlocks;
 import net.vaier.domain.port.ForPersistingAccessSources;
 import net.vaier.domain.port.ForPersistingLastServicesReached;
 import net.vaier.domain.port.ForPersistingTrustedAddresses;
+import net.vaier.domain.port.ForResolvingDns;
+import net.vaier.domain.port.ForResolvingPublicHost;
 import net.vaier.domain.port.ForWritingCrowdSecWhitelist;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -83,6 +89,9 @@ public class SecurityService implements RefreshTrustedNetworksUseCase, GetTruste
     private final ForPersistingAccessSources forPersistingAccessSources;
     private final ForPersistingLastServicesReached forPersistingLastServicesReached;
     private final ForGeolocatingIps forGeolocatingIps;
+    private final ForResolvingPublicHost forResolvingPublicHost;
+    private final ForResolvingDns forResolvingDns;
+    private final ConfigResolver configResolver;
 
     /**
      * The access sources as they stand right now, held in memory between flushes so that recording one
@@ -101,6 +110,16 @@ public class SecurityService implements RefreshTrustedNetworksUseCase, GetTruste
     private AccessSources savedAccessSources = AccessSources.empty();
 
     /**
+     * Vaier's own public address, as last resolved. Held here, and refreshed only off the request path,
+     * because resolving it is a live HTTP call to the EC2 metadata endpoint and recording an allowed access
+     * runs inside the forward-auth check for every request to every gated service.
+     *
+     * <p>Volatile rather than guarded by {@code this}: the resolution itself must not hold the monitor that
+     * every concurrent recording contends for.
+     */
+    private volatile ServerPublicAddress ownPublicAddress = ServerPublicAddress.unknown();
+
+    /**
      * Serialises flush against flush, and deliberately not {@code this}: recording an allowed access must
      * never park behind a file write. {@code fixedDelay} only stops the scheduler overlapping itself, and
      * the shutdown flush is a second caller — interleaved, the older snapshot could be written last and
@@ -115,7 +134,10 @@ public class SecurityService implements RefreshTrustedNetworksUseCase, GetTruste
                            ForPersistingTrustedAddresses forPersistingTrustedAddresses,
                            ForPersistingAccessSources forPersistingAccessSources,
                            ForPersistingLastServicesReached forPersistingLastServicesReached,
-                           ForGeolocatingIps forGeolocatingIps) {
+                           ForGeolocatingIps forGeolocatingIps,
+                           ForResolvingPublicHost forResolvingPublicHost,
+                           ForResolvingDns forResolvingDns,
+                           ConfigResolver configResolver) {
         this.peerConfigProvider = peerConfigProvider;
         this.forWritingCrowdSecWhitelist = forWritingCrowdSecWhitelist;
         this.forDetectingIntrusions = forDetectingIntrusions;
@@ -124,6 +146,9 @@ public class SecurityService implements RefreshTrustedNetworksUseCase, GetTruste
         this.forPersistingAccessSources = forPersistingAccessSources;
         this.forPersistingLastServicesReached = forPersistingLastServicesReached;
         this.forGeolocatingIps = forGeolocatingIps;
+        this.forResolvingPublicHost = forResolvingPublicHost;
+        this.forResolvingDns = forResolvingDns;
+        this.configResolver = configResolver;
     }
 
     /**
@@ -134,7 +159,34 @@ public class SecurityService implements RefreshTrustedNetworksUseCase, GetTruste
     @EventListener
     public void onApplicationReady(ApplicationReadyEvent event) {
         loadAccessSources();
+        refreshOwnPublicAddress();
         refreshTrustedNetworks();
+    }
+
+    /**
+     * Re-reads Vaier's own public address, so that {@link AccessSources#recording} can tell a request that
+     * hairpinned back through this server from one that really came from somewhere.
+     *
+     * <p>Called only from the boot and from the once-a-minute flush — never from
+     * {@link #recordAllowedAccess}, which would put a live IMDS round trip inside the check that
+     * authenticates every request to every gated service. Reuses the domain's existing four-tier fallback
+     * rather than a second path to the same fact.
+     *
+     * <p>What a resolution that yielded nothing means is {@link ServerPublicAddress#refreshedWith}'s
+     * decision, not this method's.
+     */
+    private void refreshOwnPublicAddress() {
+        try {
+            ownPublicAddress = ownPublicAddress.refreshedWith(ServerLocationResolver
+                .resolve(forResolvingPublicHost, this::resolveHostnameToIp, configResolver.getDomain())
+                .map(ResolvedHost::publicIp).orElse(null));
+        } catch (Exception e) {
+            log.debug("Could not resolve Vaier's own public address: {}", e.getMessage());
+        }
+    }
+
+    private String resolveHostnameToIp(String hostname) {
+        return forResolvingDns.resolveAddresses(hostname).stream().findFirst().orElse(null);
     }
 
     private synchronized void loadAccessSources() {
@@ -261,7 +313,8 @@ public class SecurityService implements RefreshTrustedNetworksUseCase, GetTruste
     }
 
     private synchronized void recordAccessSource(String callerIp, String person, Instant at) {
-        accessSources = accessSources.recording(callerIp, person, at, forGeolocatingIps);
+        accessSources = accessSources.recording(callerIp, person, at, forGeolocatingIps,
+            ownPublicAddress);
     }
 
     // --- FlushLastServicesReachedUseCase ---
@@ -303,6 +356,9 @@ public class SecurityService implements RefreshTrustedNetworksUseCase, GetTruste
      */
     @Override
     public Optional<List<AccessSource>> flushAccessSources() {
+        // The minute-clock this already runs on is also when Vaier re-reads its own public address: every
+        // other caller into the access sources is a forward-auth request, and resolving costs an HTTP call.
+        refreshOwnPublicAddress();
         synchronized (flushLock) {
             AccessSources snapshot;
             synchronized (this) {

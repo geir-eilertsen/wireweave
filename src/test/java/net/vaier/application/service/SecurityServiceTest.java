@@ -1,5 +1,6 @@
 package net.vaier.application.service;
 
+import net.vaier.config.ConfigResolver;
 import net.vaier.domain.AccessSource;
 import net.vaier.domain.AccessSources;
 import net.vaier.domain.BlockDecision;
@@ -19,6 +20,9 @@ import net.vaier.domain.port.ForLiftingBlocks;
 import net.vaier.domain.port.ForPersistingAccessSources;
 import net.vaier.domain.port.ForPersistingLastServicesReached;
 import net.vaier.domain.port.ForPersistingTrustedAddresses;
+import net.vaier.domain.port.ForResolvingDns;
+import net.vaier.domain.port.ForResolvingPublicHost;
+import net.vaier.domain.port.ForResolvingPublicHost.PublicHost;
 import net.vaier.domain.port.ForWritingCrowdSecWhitelist;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -39,6 +43,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -64,11 +69,26 @@ class SecurityServiceTest {
     @Mock ForPersistingAccessSources forPersistingAccessSources;
     @Mock ForPersistingLastServicesReached forPersistingLastServicesReached;
     @Mock ForGeolocatingIps forGeolocatingIps;
+    @Mock ForResolvingPublicHost forResolvingPublicHost;
+    @Mock ForResolvingDns forResolvingDns;
+    @Mock ConfigResolver configResolver;
+
+    /** The live elastic IP a full-tunnel peer's request comes back wearing. */
+    private static final String OUR_EIP = "52.29.74.114";
+
+    /** Where DB-IP places that address, and where nobody has ever signed in from. */
+    private static final GeoLocation FRANKFURT =
+        new GeoLocation(50.1109, 8.68213, "Frankfurt am Main", "Germany");
 
     private SecurityService service() {
+        return service(forResolvingPublicHost);
+    }
+
+    private SecurityService service(ForResolvingPublicHost publicHost) {
         SecurityService service = new SecurityService(peerConfigProvider, forWritingCrowdSecWhitelist,
             forDetectingIntrusions, forLiftingBlocks, forPersistingTrustedAddresses,
-            forPersistingAccessSources, forPersistingLastServicesReached, forGeolocatingIps);
+            forPersistingAccessSources, forPersistingLastServicesReached, forGeolocatingIps,
+            publicHost, forResolvingDns, configResolver);
         ReflectionTestUtils.setField(service, "vpnSubnet", "10.13.13.0/24");
         ReflectionTestUtils.setField(service, "dockerBridgeCidr", "172.20.0.0/16");
         return service;
@@ -324,6 +344,135 @@ class SecurityServiceTest {
 
         assertThat(service.getAccessSources()).singleElement()
             .satisfies(source -> assertThat(source.locatable()).isFalse());
+    }
+
+    // --- hairpinned accesses ---
+
+    /**
+     * A full-tunnel client peer's request leaves through the Vaier server and arrives here wearing the
+     * server's own public address. Geolocating that places the server, not the person — 264 accesses by the
+     * operator's own phone drawn as a green dot in Frankfurt. It has no place, so it joins the unplaceable
+     * source and the database is not asked at all.
+     */
+    @Test
+    void recordAllowedAccess_drawsNoDotForAnAccessHairpinnedThroughVaiersOwnAddress() {
+        when(forPersistingAccessSources.getAll()).thenReturn(AccessSources.empty());
+        when(forResolvingPublicHost.resolvePublicIp()).thenReturn(Optional.of(OUR_EIP));
+        SecurityService service = service();
+        service.onApplicationReady(null);
+
+        service.recordAllowedAccess(OUR_EIP, "geir@example.com", "plex.example.com", RECENTLY);
+
+        assertThat(service.getAccessSources()).singleElement().satisfies(source -> {
+            assertThat(source.isUnplaceable()).isTrue();
+            assertThat(source.count()).isEqualTo(1);
+            assertThat(source.people()).containsExactly("geir@example.com");
+        });
+        verifyNoInteractions(forGeolocatingIps);
+    }
+
+    /**
+     * The hard constraint. Resolving the address is a live HTTP call to the EC2 metadata endpoint, and this
+     * method runs inside the forward-auth check for every request to every gated service — one round trip
+     * per gated request, on the endpoint that authenticates everything.
+     */
+    @Test
+    void recordAllowedAccess_neverResolvesVaiersOwnAddressOnTheRequestPath() {
+        when(forPersistingAccessSources.getAll()).thenReturn(AccessSources.empty());
+        AtomicInteger resolutions = new AtomicInteger();
+        SecurityService service = service(countingPublicHost(resolutions));
+        service.onApplicationReady(null);
+        int afterBoot = resolutions.get();
+
+        for (int i = 0; i < 500; i++) {
+            service.recordAllowedAccess(OUR_EIP, "geir@example.com", "plex.example.com", RECENTLY);
+        }
+
+        assertThat(afterBoot).as("the address is resolved once, at boot").isPositive();
+        assertThat(resolutions.get()).isEqualTo(afterBoot);
+    }
+
+    /** The minute-clock the flush already runs on is where the address is re-read — never a request path. */
+    @Test
+    void flushAccessSources_isWhereVaiersOwnAddressIsReRead() {
+        when(forResolvingPublicHost.resolvePublicIp()).thenReturn(Optional.of(OUR_EIP));
+        SecurityService service = service();
+
+        service.flushAccessSources();
+        service.recordAllowedAccess(OUR_EIP, "geir@example.com", "plex.example.com", RECENTLY);
+
+        assertThat(service.getAccessSources()).singleElement()
+            .satisfies(source -> assertThat(source.isUnplaceable()).isTrue());
+    }
+
+    /**
+     * Unknown is not "no". With Vaier's own address unresolvable — off EC2, or in the first moments after
+     * boot — the very same access is placed exactly as it was before hairpins existed. Withholding dots on
+     * the strength of a lookup that never happened would silently blank the map.
+     */
+    @Test
+    void recordAllowedAccess_placesTheAccessAsBeforeWhenVaiersOwnAddressIsUnknown() {
+        when(forPersistingAccessSources.getAll()).thenReturn(AccessSources.empty());
+        when(forGeolocatingIps.locate(OUR_EIP)).thenReturn(Optional.of(FRANKFURT));
+        SecurityService service = service();
+        service.onApplicationReady(null);
+
+        service.recordAllowedAccess(OUR_EIP, "geir@example.com", "plex.example.com", RECENTLY);
+
+        assertThat(service.getAccessSources()).singleElement()
+            .satisfies(source -> assertThat(source.city()).isEqualTo("Frankfurt am Main"));
+    }
+
+    /** A resolution that blows up costs a dot's honesty at most — never the boot, never anybody's access. */
+    @Test
+    void aPublicAddressResolutionThatBlowsUpCostsNothing() {
+        when(forPersistingAccessSources.getAll()).thenReturn(AccessSources.empty());
+        when(forResolvingPublicHost.resolve()).thenThrow(new IllegalStateException("IMDS is down"));
+        when(forGeolocatingIps.locate(OUR_EIP)).thenReturn(Optional.of(FRANKFURT));
+        SecurityService service = service();
+
+        assertThatCode(() -> service.onApplicationReady(null)).doesNotThrowAnyException();
+        service.recordAllowedAccess(OUR_EIP, "geir@example.com", "plex.example.com", RECENTLY);
+
+        assertThat(service.getAccessSources()).hasSize(1);
+    }
+
+    /**
+     * The wiring of {@code ServerPublicAddress.refreshedWith} — the rule itself is the domain's, and tested
+     * there. A minute of silence at the metadata endpoint must not put the Frankfurt dot back.
+     */
+    @Test
+    void flushAccessSources_doesNotForgetTheAddressWhenARefreshResolvesNothing() {
+        when(forResolvingPublicHost.resolvePublicIp())
+            .thenReturn(Optional.of(OUR_EIP))
+            .thenReturn(Optional.empty());
+        SecurityService service = service();
+        service.flushAccessSources();
+
+        service.flushAccessSources();
+        service.recordAllowedAccess(OUR_EIP, "geir@example.com", "plex.example.com", RECENTLY);
+
+        assertThat(service.getAccessSources()).singleElement()
+            .satisfies(source -> assertThat(source.isUnplaceable()).isTrue());
+        // The discriminating assertion: an address forgotten by the failed refresh would be geolocated.
+        verifyNoInteractions(forGeolocatingIps);
+    }
+
+    /** Counts every question asked of the public-host port, whoever asks it. */
+    private static ForResolvingPublicHost countingPublicHost(AtomicInteger resolutions) {
+        return new ForResolvingPublicHost() {
+            @Override
+            public Optional<PublicHost> resolve() {
+                resolutions.incrementAndGet();
+                return Optional.empty();
+            }
+
+            @Override
+            public Optional<String> resolvePublicIp() {
+                resolutions.incrementAndGet();
+                return Optional.of(OUR_EIP);
+            }
+        };
     }
 
     @Test
