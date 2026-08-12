@@ -1,7 +1,10 @@
 package net.vaier.rest;
 
+import net.vaier.application.ClaimDeviceUseCase;
 import net.vaier.application.CreatePeerUseCase;
 import net.vaier.application.DeletePeerUseCase;
+import net.vaier.application.ForgetMyPositionUseCase;
+import net.vaier.application.GetMyDeviceUseCase;
 import net.vaier.application.GenerateDockerComposeUseCase;
 import net.vaier.application.GeneratePeerSetupScriptUseCase;
 import net.vaier.application.GetPeerConfigUseCase;
@@ -10,10 +13,15 @@ import net.vaier.application.GetVpnPeersUseCase;
 import net.vaier.application.GetVpnPeersUseCase.VpnPeerView;
 import net.vaier.application.ReissuePeerConfigUseCase;
 import net.vaier.application.RenamePeerUseCase;
+import net.vaier.application.ReportMyPositionUseCase;
 import net.vaier.application.UpdateLanCidrUseCase;
 import net.vaier.application.UpdatePeerDeviceCategoryUseCase;
 import net.vaier.config.ConfigResolver;
+import net.vaier.domain.CallerIp;
 import net.vaier.domain.GeoLocation;
+import net.vaier.domain.MachineId;
+import net.vaier.domain.Placement;
+import net.vaier.domain.ReportedPosition;
 import net.vaier.domain.port.ForPublishingEvents;
 import net.vaier.domain.port.ForSubscribingToEvents;
 import net.vaier.domain.port.ForTrackingPeerConfigRetrieval;
@@ -21,19 +29,23 @@ import net.vaier.domain.port.ForUpdatingPeerConfigurations;
 import net.vaier.domain.port.ForVendingSetupTokens;
 import net.vaier.config.ServiceNames;
 import net.vaier.domain.MachineIntent;
-import net.vaier.domain.MachineId;
 import net.vaier.domain.MachineType;
 
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 
 @RestController
@@ -58,7 +70,23 @@ public class VpnPeerRestController {
     private final ForPublishingEvents forPublishingEvents;
     private final ForSubscribingToEvents forSubscribingToEvents;
     private final GetServerLocationUseCase getServerLocationUseCase;
+    private final ReportMyPositionUseCase reportMyPositionUseCase;
+    private final ForgetMyPositionUseCase forgetMyPositionUseCase;
+    private final ClaimDeviceUseCase claimDeviceUseCase;
+    private final GetMyDeviceUseCase getMyDeviceUseCase;
     private final ConfigResolver configResolver;
+
+    @Value("${vaier.trusted-proxy-cidr:${launchpad.trusted-proxy-cidr:172.20.0.0/16}}")
+    private String trustedProxyCidr;
+
+    /**
+     * The device claim cookie. Not an auth credential — it authorises exactly one thing, "record this
+     * machine's position" — but still a bearer token, so it is HttpOnly, Secure and SameSite=Lax, and
+     * scoped to the one path family that reads it.
+     */
+    static final String CLAIM_COOKIE = "vaier_device_claim";
+    private static final String CLAIM_COOKIE_PATH = "/vpn/peers";
+    private static final Duration CLAIM_COOKIE_LIFE = Duration.ofDays(1825);
 
     /**
      * One-shot 410 response body (#202). Returned from any of the five secret-bearing endpoints
@@ -102,7 +130,25 @@ public class VpnPeerRestController {
             v.geoLocation().map(GeoLocation::city).orElse(null),
             v.geoLocation().map(GeoLocation::country).orElse(null),
             v.configOutOfDate(),
-            v.deviceCategory().name(), v.deviceCategoryOverridden(), v.sshAccess());
+            v.deviceCategory().name(), v.deviceCategoryOverridden(), v.sshAccess(),
+            v.placement().map(VpnPeerRestController::toPlacementResponse).orElse(null),
+            v.positionTrail().points().stream().map(VpnPeerRestController::toTrailPointResponse).toList(),
+            v.lastServiceReached().map(VpnPeerRestController::toLastServiceReachedResponse).orElse(null));
+    }
+
+    private static TrailPointResponse toTrailPointResponse(ReportedPosition point) {
+        return new TrailPointResponse(point.latitude(), point.longitude(), point.accuracyMetres(),
+            point.reportedAt());
+    }
+
+    private static LastServiceReachedResponse toLastServiceReachedResponse(
+            GetVpnPeersUseCase.LastServiceReachedView reached) {
+        return new LastServiceReachedResponse(reached.host(), reached.displayName(), reached.at());
+    }
+
+    private static PlacementResponse toPlacementResponse(Placement p) {
+        return new PlacementResponse(p.latitude(), p.longitude(), p.source().name(), p.asOf(),
+            p.accuracyMetres(), p.stale(), p.place());
     }
 
     @GetMapping("/server-location")
@@ -122,6 +168,91 @@ public class VpnPeerRestController {
             log.error("Failed to fetch server location: {}", e.getMessage(), e);
             return ResponseEntity.notFound().build();
         }
+    }
+
+    /**
+     * Records where the calling device says it is. The device is identified from its tunnel IP or its
+     * device claim, in the domain — deliberately never from the body, which carries coordinates and
+     * nothing that could name a machine, so a device can only ever report its own position.
+     */
+    @PostMapping("/my-position")
+    public ResponseEntity<Void> reportMyPosition(
+            @RequestBody(required = false) ReportMyPositionRequest request,
+            @CookieValue(name = CLAIM_COOKIE, required = false) String claimToken,
+            HttpServletRequest httpRequest) {
+        // No body at all is the domain's own refusal, borrowed — it cannot be reached with nothing to judge.
+        if (request == null) {
+            throw ReportedPosition.withoutCoordinates();
+        }
+        reportMyPositionUseCase.reportMyPosition(resolveCallerIp(httpRequest), claimToken,
+            request.latitude(), request.longitude(), request.accuracyMetres());
+        forPublishingEvents.publish("vpn-peers", "peers-updated", "");
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * The privacy escape hatch: forgets the position AND revokes the claim, then clears the cookie.
+     *
+     * <p>Mapped on the literal {@code /my-position} rather than the {@code /{peerIdentifier}} delete
+     * below — Spring prefers the literal segment, so a peer delete is unaffected.
+     */
+    @DeleteMapping("/my-position")
+    public ResponseEntity<Void> forgetMyPosition(
+            @CookieValue(name = CLAIM_COOKIE, required = false) String claimToken,
+            HttpServletRequest httpRequest) {
+        forgetMyPositionUseCase.forgetMyPosition(resolveCallerIp(httpRequest), claimToken);
+        forPublishingEvents.publish("vpn-peers", "peers-updated", "");
+        return ResponseEntity.noContent()
+            .header(HttpHeaders.SET_COOKIE, claimCookie("", Duration.ZERO).toString())
+            .build();
+    }
+
+    /**
+     * Which machine THIS browser has claimed, or null. The cookie is HttpOnly, so the browser cannot work
+     * this out for itself — and the answer belongs here rather than on the peer records, because a claim
+     * is a property of the browser asking, not of the machine.
+     */
+    @GetMapping("/my-device")
+    public ResponseEntity<MyDeviceResponse> getMyDevice(
+            @CookieValue(name = CLAIM_COOKIE, required = false) String claimToken) {
+        return ResponseEntity.ok(new MyDeviceResponse(
+            getMyDeviceUseCase.myDevice(claimToken).map(MachineId::value).orElse(null)));
+    }
+
+    /**
+     * Claims this browser as {@code machineId}'s device. The machine id is in the path, and that is
+     * correct here: this is the operator asserting from an authorised console session which device they
+     * are on, not a device asserting its own identity. Gated like every other peer-mutating endpoint —
+     * by the admin forward-auth chain in front of Vaier, with no exemption of its own.
+     *
+     * <p><b>Note the path variable.</b> Every sibling under {@code /vpn/peers/{...}} takes a <em>peer
+     * identifier</em> — the config directory name, as {@code /{peerId}/reissue} and
+     * {@code /{peerIdentifier}/config} do. This one takes the <em>machine id</em>, the identity a claim
+     * hangs off, because a peer id is a storage key and a claim must survive one changing. A caller that
+     * reuses a peer id here gets a {@code 404}; take the {@code machineId} field from {@code GET
+     * /vpn/peers} instead.
+     */
+    @PostMapping("/{machineId}/device-claim")
+    public ResponseEntity<Void> claimDevice(@PathVariable String machineId) {
+        log.info("Claiming this browser as the device for machine {}", LogSafe.forLog(machineId));
+        String token = claimDeviceUseCase.claimDevice(machineId);
+        return ResponseEntity.noContent()
+            .header(HttpHeaders.SET_COOKIE, claimCookie(token, CLAIM_COOKIE_LIFE).toString())
+            .build();
+    }
+
+    private static ResponseCookie claimCookie(String value, Duration maxAge) {
+        return ResponseCookie.from(CLAIM_COOKIE, value)
+            .httpOnly(true).secure(true).sameSite("Lax").path(CLAIM_COOKIE_PATH).maxAge(maxAge).build();
+    }
+
+    /**
+     * Which hop to believe is {@link CallerIp}'s decision, not this controller's — the launchpad and the
+     * forward-auth check ask the same question, and a second copy of the rule here is the copy that drifts.
+     */
+    private String resolveCallerIp(HttpServletRequest request) {
+        return CallerIp.of(request.getRemoteAddr(), request.getHeader("X-Forwarded-For"), trustedProxyCidr)
+            .value();
     }
 
     @PostMapping
@@ -539,7 +670,68 @@ public class VpnPeerRestController {
             boolean configOutOfDate,
             String deviceCategory,
             boolean deviceCategoryOverridden,
-            boolean sshAccess
+            boolean sshAccess,
+            /** Where to draw this machine, or null when Vaier has no honest answer. */
+            PlacementResponse placement,
+            /** Where this machine has been, oldest first; empty when it has never reported. */
+            List<TrailPointResponse> positionTrail,
+            /** What this machine last opened, or null when Vaier has never seen it reach anything. */
+            LastServiceReachedResponse lastServiceReached
+    ) {}
+
+    /**
+     * @param host        the gated host the machine reached.
+     * @param displayName the launchpad's label for it, or null when Vaier publishes no route for that host.
+     * @param at          when it was reached.
+     */
+    public record LastServiceReachedResponse(
+            String host,
+            String displayName,
+            Instant at
+    ) {}
+
+    /**
+     * @param source         {@code REPORTED} or {@code ISP_ESTIMATE}.
+     * @param asOf           when that evidence was taken.
+     * @param accuracyMetres null for an ISP estimate.
+     * @param place          "city, country" when known; null for a reported position (no reverse geocoding).
+     */
+    public record PlacementResponse(
+            double latitude,
+            double longitude,
+            String source,
+            Instant asOf,
+            Double accuracyMetres,
+            boolean stale,
+            String place
+    ) {}
+
+    /**
+     * One point of a machine's position trail — a reported position that earned a place in it.
+     *
+     * @param accuracyMetres the radius the browser gave, or null when it gave none.
+     * @param at             when the point was measured.
+     */
+    public record TrailPointResponse(
+            double latitude,
+            double longitude,
+            Double accuracyMetres,
+            Instant at
+    ) {}
+
+    /**
+     * Coordinates only. Nothing here can name a machine, and nothing may be added that could: which device
+     * is reporting comes from the tunnel or the device claim, never from the caller's say-so.
+     */
+    public record ReportMyPositionRequest(
+            Double latitude,
+            Double longitude,
+            Double accuracyMetres
+    ) {}
+
+    /** The machine this browser has claimed, or null when it holds no (unrevoked) claim. */
+    public record MyDeviceResponse(
+            String machineId
     ) {}
 
     /**

@@ -9,10 +9,21 @@ import net.vaier.config.ConfigResolver;
 import net.vaier.domain.DnsRecordType;
 import net.vaier.domain.GeoLocation;
 import net.vaier.domain.LanServer;
+import net.vaier.domain.LastServiceReached;
+import net.vaier.domain.LastServicesReached;
 import net.vaier.domain.MachineId;
 import net.vaier.domain.MachineType;
+import net.vaier.domain.DeviceClaim;
+import net.vaier.domain.MachinePosition;
+import net.vaier.domain.MachinePositions;
+import net.vaier.domain.PlacementSource;
+import net.vaier.domain.PositionTrail;
+import net.vaier.domain.ReportedPosition;
 import net.vaier.domain.ReverseProxyRoute;
+import net.vaier.domain.UnidentifiedDeviceException;
 import net.vaier.domain.VpnClient;
+import net.vaier.domain.port.ForPersistingLastServicesReached;
+import net.vaier.domain.port.ForPersistingMachinePositions;
 import net.vaier.domain.port.ForDeletingVpnPeers;
 import net.vaier.domain.port.ForPersistingLanServers;
 import net.vaier.domain.port.ForExecutingInContainer;
@@ -30,6 +41,7 @@ import net.vaier.domain.port.ForResolvingServerLanCidr;
 import net.vaier.domain.port.ForSyncingLanRoutes;
 import net.vaier.domain.port.ForUpdatingPeerConfigurations;
 import net.vaier.domain.port.ForUpdatingServerAllowedIps;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -38,18 +50,21 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -78,8 +93,24 @@ class VpnServiceTest {
     @Mock ForPersistingLanServers forPersistingLanServers;
     @Mock net.vaier.domain.port.ForPersistingHostCredentials forPersistingHostCredentials;
     @Mock net.vaier.domain.port.ForTrackingHostKeys forTrackingHostKeys;
+    @Mock ForPersistingMachinePositions forPersistingMachinePositions;
+    @Mock ForPersistingLastServicesReached forPersistingLastServicesReached;
 
     @InjectMocks VpnService service;
+
+    /** @Value-injected in production, so a unit fixture without it has nothing on the tunnel at all. */
+    @BeforeEach
+    void theDefaultVpnSubnet() {
+        ReflectionTestUtils.setField(service, "vpnSubnet", "10.13.13.0/24");
+    }
+
+    /** No device has reported or been claimed unless a test says so — the ordinary fleet-wide state. */
+    @BeforeEach
+    void noMachinePositionsByDefault() {
+        lenient().when(forPersistingMachinePositions.getAll()).thenReturn(MachinePositions.empty());
+        lenient().when(forPersistingLastServicesReached.getAll())
+            .thenReturn(LastServicesReached.empty());
+    }
 
     // --- getClients ---
 
@@ -1285,6 +1316,88 @@ class VpnServiceTest {
         assertThat(service.getVpnPeers().get(0).machineId()).isNull();
     }
 
+    // --- getVpnPeers: the last service reached ---
+
+    /** The operator's question: which service did the phone open last, and when. */
+    @Test
+    void getVpnPeers_showsWhatThatMachineLastReached() {
+        MachineId phone = MachineId.generate();
+        Instant reachedAt = Instant.parse("2026-08-11T20:14:00Z");
+        when(forGettingVpnClients.getClients()).thenReturn(List.of(
+            new VpnClient("pub", "10.13.13.5/32", "", "", "0", "0", "0")));
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.5")).thenReturn("phone");
+        when(peerConfigProvider.getPeerConfigByIp("10.13.13.5")).thenReturn(Optional.of(
+            new PeerConfiguration("phone", "Phone", "10.13.13.5", "", MachineType.MOBILE_CLIENT,
+                null, null, null, null, null, phone)));
+        when(forPersistingLastServicesReached.getAll()).thenReturn(LastServicesReached.of(List.of(
+            new LastServiceReached(phone, "grafana.example.com", reachedAt))));
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(
+            new ReverseProxyRoute("r", "grafana.example.com", "10.13.13.5", 3000, "svc", null)));
+
+        assertThat(service.getVpnPeers().get(0).lastServiceReached()).hasValueSatisfying(reached -> {
+            assertThat(reached.host()).isEqualTo("grafana.example.com");
+            assertThat(reached.displayName()).isEqualTo("grafana");
+            assertThat(reached.at()).isEqualTo(reachedAt);
+        });
+    }
+
+    @Test
+    void getVpnPeers_hasNoLastServiceForAMachineThatHasReachedNothing() {
+        when(forGettingVpnClients.getClients()).thenReturn(List.of(
+            new VpnClient("pub", "10.13.13.5/32", "", "", "0", "0", "0")));
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.5")).thenReturn("phone");
+        when(peerConfigProvider.getPeerConfigByIp("10.13.13.5")).thenReturn(Optional.of(
+            new PeerConfiguration("phone", "Phone", "10.13.13.5", "", MachineType.MOBILE_CLIENT,
+                null, null, null, null, null, MachineId.generate())));
+
+        assertThat(service.getVpnPeers().get(0).lastServiceReached()).isEmpty();
+    }
+
+    /** A peer with no stored config has no identity, so nothing can be attributed to it either. */
+    @Test
+    void getVpnPeers_hasNoLastServiceForAPeerWithNoStoredConfig() {
+        when(forGettingVpnClients.getClients()).thenReturn(List.of(
+            new VpnClient("pub", "10.13.13.5/32", "", "", "0", "0", "0")));
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.5")).thenReturn("orphan");
+        when(peerConfigProvider.getPeerConfigByIp("10.13.13.5")).thenReturn(Optional.empty());
+        when(forPersistingLastServicesReached.getAll()).thenReturn(LastServicesReached.of(List.of(
+            new LastServiceReached(MachineId.generate(), "grafana.example.com", Instant.now()))));
+
+        assertThat(service.getVpnPeers().get(0).lastServiceReached()).isEmpty();
+    }
+
+    /** The console is a gated host too, and Vaier publishes no route for it. The host stands alone. */
+    @Test
+    void getVpnPeers_leavesTheLastServiceUnnamedWhenNoRouteServesThatHost() {
+        MachineId phone = MachineId.generate();
+        when(forGettingVpnClients.getClients()).thenReturn(List.of(
+            new VpnClient("pub", "10.13.13.5/32", "", "", "0", "0", "0")));
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.5")).thenReturn("phone");
+        when(peerConfigProvider.getPeerConfigByIp("10.13.13.5")).thenReturn(Optional.of(
+            new PeerConfiguration("phone", "Phone", "10.13.13.5", "", MachineType.MOBILE_CLIENT,
+                null, null, null, null, null, phone)));
+        when(forPersistingLastServicesReached.getAll()).thenReturn(LastServicesReached.of(List.of(
+            new LastServiceReached(phone, "vaier.example.com", Instant.now()))));
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of());
+
+        assertThat(service.getVpnPeers().get(0).lastServiceReached())
+            .hasValueSatisfying(reached -> assertThat(reached.displayName()).isNull());
+    }
+
+    /** Both stores are read once per refresh, not once per peer — this list is refreshed on a clock. */
+    @Test
+    void getVpnPeers_readsTheReachStoreAndTheRoutesOncePerRefresh() {
+        when(forGettingVpnClients.getClients()).thenReturn(List.of(
+            new VpnClient("a", "10.13.13.5/32", "", "", "0", "0", "0"),
+            new VpnClient("b", "10.13.13.6/32", "", "", "0", "0", "0")));
+        when(peerConfigProvider.getPeerConfigByIp(any())).thenReturn(Optional.empty());
+
+        service.getVpnPeers();
+
+        verify(forPersistingLastServicesReached, times(1)).getAll();
+        verify(forPersistingReverseProxyRoutes, times(1)).getReverseProxyRoutes();
+    }
+
     @Test
     void getVpnPeers_skipsGeolocationWhenEndpointIsBlank() {
         VpnClient client = new VpnClient("pub", "10.13.13.2/32", "", "", "0", "0", "0");
@@ -1442,4 +1555,380 @@ class VpnServiceTest {
         assertThat(service.getVpnPeers().get(0).configOutOfDate()).isFalse();
     }
 
+
+    // --- placement: a reported position beats the ISP estimate, and a dead tunnel places nothing ---
+
+    /** A handshake WireGuard would still call live — the peer is connected right now. */
+    private static String justNow() {
+        return String.valueOf(System.currentTimeMillis() / 1000);
+    }
+
+    private PeerConfiguration phoneConfig() {
+        return new PeerConfiguration("phone", "Phone", "10.13.13.6", "[Interface]",
+            MachineType.MOBILE_CLIENT, null, null, null, null, null, mid("phone"));
+    }
+
+    private void livePeerAt(String endpointIp, GeoLocation estimate) {
+        VpnClient client = new VpnClient("pub", "10.13.13.6/32", endpointIp, "51820", justNow(), "0", "0");
+        when(forGettingVpnClients.getClients()).thenReturn(List.of(client));
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.6")).thenReturn("phone");
+        when(peerConfigProvider.getPeerConfigByIp("10.13.13.6")).thenReturn(Optional.of(phoneConfig()));
+        when(forGeolocatingIps.locate(endpointIp)).thenReturn(Optional.ofNullable(estimate));
+    }
+
+    @Test
+    void getVpnPeers_placesAConnectedPeerWithNoReportAtItsIspEstimate() {
+        livePeerAt("77.16.37.23", new GeoLocation(59.8989, 10.6324, "Oslo", "Norway"));
+
+        assertThat(service.getVpnPeers().get(0).placement()).get().satisfies(placement -> {
+            assertThat(placement.source()).isEqualTo(PlacementSource.ISP_ESTIMATE);
+            assertThat(placement.latitude()).isEqualTo(59.8989);
+            assertThat(placement.place()).isEqualTo("Oslo, Norway");
+            assertThat(placement.stale()).isFalse();
+        });
+    }
+
+    /**
+     * The reported bug: the tunnel has been down for a day and a half and {@code wg} still names the
+     * carrier IP it last saw. Vaier draws nothing rather than claiming the phone is at Fornebu.
+     */
+    @Test
+    void getVpnPeers_placesNothingForADisconnectedPeerWithNoReport() {
+        VpnClient stale = new VpnClient("pub", "10.13.13.6/32", "77.16.37.23", "51820",
+            String.valueOf(System.currentTimeMillis() / 1000 - 35 * 3600), "0", "0");
+        when(forGettingVpnClients.getClients()).thenReturn(List.of(stale));
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.6")).thenReturn("phone");
+        when(peerConfigProvider.getPeerConfigByIp("10.13.13.6")).thenReturn(Optional.of(phoneConfig()));
+        when(forGeolocatingIps.locate("77.16.37.23"))
+            .thenReturn(Optional.of(new GeoLocation(59.8989, 10.6324, "Oslo", "Norway")));
+
+        var view = service.getVpnPeers().get(0);
+
+        assertThat(view.placement()).isEmpty();
+        // The raw ISP estimate stays on the view — other things read it; only the placement is withheld.
+        assertThat(view.geoLocation()).isPresent();
+    }
+
+    @Test
+    void getVpnPeers_prefersTheDevicesOwnReportedPositionOverTheCarriersRegistryPoint() {
+        livePeerAt("77.16.37.23", new GeoLocation(59.8989, 10.6324, "Oslo", "Norway"));
+        when(forPersistingMachinePositions.getAll()).thenReturn(MachinePositions.of(List.of(
+            MachinePosition.forMachine(mid("phone"))
+                .withPosition(ReportedPosition.report(63.4305, 10.3951, 12.0, Instant.now())))));
+
+        assertThat(service.getVpnPeers().get(0).placement()).get().satisfies(placement -> {
+            assertThat(placement.source()).isEqualTo(PlacementSource.REPORTED);
+            assertThat(placement.latitude()).isEqualTo(63.4305);
+            assertThat(placement.accuracyMetres()).isEqualTo(12.0);
+        });
+    }
+
+    // --- the position trail on the peer view ---
+
+    @Test
+    void getVpnPeers_carriesTheTrailOfWhereTheMachineHasBeen() {
+        livePeerAt("77.16.37.23", new GeoLocation(59.8989, 10.6324, "Oslo", "Norway"));
+        Instant now = Instant.now();
+        when(forPersistingMachinePositions.getAll()).thenReturn(MachinePositions.empty()
+            .withPositionFor(mid("phone"),
+                ReportedPosition.report(63.4305, 10.3951, 12.0, now.minusSeconds(3600)))
+            .withPositionFor(mid("phone"), ReportedPosition.report(63.5305, 10.3951, 12.0, now)));
+
+        assertThat(service.getVpnPeers().get(0).positionTrail().points())
+            .extracting(ReportedPosition::latitude)
+            .containsExactly(63.4305, 63.5305);
+    }
+
+    /** No report, no trail — and never one built from the carrier's registry point. */
+    @Test
+    void getVpnPeers_carriesAnEmptyTrailForAMachineThatOnlyHasAnIspEstimate() {
+        livePeerAt("77.16.37.23", new GeoLocation(59.8989, 10.6324, "Oslo", "Norway"));
+
+        assertThat(service.getVpnPeers().get(0).positionTrail().points()).isEmpty();
+    }
+
+    /** Retention is the domain's, and it has to hold on the way out too, not only on the way in. */
+    @Test
+    void getVpnPeers_leavesOutTrailPointsThatHaveAgedOut() {
+        livePeerAt("77.16.37.23", new GeoLocation(59.8989, 10.6324, "Oslo", "Norway"));
+        when(forPersistingMachinePositions.getAll()).thenReturn(MachinePositions.empty()
+            .withPositionFor(mid("phone"), ReportedPosition.report(63.4305, 10.3951, 12.0,
+                Instant.now().minus(PositionTrail.RETENTION).minusSeconds(3600))));
+
+        assertThat(service.getVpnPeers().get(0).positionTrail().points()).isEmpty();
+    }
+
+    // --- reportMyPosition: the tunnel, else a device claim, never the caller's say-so ---
+
+    /** The store, having attributed the report to that machine — an answer only it is in a position to give. */
+    private void attributedTo(MachineId machineId) {
+        when(forPersistingMachinePositions.recordReportedPosition(any(), any(), any()))
+            .thenReturn(Optional.of(machineId));
+    }
+
+    @Test
+    void reportMyPosition_onTheTunnel_namesTheCallersOwnMachineAsTheTunnelIdentity() {
+        when(peerConfigProvider.getPeerConfigByIp("10.13.13.6")).thenReturn(Optional.of(phoneConfig()));
+        attributedTo(mid("phone"));
+
+        service.reportMyPosition("10.13.13.6", null, 63.4305, 10.3951, 12.0);
+
+        ArgumentCaptor<ReportedPosition> reported = ArgumentCaptor.forClass(ReportedPosition.class);
+        verify(forPersistingMachinePositions)
+            .recordReportedPosition(eq(mid("phone")), isNull(), reported.capture());
+        assertThat(reported.getValue().latitude()).isEqualTo(63.4305);
+        assertThat(reported.getValue().longitude()).isEqualTo(10.3951);
+        assertThat(reported.getValue().accuracyMetres()).isEqualTo(12.0);
+    }
+
+    /**
+     * The service says who is talking and lets the store work out whose report it is. Deciding that here
+     * means deciding it against a read a {@code Forget} can invalidate before the write lands — the race
+     * that filed a position, and a trail point, for a device the operator had just erased.
+     */
+    @Test
+    void reportMyPosition_neverReadsTheStoreItIsAboutToWriteTo() {
+        when(peerConfigProvider.getPeerConfigByIp("10.13.13.6")).thenReturn(Optional.of(phoneConfig()));
+        attributedTo(mid("phone"));
+
+        service.reportMyPosition("10.13.13.6", null, 63.4305, 10.3951, 12.0);
+
+        verify(forPersistingMachinePositions, never()).getAll();
+        // A report writes a position and nothing else, so it can neither revoke nor restore a claim.
+        verify(forPersistingMachinePositions, never()).saveClaim(any(), any());
+        verify(forPersistingMachinePositions, never()).remove(any());
+    }
+
+    /**
+     * Being outside the VPN subnet settles it: no tunnel identity, whatever the peer store would answer
+     * for that address. A carrier address is shared by thousands of subscribers, so a peer record that
+     * happened to match one must never name the device reporting from it.
+     */
+    @Test
+    void reportMyPosition_offTheTunnel_takesNoTunnelIdentityEvenWhenAPeerWouldMatchThatAddress() {
+        lenient().when(peerConfigProvider.getPeerConfigByIp("77.16.37.23"))
+            .thenReturn(Optional.of(phoneConfig()));
+        attributedTo(mid("phone"));
+
+        service.reportMyPosition("77.16.37.23", "claim-token", 63.4305, 10.3951, 12.0);
+
+        verify(forPersistingMachinePositions)
+            .recordReportedPosition(isNull(), eq("claim-token"), any());
+    }
+
+    /** Forget is guarded by the same rule — an off-tunnel caller may only erase what its claim names. */
+    @Test
+    void forgetMyPosition_offTheTunnel_takesNoTunnelIdentityEvenWhenAPeerWouldMatchThatAddress() {
+        DeviceClaim claim = DeviceClaim.mint(Instant.now());
+        lenient().when(peerConfigProvider.getPeerConfigByIp("77.16.37.23"))
+            .thenReturn(Optional.of(phoneConfig()));
+        when(forPersistingMachinePositions.getAll()).thenReturn(MachinePositions.of(List.of(
+            MachinePosition.forMachine(mid("laptop")).withClaim(claim))));
+
+        service.forgetMyPosition("77.16.37.23", claim.token());
+
+        verify(forPersistingMachinePositions).remove(mid("laptop"));
+    }
+
+    /** An Android phone drops WireGuard constantly, so off-tunnel is the ordinary case, not the edge. */
+    @Test
+    void reportMyPosition_offTheTunnel_carriesTheClaimAndNoTunnelIdentity() {
+        DeviceClaim claim = DeviceClaim.mint(Instant.now());
+        attributedTo(mid("phone"));
+
+        service.reportMyPosition("203.0.113.9", claim.token(), 63.4305, 10.3951, 12.0);
+
+        verify(forPersistingMachinePositions).recordReportedPosition(isNull(), eq(claim.token()), any());
+    }
+
+    /** Both identities go over as they are: which one wins is the domain's rule, applied under the lock. */
+    @Test
+    void reportMyPosition_handsOverBothIdentitiesWithoutChoosingBetweenThem() {
+        DeviceClaim claim = DeviceClaim.mint(Instant.now());
+        when(peerConfigProvider.getPeerConfigByIp("10.13.13.6")).thenReturn(Optional.of(phoneConfig()));
+        attributedTo(mid("phone"));
+
+        service.reportMyPosition("10.13.13.6", claim.token(), 63.4305, 10.3951, 12.0);
+
+        verify(forPersistingMachinePositions)
+            .recordReportedPosition(eq(mid("phone")), eq(claim.token()), any());
+    }
+
+    /**
+     * Nothing identified the caller — no tunnel, and no claim the store still recognises, which covers a
+     * revoked one and one a second claim superseded alike. Nothing was written, so nothing needs undoing.
+     */
+    @Test
+    void reportMyPosition_refusesWhenTheStoreAttributedTheReportToNoMachine() {
+        when(forPersistingMachinePositions.recordReportedPosition(any(), any(), any()))
+            .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.reportMyPosition("203.0.113.9", "revoked", 63.4, 10.3, 12.0))
+            .isInstanceOf(UnidentifiedDeviceException.class);
+        verify(forPersistingMachinePositions, never()).saveClaim(any(), any());
+        verify(forPersistingMachinePositions, never()).remove(any());
+    }
+
+    @Test
+    void reportMyPosition_refusesACallerWithNoAddressAndNoClaim() {
+        assertThatThrownBy(() -> service.reportMyPosition(null, null, 63.4305, 10.3951, 12.0))
+            .isInstanceOf(UnidentifiedDeviceException.class);
+        verify(forPersistingMachinePositions).recordReportedPosition(isNull(), isNull(), any());
+    }
+
+    @Test
+    void reportMyPosition_rejectsCoordinatesOffTheGlobeWithoutTouchingTheStore() {
+        when(peerConfigProvider.getPeerConfigByIp("10.13.13.6")).thenReturn(Optional.of(phoneConfig()));
+
+        assertThatThrownBy(() -> service.reportMyPosition("10.13.13.6", null, 91.0, 10.3951, 12.0))
+            .isInstanceOf(IllegalArgumentException.class);
+        verifyNoInteractions(forPersistingMachinePositions);
+    }
+
+    // --- forgetMyPosition: erasing the dot and forgetting the browser are one action ---
+
+    @Test
+    void forgetMyPosition_forgetsOnlyTheCallersOwnMachine() {
+        when(peerConfigProvider.getPeerConfigByIp("10.13.13.6")).thenReturn(Optional.of(phoneConfig()));
+
+        service.forgetMyPosition("10.13.13.6", null);
+
+        verify(forPersistingMachinePositions).remove(mid("phone"));
+    }
+
+    @Test
+    void forgetMyPosition_offTheTunnel_revokesTheClaimThatIdentifiedTheBrowser() {
+        DeviceClaim claim = DeviceClaim.mint(Instant.now());
+        when(forPersistingMachinePositions.getAll()).thenReturn(MachinePositions.of(List.of(
+            MachinePosition.forMachine(mid("phone")).withClaim(claim))));
+
+        service.forgetMyPosition("203.0.113.9", claim.token());
+
+        verify(forPersistingMachinePositions).remove(mid("phone"));
+    }
+
+    @Test
+    void forgetMyPosition_refusesAnUnclaimedCallerOffTheTunnel() {
+        assertThatThrownBy(() -> service.forgetMyPosition("203.0.113.9", null))
+            .isInstanceOf(UnidentifiedDeviceException.class);
+        verify(forPersistingMachinePositions, never()).remove(any());
+    }
+
+    // --- claimDevice: the operator's deliberate assertion from an authorised session ---
+
+    /** Vaier knows its own machines, so the fleet is stubbed wherever a claim is expected to land. */
+    private void fleetKnowsThePhone() {
+        when(peerConfigProvider.getAllPeerConfigs()).thenReturn(List.of(phoneConfig()));
+    }
+
+    @Test
+    void claimDevice_issuesATokenThatThenIdentifiesThatBrowsersMachine() {
+        fleetKnowsThePhone();
+
+        String token = service.claimDevice(mid("phone").value());
+
+        ArgumentCaptor<DeviceClaim> saved = ArgumentCaptor.forClass(DeviceClaim.class);
+        verify(forPersistingMachinePositions).saveClaim(eq(mid("phone")), saved.capture());
+        assertThat(saved.getValue().matches(token)).isTrue();
+    }
+
+    /**
+     * Claiming writes only the claim. Whether that supersedes an older one, and whether the machine's
+     * position survives, are the store's merge — decided against what is on disk, not against a snapshot
+     * this service read beforehand.
+     */
+    @Test
+    void claimDevice_writesOnlyTheClaim_soAConcurrentReportIsNotReverted() {
+        fleetKnowsThePhone();
+
+        service.claimDevice(mid("phone").value());
+
+        verify(forPersistingMachinePositions).saveClaim(eq(mid("phone")), any());
+        verify(forPersistingMachinePositions, never()).recordReportedPosition(any(), any(), any());
+        verify(forPersistingMachinePositions, never()).remove(any());
+    }
+
+    /** It must not even read the store to claim — a read it does not take cannot go stale. */
+    @Test
+    void claimDevice_neverReadsTheStoreItIsAboutToWriteTo() {
+        fleetKnowsThePhone();
+
+        service.claimDevice(mid("phone").value());
+
+        verify(forPersistingMachinePositions, never()).getAll();
+    }
+
+    // --- myDevice: a property of the browser asking, not of the machine ---
+
+    @Test
+    void myDevice_namesTheMachineThatBrowsersClaimIsOn() {
+        DeviceClaim claim = DeviceClaim.mint(Instant.now());
+        when(forPersistingMachinePositions.getAll()).thenReturn(MachinePositions.of(List.of(
+            MachinePosition.forMachine(mid("phone")).withClaim(claim))));
+
+        assertThat(service.myDevice(claim.token())).contains(mid("phone"));
+    }
+
+    @Test
+    void myDevice_isEmptyForABrowserWithNoClaim() {
+        assertThat(service.myDevice(null)).isEmpty();
+        assertThat(service.myDevice("")).isEmpty();
+        assertThat(service.myDevice("not-a-token")).isEmpty();
+    }
+
+    @Test
+    void myDevice_isEmptyOnceTheClaimHasBeenRevoked() {
+        DeviceClaim claim = DeviceClaim.mint(Instant.now());
+        when(forPersistingMachinePositions.getAll()).thenReturn(MachinePositions.of(List.of(
+            MachinePosition.forMachine(mid("phone")).withClaim(claim).withoutClaim())));
+
+        assertThat(service.myDevice(claim.token())).isEmpty();
+    }
+
+    @Test
+    void myDevice_isEmptyForATokenASecondClaimSuperseded() {
+        DeviceClaim first = DeviceClaim.mint(Instant.now());
+        DeviceClaim second = DeviceClaim.mint(Instant.now());
+        when(forPersistingMachinePositions.getAll()).thenReturn(MachinePositions.of(List.of(
+            MachinePosition.forMachine(mid("phone")).withClaim(first).withClaim(second))));
+
+        assertThat(service.myDevice(first.token())).isEmpty();
+        assertThat(service.myDevice(second.token())).contains(mid("phone"));
+    }
+
+    /** Being on the tunnel lets a device report; it is not a claim, and must not read as one. */
+    @Test
+    void myDevice_isEmptyForATunnelCallerThatHasNeverBeenClaimed() {
+        assertThat(service.myDevice(null)).isEmpty();
+        verifyNoInteractions(peerConfigProvider);
+    }
+
+    @Test
+    void claimDevice_rejectsSomethingThatIsNotAMachineId() {
+        assertThatThrownBy(() -> service.claimDevice("phone"))
+            .isInstanceOf(IllegalArgumentException.class);
+        verify(forPersistingMachinePositions, never()).saveClaim(any(), any());
+    }
+
+    /**
+     * A well-formed id for a machine that is not there would store a claim that can never place a dot:
+     * an action Vaier already knows cannot work, accepted anyway. Vaier knows its own fleet, so it checks.
+     */
+    @Test
+    void claimDevice_rejectsAMachineIdThatNamesNoPeer() {
+        when(peerConfigProvider.getAllPeerConfigs()).thenReturn(List.of(phoneConfig()));
+
+        assertThatThrownBy(() -> service.claimDevice(mid("ghost").value()))
+            .isInstanceOf(PeerNotFoundException.class);
+        verify(forPersistingMachinePositions, never()).saveClaim(any(), any());
+    }
+
+    @Test
+    void claimDevice_rejectsAnyMachineIdWhenThereAreNoPeers() {
+        when(peerConfigProvider.getAllPeerConfigs()).thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.claimDevice(mid("phone").value()))
+            .isInstanceOf(PeerNotFoundException.class);
+        verify(forPersistingMachinePositions, never()).saveClaim(any(), any());
+    }
 }

@@ -1,7 +1,14 @@
 package net.vaier.rest;
 
+import jakarta.servlet.http.HttpServletRequest;
+import java.lang.reflect.RecordComponent;
 import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.PeerNotFoundException;
+import net.vaier.domain.Placement;
+import net.vaier.domain.PlacementSource;
+import net.vaier.domain.PositionTrail;
+import net.vaier.domain.ReportedPosition;
+import net.vaier.domain.UnidentifiedDeviceException;
 import net.vaier.domain.ConflictException;
 import net.vaier.domain.port.ForPublishingEvents;
 import net.vaier.domain.port.ForSubscribingToEvents;
@@ -15,12 +22,18 @@ import net.vaier.application.GetServerLocationUseCase;
 import net.vaier.application.GetServerLocationUseCase.ServerLocation;
 import net.vaier.application.GetVpnPeersUseCase;
 import net.vaier.application.GetVpnPeersUseCase.VpnPeerView;
+import net.vaier.application.ClaimDeviceUseCase;
+import net.vaier.application.ForgetMyPositionUseCase;
+import net.vaier.application.GetMyDeviceUseCase;
 import net.vaier.application.ReissuePeerConfigUseCase;
 import net.vaier.application.RenamePeerUseCase;
+import net.vaier.application.ReportMyPositionUseCase;
 import net.vaier.application.UpdateLanCidrUseCase;
+import net.vaier.domain.DeviceCategory;
 import net.vaier.domain.GeoLocation;
 import net.vaier.domain.MachineId;
 import net.vaier.domain.MachineType;
+import net.vaier.domain.PeerArtifact;
 import net.vaier.domain.SetupToken;
 import net.vaier.domain.port.ForTrackingPeerConfigRetrieval;
 import net.vaier.domain.port.ForUpdatingPeerConfigurations;
@@ -30,9 +43,13 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -41,9 +58,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.when;
 
@@ -66,6 +85,10 @@ class VpnPeerRestControllerTest {
     @Mock ForPublishingEvents forPublishingEvents;
     @Mock ForSubscribingToEvents forSubscribingToEvents;
     @Mock GetServerLocationUseCase getServerLocationUseCase;
+    @Mock ReportMyPositionUseCase reportMyPositionUseCase;
+    @Mock ForgetMyPositionUseCase forgetMyPositionUseCase;
+    @Mock ClaimDeviceUseCase claimDeviceUseCase;
+    @Mock GetMyDeviceUseCase getMyDeviceUseCase;
     @Mock ConfigResolver configResolver;
 
     @InjectMocks VpnPeerRestController controller;
@@ -80,12 +103,46 @@ class VpnPeerRestControllerTest {
     private static VpnPeerView view(String id, String name, boolean connected,
                                     String endpointIp, MachineType type, String description,
                                     Optional<GeoLocation> geo) {
-        return new VpnPeerView(id, identityOf(id).value(), name, "pub", "10.13.13.2/32", "10.13.13.2",
-            endpointIp, "51820", "0", connected, "0", "0",
-            type, type.isServerType(), type.isVpnPeer() && !type.isServerType(), false,
-            net.vaier.domain.PeerArtifact.forPeerType(type),
-            null, null, description, geo, false,
-            net.vaier.domain.DeviceCategory.detect(name, type, null), false, type.isServerType());
+        return view(id, name, connected, endpointIp, type, description, geo, Optional.empty());
+    }
+
+    private static VpnPeerView view(String id, String name, boolean connected,
+                                    String endpointIp, MachineType type, String description,
+                                    Optional<GeoLocation> geo, Optional<Placement> placement) {
+        return viewBuilder(id, name, connected, endpointIp, type, description)
+            .geoLocation(geo)
+            .placement(placement)
+            .build();
+    }
+
+    private static VpnPeerView.VpnPeerViewBuilder viewBuilder(String id, String name, boolean connected,
+                                                              String endpointIp, MachineType type,
+                                                              String description) {
+        return VpnPeerView.builder()
+            .id(id).machineId(identityOf(id).value()).name(name)
+            .publicKey("pub").allowedIps("10.13.13.2/32").tunnelIp("10.13.13.2")
+            .endpointIp(endpointIp).endpointPort("51820").latestHandshake("0").connected(connected)
+            .transferRx("0").transferTx("0")
+            .peerType(type).isServer(type.isServerType())
+            .isClient(type.isVpnPeer() && !type.isServerType()).isRelay(false)
+            .availableArtifacts(PeerArtifact.forPeerType(type))
+            .description(description)
+            .deviceCategory(DeviceCategory.detect(name, type, null)).deviceCategoryOverridden(false)
+            .sshAccess(type.isServerType());
+    }
+
+    private static HttpServletRequest callerAt(String address) {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setRemoteAddr(address);
+        return request;
+    }
+
+    /** A request as Traefik actually delivers it: the proxy's own address, the client named in XFF. */
+    private static HttpServletRequest proxiedFrom(String remoteAddress, String forwardedFor) {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setRemoteAddr(remoteAddress);
+        request.addHeader("X-Forwarded-For", forwardedFor);
+        return request;
     }
 
     @Test
@@ -138,9 +195,7 @@ class VpnPeerRestControllerTest {
         // still propagate (not swallow) and must not publish an update event on failure.
         assertThatThrownBy(() -> controller.updateLanAddress("ghost", request))
             .isInstanceOf(PeerNotFoundException.class);
-        verify(forPublishingEvents, never()).publish(org.mockito.ArgumentMatchers.anyString(),
-                                                    org.mockito.ArgumentMatchers.anyString(),
-                                                    org.mockito.ArgumentMatchers.anyString());
+        verify(forPublishingEvents, never()).publish(anyString(), anyString(), anyString());
     }
 
     @Test
@@ -180,9 +235,7 @@ class VpnPeerRestControllerTest {
 
         assertThatThrownBy(() -> controller.updateLanCidr("ghost", request))
             .isInstanceOf(PeerNotFoundException.class);
-        verify(forPublishingEvents, never()).publish(org.mockito.ArgumentMatchers.anyString(),
-                                                    org.mockito.ArgumentMatchers.anyString(),
-                                                    org.mockito.ArgumentMatchers.anyString());
+        verify(forPublishingEvents, never()).publish(anyString(), anyString(), anyString());
     }
 
     @Test
@@ -195,9 +248,7 @@ class VpnPeerRestControllerTest {
 
         assertThatThrownBy(() -> controller.updateLanCidr("apalveien5", request))
             .isInstanceOf(ConflictException.class);
-        verify(forPublishingEvents, never()).publish(org.mockito.ArgumentMatchers.anyString(),
-                                                    org.mockito.ArgumentMatchers.anyString(),
-                                                    org.mockito.ArgumentMatchers.anyString());
+        verify(forPublishingEvents, never()).publish(anyString(), anyString(), anyString());
     }
 
     @Test
@@ -218,9 +269,7 @@ class VpnPeerRestControllerTest {
 
         assertThatThrownBy(() -> controller.renamePeer("ghost", new VpnPeerRestController.RenamePeerRequest("phantom")))
             .isInstanceOf(PeerNotFoundException.class);
-        verify(forPublishingEvents, never()).publish(org.mockito.ArgumentMatchers.anyString(),
-                                                    org.mockito.ArgumentMatchers.anyString(),
-                                                    org.mockito.ArgumentMatchers.anyString());
+        verify(forPublishingEvents, never()).publish(anyString(), anyString(), anyString());
     }
 
     @Test
@@ -396,12 +445,8 @@ class VpnPeerRestControllerTest {
     @Test
     void listPeers_exposesConfigOutOfDateFlag() {
         when(getVpnPeersUseCase.getVpnPeers()).thenReturn(List.of(
-            new VpnPeerView("nas", identityOf("nas").value(), "nas", "pub", "10.13.13.6/32", "10.13.13.6",
-                "", "51820", "0", false, "0", "0",
-                MachineType.UBUNTU_SERVER, true, false, false,
-                net.vaier.domain.PeerArtifact.forPeerType(MachineType.UBUNTU_SERVER),
-                null, null, null, Optional.empty(), true,
-                net.vaier.domain.DeviceCategory.SERVER, false, true)
+            viewBuilder("nas", "nas", false, "", MachineType.UBUNTU_SERVER, null)
+                .configOutOfDate(true).build()
         ));
 
         assertThat(controller.listPeers().getBody().get(0).configOutOfDate()).isTrue();
@@ -470,12 +515,9 @@ class VpnPeerRestControllerTest {
     @Test
     void listPeers_exposesEffectiveDeviceCategoryAndOverrideFlag() {
         when(getVpnPeersUseCase.getVpnPeers()).thenReturn(List.of(
-            new VpnPeerView("nas", identityOf("nas").value(), "nas", "pub", "10.13.13.6/32", "10.13.13.6",
-                "", "51820", "0", false, "0", "0",
-                MachineType.UBUNTU_SERVER, true, false, false,
-                net.vaier.domain.PeerArtifact.forPeerType(MachineType.UBUNTU_SERVER),
-                null, null, null, Optional.empty(), true,
-                net.vaier.domain.DeviceCategory.NAS, true, true)
+            viewBuilder("nas", "nas", false, "", MachineType.UBUNTU_SERVER, null)
+                .configOutOfDate(true)
+                .deviceCategory(DeviceCategory.NAS).deviceCategoryOverridden(true).build()
         ));
 
         var peer = controller.listPeers().getBody().get(0);
@@ -541,9 +583,7 @@ class VpnPeerRestControllerTest {
 
         assertThatThrownBy(() -> controller.updateDescription("ghost", request))
             .isInstanceOf(PeerNotFoundException.class);
-        verify(forPublishingEvents, never()).publish(org.mockito.ArgumentMatchers.anyString(),
-                                                    org.mockito.ArgumentMatchers.anyString(),
-                                                    org.mockito.ArgumentMatchers.anyString());
+        verify(forPublishingEvents, never()).publish(anyString(), anyString(), anyString());
     }
 
     @Test
@@ -570,5 +610,280 @@ class VpnPeerRestControllerTest {
         var response = controller.getServerLocation();
 
         assertThat(response.getStatusCode().value()).isEqualTo(404);
+    }
+
+
+    // --- placement on the peer listing ---
+
+    @Test
+    void listPeers_carriesThePlacementTheDomainDecided() {
+        Placement placement = new Placement(63.4305, 10.3951, PlacementSource.REPORTED,
+            Instant.parse("2026-08-11T18:00:00Z"), 12.0, false, null);
+        when(getVpnPeersUseCase.getVpnPeers()).thenReturn(List.of(
+            view("alice", "alice", true, "77.16.37.23", MachineType.MOBILE_CLIENT, null,
+                Optional.of(new GeoLocation(59.8989, 10.6324, "Oslo", "Norway")), Optional.of(placement))));
+
+        var body = controller.listPeers().getBody().get(0);
+
+        assertThat(body.placement().latitude()).isEqualTo(63.4305);
+        assertThat(body.placement().longitude()).isEqualTo(10.3951);
+        assertThat(body.placement().source()).isEqualTo("REPORTED");
+        assertThat(body.placement().asOf()).isEqualTo(Instant.parse("2026-08-11T18:00:00Z"));
+        assertThat(body.placement().accuracyMetres()).isEqualTo(12.0);
+        assertThat(body.placement().stale()).isFalse();
+        assertThat(body.placement().place()).isNull();
+        // The raw ISP estimate is untouched — other things read it.
+        assertThat(body.latitude()).isEqualTo(59.8989);
+    }
+
+    @Test
+    void listPeers_leavesPlacementNullWhenVaierHasNoHonestAnswer() {
+        when(getVpnPeersUseCase.getVpnPeers()).thenReturn(List.of(
+            view("alice", "alice", false, "77.16.37.23", MachineType.MOBILE_CLIENT, null,
+                Optional.of(new GeoLocation(59.8989, 10.6324, "Oslo", "Norway")), Optional.empty())));
+
+        assertThat(controller.listPeers().getBody().get(0).placement()).isNull();
+    }
+
+    // --- the position trail on the peer listing ---
+
+    @Test
+    void listPeers_carriesThePositionTrailTheDomainRetained() {
+        Instant noon = Instant.parse("2026-08-11T12:00:00Z");
+        PositionTrail trail = PositionTrail.empty()
+            .extendedWith(ReportedPosition.report(63.4305, 10.3951, 12.0, noon))
+            .extendedWith(ReportedPosition.report(63.5305, 10.4051, null, noon.plusSeconds(1800)));
+        when(getVpnPeersUseCase.getVpnPeers()).thenReturn(List.of(
+            viewBuilder("alice", "alice", true, "77.16.37.23", MachineType.MOBILE_CLIENT, null)
+                .positionTrail(trail).build()));
+
+        var body = controller.listPeers().getBody().get(0);
+
+        assertThat(body.positionTrail()).hasSize(2);
+        assertThat(body.positionTrail().get(0).latitude()).isEqualTo(63.4305);
+        assertThat(body.positionTrail().get(0).accuracyMetres()).isEqualTo(12.0);
+        assertThat(body.positionTrail().get(0).at()).isEqualTo(noon);
+        assertThat(body.positionTrail().get(1).longitude()).isEqualTo(10.4051);
+        assertThat(body.positionTrail().get(1).accuracyMetres()).isNull();
+    }
+
+    /** A machine that has never reported carries an empty trail, never a null the browser must guard. */
+    @Test
+    void listPeers_carriesAnEmptyTrailForAMachineThatHasNeverReported() {
+        when(getVpnPeersUseCase.getVpnPeers()).thenReturn(List.of(
+            view("alice", "alice", true, "77.16.37.23", MachineType.MOBILE_CLIENT, null,
+                Optional.empty())));
+
+        assertThat(controller.listPeers().getBody().get(0).positionTrail()).isEmpty();
+    }
+
+    // --- last service reached on the peer listing ---
+
+    /** The operator's question, answered on the row that already stands for the phone. */
+    @Test
+    void listPeers_carriesTheServiceTheMachineLastReached() {
+        when(getVpnPeersUseCase.getVpnPeers()).thenReturn(List.of(
+            viewBuilder("alice", "alice", true, "", MachineType.MOBILE_CLIENT, null)
+                .lastServiceReached(Optional.of(new GetVpnPeersUseCase.LastServiceReachedView(
+                    "grafana.example.com", "Grafana", Instant.parse("2026-08-11T20:14:00Z"))))
+                .build()));
+
+        var reached = controller.listPeers().getBody().get(0).lastServiceReached();
+
+        assertThat(reached.host()).isEqualTo("grafana.example.com");
+        assertThat(reached.displayName()).isEqualTo("Grafana");
+        assertThat(reached.at()).isEqualTo(Instant.parse("2026-08-11T20:14:00Z"));
+    }
+
+    /** Null, not an empty object: the browser asks "is anything known", and nothing is. */
+    @Test
+    void listPeers_leavesLastServiceReachedNullWhenNothingIsKnown() {
+        when(getVpnPeersUseCase.getVpnPeers()).thenReturn(List.of(
+            view("alice", "alice", true, "", MachineType.MOBILE_CLIENT, null, Optional.empty())));
+
+        assertThat(controller.listPeers().getBody().get(0).lastServiceReached()).isNull();
+    }
+
+    /** A host Vaier publishes no route for still has a host to show. */
+    @Test
+    void listPeers_carriesAnUnnamedServiceByItsHostAlone() {
+        when(getVpnPeersUseCase.getVpnPeers()).thenReturn(List.of(
+            viewBuilder("alice", "alice", true, "", MachineType.MOBILE_CLIENT, null)
+                .lastServiceReached(Optional.of(new GetVpnPeersUseCase.LastServiceReachedView(
+                    "vaier.example.com", null, Instant.parse("2026-08-11T20:14:00Z"))))
+                .build()));
+
+        var reached = controller.listPeers().getBody().get(0).lastServiceReached();
+
+        assertThat(reached.host()).isEqualTo("vaier.example.com");
+        assertThat(reached.displayName()).isNull();
+    }
+
+    // --- my-position: which device this is comes from the tunnel or the claim, never the body ---
+
+    @Test
+    void reportMyPosition_handsTheUseCaseTheCallerIpAndTheClaimCookie() {
+        var request = new VpnPeerRestController.ReportMyPositionRequest(63.4305, 10.3951, 12.0);
+
+        var response = controller.reportMyPosition(request, "claim-token", callerAt("10.13.13.6"));
+
+        assertThat(response.getStatusCode().value()).isEqualTo(204);
+        verify(reportMyPositionUseCase)
+            .reportMyPosition("10.13.13.6", "claim-token", 63.4305, 10.3951, 12.0);
+        verify(forPublishingEvents).publish("vpn-peers", "peers-updated", "");
+    }
+
+    @Test
+    void reportMyPosition_acceptsAPositionWithNoAccuracyAndNoClaim() {
+        var request = new VpnPeerRestController.ReportMyPositionRequest(63.4305, 10.3951, null);
+
+        controller.reportMyPosition(request, null, callerAt("10.13.13.6"));
+
+        verify(reportMyPositionUseCase).reportMyPosition("10.13.13.6", null, 63.4305, 10.3951, null);
+    }
+
+    @Test
+    void reportMyPosition_propagatesTheRefusalOfAnUnidentifiedDevice_withoutPublishing() {
+        doThrow(new UnidentifiedDeviceException("no idea which device this is"))
+            .when(reportMyPositionUseCase).reportMyPosition(eq("203.0.113.9"), any(), any(), any(), any());
+        var request = new VpnPeerRestController.ReportMyPositionRequest(63.4305, 10.3951, 12.0);
+
+        assertThatThrownBy(() -> controller.reportMyPosition(request, null, callerAt("203.0.113.9")))
+            .isInstanceOf(UnidentifiedDeviceException.class);
+        verify(forPublishingEvents, never()).publish(anyString(), anyString(), anyString());
+    }
+
+    /** No machine id in the body, ever — so an empty body is a refusal, not a guess. */
+    @Test
+    void reportMyPosition_rejectsAnEmptyBodyRatherThanGuessing() {
+        assertThatThrownBy(() -> controller.reportMyPosition(null, null, callerAt("10.13.13.6")))
+            .isInstanceOf(IllegalArgumentException.class);
+        verifyNoInteractions(reportMyPositionUseCase);
+    }
+
+    /**
+     * Behind Traefik the socket address is the proxy's, and the device's real tunnel IP arrives in
+     * {@code X-Forwarded-For}. This is the branch that decides identity in production, and it must go
+     * through {@link net.vaier.domain.CallerIp} — a future edit reading the header directly would pass
+     * every other test in this file while making tunnel identity forgeable.
+     */
+    @Test
+    void reportMyPosition_believesTheForwardedTunnelIpWhenTheProxyIsTrusted() {
+        ReflectionTestUtils.setField(controller, "trustedProxyCidr", "172.20.0.0/16");
+        var request = new VpnPeerRestController.ReportMyPositionRequest(63.4305, 10.3951, 12.0);
+
+        controller.reportMyPosition(request, null, proxiedFrom("172.20.0.5", "10.13.13.6"));
+
+        verify(reportMyPositionUseCase).reportMyPosition("10.13.13.6", null, 63.4305, 10.3951, 12.0);
+    }
+
+    /** The same header from anywhere else is a claim the caller wrote about itself, and is ignored. */
+    @Test
+    void reportMyPosition_ignoresAForwardedTunnelIpFromAnUntrustedAddress() {
+        ReflectionTestUtils.setField(controller, "trustedProxyCidr", "172.20.0.0/16");
+        var request = new VpnPeerRestController.ReportMyPositionRequest(63.4305, 10.3951, 12.0);
+
+        controller.reportMyPosition(request, null, proxiedFrom("203.0.113.9", "10.13.13.6"));
+
+        verify(reportMyPositionUseCase).reportMyPosition("203.0.113.9", null, 63.4305, 10.3951, 12.0);
+    }
+
+    @Test
+    void forgetMyPosition_believesTheForwardedTunnelIpWhenTheProxyIsTrusted() {
+        ReflectionTestUtils.setField(controller, "trustedProxyCidr", "172.20.0.0/16");
+
+        controller.forgetMyPosition(null, proxiedFrom("172.20.0.5", "10.13.13.6"));
+
+        verify(forgetMyPositionUseCase).forgetMyPosition("10.13.13.6", null);
+    }
+
+    /**
+     * The security property, pinned as a shape test: the request body carries coordinates and nothing
+     * that could name a machine. A field added here would let a device report someone else's position.
+     */
+    @Test
+    void reportMyPositionRequest_carriesNoWayToNameAMachine() {
+        assertThat(VpnPeerRestController.ReportMyPositionRequest.class.getRecordComponents())
+            .extracting(RecordComponent::getName)
+            .containsExactlyInAnyOrder("latitude", "longitude", "accuracyMetres");
+    }
+
+    @Test
+    void forgetMyPosition_forgetsAndClearsTheClaimCookie() {
+        var response = controller.forgetMyPosition("claim-token", callerAt("10.13.13.6"));
+
+        assertThat(response.getStatusCode().value()).isEqualTo(204);
+        verify(forgetMyPositionUseCase).forgetMyPosition("10.13.13.6", "claim-token");
+        verify(forPublishingEvents).publish("vpn-peers", "peers-updated", "");
+        assertThat(response.getHeaders().getFirst(HttpHeaders.SET_COOKIE))
+            .contains("vaier_device_claim=").contains("Max-Age=0");
+    }
+
+    @Test
+    void forgetMyPosition_propagatesTheRefusalOfAnUnidentifiedDevice_withoutPublishing() {
+        doThrow(new UnidentifiedDeviceException("no idea which device this is"))
+            .when(forgetMyPositionUseCase).forgetMyPosition("203.0.113.9", null);
+
+        assertThatThrownBy(() -> controller.forgetMyPosition(null, callerAt("203.0.113.9")))
+            .isInstanceOf(UnidentifiedDeviceException.class);
+        verify(forPublishingEvents, never()).publish(anyString(), anyString(), anyString());
+    }
+
+    // --- device-claim: here the machine id IS the operator's deliberate assertion ---
+
+    @Test
+    void claimDevice_setsTheClaimAsAHardenedCookie() {
+        MachineId phone = identityOf("phone");
+        when(claimDeviceUseCase.claimDevice(phone.value())).thenReturn("opaque-token");
+
+        var response = controller.claimDevice(phone.value());
+
+        assertThat(response.getStatusCode().value()).isEqualTo(204);
+        String cookie = response.getHeaders().getFirst(HttpHeaders.SET_COOKIE);
+        assertThat(cookie).contains("vaier_device_claim=opaque-token")
+            .contains("HttpOnly").contains("Secure").contains("SameSite=Lax").contains("Path=/vpn/peers");
+    }
+
+    // --- my-device: which machine THIS browser has claimed, never a fact about the machine ---
+
+    @Test
+    void getMyDevice_namesTheMachineThisBrowserClaimed() {
+        MachineId phone = identityOf("phone");
+        when(getMyDeviceUseCase.myDevice("claim-token")).thenReturn(Optional.of(phone));
+
+        var response = controller.getMyDevice("claim-token");
+
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
+        assertThat(response.getBody().machineId()).isEqualTo(phone.value());
+    }
+
+    /**
+     * A browser holding no claim, one whose claim was revoked, and one whose token a later claim
+     * superseded all read the same: null. The use case cannot distinguish them and must not pretend to.
+     */
+    @Test
+    void getMyDevice_isNullForABrowserThatHoldsNoLiveClaim() {
+        when(getMyDeviceUseCase.myDevice(null)).thenReturn(Optional.empty());
+        when(getMyDeviceUseCase.myDevice("revoked-or-superseded")).thenReturn(Optional.empty());
+
+        assertThat(controller.getMyDevice(null).getBody().machineId()).isNull();
+        assertThat(controller.getMyDevice("revoked-or-superseded").getBody().machineId()).isNull();
+    }
+
+    /** Off the tunnel is the ordinary case, so this must never consult the caller's address. */
+    @Test
+    void getMyDevice_needsNoRequestAtAll_soItCannotDependOnTheTunnel() {
+        when(getMyDeviceUseCase.myDevice("claim-token")).thenReturn(Optional.of(identityOf("phone")));
+
+        assertThat(controller.getMyDevice("claim-token").getBody().machineId()).isNotNull();
+    }
+
+    @Test
+    void claimDevice_propagatesAnUnusableMachineId() {
+        when(claimDeviceUseCase.claimDevice("phone"))
+            .thenThrow(new IllegalArgumentException("Machine id must be a canonical lowercase UUID: phone"));
+
+        assertThatThrownBy(() -> controller.claimDevice("phone"))
+            .isInstanceOf(IllegalArgumentException.class);
     }
 }

@@ -323,6 +323,26 @@ public class ReverseProxyRoute {
     }
 
     /**
+     * What to call the host somebody reached: the {@link #launchpadDisplayName} of the route serving it,
+     * or null when Vaier publishes no route for that host — the console is one such host, and a name Vaier
+     * cannot support is worse than the host standing on its own.
+     *
+     * <p>A host-only route wins over a path-scoped sibling on the same host: a bare host name is what a
+     * path-less route serves, and the sibling's label describes a path nobody said was reached.
+     */
+    public static String launchpadDisplayNameFor(List<ReverseProxyRoute> routes, String host,
+                                                 String baseDomain) {
+        if (routes == null || host == null || host.isBlank()) return null;
+        ReverseProxyRoute best = null;
+        for (ReverseProxyRoute route : routes) {
+            if (route == null || !host.equalsIgnoreCase(route.getDomainName())) continue;
+            if (route.getPathPrefix() == null) return route.launchpadDisplayName(baseDomain);
+            if (best == null) best = route;
+        }
+        return best == null ? null : best.launchpadDisplayName(baseDomain);
+    }
+
+    /**
      * The query string the launchpad should send to {@code /icon} for this route. The domain
      * owns the lookup identity: host-only routes resolve a single icon per FQDN, while path-based
      * routes use (FQDN, pathPrefix) so siblings under one host don't collide on the icon cache

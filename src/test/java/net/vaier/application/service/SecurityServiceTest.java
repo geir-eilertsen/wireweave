@@ -5,8 +5,11 @@ import net.vaier.domain.AccessSources;
 import net.vaier.domain.BlockDecision;
 import net.vaier.domain.BlockDecisionsUnreadableException;
 import net.vaier.domain.GeoLocation;
+import net.vaier.domain.LastServiceReached;
+import net.vaier.domain.MachineId;
 import net.vaier.domain.MachineType;
 import net.vaier.domain.SourceAddress;
+import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.TrustedNetworks;
 import net.vaier.domain.port.ForDetectingIntrusions;
 import net.vaier.domain.port.ForGeolocatingIps;
@@ -14,6 +17,7 @@ import net.vaier.domain.port.ForGettingPeerConfigurations;
 import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
 import net.vaier.domain.port.ForLiftingBlocks;
 import net.vaier.domain.port.ForPersistingAccessSources;
+import net.vaier.domain.port.ForPersistingLastServicesReached;
 import net.vaier.domain.port.ForPersistingTrustedAddresses;
 import net.vaier.domain.port.ForWritingCrowdSecWhitelist;
 import org.junit.jupiter.api.Test;
@@ -58,12 +62,13 @@ class SecurityServiceTest {
     @Mock ForLiftingBlocks forLiftingBlocks;
     @Mock ForPersistingTrustedAddresses forPersistingTrustedAddresses;
     @Mock ForPersistingAccessSources forPersistingAccessSources;
+    @Mock ForPersistingLastServicesReached forPersistingLastServicesReached;
     @Mock ForGeolocatingIps forGeolocatingIps;
 
     private SecurityService service() {
         SecurityService service = new SecurityService(peerConfigProvider, forWritingCrowdSecWhitelist,
             forDetectingIntrusions, forLiftingBlocks, forPersistingTrustedAddresses,
-            forPersistingAccessSources, forGeolocatingIps);
+            forPersistingAccessSources, forPersistingLastServicesReached, forGeolocatingIps);
         ReflectionTestUtils.setField(service, "vpnSubnet", "10.13.13.0/24");
         ReflectionTestUtils.setField(service, "dockerBridgeCidr", "172.20.0.0/16");
         return service;
@@ -282,8 +287,8 @@ class SecurityServiceTest {
         when(forGeolocatingIps.locate("203.0.113.7")).thenReturn(Optional.of(OSLO));
         SecurityService service = service();
 
-        service.recordAllowedAccess("203.0.113.7", "geir@example.com", RECENTLY);
-        service.recordAllowedAccess("203.0.113.7", "geir@example.com", RECENTLY.plusSeconds(1));
+        service.recordAllowedAccess("203.0.113.7", "geir@example.com", "plex.example.com", RECENTLY);
+        service.recordAllowedAccess("203.0.113.7", "geir@example.com", "plex.example.com", RECENTLY.plusSeconds(1));
 
         assertThat(service.getAccessSources()).singleElement().satisfies(source -> {
             assertThat(source.city()).isEqualTo("Oslo");
@@ -301,7 +306,7 @@ class SecurityServiceTest {
     void recordAllowedAccess_neverWritesToDisk() {
         when(forGeolocatingIps.locate("203.0.113.7")).thenReturn(Optional.of(OSLO));
 
-        service().recordAllowedAccess("203.0.113.7", "geir@example.com", RECENTLY);
+        service().recordAllowedAccess("203.0.113.7", "geir@example.com", "plex.example.com", RECENTLY);
 
         verify(forPersistingAccessSources, never()).save(any());
     }
@@ -315,7 +320,7 @@ class SecurityServiceTest {
         when(forGeolocatingIps.locate("203.0.113.7")).thenThrow(new IllegalStateException("mmdb closed"));
         SecurityService service = service();
 
-        service.recordAllowedAccess("203.0.113.7", "geir@example.com", RECENTLY);
+        service.recordAllowedAccess("203.0.113.7", "geir@example.com", "plex.example.com", RECENTLY);
 
         assertThat(service.getAccessSources()).singleElement()
             .satisfies(source -> assertThat(source.locatable()).isFalse());
@@ -341,7 +346,7 @@ class SecurityServiceTest {
         SecurityService service = service();
         service.onApplicationReady(null);
 
-        service.recordAllowedAccess("203.0.113.7", "geir@example.com", RECENTLY);
+        service.recordAllowedAccess("203.0.113.7", "geir@example.com", "plex.example.com", RECENTLY);
 
         assertThat(service.getAccessSources()).hasSize(1);
     }
@@ -350,7 +355,7 @@ class SecurityServiceTest {
     void flushAccessSources_savesWhatHasBeenRecordedSinceTheLastFlush() {
         when(forGeolocatingIps.locate("203.0.113.7")).thenReturn(Optional.of(OSLO));
         SecurityService service = service();
-        service.recordAllowedAccess("203.0.113.7", "geir@example.com", RECENTLY);
+        service.recordAllowedAccess("203.0.113.7", "geir@example.com", "plex.example.com", RECENTLY);
 
         Optional<List<AccessSource>> flushed = service.flushAccessSources();
 
@@ -383,6 +388,67 @@ class SecurityServiceTest {
         assertThat(captor.getValue().sources()).isEmpty();
     }
 
+    // --- Last service reached: what the machine on the tunnel opened ---
+
+    private static final MachineId PHONE = TestMachineIds.of("phone");
+
+    private static PeerConfiguration phoneAt(String tunnelIp) {
+        return new PeerConfiguration("phone", "phone", tunnelIp, "", MachineType.MOBILE_CLIENT, null,
+            null, null, null, null, PHONE);
+    }
+
+    /**
+     * The whole feature: a request on the tunnel was authenticated by WireGuard, so its caller address is
+     * the peer — and only then does Vaier know which device opened which service.
+     */
+    @Test
+    void recordAllowedAccess_recordsWhatTheMachineOnTheTunnelReached() {
+        when(peerConfigProvider.getPeerConfigByIp("10.13.13.4"))
+            .thenReturn(Optional.of(phoneAt("10.13.13.4")));
+
+        service().recordAllowedAccess("10.13.13.4", "geir@example.com", "grafana.example.com", RECENTLY);
+
+        ArgumentCaptor<LastServiceReached> captor = ArgumentCaptor.forClass(LastServiceReached.class);
+        verify(forPersistingLastServicesReached).save(captor.capture());
+        assertThat(captor.getValue())
+            .isEqualTo(new LastServiceReached(PHONE, "grafana.example.com", RECENTLY));
+    }
+
+    /**
+     * A carrier address is shared by thousands of subscribers: it identifies a person, never a device. The
+     * access still counts towards its place — it just says nothing about which machine made it.
+     */
+    @Test
+    void recordAllowedAccess_attributesNoServiceToAnyMachineWhenTheCallerIsNotOnTheTunnel() {
+        when(forGeolocatingIps.locate("203.0.113.7")).thenReturn(Optional.of(OSLO));
+        SecurityService service = service();
+
+        service.recordAllowedAccess("203.0.113.7", "geir@example.com", "grafana.example.com", RECENTLY);
+
+        verifyNoInteractions(forPersistingLastServicesReached);
+        assertThat(service.getAccessSources()).hasSize(1);
+    }
+
+    /** Same guarantee as the map's: a store that blows up costs a statistic, never anybody's access. */
+    @Test
+    void recordAllowedAccess_neverThrowsWhenTheReachStoreBlowsUp() {
+        when(peerConfigProvider.getPeerConfigByIp("10.13.13.4"))
+            .thenReturn(Optional.of(phoneAt("10.13.13.4")));
+        doThrow(new IllegalStateException("store is on fire"))
+            .when(forPersistingLastServicesReached).save(any());
+        SecurityService service = service();
+
+        assertThatCode(() -> service.recordAllowedAccess("10.13.13.4", "geir@example.com",
+            "grafana.example.com", RECENTLY)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void flushLastServicesReached_writesThroughToTheStore() {
+        service().flushLastServicesReached();
+
+        verify(forPersistingLastServicesReached).flush();
+    }
+
     /**
      * The flush runs every minute forever. On a fleet nobody is using, an unconditional write is ~1440
      * identical files a day — and an SSE push behind each one, repainting the map's green dots for nothing.
@@ -391,7 +457,7 @@ class SecurityServiceTest {
     void flushAccessSources_whenNothingHasChangedSinceTheLastSave_writesNothing() {
         when(forGeolocatingIps.locate("203.0.113.7")).thenReturn(Optional.of(OSLO));
         SecurityService service = service();
-        service.recordAllowedAccess("203.0.113.7", "geir@example.com", RECENTLY);
+        service.recordAllowedAccess("203.0.113.7", "geir@example.com", "plex.example.com", RECENTLY);
         service.flushAccessSources();
 
         service.flushAccessSources();
@@ -407,7 +473,7 @@ class SecurityServiceTest {
     void flushAccessSources_whenNothingHasChangedSinceTheLastSave_hasNothingToHandTheCaller() {
         when(forGeolocatingIps.locate("203.0.113.7")).thenReturn(Optional.of(OSLO));
         SecurityService service = service();
-        service.recordAllowedAccess("203.0.113.7", "geir@example.com", RECENTLY);
+        service.recordAllowedAccess("203.0.113.7", "geir@example.com", "plex.example.com", RECENTLY);
         service.flushAccessSources();
 
         Optional<List<AccessSource>> flushed = service.flushAccessSources();
@@ -425,7 +491,7 @@ class SecurityServiceTest {
         doThrow(new IllegalStateException("disk full")).doNothing()
             .when(forPersistingAccessSources).save(any());
         SecurityService service = service();
-        service.recordAllowedAccess("203.0.113.7", "geir@example.com", RECENTLY);
+        service.recordAllowedAccess("203.0.113.7", "geir@example.com", "plex.example.com", RECENTLY);
         assertThatThrownBy(service::flushAccessSources).isInstanceOf(IllegalStateException.class);
 
         Optional<List<AccessSource>> flushed = service.flushAccessSources();
@@ -443,7 +509,7 @@ class SecurityServiceTest {
     void flushAccessSources_doesNotHoldUpTheForwardAuthPathWhileTheStoreIsBeingWritten() throws Exception {
         when(forGeolocatingIps.locate(any())).thenReturn(Optional.of(OSLO));
         SecurityService service = service();
-        service.recordAllowedAccess("203.0.113.7", "geir@example.com", RECENTLY);
+        service.recordAllowedAccess("203.0.113.7", "geir@example.com", "plex.example.com", RECENTLY);
 
         CountDownLatch saveInFlight = new CountDownLatch(1);
         CountDownLatch releaseSave = new CountDownLatch(1);
@@ -458,7 +524,7 @@ class SecurityServiceTest {
             Future<?> flush = threads.submit(service::flushAccessSources);
             assertThat(saveInFlight.await(5, TimeUnit.SECONDS)).as("the save started").isTrue();
             Future<?> record = threads.submit(() ->
-                service.recordAllowedAccess("198.51.100.9", "someone@example.com", RECENTLY));
+                service.recordAllowedAccess("198.51.100.9", "someone@example.com", "plex.example.com", RECENTLY));
 
             assertThatCode(() -> record.get(2, TimeUnit.SECONDS))
                 .as("an allowed access is recorded while the store is still being written")
@@ -483,7 +549,7 @@ class SecurityServiceTest {
     void flushAccessSources_twoAtOnce_neverLeaveTheOlderSnapshotInTheStore() throws Exception {
         when(forGeolocatingIps.locate(any())).thenReturn(Optional.of(OSLO));
         SecurityService service = service();
-        service.recordAllowedAccess("203.0.113.7", "geir@example.com", RECENTLY);
+        service.recordAllowedAccess("203.0.113.7", "geir@example.com", "plex.example.com", RECENTLY);
 
         CountDownLatch firstSaveInFlight = new CountDownLatch(1);
         CountDownLatch releaseFirstSave = new CountDownLatch(1);
@@ -504,7 +570,7 @@ class SecurityServiceTest {
             Future<?> scheduled = threads.submit(service::flushAccessSources);
             assertThat(firstSaveInFlight.await(5, TimeUnit.SECONDS)).as("the first save started").isTrue();
 
-            service.recordAllowedAccess("198.51.100.9", "kari@example.com", RECENTLY);
+            service.recordAllowedAccess("198.51.100.9", "kari@example.com", "plex.example.com", RECENTLY);
             Future<?> shutdown = threads.submit(service::flushAccessSources);
             // Bounded, so a regression fails here rather than hanging: every chance to overtake the first
             // save, and then the assertion that it did not.
@@ -528,7 +594,7 @@ class SecurityServiceTest {
     void flushAccessSources_leavesTheServiceHoldingWhatItSaved() {
         when(forGeolocatingIps.locate("203.0.113.7")).thenReturn(Optional.of(OSLO));
         SecurityService service = service();
-        service.recordAllowedAccess("203.0.113.7", "geir@example.com", RECENTLY);
+        service.recordAllowedAccess("203.0.113.7", "geir@example.com", "plex.example.com", RECENTLY);
 
         service.flushAccessSources();
 

@@ -260,6 +260,59 @@ class ReverseProxyRouteTest {
         assertThat(route.launchpadDisplayName("example.com")).isEqualTo("grafana");
     }
 
+    // --- launchpadDisplayNameFor: naming a host somebody reached ---
+
+    @Test
+    void launchpadDisplayNameFor_namesTheRouteServingThatHost() {
+        List<ReverseProxyRoute> routes = List.of(
+            route("plex.example.com", "10.0.0.1", 8080), route("grafana.example.com", "10.0.0.2", 3000));
+
+        assertThat(ReverseProxyRoute.launchpadDisplayNameFor(routes, "grafana.example.com", "example.com"))
+            .isEqualTo("grafana");
+    }
+
+    /** The label the operator picked, not the DNS label — the same name the launchpad tile shows. */
+    @Test
+    void launchpadDisplayNameFor_prefersTheOperatorsAlias() {
+        List<ReverseProxyRoute> routes = List.of(new ReverseProxyRoute("r", "grafana.example.com",
+            "10.0.0.1", 8080, "svc", null, null, null, null, null, false, false, null, null, false,
+            "Grafana Prod"));
+
+        assertThat(ReverseProxyRoute.launchpadDisplayNameFor(routes, "grafana.example.com", "example.com"))
+            .isEqualTo("Grafana Prod");
+    }
+
+    /**
+     * A host Vaier does not publish is still a host somebody reached — the console itself is one. No name
+     * is a fair answer; a wrong one is not.
+     */
+    @Test
+    void launchpadDisplayNameFor_isNullWhenNoRouteServesThatHost() {
+        assertThat(ReverseProxyRoute.launchpadDisplayNameFor(
+            List.of(route("plex.example.com", "10.0.0.1", 8080)), "vaier.example.com", "example.com"))
+            .isNull();
+        assertThat(ReverseProxyRoute.launchpadDisplayNameFor(null, "plex.example.com", "example.com"))
+            .isNull();
+        assertThat(ReverseProxyRoute.launchpadDisplayNameFor(List.of(), null, "example.com")).isNull();
+    }
+
+    /** Several routes share one host when they are path-scoped; the host-only one is what a host names. */
+    @Test
+    void launchpadDisplayNameFor_prefersTheHostOnlyRouteOverAPathScopedSibling() {
+        List<ReverseProxyRoute> routes = List.of(
+            pathRoute("svc.example.com", "/grafana"), route("svc.example.com", "10.0.0.1", 8080));
+
+        assertThat(ReverseProxyRoute.launchpadDisplayNameFor(routes, "svc.example.com", "example.com"))
+            .isEqualTo("svc");
+    }
+
+    @Test
+    void launchpadDisplayNameFor_matchesAHostWhateverItsCase() {
+        assertThat(ReverseProxyRoute.launchpadDisplayNameFor(
+            List.of(route("grafana.example.com", "10.0.0.1", 8080)), "Grafana.Example.com", "example.com"))
+            .isEqualTo("grafana");
+    }
+
     // --- launchpadIconQuery (domain owns the icon lookup identity) ---
 
     @Test

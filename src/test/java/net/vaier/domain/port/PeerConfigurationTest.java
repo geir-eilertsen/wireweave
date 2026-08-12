@@ -2,6 +2,7 @@ package net.vaier.domain.port;
 
 import net.vaier.domain.DeviceCategory;
 import net.vaier.domain.MachineType;
+import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
 import org.junit.jupiter.api.Test;
 
@@ -40,6 +41,35 @@ class PeerConfigurationTest {
 
         assertThat(PeerConfiguration.lanCidrOwner(peers, "192.168.9.0/24", "bob")).isEmpty();
         assertThat(PeerConfiguration.lanCidrOwner(peers, null, "bob")).isEmpty();
+    }
+
+    // --- is this machine one of our peers? ---
+
+    @Test
+    void isPeerMachine_findsAPeerByItsMachineId() {
+        PeerConfiguration phone = peerFor("phone");
+        List<PeerConfiguration> peers = List.of(phone, peerFor("laptop"));
+
+        assertThat(PeerConfiguration.isPeerMachine(peers, phone.machineId())).isTrue();
+    }
+
+    @Test
+    void isPeerMachine_isFalseForAMachineNoPeerIs() {
+        List<PeerConfiguration> peers = List.of(peerFor("phone"));
+
+        assertThat(PeerConfiguration.isPeerMachine(peers, TestMachineIds.of("ghost"))).isFalse();
+        assertThat(PeerConfiguration.isPeerMachine(List.of(), TestMachineIds.of("phone"))).isFalse();
+    }
+
+    /** Never a match by accident: no machine id names no machine. */
+    @Test
+    void isPeerMachine_isFalseForNoMachineIdAtAll() {
+        assertThat(PeerConfiguration.isPeerMachine(List.of(peerFor("phone")), null)).isFalse();
+    }
+
+    private static PeerConfiguration peerFor(String name) {
+        return new PeerConfiguration(name, name, "10.13.13.2", "", MachineType.UBUNTU_SERVER,
+            null, null, null, null, null, TestMachineIds.of(name));
     }
 
     // --- device category (override + effective) ---

@@ -11,6 +11,10 @@ import net.vaier.application.GetServerLocationUseCase;
 import net.vaier.application.GetVpnClientsUseCase;
 import net.vaier.application.GetVpnPeersUseCase;
 import net.vaier.application.GetVpnPeersUseCase.VpnPeerView;
+import net.vaier.application.ClaimDeviceUseCase;
+import net.vaier.application.ForgetMyPositionUseCase;
+import net.vaier.application.GetMyDeviceUseCase;
+import net.vaier.application.ReportMyPositionUseCase;
 import net.vaier.application.ReissuePeerConfigUseCase;
 import net.vaier.application.RenamePeerUseCase;
 import net.vaier.application.ResolveVpnPeerIdUseCase;
@@ -20,17 +24,25 @@ import net.vaier.application.UpdatePeerDeviceCategoryUseCase;
 import net.vaier.domain.DeviceCategory;
 import net.vaier.config.ConfigResolver;
 import net.vaier.config.ServiceNames;
+import net.vaier.domain.DeviceClaim;
 import net.vaier.domain.GeoLocation;
 import net.vaier.domain.LanServer;
 import net.vaier.domain.Machine;
 import net.vaier.domain.MachineId;
+import net.vaier.domain.LastServicesReached;
+import net.vaier.domain.MachinePositions;
 import net.vaier.domain.MachineType;
+import net.vaier.domain.PeerArtifact;
 import net.vaier.domain.PeerId;
+import net.vaier.domain.Placement;
+import net.vaier.domain.ReportedPosition;
+import net.vaier.domain.UnidentifiedDeviceException;
 import net.vaier.domain.PeerNotFoundException;
 import net.vaier.domain.ConflictException;
 import net.vaier.domain.PeerSetupScript;
 import net.vaier.domain.ReverseProxyRoute;
 import net.vaier.domain.ServerLocationResolver;
+import net.vaier.domain.TunnelCaller;
 import net.vaier.domain.VaierHostnames;
 import net.vaier.domain.VpnClient;
 import net.vaier.domain.VpnSubnet;
@@ -43,6 +55,8 @@ import net.vaier.domain.port.ForGettingPeerConfigurations;
 import net.vaier.domain.port.ForGettingVpnClients;
 import net.vaier.domain.port.ForPersistingHostCredentials;
 import net.vaier.domain.port.ForPersistingLanServers;
+import net.vaier.domain.port.ForPersistingLastServicesReached;
+import net.vaier.domain.port.ForPersistingMachinePositions;
 import net.vaier.domain.port.ForTrackingHostKeys;
 import net.vaier.domain.port.ForPersistingReverseProxyRoutes;
 import net.vaier.domain.port.ForResolvingPeerIds;
@@ -59,6 +73,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -82,6 +97,10 @@ public class VpnService implements
     RenamePeerUseCase,
     ReissuePeerConfigUseCase,
     UpdatePeerDeviceCategoryUseCase,
+    ReportMyPositionUseCase,
+    ForgetMyPositionUseCase,
+    ClaimDeviceUseCase,
+    GetMyDeviceUseCase,
     SyncLanRoutesUseCase {
 
     @Value("${wireguard.config.path:/wireguard/config}")
@@ -115,6 +134,8 @@ public class VpnService implements
     private final ForPersistingLanServers forPersistingLanServers;
     private final ForPersistingHostCredentials forPersistingHostCredentials;
     private final ForTrackingHostKeys forTrackingHostKeys;
+    private final ForPersistingMachinePositions forPersistingMachinePositions;
+    private final ForPersistingLastServicesReached forPersistingLastServicesReached;
 
     public VpnService(ConfigResolver configResolver,
                       ForGettingVpnClients forGettingVpnClients,
@@ -134,7 +155,9 @@ public class VpnService implements
                       ForTrackingPeerConfigRetrieval forTrackingPeerConfigRetrieval,
                       ForPersistingLanServers forPersistingLanServers,
                       ForPersistingHostCredentials forPersistingHostCredentials,
-                      ForTrackingHostKeys forTrackingHostKeys) {
+                      ForTrackingHostKeys forTrackingHostKeys,
+                      ForPersistingMachinePositions forPersistingMachinePositions,
+                      ForPersistingLastServicesReached forPersistingLastServicesReached) {
         this.configResolver = configResolver;
         this.forGettingVpnClients = forGettingVpnClients;
         this.forResolvingPeerIds = forResolvingPeerIds;
@@ -154,6 +177,8 @@ public class VpnService implements
         this.forPersistingLanServers = forPersistingLanServers;
         this.forPersistingHostCredentials = forPersistingHostCredentials;
         this.forTrackingHostKeys = forTrackingHostKeys;
+        this.forPersistingMachinePositions = forPersistingMachinePositions;
+        this.forPersistingLastServicesReached = forPersistingLastServicesReached;
     }
 
     // --- GetVpnClientsUseCase ---
@@ -167,13 +192,27 @@ public class VpnService implements
 
     @Override
     public List<VpnPeerView> getVpnPeers() {
-        // Resolve the live server render inputs once per refresh (not per peer) so the
-        // out-of-date check is a pure string compare against each peer's on-disk config.
-        ServerRenderContext serverContext = resolveServerRenderContext();
+        RefreshContext context = new RefreshContext(
+            // Resolve the live server render inputs once per refresh (not per peer) so the
+            // out-of-date check is a pure string compare against each peer's on-disk config.
+            resolveServerRenderContext(),
+            forPersistingMachinePositions.getAll(),
+            forPersistingLastServicesReached.getAll(),
+            forPersistingReverseProxyRoutes.getReverseProxyRoutes(),
+            configResolver.getDomain(),
+            Instant.now());
         return forGettingVpnClients.getClients().stream()
-            .map(client -> toVpnPeerView(client, serverContext))
+            .map(client -> toVpnPeerView(client, context))
             .toList();
     }
+
+    /**
+     * What every peer in one refresh shares — each read once here rather than once per peer, on a list a
+     * scheduler repaints on a clock.
+     */
+    private record RefreshContext(ServerRenderContext server, MachinePositions positions,
+                                  LastServicesReached reached, List<ReverseProxyRoute> routes,
+                                  String baseDomain, Instant now) {}
 
     /**
      * The current server-side inputs to {@link WireGuardPeerConfig#reissue}. Null when they can't
@@ -194,7 +233,8 @@ public class VpnService implements
         }
     }
 
-    private VpnPeerView toVpnPeerView(VpnClient client, ServerRenderContext serverContext) {
+    private VpnPeerView toVpnPeerView(VpnClient client, RefreshContext context) {
+        ServerRenderContext serverContext = context.server();
         String peerIp = client.vpnIp();
         String id = forResolvingPeerIds.resolvePeerIdByIp(peerIp);
         // The raw PeerConfiguration carries the device-category override and owns the effective-
@@ -236,21 +276,97 @@ public class VpnService implements
         // with no on-disk config yet, derive the default from the live category + type.
         boolean sshAccess = rawCfg
             .map(ForGettingPeerConfigurations.PeerConfiguration::effectiveSshAccess)
-            .orElseGet(() -> net.vaier.domain.Machine.defaultSshAccess(deviceCategory, peerType));
+            .orElseGet(() -> Machine.defaultSshAccess(deviceCategory, peerType));
         // Read from the stored config, never minted: a live peer with no config on disk is in no machine
         // registry, and a caller joining on a fabricated id would match nothing while looking like it could.
-        String machineId = rawCfg
+        MachineId machineId = rawCfg
             .map(ForGettingPeerConfigurations.PeerConfiguration::machineId)
-            .map(MachineId::value)
             .orElse(null);
-        return new VpnPeerView(
-            id, machineId, name, client.publicKey(), client.allowedIps(), peerIp,
-            client.endpointIp(), client.endpointPort(), client.latestHandshake(),
-            client.isConnected(), client.transferRx(), client.transferTx(),
-            peerType, isServer, isClient, isRelay,
-            net.vaier.domain.PeerArtifact.forPeerType(peerType),
-            lanCidr, lanAddress, description, geo, configOutOfDate,
-            deviceCategory, deviceCategoryOverridden, sshAccess);
+        // Where to draw this machine is the domain's call — including refusing to draw it at all.
+        Optional<Placement> placement = Placement.decide(
+            context.positions().reportedFor(machineId).orElse(null), geo.orElse(null),
+            client.isConnected(), Instant.ofEpochSecond(client.latestHandshakeEpoch()), context.now());
+        return VpnPeerView.builder()
+            .id(id).machineId(machineId == null ? null : machineId.value()).name(name)
+            .publicKey(client.publicKey()).allowedIps(client.allowedIps()).tunnelIp(peerIp)
+            .endpointIp(client.endpointIp()).endpointPort(client.endpointPort())
+            .latestHandshake(client.latestHandshake()).connected(client.isConnected())
+            .transferRx(client.transferRx()).transferTx(client.transferTx())
+            .peerType(peerType).isServer(isServer).isClient(isClient).isRelay(isRelay)
+            .availableArtifacts(PeerArtifact.forPeerType(peerType))
+            .lanCidr(lanCidr).lanAddress(lanAddress).description(description)
+            .geoLocation(geo).configOutOfDate(configOutOfDate)
+            .deviceCategory(deviceCategory).deviceCategoryOverridden(deviceCategoryOverridden)
+            .sshAccess(sshAccess).placement(placement)
+            // Which points are still worth showing is the domain's call too — retention holds for a device
+            // that stopped reporting, not only for one still going.
+            .positionTrail(context.positions().trailFor(machineId, context.now()))
+            .lastServiceReached(lastServiceReached(machineId, context))
+            .build();
+    }
+
+    /**
+     * What that machine last opened, named the way the launchpad names it. Which service a machine reached
+     * was decided when the access was recorded — this only reads it and asks the domain for its label, so
+     * nothing here has to guess whose access was whose.
+     */
+    private Optional<GetVpnPeersUseCase.LastServiceReachedView> lastServiceReached(
+            MachineId machineId, RefreshContext context) {
+        return context.reached().forMachine(machineId)
+            .map(reached -> new GetVpnPeersUseCase.LastServiceReachedView(reached.host(),
+                ReverseProxyRoute.launchpadDisplayNameFor(context.routes(), reached.host(),
+                    context.baseDomain()),
+                reached.at()));
+    }
+
+    // --- ReportMyPositionUseCase / ForgetMyPositionUseCase / ClaimDeviceUseCase ---
+
+    @Override
+    public void reportMyPosition(String callerIp, String claimToken,
+                                 Double latitude, Double longitude, Double accuracyMetres) {
+        // Say who is talking, never which machine to file it under: resolving that here would leave a gap
+        // in which a Forget lands, and the report would then re-create the record it just erased.
+        forPersistingMachinePositions.recordReportedPosition(tunnelMachine(callerIp), claimToken,
+                ReportedPosition.report(latitude, longitude, accuracyMetres, Instant.now()))
+            .orElseThrow(UnidentifiedDeviceException::becauseNothingIdentifiesTheDevice);
+    }
+
+    @Override
+    public void forgetMyPosition(String callerIp, String claimToken) {
+        // Precedence — tunnel over claim — is the domain's; this only supplies what each evidence says.
+        // Resolving here is safe in a way reporting is not: a Forget racing another write can only ever
+        // erase, never file something under an identity that has just stopped existing.
+        MachineId machineId = forPersistingMachinePositions.getAll()
+            .reportingMachine(tunnelMachine(callerIp), claimToken)
+            .orElseThrow(UnidentifiedDeviceException::becauseNothingIdentifiesTheDevice);
+        forPersistingMachinePositions.remove(machineId);
+    }
+
+    @Override
+    public String claimDevice(String machineId) {
+        MachineId claimed = MachineId.of(machineId);
+        // Vaier knows its own peers, so it says so now rather than storing a claim that could never
+        // place a dot. Whether the machine is one of ours is the domain's call; this only reads the port.
+        if (!ForGettingPeerConfigurations.PeerConfiguration
+                .isPeerMachine(peerConfigProvider.getAllPeerConfigs(), claimed)) {
+            throw new PeerNotFoundException("No peer with machine id " + claimed.value() + " to claim.");
+        }
+        DeviceClaim claim = DeviceClaim.mint(Instant.now());
+        forPersistingMachinePositions.saveClaim(claimed, claim);
+        return claim.token();
+    }
+
+    @Override
+    public Optional<MachineId> myDevice(String claimToken) {
+        return forPersistingMachinePositions.getAll().claimedBy(claimToken);
+    }
+
+    /**
+     * The machine holding {@code callerIp} as its tunnel IP, or null when that address is not one — the
+     * rule is {@link TunnelCaller}'s, this only supplies the subnet and the peer store it reads.
+     */
+    private MachineId tunnelMachine(String callerIp) {
+        return TunnelCaller.machineFor(callerIp, vpnSubnet, peerConfigProvider).orElse(null);
     }
 
     /**

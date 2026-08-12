@@ -136,6 +136,19 @@ public interface ForGettingPeerConfigurations {
         }
 
         /**
+         * Whether {@code machineId} is one of {@code peers}. Deliberately narrower than "is this a machine
+         * in the fleet" — a fleet machine may also be a LAN server or the Vaier server, and this searches
+         * peers only, which is why it is named for what it checks.
+         *
+         * <p>Null never matches: no machine id names no machine, and a lenient answer here would let a
+         * record be stored against nothing.
+         */
+        public static boolean isPeerMachine(List<PeerConfiguration> peers, MachineId machineId) {
+            if (machineId == null) return false;
+            return peers.stream().anyMatch(peer -> peer.machineId().isSameAs(machineId));
+        }
+
+        /**
          * The peer — other than {@code excludingPeerId} — that already owns {@code lanCidr}, if
          * any. A LAN CIDR may be routed by only one relay peer, so the caller rejects a non-empty
          * result. Empty when {@code lanCidr} is null.

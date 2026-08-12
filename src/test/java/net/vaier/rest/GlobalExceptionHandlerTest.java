@@ -8,6 +8,7 @@ import net.vaier.domain.NoSftpSubsystemException;
 import net.vaier.domain.NoSshServerException;
 import net.vaier.domain.SshAuthException;
 import net.vaier.domain.SshConnectException;
+import net.vaier.domain.UnidentifiedDeviceException;
 import net.vaier.application.AddReverseProxyRouteUseCase;
 import net.vaier.application.DeleteReverseProxyRouteUseCase;
 import net.vaier.application.GetReverseProxyRoutesUseCase;
@@ -247,6 +248,25 @@ class GlobalExceptionHandlerTest {
                 .contains("Roon kjøkken")
                 .contains("does not answer SSH")
                 .contains("Install and start an SSH server");
+    }
+
+    /**
+     * The browser's lapsed-claim recovery keys on this exact status: a 403 tells it the claim it holds
+     * is dead, so it offers Claim again. Mapped to 400 or a generic 500 it would silently go on showing
+     * a device as claimed when it is not — so the status is contract, not an implementation detail.
+     */
+    @Test
+    void unidentifiedDeviceException_mappedTo403_soTheBrowserCanRecoverALapsedClaim() {
+        ResponseEntity<ApiError> response = new GlobalExceptionHandler()
+                .handleUnidentifiedDevice(
+                    UnidentifiedDeviceException.becauseNothingIdentifiesTheDevice());
+
+        assertThat(response.getStatusCode().value()).isEqualTo(403);
+        assertThat(response.getBody().code()).isEqualTo("UNIDENTIFIED_DEVICE");
+        assertThat(response.getBody().message())
+                .contains("cannot tell which device")
+                .contains("tunnel")
+                .contains("device claim");
     }
 
     @Test

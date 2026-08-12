@@ -1,10 +1,14 @@
 package net.vaier.application;
 
+import lombok.Builder;
 import net.vaier.domain.DeviceCategory;
 import net.vaier.domain.GeoLocation;
 import net.vaier.domain.MachineType;
 import net.vaier.domain.PeerArtifact;
+import net.vaier.domain.Placement;
+import net.vaier.domain.PositionTrail;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -43,8 +47,18 @@ public interface GetVpnPeersUseCase {
      * @param availableArtifacts  which downloadable artifacts this peer supports — config file,
      *                            QR code, Docker Compose template, setup script. The browser
      *                            only renders buttons for what's in the set.
-     * @param geoLocation         present only when the peer has a non-blank endpoint and the
-     *                            lookup succeeded; empty otherwise.
+     * @param geoLocation         the raw ISP estimate: present only when the peer has a non-blank
+     *                            endpoint and the lookup succeeded; empty otherwise. Kept as it is —
+     *                            it is an input to {@code placement}, not a substitute for it.
+     * @param placement           where the machine actually is, decided by {@link Placement} from the
+     *                            reported position and the ISP estimate. Empty when Vaier has no
+     *                            honest answer — notably for a disconnected peer that has never reported,
+     *                            whose endpoint is only the last one WireGuard happened to see.
+     * @param positionTrail       where this machine has been: the retained {@link PositionTrail} of its own
+     *                            reported positions, oldest first. Empty for a machine that has never
+     *                            reported — an ISP estimate never joins a trail, because a carrier's whole
+     *                            block resolves to one point and a journey drawn from those is a line from
+     *                            the carrier's head office to itself.
      * @param configOutOfDate     true when the peer's on-disk config differs from what current
      *                            generation logic would render (keys preserved) — i.e. a
      *                            {@code Reissue} would change it. The UI surfaces this as a badge.
@@ -52,7 +66,12 @@ public interface GetVpnPeersUseCase {
      *                            never null. Orthogonal to {@code peerType} — it only picks an icon.
      * @param deviceCategoryOverridden  true when an explicit override is stored (rather than
      *                            auto-detected).
+     * @param lastServiceReached  what this machine most recently opened through the forward-auth chain,
+     *                            and when. Empty unless the machine has reached something <em>over the
+     *                            tunnel</em> — an access from anywhere else identifies a person, not a
+     *                            device, and Vaier does not guess which one.
      */
+    @Builder
     record VpnPeerView(
         String id,
         String machineId,
@@ -78,6 +97,32 @@ public interface GetVpnPeersUseCase {
         boolean configOutOfDate,
         DeviceCategory deviceCategory,
         boolean deviceCategoryOverridden,
-        boolean sshAccess
-    ) {}
+        boolean sshAccess,
+        Optional<Placement> placement,
+        PositionTrail positionTrail,
+        Optional<LastServiceReachedView> lastServiceReached
+    ) {
+        /**
+         * Twenty-seven components, several of them same-typed and adjacent, so the {@link Builder} is what
+         * every call site uses — and an absent optional is the empty one, never null: a builder leaves out
+         * what a caller does not care about, and {@code Optional} that can be null is the worst of both.
+         * A trail nobody set is the empty trail for the same reason.
+         */
+        public VpnPeerView {
+            geoLocation = geoLocation == null ? Optional.empty() : geoLocation;
+            placement = placement == null ? Optional.empty() : placement;
+            positionTrail = positionTrail == null ? PositionTrail.empty() : positionTrail;
+            lastServiceReached = lastServiceReached == null ? Optional.empty() : lastServiceReached;
+        }
+    }
+
+    /**
+     * The last service a machine reached, as the browser needs it.
+     *
+     * @param host        the gated host that was reached — always known.
+     * @param displayName the same label the launchpad tile carries, or null when Vaier publishes no route
+     *                    for that host (its own console is one such host). The host then stands alone.
+     * @param at          when it was reached.
+     */
+    record LastServiceReachedView(String host, String displayName, Instant at) {}
 }

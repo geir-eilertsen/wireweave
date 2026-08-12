@@ -47,6 +47,9 @@
         shield:  '<path d="M8 1.7l5.1 1.9v3.9c0 3.2-2.1 5.4-5.1 6.5-3-1.1-5.1-3.3-5.1-6.5V3.6z"/><path d="M5.7 8l1.6 1.7L10.4 6"/>',
         shieldhalf: '<path d="M8 1.7l5.1 1.9v3.9c0 3.2-2.1 5.4-5.1 6.5-3-1.1-5.1-3.3-5.1-6.5V3.6z"/><path d="M3 8.3h10"/>',
         map:     '<path d="M8 1.7c-2.5 0-4.4 1.9-4.4 4.3 0 3.1 4.4 8.3 4.4 8.3s4.4-5.2 4.4-8.3c0-2.4-1.9-4.3-4.4-4.3z"/><circle cx="8" cy="6" r="1.6"/>',
+        // A GPS crosshair — "find me" in every map app, so it is the one glyph that reads as "report where I
+        // am" without borrowing the fleet's own map-pin icon (which already means something else: a place).
+        locate:  '<circle cx="8" cy="8" r="3.1"/><circle cx="8" cy="8" r=".6" fill="currentColor" stroke="none"/><path d="M8 1.3v2.2M8 12.5v2.2M1.3 8h2.2M12.5 8h2.2"/>',
         // Capability glyphs — a machine's powers, riding just after its name in the rail. Line-art in the same
         // weight as everything else here, cropped small: stacked containers over a whale's waterline for Docker,
         // a hub fanning out to two dots for a relay.
@@ -176,6 +179,8 @@
         trustedRead: false,              // whether that read has landed once
         trustedError: '',                // why it failed, when it did — never shown as "nothing trusted"
         palSel: 0,
+        myDeviceMachineId: null,         // GET /vpn/peers/my-device — the ONE machine THIS browser's cookie
+                                          //   claims, server-decided; never "some browser claims this machine"
     };
 
     // A file large enough to be worth a second thought before it crosses the fleet over WireGuard. The
@@ -1173,6 +1178,8 @@
         pane.scrollTop = 0;
 
         const kind = kindOf(S.path);
+        // Standing anywhere else ends the visit to the Map, so opening it again frames the fleet afresh.
+        if (kind !== 'map') _mapFramed = false;
         if (kind === 'fleet') return renderFleet(pane);
         if (kind === 'map') return renderMap(pane);
         if (kind === 'settings') return renderSettings(pane);
@@ -1258,31 +1265,48 @@
         pane.appendChild(body);
     }
 
-    // The fleet on a map — where the machines physically are, from the geo Vaier already resolves onto each
-    // peer (latitude/longitude/city). Leaflet, loaded from explorer.html; if it did not load, the entry says so
-    // rather than breaking. The map is torn down and rebuilt on each render (rare — peer stats only repaint the
-    // dots, so the map is not thrashed), and requestAnimationFrame — never a timer — settles its size.
-    // The fleet on a map — a faithful port of the Infrastructure page's map. Clustered so
-    // co-located machines gather and spiderfy on click; a client shows twice — a weak marker where it connects
-    // from and a firm one where its traffic surfaces (the Vaier server); LAN servers sit at their relay; the
-    // Vaier server itself is the big marker in Frankfurt. Leaflet + markercluster load from explorer.html.
+    // The fleet on a map — where the machines physically are. Leaflet, loaded from explorer.html; if it did not
+    // load, the entry says so rather than breaking. The map is built once and kept for as long as the tab lives:
+    // renderPane empties the pane on every render, so the map's element is detached and re-attached rather than
+    // rebuilt, and requestAnimationFrame — never a timer — settles its size again. Clustered so co-located
+    // machines gather and spiderfy on click.
+    //
+    // A client peer's own position comes entirely from `placement`: a REPORTED fix is a firm pin, an
+    // ISP_ESTIMATE is a soft region (never a pin — a carrier's registry point is not the device), and no
+    // placement draws nothing at all. It shows twice regardless: once wherever `placement` puts it (or not),
+    // and once firm at the Vaier server, where its tunnelled traffic actually surfaces.
+    // LAN servers sit at their relay; the Vaier server itself is the big marker. Leaflet + markercluster load
+    // from explorer.html.
     let _map = null;
     let _cluster = null;
+    let _mapHolder = null;    // the map's own element, moved between renders rather than rebuilt
+    let _mapFramed = false;   // whether this visit to the Map has had its one framing
+    let _fleetMarkers = new Map();   // pin key -> { marker, look, at }, so an update can move what moved
+    let _fleetRegions = new Map();   // the same, for the ISP-estimate circles
     let _threatMarkers = [];
     let _accessMarkers = [];
+    let _trailLayers = [];           // the drawn position trail, torn down whole and redrawn
+    let _trailKey = null;            // which pin's trail is on the map, or null when none is
+    let _trailLook = null;           // the points as drawn, so an unchanged trail is left alone
+    let _trailByKey = new Map();     // pin key -> its points, refreshed every paint so a redraw is current
     const MAP_STATUS = { OK: 'up', DEGRADED: 'degraded', DOWN: 'down', UNKNOWN: 'unknown' };
     const iconByCategory = (cat) => { const k = cat ? String(cat).toLowerCase() : ''; return ICON[k] ? k : 'generic'; };
 
-    function mapMarker(latlng, iconKind, statusKey, opts) {
+    // Split out from mapMarker so a marker that is already on the map can be re-dressed (setIcon) when its
+    // status changes, instead of being replaced by a new one.
+    function markerIcon(iconKind, statusKey, opts) {
         const cls = ['map-marker', statusKey];
         if (opts && opts.big) cls.push('large');
-        if (opts && opts.weak) cls.push('weak');
+        // A REPORTED placement the domain has called stale — a real fix, just an old one. Faded, not dashed:
+        // dashed already means "not a real fix" (the ISP circle), and stale coordinates are still a real one.
+        if (opts && opts.stale) cls.push('stale');
         const sz = opts && opts.big ? 36 : 28;
-        return L.marker(latlng, {
-            icon: L.divIcon({ html: '<div class="' + cls.join(' ') + '">' + svg(iconKind, 'ex-ico') + '</div>',
-                className: '', iconSize: [sz, sz], iconAnchor: [sz / 2, sz / 2] }),
-            riseOnHover: true,
-        });
+        return L.divIcon({ html: '<div class="' + cls.join(' ') + '">' + svg(iconKind, 'ex-ico') + '</div>',
+            className: '', iconSize: [sz, sz], iconAnchor: [sz / 2, sz / 2] });
+    }
+
+    function mapMarker(latlng, iconKind, statusKey, opts) {
+        return L.marker(latlng, { icon: markerIcon(iconKind, statusKey, opts), riseOnHover: true });
     }
     // A popup, built from DOM elements (no interpolation) — a bold title then muted/mono lines.
     function mapPopup(title, lines) {
@@ -1305,6 +1329,11 @@
     // is both the access source AND the Vaier server's own 36px marker; a lone-layer dot hid underneath it).
     // `coords` — what fitBounds reads for framing — is untouched here, so cluster membership can never drag
     // the map's zoom toward a single remote scanner or sign-in.
+    //
+    // The fleet's own markers deliberately do NOT come through here (see syncPins): a machine has a stable
+    // identity to diff on and a popup worth keeping open across an update. A blocked address or a sign-in
+    // is an event, not a thing that persists and moves, so there is nothing to key it by and wholesale
+    // replacement is the honest way to redraw it.
     function repaintIntoCluster(prevMarkers, items, buildMarker) {
         if (!_map || !_cluster) return prevMarkers;
         prevMarkers.forEach((m) => _cluster.removeLayer(m));
@@ -1346,51 +1375,161 @@
         });
     }
 
-    function renderMap(pane) {
-        const seen = S.threats.filter((d) => d.locatable).length;
-        pane.appendChild(paneHead('Map', false,
-            seen ? 'Where the fleet is, and where ' + seen + (seen === 1 ? ' blocked address is' : ' blocked addresses are')
-                 : 'Where the fleet is'));
-        const body = el('div', 'ex-pane-body ex-map-body');
-        const holder = el('div', 'ex-map');
-        body.appendChild(holder);
-        pane.appendChild(body);
-        if (typeof L === 'undefined') { body.appendChild(note('The map could not load its library.', true)); return; }
-        if (_map) { try { _map.remove(); } catch (e) { /* gone */ } _map = null; _cluster = null; _threatMarkers = []; _accessMarkers = []; }
+    // The position trail — where one machine has actually been, drawn from its own reported positions.
+    //
+    // Shown for ONE machine at a time: the one whose popup is open. The fleet map already carries a chip per
+    // machine, a second chip per client at the hub, soft ISP circles, green access dots and red threat pings;
+    // every trail always on would be a permanent scribble across all of it, and two travelling devices would
+    // cross into one unreadable tangle. Opening a machine's popup is already how the operator asks about that
+    // machine, so it is the selection — no new control, no legend, nothing to switch off.
+    const TRAIL_COLOUR = '#d9a05b';   // --accent: the console drawing, not a status. No other map layer wears it.
+    const TRAIL_BANDS = 12;
 
-        const map = L.map(holder, { worldCopyJump: true }).setView([20, 0], 1);
-        _map = map;
+    // The line is drawn in bands rather than one segment per point: a 500-point trail is one polyline per band
+    // instead of 499, and twelve steps is a ramp the eye reads as continuous. Consecutive bands share an
+    // endpoint, so the path has no gaps.
+    function trailBands(points) {
+        const segments = points.length - 1;
+        const bands = Math.min(TRAIL_BANDS, segments);
+        const out = [];
+        for (let b = 0; b < bands; b++) {
+            const from = Math.floor(b * segments / bands);
+            const to = Math.floor((b + 1) * segments / bands);
+            out.push({ path: points.slice(from, to + 1), age: bands === 1 ? 1 : b / (bands - 1) });
+        }
+        return out;
+    }
+
+    // Older recedes: the trail thins and fades back into the past, so which end is "now" is legible without an
+    // arrowhead or a legend. The newest end runs into the machine's own marker, which is the head of the line.
+    //
+    // Look-guarded like the fleet's pins are: the peers feed repaints on every SSE nudge, and a trail that has
+    // not gained a point must not be torn down and rebuilt underneath an operator reading the map.
+    function paintTrail(points) {
+        const look = JSON.stringify(points);
+        if (look === _trailLook && _trailLayers.length) return;
+        clearTrail();
+        _trailLook = look;
+        if (!_map || points.length < 2) return;
+        trailBands(points).forEach((band) => {
+            _trailLayers.push(L.polyline(band.path, {
+                color: TRAIL_COLOUR, weight: 1.5 + 2.5 * band.age, opacity: 0.22 + 0.68 * band.age,
+                lineCap: 'round', lineJoin: 'round', interactive: false,
+            }).addTo(_map));
+        });
+        // A dot per retained point, because where the reports fell is information the line alone hides:
+        // clustered dots are a device that lingered, strung-out ones a device that was moving.
+        points.forEach((at, i) => {
+            const age = i / (points.length - 1);
+            _trailLayers.push(L.circleMarker(at, {
+                radius: 1.6 + 1.6 * age, color: TRAIL_COLOUR, weight: 0,
+                fillColor: TRAIL_COLOUR, fillOpacity: 0.3 + 0.6 * age, interactive: false,
+            }).addTo(_map));
+        });
+    }
+
+    function clearTrail() {
+        _trailLayers.forEach((layer) => _map.removeLayer(layer));
+        _trailLayers = [];
+        _trailLook = null;
+    }
+
+    function showTrail(key) {
+        _trailKey = key;
+        paintTrail(_trailByKey.get(key) || []);
+    }
+
+    // Guarded by key: a popup closing because another just opened must not erase the one that replaced it.
+    function hideTrail(key) {
+        if (_trailKey !== key) return;
+        _trailKey = null;
+        clearTrail();
+    }
+
+    // Leaflet holds the operator's pan and zoom inside the map object, so building it once is the whole fix:
+    // a rebuilt map is a reset view. The element is handed to each freshly rendered body instead, and once
+    // built the map lives as long as the tab — deliberately. Anything that would have to be chosen afresh
+    // (a different basemap, a different projection) has to be applied to this instance, not waited for on
+    // the next render, because there is no next construction.
+    //
+    // trackResize is off: Leaflet's own window-resize handler would fire while the element is detached (the
+    // pane is emptied on every render), measure a 0x0 container and pan by half its old size. renderMap
+    // calls invalidateSize itself on every paint, which is when the size can actually be measured.
+    function ensureMap(body) {
+        if (!_mapHolder) _mapHolder = el('div', 'ex-map');
+        body.appendChild(_mapHolder);
+        if (_map) return;
+        _map = L.map(_mapHolder, { worldCopyJump: true, trackResize: false }).setView([20, 0], 1);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-            { maxZoom: 18, attribution: '© OpenStreetMap' }).addTo(map);
-        const cluster = L.markerClusterGroup({ showCoverageOnHover: false, spiderfyOnMaxZoom: true, maxClusterRadius: 30 });
-        map.addLayer(cluster);
-        _cluster = cluster;
+            { maxZoom: 18, attribution: '© OpenStreetMap' }).addTo(_map);
+        _cluster = L.markerClusterGroup({ showCoverageOnHover: false, spiderfyOnMaxZoom: true, maxClusterRadius: 30 });
+        _map.addLayer(_cluster);
+        // The one case trackResize was right about — the window resizing while the Map is on screen — handled
+        // where the element can be checked for being attached first. An event, never a timer.
+        window.addEventListener('resize', () => { if (_mapHolder.isConnected) _map.invalidateSize(); });
+    }
 
+    // What the fleet layer draws, as data: one entry per pin, keyed by the machine it belongs to and the role
+    // it plays there (a client draws twice — where the device is, and at the hub its traffic surfaces through
+    // — so the machine's identity alone is not a key). Describing the pins before drawing them is what lets
+    // the next paint tell "this is the same pin, moved" from "this is a different pin".
+    function fleetPins() {
         const loc = S.serverLocation;
         const hasLoc = loc && loc.latitude != null && loc.longitude != null;
-        const coords = [];
-        const add = (marker, ll) => { cluster.addLayer(marker); coords.push(ll); };
+        const pins = [];
+        const regions = [];
 
         Array.from(S.peers.values()).forEach((p) => {
-            if (p.latitude == null || p.longitude == null) return;
             const statusKey = p.connected ? 'up' : 'down';
             const iconKind = iconByCategory(p.deviceCategory);
-            const place = [p.city, p.country].filter(Boolean).join(', ');
             if (p.isClient) {
-                const weak = mapMarker([p.latitude, p.longitude], iconKind, statusKey, { weak: true });
-                weak.bindPopup(mapPopup(p.name, [{ text: 'connecting from', muted: true },
-                    { text: p.endpointIp, mono: true }, { text: place }, { text: 'approx. ISP location', muted: true }]));
-                add(weak, [p.latitude, p.longitude]);
+                // `placement` is the one true answer to "where is this client" — never re-derived here, only
+                // rendered. No re-check against p.latitude/p.longitude: those still carry the raw ISP guess,
+                // which is exactly what put a 35-hours-disconnected phone at Telenor HQ.
+                const pl = p.placement;
+                if (pl && pl.source === 'REPORTED') {
+                    const lines = pl.stale
+                        ? [{ text: 'Last reported — ' + timeAgo(pl.asOf), muted: true }]
+                        : [{ text: 'Reported by the device', muted: true }, { text: timeAgo(pl.asOf) }];
+                    if (pl.accuracyMetres != null) {
+                        lines.push({ text: '±' + Math.round(pl.accuracyMetres) + ' m', muted: true });
+                    }
+                    // Only ever the machine's own reported positions — an ISP estimate never joins a trail,
+                    // so a peer placed by its carrier gets none. A lone point is where it already is.
+                    const trail = (p.positionTrail || []).map((t) => [t.latitude, t.longitude]);
+                    if (trail.length > 1) {
+                        lines.push({ text: 'Position trail — ' + trail.length + ' points, oldest '
+                            + timeAgo(p.positionTrail[0].at), muted: true });
+                    }
+                    pins.push({ key: 'device:' + p.machineId, at: [pl.latitude, pl.longitude],
+                        icon: iconKind, status: statusKey, opts: { stale: !!pl.stale }, title: p.name, lines,
+                        trail });
+                } else if (pl && pl.source === 'ISP_ESTIMATE') {
+                    // A soft region, not a pin: a carrier's registry point is not evidence of where the device
+                    // sits. The radius is a fixed visual convention, not a claimed accuracy — Vaier does not
+                    // know one, and drawing a number here would repeat the bug in a new costume.
+                    regions.push({ key: 'isp:' + p.machineId, at: [pl.latitude, pl.longitude], title: p.name,
+                        lines: [{ text: 'ISP estimate', muted: true },
+                            { text: p.endpointIp, mono: true }, { text: pl.place || '' },
+                            { text: 'Where the carrier registered this address — not where the device is.',
+                                muted: true }] });
+                }
+                // A client's traffic surfaces at the Vaier server no matter where the device itself is — true
+                // whether or not Vaier can honestly place the device, so this never waits on `placement`.
                 if (hasLoc) {
-                    const firm = mapMarker([loc.latitude, loc.longitude], iconKind, statusKey);
-                    firm.bindPopup(mapPopup(p.name, [{ text: 'internet via Vaier', muted: true },
-                        { text: [loc.city, loc.country].filter(Boolean).join(', ') }]));
-                    add(firm, [loc.latitude, loc.longitude]);
+                    pins.push({ key: 'hub:' + p.machineId, at: [loc.latitude, loc.longitude],
+                        icon: iconKind, status: statusKey, title: p.name,
+                        lines: [{ text: 'internet via Vaier', muted: true },
+                            { text: [loc.city, loc.country].filter(Boolean).join(', ') }] });
                 }
             } else {
-                const firm = mapMarker([p.latitude, p.longitude], iconKind, statusKey);
-                firm.bindPopup(mapPopup(p.name, [{ text: p.endpointIp, mono: true }, { text: place }]));
-                add(firm, [p.latitude, p.longitude]);
+                // Deliberately not `placement`: a fixed-line peer's ISP estimate is good evidence about a
+                // thing that does not move, so its last known dot stays rather than vanishing off the map.
+                if (p.latitude == null || p.longitude == null) return;
+                const place = [p.city, p.country].filter(Boolean).join(', ');
+                pins.push({ key: 'device:' + p.machineId, at: [p.latitude, p.longitude],
+                    icon: iconKind, status: statusKey, title: p.name,
+                    lines: [{ text: p.endpointIp, mono: true }, { text: place }] });
             }
         });
 
@@ -1411,20 +1550,116 @@
                 if (!relay || relay.latitude == null || relay.longitude == null) return;
                 lat = relay.latitude; lon = relay.longitude;
             }
-            const firm = mapMarker([lat, lon], iconByCategory(s.deviceCategory), MAP_STATUS[s.status] || 'unknown');
-            firm.bindPopup(mapPopup(s.name, [{ text: 'Behind ' + s.relayPeerName, muted: true },
-                { text: s.lanAddress, mono: true },
-                { text: s.runsDocker ? 'Docker on :' + s.dockerPort : '', muted: true }]));
-            add(firm, [lat, lon]);
+            pins.push({ key: 'device:' + s.machineId, at: [lat, lon], icon: iconByCategory(s.deviceCategory),
+                status: MAP_STATUS[s.status] || 'unknown', title: s.name,
+                lines: [{ text: 'Behind ' + s.relayPeerName, muted: true },
+                    { text: s.lanAddress, mono: true },
+                    { text: s.runsDocker ? 'Docker on :' + s.dockerPort : '', muted: true }] });
         });
 
         if (hasLoc) {
-            const m = mapMarker([loc.latitude, loc.longitude], 'server', 'up', { big: true });
-            m.bindPopup(mapPopup('Vaier server', [{ text: loc.publicHost, mono: true },
-                { text: [loc.city, loc.country].filter(Boolean).join(', ') }]));
-            add(m, [loc.latitude, loc.longitude]);
+            pins.push({ key: 'server', at: [loc.latitude, loc.longitude], icon: 'server', status: 'up',
+                opts: { big: true }, title: 'Vaier server',
+                lines: [{ text: loc.publicHost, mono: true },
+                    { text: [loc.city, loc.country].filter(Boolean).join(', ') }] });
         }
+        return { pins, regions };
+    }
 
+    // Everything about a pin except where it is — its icon, its state, what its popup says. Compared to decide
+    // whether an existing pin needs re-dressing at all, so a pin that has not changed is left strictly alone
+    // and the popup an operator is reading survives the update that arrives while they read it.
+    const pinLook = (p) => JSON.stringify([p.icon, p.status, p.opts || null, p.title, p.lines]);
+    const sameAt = (a, b) => a[0] === b[0] && a[1] === b[1];
+
+    // The fleet's markers, diffed by key: what is new is added, what moved is moved, what changed is
+    // re-dressed, what is gone is removed, and what is unchanged is not touched.
+    //
+    // setLatLng is all a move needs even inside the cluster: MarkerClusterGroup binds a `move` handler to
+    // every marker it holds (_childMarkerMoved), which re-clusters it at the new position and re-opens its
+    // popup if one was open. refreshClusters is not the tool here — it only refreshes cluster ICONS.
+    function syncPins(pins) {
+        const next = new Map();
+        // Rebuilt from this paint's data so an open trail redraws from what is current, never from a snapshot
+        // taken when the popup opened. Deliberately outside pinLook: a trail growing by a point must not
+        // re-dress the marker.
+        _trailByKey = new Map();
+        pins.forEach((p) => { if (p.trail && p.trail.length > 1) _trailByKey.set(p.key, p.trail); });
+        pins.forEach((p) => {
+            if (next.has(p.key)) return;   // one pin per key — a second would orphan the first in the cluster
+            const held = _fleetMarkers.get(p.key);
+            const look = pinLook(p);
+            if (!held) {
+                const marker = mapMarker(p.at, p.icon, p.status, p.opts);
+                marker.bindPopup(mapPopup(p.title, p.lines));
+                // The popup IS the selection — opening one asks about that machine, and its trail is part of
+                // the answer. A machine with no trail simply has nothing to draw.
+                marker.on('popupopen', () => showTrail(p.key));
+                marker.on('popupclose', () => hideTrail(p.key));
+                _cluster.addLayer(marker);
+                next.set(p.key, { marker, look, at: p.at });
+                return;
+            }
+            if (!sameAt(held.at, p.at)) held.marker.setLatLng(p.at);
+            if (held.look !== look) {
+                held.marker.setIcon(markerIcon(p.icon, p.status, p.opts));
+                held.marker.setPopupContent(mapPopup(p.title, p.lines));
+            }
+            next.set(p.key, { marker: held.marker, look, at: p.at });
+        });
+        _fleetMarkers.forEach((held, k) => { if (!next.has(k)) _cluster.removeLayer(held.marker); });
+        _fleetMarkers = next;
+        // A trail on screen follows its machine: it grows as new points arrive and goes when the machine does
+        // (deleted, or its position forgotten). Pushed by the vpn-peers SSE topic the fleet already repaints
+        // on — nothing here is on a timer.
+        if (_trailKey) {
+            if (_trailByKey.has(_trailKey)) paintTrail(_trailByKey.get(_trailKey));
+            else hideTrail(_trailKey);
+        }
+    }
+
+    // The same diff for the ISP-estimate circles. They are not cluster members — they sit straight on the
+    // map — so a move here is a plain setLatLng with nobody to tell.
+    function syncRegions(regions) {
+        const next = new Map();
+        regions.forEach((r) => {
+            const held = _fleetRegions.get(r.key);
+            const look = pinLook(r);
+            if (!held) {
+                const circle = L.circle(r.at, { radius: 30000,
+                    color: '#7a6a53', weight: 1, opacity: .6, fillColor: '#7a6a53', fillOpacity: .12 });
+                circle.bindPopup(mapPopup(r.title, r.lines));
+                circle.addTo(_map);
+                next.set(r.key, { circle, look, at: r.at });
+                return;
+            }
+            if (!sameAt(held.at, r.at)) held.circle.setLatLng(r.at);
+            if (held.look !== look) held.circle.setPopupContent(mapPopup(r.title, r.lines));
+            next.set(r.key, { circle: held.circle, look, at: r.at });
+        });
+        _fleetRegions.forEach((held, k) => { if (!next.has(k)) _map.removeLayer(held.circle); });
+        _fleetRegions = next;
+    }
+
+    // Returns every coordinate drawn — what the first paint frames on, and nothing after it reads.
+    function paintFleetLayer() {
+        const { pins, regions } = fleetPins();
+        syncPins(pins);
+        syncRegions(regions);
+        return pins.map((p) => p.at).concat(regions.map((r) => r.at));
+    }
+
+    function renderMap(pane) {
+        const seen = S.threats.filter((d) => d.locatable).length;
+        pane.appendChild(paneHead('Map', false,
+            seen ? 'Where the fleet is, and where ' + seen + (seen === 1 ? ' blocked address is' : ' blocked addresses are')
+                 : 'Where the fleet is'));
+        const body = el('div', 'ex-pane-body ex-map-body');
+        pane.appendChild(body);
+        if (typeof L === 'undefined') { body.appendChild(note('The map could not load its library.', true)); return; }
+        ensureMap(body);
+
+        const coords = paintFleetLayer();
         paintThreatLayer();
         paintAccessLayer();
 
@@ -1448,9 +1683,15 @@
                 + ' from an address that cannot be placed on a map — your own VPN and LAN among them.', false));
         }
 
-        if (coords.length) map.fitBounds(L.latLngBounds(coords).pad(0.3), { maxZoom: 5 });
-        else body.appendChild(note('No machine has a known location yet.', false));
-        requestAnimationFrame(() => { try { map.invalidateSize(); } catch (e) { /* torn down */ } });
+        // Framed on the first paint of a visit and never again: from the operator's first pan or zoom the view
+        // is theirs, and an update must not take it back. Leaving the Map ends the visit (renderPane).
+        if (coords.length && !_mapFramed) {
+            _map.fitBounds(L.latLngBounds(coords).pad(0.3), { maxZoom: 5 });
+            _mapFramed = true;
+        }
+        if (!coords.length) body.appendChild(note('No machine has a known location yet.', false));
+        // The element has just been re-attached to a new body, so Leaflet has to measure it again.
+        requestAnimationFrame(() => { try { _map.invalidateSize(); } catch (e) { /* gone */ } });
     }
 
     // A peer answers at its tunnel address, a LAN server on its LAN — the same rule the SSH connection
@@ -1496,6 +1737,15 @@
             rows.push(['Last handshake', peer ? agoFromEpochSeconds(peer.latestHandshake) : '']);
         }
         rows.push(['Device category', categoryLabel(m.deviceCategory)]);
+        // Only an access that came over the tunnel identifies a device rather than a person, so this is the
+        // last published service Vaier SAW this machine reach — which is why the row says so, and why no
+        // record draws no row: never having seen one is not the same as the machine having reached none.
+        const reached = peer && peer.lastServiceReached;
+        if (reached) {
+            const age = timeAgo(reached.at);
+            rows.push(['Last service', (reached.displayName || reached.host)
+                + (age ? ' · ' + age : '') + ', over the tunnel']);
+        }
         body.appendChild(kv(rows));
 
         const wires = disclosure('Connection details');
@@ -1621,6 +1871,27 @@
                 body.appendChild(note('Off — Vaier holds no session to this machine, so it has no shell, files '
                     + 'or disk reading here. Turn it on to give it an SSH credential.', false));
             }
+        } else {
+            // A phone or a laptop has no SSH story — Vaier cannot reach inside it. What it CAN do is ask the
+            // device itself where it is, and the device's own browser is the only witness that can say. The
+            // claim is the one-time act of that browser vouching "I am the one running on this machine";
+            // sharing and forgetting only make sense once it has.
+            body.appendChild(section('This device'));
+            // "I claim this machine" is per-browser, not per-machine — GET /vpn/peers/my-device says which
+            // ONE machine THIS browser's cookie is bound to, read once at boot and held in S. Comparing a
+            // per-peer flag would have shown Share on every browser looking at Geir's phone, not just his
+            // phone's own.
+            if (S.myDeviceMachineId === m.id) {
+                body.appendChild(devicePlacementControls(m));
+            } else {
+                const claimRow = el('div', 'ex-lactions is-static');
+                claimRow.appendChild(selVerb('locate', 'This browser is ' + m.name, 'ex-btn', () => claimDevice(m)));
+                body.appendChild(claimRow);
+                body.appendChild(note('Claim ' + m.name + ' from the browser running on it, and that browser '
+                    + 'can report where it actually is — the fix for exactly the case the map used to get '
+                    + 'wrong: a phone whose tunnel has been down for hours, still drawn at a day-old guess.',
+                    false));
+            }
         }
 
         // Everything you do TO the machine, rather than reach INSIDE it. Editing its details is common enough to
@@ -1651,6 +1922,135 @@
             body.appendChild(adv);
         }
         pane.appendChild(body);
+    }
+
+    // --- device claim: a browser vouching that it runs on a given machine, so it can report that machine's --
+    // position without needing the VPN tunnel up (the tunnel is exactly what tends to be down on a phone).
+
+    // localStorage, not a server setting: this is a per-browser habit ("keep refreshing while I'm the one
+    // holding you"), scoped by machine since a browser could plausibly be re-claimed as a different one later.
+    const autoShareKey = (machineId) => 'vaier-auto-share-position-' + machineId;
+    const autoShareEnabled = (machineId) => localStorage.getItem(autoShareKey(machineId)) === '1';
+    const setAutoShare = (machineId, on) => {
+        if (on) localStorage.setItem(autoShareKey(machineId), '1');
+        else localStorage.removeItem(autoShareKey(machineId));
+    };
+
+    // Once claimed: share now, keep it fresh on its own, or forget. Grouped together because the way out
+    // (Forget) has to sit exactly where the way in (Share) does — storing a person's whereabouts is not
+    // something to make easy going in and hard coming back out of.
+    function devicePlacementControls(m) {
+        const wrap = el('div');
+        const row = el('div', 'ex-lactions is-static');
+        row.appendChild(selVerb('locate', 'Share position', 'ex-btn is-accent', () => sharePosition(m)));
+        row.appendChild(selVerb('cross', 'Forget', 'ex-btn', () => forgetPosition(m)));
+        wrap.appendChild(row);
+
+        const auto = el('label', 'ex-check-row');
+        const box = el('input'); box.type = 'checkbox'; box.checked = autoShareEnabled(m.id);
+        box.onchange = () => setAutoShare(m.id, box.checked);
+        const atxt = el('span');
+        atxt.textContent = 'Keep this device’s position up to date — refresh it quietly whenever this browser '
+            + 'opens Vaier, with no new permission prompt';
+        auto.append(box, atxt);
+        wrap.appendChild(auto);
+
+        wrap.appendChild(note('This browser is claimed as ' + m.name + '. Forget erases its position and this '
+            + 'claim together — sharing again starts over with the claim.', false));
+        return wrap;
+    }
+
+    // The assertion itself. Vaier remembers it as an HttpOnly cookie this browser cannot read back — which is
+    // why claimedness is always read off GET /vpn/peers/my-device (loadMyDevice), never off document.cookie.
+    // Claiming a different machine than the one already held is allowed on purpose — last claim wins, and
+    // the operator is never asked to un-claim first — so this always just re-fetches and re-renders.
+    async function claimDevice(m) {
+        const ok = await confirmModal('This browser is ' + m.name + '?',
+            'Vaier will trust this browser to report where ' + m.name + ' actually is, tunnel up or not. '
+            + 'Claim it only from the browser that actually runs on ' + m.name + '.', 'Claim');
+        if (!ok) return;
+        try {
+            const res = await fetch('/vpn/peers/' + encodeURIComponent(m.id) + '/device-claim', { method: 'POST' });
+            if (!res.ok) { toast('Vaier could not claim this device.'); return; }
+            toast('This browser is now ' + m.name + '.');
+            await loadMyDevice(); render();
+        } catch (e) { toast('Vaier could not claim this device.'); }
+    }
+
+    // Each failure mode gets its own honest sentence — no false hope, since "try again" means something
+    // different for a declined permission than for a fix that never arrived.
+    const GEO_ERROR = {
+        1: 'Location sharing was declined — allow it for this site in the browser’s settings to share it.',
+        2: 'This device could not work out its own location right now.',
+        3: 'Location took too long to arrive — try again, ideally with a clearer view of the sky.',
+    };
+
+    function sharePosition(m) {
+        if (!navigator.geolocation) { toast('This browser cannot report a location.'); return; }
+        navigator.geolocation.getCurrentPosition(
+            (pos) => reportPosition(pos.coords, m),
+            (err) => toast(GEO_ERROR[err.code] || 'Vaier could not read this device’s location.'),
+            { enableHighAccuracy: true, timeout: 20000 });
+    }
+
+    // The POST itself, shared by the manual Share-position button and the silent boot-time refresh below — one
+    // place decides the body and what happens after, so the two paths can never drift apart on it. `m` is
+    // null for the silent path: nothing was directly asked for, so nothing is toasted either way.
+    async function reportPosition(coords, m) {
+        try {
+            const res = await fetch('/vpn/peers/my-position', { method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ latitude: coords.latitude, longitude: coords.longitude,
+                    accuracyMetres: coords.accuracy }) });
+            // The claim can lapse (revoked, or superseded by a claim made in another browser) — 403 here means
+            // exactly that. Resync what THIS browser actually holds rather than leave a stale claimed UI on
+            // screen; the manual path also says so, the silent one just quietly stops offering Share.
+            if (res.status === 403) {
+                await loadMyDevice();
+                if (m) toast('This browser has not claimed ' + m.name + ' — claim it again, then share.');
+                render();
+                return;
+            }
+            if (!res.ok) { if (m) toast('Vaier could not record that position.'); return; }
+            if (m) toast(m.name + '’s position shared.');
+            await loadFleet(); render();
+        } catch (e) { if (m) toast('Vaier could not record that position.'); }
+    }
+
+    // Erases the reported position AND revokes this browser's claim in one action, per the contract — a claim
+    // with no way back to "unclaimed" would be a one-way door, and this is the door. Re-fetches my-device
+    // alongside the fleet so the claim UI flips back to "This browser is …" without a reload.
+    async function forgetPosition(m) {
+        const ok = await confirmModal('Forget ' + m.name + '’s position?',
+            'This erases ' + m.name + '’s reported position and this browser’s claim on it together. Sharing '
+            + 'again starts over with the claim.', 'Forget');
+        if (!ok) return;
+        try {
+            const res = await fetch('/vpn/peers/my-position', { method: 'DELETE' });
+            if (!res.ok) {
+                // A failed forget can still mean the claim itself lapsed server-side — resync rather than
+                // leave Share/Forget on screen for a device this browser no longer holds.
+                await loadMyDevice();
+                toast('Vaier could not forget that position.');
+                render();
+                return;
+            }
+            setAutoShare(m.id, false);
+            toast(m.name + '’s position forgotten.');
+            await Promise.all([loadFleet(), loadMyDevice()]); render();
+        } catch (e) { toast('Vaier could not forget that position.'); }
+    }
+
+    // A claimed device's position kept current without a fresh permission prompt (the browser remembers the
+    // grant per origin) — but only when the operator explicitly opted in, and always silent: this runs
+    // unprompted at boot, so nothing here should ever surface as a toast. S.myDeviceMachineId is the one
+    // machine THIS browser holds, so there is never more than one to refresh.
+    function maybeAutoSharePosition() {
+        if (!navigator.geolocation || !S.myDeviceMachineId || !autoShareEnabled(S.myDeviceMachineId)) return;
+        navigator.geolocation.getCurrentPosition(
+            (pos) => reportPosition(pos.coords, null),
+            () => { /* opportunistic — a denial or timeout here is not worth interrupting anyone about */ },
+            { enableHighAccuracy: true, timeout: 20000 });
     }
 
     // Where each nudge's action goes — the one bit that is a UI concern, not a domain one: the domain says a
@@ -5527,18 +5927,17 @@
     }
 
     // A push lands every five minutes whatever the operator is looking at, so repaint only what actually
-    // shows threats — and never re-render the Map, which would tear the whole thing down and throw away
-    // the pan and zoom mid-gesture. Its markers are refreshed in place instead, exactly as paintDots does
-    // for liveness.
+    // shows threats — and on the Map only the pings, not the whole pane, exactly as paintDots does for
+    // liveness. The map itself survives a re-render now (it is built once), but rebuilding a pane for
+    // markers that can be swapped in place is still work nobody asked for.
     function repaintThreats() {
         const kind = kindOf(S.path);
         if (kind === 'security') render();
         else if (kind === 'map') paintThreatLayer();
     }
 
-    // The Map is the only screen that draws these, so it is the only one to repaint — and in place, for
-    // the reason above: a push must not tear Leaflet down and throw away the operator's pan and zoom
-    // mid-gesture. Re-rendering Security here rebuilt a whole view every minute for data it never shows.
+    // The Map is the only screen that draws these, so it is the only one to repaint — and in place, for the
+    // reason above. Re-rendering Security here rebuilt a whole view every minute for data it never shows.
     function repaintAccessSources() {
         if (kindOf(S.path) === 'map') paintAccessLayer();
     }
@@ -7813,6 +8212,16 @@
         } catch (e) { /* a fleet with no LAN servers is a fleet, not a failure */ }
     }
 
+    // Which ONE machine THIS browser's claim cookie is bound to — decided server-side, so a cleared cookie,
+    // a revoked claim or a claim superseded from another browser all just come back null. Read once at boot
+    // and after claimDevice/forgetPosition settle; never derived from document.cookie, which cannot read it.
+    async function loadMyDevice() {
+        try {
+            const res = await fetch('/vpn/peers/my-device');
+            S.myDeviceMachineId = res.ok ? (await res.json()).machineId : null;
+        } catch (e) { S.myDeviceMachineId = null; }
+    }
+
     // The discovered-machines snapshot — read when the fleet is looked at, and again whenever a scan settles
     // (the backend pushes lan-scan-updated on the vpn-peers stream, so this never polls). An unreadable
     // response (offline, a fleet with no scannable LAN yet) just leaves the section empty. Guarded so a
@@ -8219,11 +8628,14 @@
         // The services are awaited because the tree cannot be honest without them: a `services` entry exists
         // only on a machine that actually publishes something, and a tree that grew one a moment later would
         // have been lying for that moment.
-        await Promise.all([loadFleet(), loadServices(), loadBackup()]);
+        await Promise.all([loadFleet(), loadServices(), loadBackup(), loadMyDevice()]);
         // A link into a folder needs the chain above it read before remotePath can resolve where the machine's
         // tree begins. Standing anywhere else this is a no-op.
         if (S.path.length > 3) readPathChain(S.path[1]);
         render();
+        // Not awaited and never toasted — a claimed device quietly refreshing its own position is a background
+        // habit the operator opted into once, not an event of the visit.
+        maybeAutoSharePosition();
 
         // The containers are not awaited. The fleet-wide Docker scrape can take seconds against a sleeping
         // host, and no part of the first paint depends on it — the `containers` entry is decided by

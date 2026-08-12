@@ -107,7 +107,9 @@ public class WireguardConfigFileAdapter implements ForGettingPeerConfigurations,
     public Optional<PeerConfiguration> getPeerConfigByIp(String ipAddress) {
         try {
             Path configDir = Paths.get(wireguardConfigPath);
-            log.info("Searching for peer with IP {} in directory: {}", ipAddress, configDir.toAbsolutePath());
+            // Debug, not info: this lookup now runs inside the forward-auth check, so an info line here
+            // is one per request to every gated service in the fleet.
+            log.debug("Searching for peer with IP {} in directory: {}", ipAddress, configDir.toAbsolutePath());
 
             if (!Files.exists(configDir)) {
                 log.warn("Config directory does not exist: {}", configDir.toAbsolutePath());
@@ -123,7 +125,8 @@ public class WireguardConfigFileAdapter implements ForGettingPeerConfigurations,
                     .findFirst();
 
                 if (foundPeerDir.isEmpty()) {
-                    log.warn("No peer directory found for IP: {}", ipAddress);
+                    // Not a warning: asking about an address no peer holds is the ordinary case now.
+                    log.debug("No peer directory found for IP: {}", ipAddress);
                     return Optional.empty();
                 }
 

@@ -3,12 +3,18 @@ package net.vaier.integration.controller;
 import net.vaier.domain.TestMachineIds;
 import net.vaier.application.CreatePeerUseCase.CreatedPeerUco;
 import net.vaier.application.GetPeerConfigUseCase.PeerConfigResult;
+import net.vaier.application.GetVpnPeersUseCase;
 import net.vaier.application.GetVpnPeersUseCase.VpnPeerView;
+import net.vaier.domain.DeviceCategory;
 import net.vaier.domain.MachineType;
+import net.vaier.domain.PositionTrail;
+import net.vaier.domain.ReportedPosition;
 import net.vaier.integration.base.VaierWebMvcIntegrationBase;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -33,13 +39,15 @@ class VpnPeerControllerIT extends VaierWebMvcIntegrationBase {
 
     @Test
     void listPeers_returnsMappedPeerList() throws Exception {
-        VpnPeerView view = new VpnPeerView(
-                "peer1", "11111111-2222-3333-4444-555555555555", "peer1", "pubkey123", "10.13.13.2/32",
-                "10.13.13.2",
-                "1.2.3.4", "51820", "2024-01-01", true, "100", "200",
-                MachineType.UBUNTU_SERVER, true, false, false, Set.of(),
-                null, null, null, Optional.empty(), false,
-                net.vaier.domain.DeviceCategory.SERVER, false, true);
+        VpnPeerView view = VpnPeerView.builder()
+                .id("peer1").machineId("11111111-2222-3333-4444-555555555555").name("peer1")
+                .publicKey("pubkey123").allowedIps("10.13.13.2/32").tunnelIp("10.13.13.2")
+                .endpointIp("1.2.3.4").endpointPort("51820").latestHandshake("2024-01-01")
+                .connected(true).transferRx("100").transferTx("200")
+                .peerType(MachineType.UBUNTU_SERVER).isServer(true).isClient(false).isRelay(false)
+                .availableArtifacts(Set.of()).configOutOfDate(false)
+                .deviceCategory(DeviceCategory.SERVER).deviceCategoryOverridden(false).sshAccess(true)
+                .build();
         when(getVpnPeersUseCase.getVpnPeers()).thenReturn(List.of(view));
 
         mockMvc.perform(get("/vpn/peers"))
@@ -49,6 +57,75 @@ class VpnPeerControllerIT extends VaierWebMvcIntegrationBase {
                .andExpect(jsonPath("$[0].machineId").value("11111111-2222-3333-4444-555555555555"))
                .andExpect(jsonPath("$[0].publicKey").value("pubkey123"))
                .andExpect(jsonPath("$[0].peerType").value("UBUNTU_SERVER"));
+    }
+
+    /** The shape the Explorer reads: a host, an optional label, and an ISO-8601 instant. */
+    @Test
+    void listPeers_carriesTheLastServiceReachedOverTheWire() throws Exception {
+        when(getVpnPeersUseCase.getVpnPeers()).thenReturn(List.of(VpnPeerView.builder()
+                .id("phone").name("phone").peerType(MachineType.MOBILE_CLIENT)
+                .availableArtifacts(Set.of()).deviceCategory(DeviceCategory.PHONE)
+                .lastServiceReached(Optional.of(new GetVpnPeersUseCase.LastServiceReachedView(
+                        "grafana.example.com", "Grafana", Instant.parse("2026-08-11T20:14:00Z"))))
+                .build()));
+
+        mockMvc.perform(get("/vpn/peers"))
+               .andExpect(status().isOk())
+               .andExpect(jsonPath("$[0].lastServiceReached.host").value("grafana.example.com"))
+               .andExpect(jsonPath("$[0].lastServiceReached.displayName").value("Grafana"))
+               .andExpect(jsonPath("$[0].lastServiceReached.at").value("2026-08-11T20:14:00Z"));
+    }
+
+    /** A machine that has reached nothing carries null, not an empty object. */
+    @Test
+    void listPeers_carriesNoLastServiceReachedForAMachineThatHasReachedNothing() throws Exception {
+        when(getVpnPeersUseCase.getVpnPeers()).thenReturn(List.of(VpnPeerView.builder()
+                .id("phone").name("phone").peerType(MachineType.MOBILE_CLIENT)
+                .availableArtifacts(Set.of()).deviceCategory(DeviceCategory.PHONE)
+                .build()));
+
+        mockMvc.perform(get("/vpn/peers"))
+               .andExpect(status().isOk())
+               .andExpect(jsonPath("$[0].lastServiceReached").doesNotExist());
+    }
+
+    /**
+     * The exact shape the Map's trail layer reads — field names included. The trail is the one part of this
+     * payload the browser walks point by point, so a rename here is a silently blank line on the map.
+     */
+    @Test
+    void listPeers_carriesThePositionTrailOverTheWire() throws Exception {
+        Instant noon = Instant.parse("2026-08-11T12:00:00Z");
+        when(getVpnPeersUseCase.getVpnPeers()).thenReturn(List.of(VpnPeerView.builder()
+                .id("phone").name("phone").peerType(MachineType.MOBILE_CLIENT)
+                .availableArtifacts(Set.of()).deviceCategory(DeviceCategory.PHONE)
+                .positionTrail(PositionTrail.empty()
+                        .extendedWith(ReportedPosition.report(63.4305, 10.3951, 12.0, noon))
+                        .extendedWith(ReportedPosition.report(63.5305, 10.4051, null,
+                                noon.plus(Duration.ofMinutes(20)))))
+                .build()));
+
+        mockMvc.perform(get("/vpn/peers"))
+               .andExpect(status().isOk())
+               .andExpect(jsonPath("$[0].positionTrail.length()").value(2))
+               .andExpect(jsonPath("$[0].positionTrail[0].latitude").value(63.4305))
+               .andExpect(jsonPath("$[0].positionTrail[0].longitude").value(10.3951))
+               .andExpect(jsonPath("$[0].positionTrail[0].accuracyMetres").value(12.0))
+               .andExpect(jsonPath("$[0].positionTrail[0].at").value("2026-08-11T12:00:00Z"))
+               .andExpect(jsonPath("$[0].positionTrail[1].accuracyMetres").doesNotExist());
+    }
+
+    /** A machine that has never reported carries an empty list, never null — the map iterates it unguarded. */
+    @Test
+    void listPeers_carriesAnEmptyPositionTrailForAMachineThatHasNeverReported() throws Exception {
+        when(getVpnPeersUseCase.getVpnPeers()).thenReturn(List.of(VpnPeerView.builder()
+                .id("phone").name("phone").peerType(MachineType.MOBILE_CLIENT)
+                .availableArtifacts(Set.of()).deviceCategory(DeviceCategory.PHONE)
+                .build()));
+
+        mockMvc.perform(get("/vpn/peers"))
+               .andExpect(status().isOk())
+               .andExpect(jsonPath("$[0].positionTrail").isEmpty());
     }
 
     @Test

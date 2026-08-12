@@ -2,6 +2,7 @@ package net.vaier.application.service;
 
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.application.FlushAccessSourcesUseCase;
+import net.vaier.application.FlushLastServicesReachedUseCase;
 import net.vaier.application.GetAccessSourcesUseCase;
 import net.vaier.application.GetBlockDecisionsUseCase;
 import net.vaier.application.GetTrustedAddressesUseCase;
@@ -14,6 +15,7 @@ import net.vaier.application.UntrustAddressUseCase;
 import net.vaier.domain.AccessSource;
 import net.vaier.domain.AccessSources;
 import net.vaier.domain.BlockDecision;
+import net.vaier.domain.LastServiceReached;
 import net.vaier.domain.SourceAddress;
 import net.vaier.domain.TrustedNetworks;
 import net.vaier.domain.port.ForDetectingIntrusions;
@@ -21,6 +23,7 @@ import net.vaier.domain.port.ForGeolocatingIps;
 import net.vaier.domain.port.ForGettingPeerConfigurations;
 import net.vaier.domain.port.ForLiftingBlocks;
 import net.vaier.domain.port.ForPersistingAccessSources;
+import net.vaier.domain.port.ForPersistingLastServicesReached;
 import net.vaier.domain.port.ForPersistingTrustedAddresses;
 import net.vaier.domain.port.ForWritingCrowdSecWhitelist;
 import org.springframework.beans.factory.annotation.Value;
@@ -47,12 +50,18 @@ import java.util.Optional;
  * <p>It also owns the other side of the same coin: the {@link AccessSource}s, the places Vaier's own
  * forward-auth check has let people in from. Same domain (who reaches this fleet, and from where), same SSE
  * topic, same screen — so the same service, per the one-service-per-domain rule, rather than a second one.
+ *
+ * <p>One allowed access records two things, and this is the only place that sees both: the place it came
+ * from, and — when it arrived over the tunnel, the only case in which an address names a device — the
+ * {@link LastServiceReached}. The peer view reads the second through the same driven port this writes it
+ * to; no service asks another for it.
  */
 @Service
 @Slf4j
 public class SecurityService implements RefreshTrustedNetworksUseCase, GetTrustedNetworksUseCase,
     GetBlockDecisionsUseCase, LiftBlockUseCase, TrustAddressUseCase, GetTrustedAddressesUseCase,
-    UntrustAddressUseCase, RecordAllowedAccessUseCase, GetAccessSourcesUseCase, FlushAccessSourcesUseCase {
+    UntrustAddressUseCase, RecordAllowedAccessUseCase, GetAccessSourcesUseCase, FlushAccessSourcesUseCase,
+    FlushLastServicesReachedUseCase {
 
     @Value("${wireguard.vpn.subnet:10.13.13.0/24}")
     private String vpnSubnet;
@@ -72,6 +81,7 @@ public class SecurityService implements RefreshTrustedNetworksUseCase, GetTruste
     private final ForLiftingBlocks forLiftingBlocks;
     private final ForPersistingTrustedAddresses forPersistingTrustedAddresses;
     private final ForPersistingAccessSources forPersistingAccessSources;
+    private final ForPersistingLastServicesReached forPersistingLastServicesReached;
     private final ForGeolocatingIps forGeolocatingIps;
 
     /**
@@ -104,6 +114,7 @@ public class SecurityService implements RefreshTrustedNetworksUseCase, GetTruste
                            ForLiftingBlocks forLiftingBlocks,
                            ForPersistingTrustedAddresses forPersistingTrustedAddresses,
                            ForPersistingAccessSources forPersistingAccessSources,
+                           ForPersistingLastServicesReached forPersistingLastServicesReached,
                            ForGeolocatingIps forGeolocatingIps) {
         this.peerConfigProvider = peerConfigProvider;
         this.forWritingCrowdSecWhitelist = forWritingCrowdSecWhitelist;
@@ -111,6 +122,7 @@ public class SecurityService implements RefreshTrustedNetworksUseCase, GetTruste
         this.forLiftingBlocks = forLiftingBlocks;
         this.forPersistingTrustedAddresses = forPersistingTrustedAddresses;
         this.forPersistingAccessSources = forPersistingAccessSources;
+        this.forPersistingLastServicesReached = forPersistingLastServicesReached;
         this.forGeolocatingIps = forGeolocatingIps;
     }
 
@@ -236,12 +248,31 @@ public class SecurityService implements RefreshTrustedNetworksUseCase, GetTruste
      * {@link AccessSources#recording}'s decisions; the geolocation port is passed in, not consulted here.
      */
     @Override
-    public synchronized void recordAllowedAccess(String callerIp, String person, Instant at) {
+    public void recordAllowedAccess(String callerIp, String person, String host, Instant at) {
         try {
-            accessSources = accessSources.recording(callerIp, person, at, forGeolocatingIps);
+            recordAccessSource(callerIp, person, at);
+            // Outside the monitor above: attributing a caller to a machine reads the peer store, and no
+            // concurrent request in the fleet should queue behind another one's lookup.
+            LastServiceReached.reachedOverTheTunnel(callerIp, vpnSubnet, host, at, peerConfigProvider)
+                .ifPresent(forPersistingLastServicesReached::save);
         } catch (Exception e) {
             log.debug("Not recording this allowed access: {}", e.getMessage());
         }
+    }
+
+    private synchronized void recordAccessSource(String callerIp, String person, Instant at) {
+        accessSources = accessSources.recording(callerIp, person, at, forGeolocatingIps);
+    }
+
+    // --- FlushLastServicesReachedUseCase ---
+
+    /**
+     * Where the disk lives for the other half of what an allowed access records. The store decides whether
+     * anything actually needs writing — an idle minute must not rewrite an identical file forever.
+     */
+    @Override
+    public void flushLastServicesReached() {
+        forPersistingLastServicesReached.flush();
     }
 
     // --- GetAccessSourcesUseCase ---
@@ -265,7 +296,7 @@ public class SecurityService implements RefreshTrustedNetworksUseCase, GetTruste
      * already decided to forget. A prune that dropped a place is itself a change, and gets written.
      *
      * <p>Two monitors, and which one guards what is the point. {@code this} is held only for the prune and
-     * the snapshot — never across the write, because the same monitor guards {@link #recordAllowedAccess}
+     * the snapshot — never across the write, because the same monitor guards {@code recordAccessSource}
      * and saving under it would park every concurrent forward-auth check in the fleet behind a YAML write,
      * once a minute. {@link #flushLock} is held across the whole of it, so a second flusher cannot snapshot
      * a newer collection, save it, and then be overwritten by this one's older snapshot.

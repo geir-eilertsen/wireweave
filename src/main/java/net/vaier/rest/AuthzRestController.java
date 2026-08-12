@@ -102,7 +102,7 @@ public class AuthzRestController {
             // (pending or not-in-group) identity sees the branded "awaiting approval" page.
             return ResponseEntity.status(403).contentType(MediaType.TEXT_HTML).body(DENIED_PAGE);
         }
-        recordAllowedAccess(request, decision);
+        recordAllowedAccess(request, decision, host);
         ResponseEntity.BodyBuilder ok = ResponseEntity.ok()
                 .header("Remote-User", decision.getUser())
                 .header("Remote-Email", decision.getEmail())
@@ -117,8 +117,13 @@ public class AuthzRestController {
     }
 
     /**
-     * Note where this allowed access came from, so the map can draw a green dot for the place. Only on an
-     * allow: a refused knock belongs to the threat side of the security view, not to this one.
+     * Note where this allowed access came from, so the map can draw a green dot for the place, and which
+     * service was reached, so a machine's row can say what it last opened. Only on an allow: a refused
+     * knock belongs to the threat side of the security view, not to this one.
+     *
+     * <p>{@code host} is the requested service, and this endpoint is the only place in Vaier that sees it.
+     * Whether the caller identifies a machine at all is decided downstream, in the domain — a carrier
+     * address names a person and never a device.
      *
      * <p><b>Nothing in here may reach the response.</b> This endpoint is what authenticates every request
      * to every gated service, so a geolocation database that has gone missing, a store that cannot be
@@ -126,11 +131,11 @@ public class AuthzRestController {
      * their own fleet. The use case promises the same thing on its own side; this guard is the one that
      * has to hold when that promise is broken, which is why the test for it asserts on the 200.
      */
-    private void recordAllowedAccess(HttpServletRequest request, AccessDecision decision) {
+    private void recordAllowedAccess(HttpServletRequest request, AccessDecision decision, String host) {
         try {
             CallerIp callerIp = CallerIp.of(request.getRemoteAddr(),
                 request.getHeader("X-Forwarded-For"), trustedProxyCidr);
-            recordAllowedAccessUseCase.recordAllowedAccess(callerIp.value(), decision.getEmail(),
+            recordAllowedAccessUseCase.recordAllowedAccess(callerIp.value(), decision.getEmail(), host,
                 Instant.now());
         } catch (Exception e) {
             log.debug("Not recording this allowed access: {}", e.getMessage());

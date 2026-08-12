@@ -160,7 +160,26 @@ class AuthzRestControllerTest {
                 "friend@example.com", "plex.example.com", null, null, null);
 
         verify(recordAllowedAccessUseCase)
-                .recordAllowedAccess(eq("203.0.113.7"), eq("friend@example.com"), any(Instant.class));
+                .recordAllowedAccess(eq("203.0.113.7"), eq("friend@example.com"), eq("plex.example.com"),
+                        any(Instant.class));
+    }
+
+    /**
+     * The forward-auth check is the only place in Vaier that sees which service a request was for. It used
+     * to throw that away — hence "the phone reached something, somewhere" and nothing more.
+     */
+    @Test
+    void verify_allowed_namesTheServiceThatWasReached() {
+        AccessEntry entry = AccessEntry.builder().email("friend@example.com").role(Role.USER).build();
+        when(verifyAccessUseCase.verify("friend@example.com", "grafana.example.com", null, null, null))
+                .thenReturn(AccessDecision.allow(entry));
+
+        controller.verify(requestFrom("172.20.0.5", "10.13.13.4"),
+                "friend@example.com", "grafana.example.com", null, null, null);
+
+        verify(recordAllowedAccessUseCase)
+                .recordAllowedAccess(eq("10.13.13.4"), eq("friend@example.com"), eq("grafana.example.com"),
+                        any(Instant.class));
     }
 
     /**
@@ -178,7 +197,8 @@ class AuthzRestControllerTest {
                 "friend@example.com", "plex.example.com", null, null, null);
 
         verify(recordAllowedAccessUseCase)
-                .recordAllowedAccess(eq("203.0.113.99"), eq("friend@example.com"), any(Instant.class));
+                .recordAllowedAccess(eq("203.0.113.99"), eq("friend@example.com"), eq("plex.example.com"),
+                        any(Instant.class));
     }
 
     /** Only an allowed access is one. A refused knock belongs to the threat side of the security view. */
@@ -205,7 +225,7 @@ class AuthzRestControllerTest {
         when(verifyAccessUseCase.verify("friend@example.com", "plex.example.com", null, null, null))
                 .thenReturn(AccessDecision.allow(entry));
         doThrow(new IllegalStateException("the map is on fire")).when(recordAllowedAccessUseCase)
-                .recordAllowedAccess(any(), any(), any());
+                .recordAllowedAccess(any(), any(), any(), any());
 
         ResponseEntity<String> response = controller.verify(aRequest(),
                 "friend@example.com", "plex.example.com", null, null, null);

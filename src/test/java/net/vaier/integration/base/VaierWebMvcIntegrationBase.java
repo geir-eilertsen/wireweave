@@ -123,6 +123,18 @@ public abstract class VaierWebMvcIntegrationBase {
     @MockBean
     protected ForGeolocatingIps forGeolocatingIps;
 
+    @MockBean
+    protected ReportMyPositionUseCase reportMyPositionUseCase;
+
+    @MockBean
+    protected ForgetMyPositionUseCase forgetMyPositionUseCase;
+
+    @MockBean
+    protected ClaimDeviceUseCase claimDeviceUseCase;
+
+    @MockBean
+    protected GetMyDeviceUseCase getMyDeviceUseCase;
+
     // --- Published service use cases ---
     @MockBean
     protected GetPublishedServicesUseCase getPublishedServicesUseCase;

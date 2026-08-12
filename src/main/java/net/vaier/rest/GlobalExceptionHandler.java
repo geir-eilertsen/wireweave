@@ -17,6 +17,7 @@ import net.vaier.domain.PathOutsideSftpRootException;
 import net.vaier.domain.PermissionDeniedException;
 import net.vaier.domain.SshAuthException;
 import net.vaier.domain.SshConnectException;
+import net.vaier.domain.UnidentifiedDeviceException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
@@ -96,6 +97,17 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(PermissionDeniedException.class)
     public ResponseEntity<ApiError> handlePermissionDenied(PermissionDeniedException e) {
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(ApiError.of("PERMISSION_DENIED", e.getMessage()));
+    }
+
+    /**
+     * Vaier cannot tell which device is reporting its position: no peer's tunnel IP, no device claim.
+     * {@code 403} rather than {@code 404} — the caller is authenticated, it simply has not established
+     * which of the operator's devices it is, and the fix is to claim this browser.
+     */
+    @ExceptionHandler(UnidentifiedDeviceException.class)
+    public ResponseEntity<ApiError> handleUnidentifiedDevice(UnidentifiedDeviceException e) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+            .body(ApiError.of("UNIDENTIFIED_DEVICE", e.getMessage()));
     }
 
     @ExceptionHandler(ConflictException.class)

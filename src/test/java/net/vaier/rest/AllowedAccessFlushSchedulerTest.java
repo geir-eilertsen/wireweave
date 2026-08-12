@@ -2,6 +2,7 @@ package net.vaier.rest;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import net.vaier.application.FlushAccessSourcesUseCase;
+import net.vaier.application.FlushLastServicesReachedUseCase;
 import net.vaier.domain.AccessSource;
 import net.vaier.domain.port.ForPublishingEvents;
 import org.junit.jupiter.api.Test;
@@ -18,7 +19,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-class AccessSourceFlushSchedulerTest {
+class AllowedAccessFlushSchedulerTest {
 
     private static final Instant NOON = Instant.parse("2026-08-09T12:00:00Z");
 
@@ -28,10 +29,12 @@ class AccessSourceFlushSchedulerTest {
         .people(List.of("geir.eilertsen@gmail.com")).build();
 
     FlushAccessSourcesUseCase flushAccessSources = mock(FlushAccessSourcesUseCase.class);
+    FlushLastServicesReachedUseCase flushLastServicesReached = mock(FlushLastServicesReachedUseCase.class);
     ForPublishingEvents forPublishingEvents = mock(ForPublishingEvents.class);
 
-    private AccessSourceFlushScheduler scheduler() {
-        return new AccessSourceFlushScheduler(flushAccessSources, forPublishingEvents, new ObjectMapper());
+    private AllowedAccessFlushScheduler scheduler() {
+        return new AllowedAccessFlushScheduler(flushAccessSources, flushLastServicesReached,
+            forPublishingEvents, new ObjectMapper());
     }
 
     @Test
@@ -42,7 +45,7 @@ class AccessSourceFlushSchedulerTest {
 
         verify(flushAccessSources).flushAccessSources();
         verify(forPublishingEvents).publish(eq(BreachAttemptWatcher.SECURITY_TOPIC),
-            eq(AccessSourceFlushScheduler.ACCESS_SOURCES_EVENT), contains("\"city\":\"Oslo\""));
+            eq(AllowedAccessFlushScheduler.ACCESS_SOURCES_EVENT), contains("\"city\":\"Oslo\""));
     }
 
     /** The payload is the controller's own shape, so the stream and the initial load cannot disagree. */
@@ -53,7 +56,7 @@ class AccessSourceFlushSchedulerTest {
         scheduler().flush();
 
         verify(forPublishingEvents).publish(eq(BreachAttemptWatcher.SECURITY_TOPIC),
-            eq(AccessSourceFlushScheduler.ACCESS_SOURCES_EVENT), contains("\"locatable\":true"));
+            eq(AllowedAccessFlushScheduler.ACCESS_SOURCES_EVENT), contains("\"locatable\":true"));
     }
 
     /**
@@ -87,7 +90,7 @@ class AccessSourceFlushSchedulerTest {
         when(flushAccessSources.flushAccessSources()).thenReturn(Optional.of(List.of(OSLO)));
         doThrow(new IllegalStateException("nobody is listening"))
             .when(forPublishingEvents).publish(eq(BreachAttemptWatcher.SECURITY_TOPIC),
-                eq(AccessSourceFlushScheduler.ACCESS_SOURCES_EVENT), contains("Oslo"));
+                eq(AllowedAccessFlushScheduler.ACCESS_SOURCES_EVENT), contains("Oslo"));
 
         scheduler().flush();
     }
@@ -103,5 +106,35 @@ class AccessSourceFlushSchedulerTest {
         scheduler().flushBeforeShutdown();
 
         verify(flushAccessSources).flushAccessSources();
+        verify(flushLastServicesReached).flushLastServicesReached();
+    }
+
+    /** The other half of what the forward-auth check holds in memory, on the same minute and the same exit. */
+    @Test
+    void flush_alsoWritesWhatEachMachineLastReached() {
+        when(flushAccessSources.flushAccessSources()).thenReturn(Optional.empty());
+
+        scheduler().flush();
+
+        verify(flushLastServicesReached).flushLastServicesReached();
+    }
+
+    /** Two independent stores: one that cannot be written must not cost the other its flush. */
+    @Test
+    void flush_stillWritesTheLastServicesReachedWhenTheAccessSourcesCannotBeWritten() {
+        doThrow(new IllegalStateException("disk full")).when(flushAccessSources).flushAccessSources();
+
+        scheduler().flush();
+
+        verify(flushLastServicesReached).flushLastServicesReached();
+    }
+
+    @Test
+    void flush_whenTheLastServicesReachedCannotBeWritten_doesNotThrow() {
+        when(flushAccessSources.flushAccessSources()).thenReturn(Optional.empty());
+        doThrow(new IllegalStateException("disk full"))
+            .when(flushLastServicesReached).flushLastServicesReached();
+
+        scheduler().flush();
     }
 }

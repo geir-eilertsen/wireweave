@@ -12,5 +12,14 @@ import java.time.Instant;
  */
 public interface RecordAllowedAccessUseCase {
 
-    void recordAllowedAccess(String callerIp, String person, Instant at);
+    /**
+     * @param callerIp the address the request really came from — {@code domain.CallerIp}'s decision, never
+     *                 a raw header. It is also the only thing that can name a <em>device</em>: on the
+     *                 tunnel it is a peer's own address, and off it, nothing.
+     * @param person   the identity the forward-auth check let through.
+     * @param host     the gated host that was reached, from {@code X-Forwarded-Host}. This check is the
+     *                 only place in Vaier that sees it.
+     * @param at       when the request was let through.
+     */
+    void recordAllowedAccess(String callerIp, String person, String host, Instant at);
 }
