@@ -1056,12 +1056,68 @@ chain). Address selection (tunnel IP for peers, `lanAddress` for LAN servers) is
     and the `domain.DiskUsage` value object) — nothing read the host disk directly anymore. `df` over SSH is
     now the entire disk story; see the disk-pressure-alerts entry above.
   - **#317 — Docker health over SSH + close the `apalveien5` 2375 hole.** 🔲
+- **Paste button in the terminal window's top bar ✅.** `Ctrl/Cmd+V` already reached the shell (527244c),
+  but a phone's soft keyboard has no Ctrl at all, so there was no way to paste into a shell from a phone.
+  `terminal-window.js` gains a **Paste** action beside Duplicate / Send password / Exit shell: on click it
+  reads `navigator.clipboard.readText()` — only callable from a user gesture, which the click itself is —
+  and hands the text to `term.paste()` so a multi-line paste still arrives **bracketed**, i.e. the remote
+  receives it as pasted text rather than a queue of lines it starts executing as they arrive. Disabled
+  until the shell's WebSocket is connected (tooltip explains why); a refused clipboard read reports itself
+  and points at `Ctrl+V` / `⌘V` as the fallback. Gives desktop a discoverable alternative to the keyboard
+  shortcut too.
 
 **Backlog:** SFTP *over the terminal session itself* remains out of scope — the terminal's V1 scope is the
 interactive shell plus saved snippets. (Vaier does speak SFTP now, but as its own feature: see **6.20
 Explorer**, which browses a machine's files over a separate SFTP connection sharing the terminal's
 credential vault and host-key trust.) Further remote-telemetry watchers (reboot detection, systemd service
 health, load/temperature) are backlog under #313.
+
+**Backlog — fleet credential (issue TBD).** #307 gave Vaier one **host credential** per machine: a secret
+*Vaier* uses to reach a machine. The mirror image of that is a secret the *operator* needs to exist
+identically **on** every machine, and the motivating case is the Claude Code OAuth credential
+(`~/.claude/.credentials.json`) — today it has to be established by logging in separately on each host, in
+a terminal where copy/paste may not even work. The generic shape is a **fleet credential**: one secret,
+sealed in the vault Vaier already has, reconciled onto every SSH-capable machine. It is deliberately *not*
+a second vault — it reuses `SecretCipher`, the `host-credentials.yml` sealing, and the same SSH road the
+five-minute disk sweep already drives down. (Its glossary entry lands with the code, not before: the name
+is proposed here, and `UBIQUITOUS_LANGUAGE.md` gains **fleet credential** — explicitly distinguished from
+the existing per-machine **host credential** — in the slice that builds it.)
+
+Three questions gate the whole design, and the first one can invalidate it outright:
+
+1. **Does the credential survive being shared at all?** If Anthropic's OAuth refresh tokens *rotate*
+   (single-use, reissued on each refresh), then N hosts holding one copy is not a fleet — it is a race:
+   the first host to refresh invalidates every other copy, and the rest fail later, silently, far from the
+   cause. That failure mode is worse than the manual logins it replaces. This must be measured, never
+   assumed. If tokens do rotate, the answer is **not** to sync the file harder but to distribute a
+   different artefact: `claude setup-token` mints a long-lived token designed for non-interactive use,
+   which has no rotation race and can be revoked without killing the operator's own interactive session.
+   The long-lived token is the better primitive regardless, and should be the default plan.
+2. **Ownership and mode**, which Vaier has already been burned by: the JVM runs as uid 1000, and a
+   root-owned `0600` file is silently unreadable rather than loudly broken. A push that lands as `root`
+   produces a credential that exists, looks right, and does not work. The distribution must write as the
+   *target* SSH user, `0600`, and verify the resulting ownership rather than trusting the write.
+3. **Blast radius.** One credential on N hosts means any single host compromise is an account compromise.
+   This is a considered trade on a trusted fleet, not a free one, so the slice that pushes a secret must
+   ship the withdraw alongside it — distribution without one-place revocation is not finished work.
+
+Staged so that nothing is built before it has been earned:
+
+- **Stage 0 — no code at all.** The Explorer already copies and pastes files across the fleet (§6.21).
+  Distributing the credential by hand costs nothing, answers question (1) for free, and establishes
+  whether the automation is worth writing. Skipping this stage is how a feature acquires machinery it
+  turns out not to need.
+- **Stage 1 — the vault learns a fleet-wide secret.** Narrow use cases (`SaveFleetCredentialUseCase`,
+  `DistributeFleetCredentialUseCase`, `WithdrawFleetCredentialUseCase`) on the existing `TerminalService`
+  — the domain that already owns the vault — with the write itself going out over the existing SSH driven
+  port. No new `*Service`, no new vault, no new transport. Scope is *machines that run a shell*, not every
+  peer: a phone has no `~/.claude` and must never be offered one.
+- **Stage 2 — reconcile rather than fire-and-forget.** The disk sweep already SSHes to every machine on a
+  schedule; a machine missing the credential (rebuilt, restored, newly adopted) is a fact that path can
+  learn for free, and heal, without a second sweep existing to do it.
+
+Prerequisite: nuc02's outstanding key hygiene is unresolved, and pushing a shared secret to a host with a
+world-readable key would hand it to anyone with a login there. That cleanup blocks Stage 1 for that host.
 
 ---
 

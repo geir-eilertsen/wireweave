@@ -88,7 +88,7 @@
     const state = {
         ws: null, term: null, fit: null, retries: 0, reconnectTimer: 0,
         ended: false, shellMode: null, pendingBanner: false, bannerTimer: 0,
-        promptShowing: false,
+        promptShowing: false, connected: false,
     };
 
     const term = new Terminal({
@@ -119,6 +119,8 @@
 
     // --- the top bar's actions ------------------------------------------------------------------------
     const PASSWORD_DISABLED_REASON = 'Available only while the remote is asking for a password';
+    const PASTE_DISABLED_REASON = 'Available once the shell is connected';
+    const PASTE_HELP = 'Press Ctrl+V (⌘V on a Mac) to paste.';
 
     // Duplicate opens another, separate shell on this same machine in its own window — a fresh session id and a
     // unique window name, so several shells on one machine can be open side by side.
@@ -129,13 +131,14 @@
             'vaier-shell-' + encodeURIComponent(pane), 'popup,width=1024,height=680');
     });
     btnDup.title = 'Open a second, separate shell on ' + machine;
+    const btnPaste = actionButton('Paste', pasteClipboard);
     const btnPassword = actionButton('Send password', () => send({ type: 'send-password' }));
     const btnEnd = actionButton('Exit shell', endShell);
     btnEnd.classList.add('tw-danger');
     // The one distinction people miss: closing the window keeps the shell alive to reattach; Exit stops it.
     btnEnd.title = 'Stop this shell for good on ' + machine + '. Just closing the window keeps it running — and '
         + 'it even survives a Vaier restart — so reopening reattaches right where you left off.';
-    $('twActions').append(btnDup, btnPassword, btnEnd);
+    $('twActions').append(btnDup, btnPaste, btnPassword, btnEnd);
     refreshActions();
 
     function actionButton(label, onClick) {
@@ -146,6 +149,27 @@
     function refreshActions() {
         btnPassword.disabled = !state.promptShowing;
         btnPassword.title = state.promptShowing ? 'Send the stored password' : PASSWORD_DISABLED_REASON;
+        btnPaste.disabled = !state.connected;
+        btnPaste.title = state.connected ? 'Paste the clipboard into this shell' : PASTE_DISABLED_REASON;
+    }
+
+    // Pasting from a button, not only from Ctrl/Cmd+V: a soft keyboard has no Ctrl at all, and a browser
+    // may refuse the keystroke path outright. Routed through term.paste so a multi-line paste arrives
+    // bracketed — text the remote receives as text, not a queue of lines it starts running.
+    async function pasteClipboard() {
+        let text;
+        try {
+            text = await navigator.clipboard.readText();
+        } catch (e) {
+            // Refused, dismissed, or unimplemented: indistinguishable here, and one remedy covers all three.
+            setStatus('The browser did not share the clipboard. ' + PASTE_HELP, true);
+            return;
+        }
+        if (!text) { setStatus('The clipboard is empty.', true); return; }
+        disarmMods();   // a paste is not a keystroke, so an armed sticky modifier must not fold into it
+        setStatus(null);
+        term.paste(text);
+        term.focus();
     }
 
     function send(msg) {
@@ -167,6 +191,7 @@
         ws.onopen = () => {
             const reconnected = state.retries > 0;
             state.retries = 0;
+            state.connected = true;
             state.shellMode = null;
             setDot(null);
             setStatus(null);
@@ -181,6 +206,7 @@
             if (typeof ev.data === 'string') handleControl(ev.data);
         };
         ws.onclose = (ev) => {
+            state.connected = false;
             if (state.ended) return;
             // A clean exit means the remote shell ended — the session is gone, so let it go and close the window.
             if (ev.code === 1000) { state.ended = true; VaierPanes.release(machineId, paneId, machine); window.close(); setStatus('The shell ended.'); return; }
