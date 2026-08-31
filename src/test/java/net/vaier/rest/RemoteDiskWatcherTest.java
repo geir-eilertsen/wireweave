@@ -992,56 +992,71 @@ class RemoteDiskWatcherTest {
         verify(notifier, never()).notifyAdminsOfRemoteDiskRecovery(any(), anyInt());
     }
 
+    /**
+     * Capture what {@link RemoteDiskWatcher} logs while {@code work} runs.
+     *
+     * <p>The level is pinned to INFO rather than trusted. {@code application-integration.yml} sets
+     * {@code net.vaier: WARN}, and Spring Boot applies that to the JVM-wide Logback context the moment a
+     * test activating the {@code integration} profile refreshes its context. Nothing puts it back, so every
+     * test running after it in the same fork captures nothing at INFO — and which tests those are depends
+     * on surefire's ordering, which differs between a laptop and CI. Attaching an appender is therefore not
+     * enough on its own; the level has to be asserted too, and restored afterwards.
+     */
+    private List<ILoggingEvent> whileCapturingTheLog(Runnable work) {
+        Logger watcherLog = (Logger) LoggerFactory.getLogger(RemoteDiskWatcher.class);
+        Level original = watcherLog.getLevel();
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        watcherLog.addAppender(appender);
+        watcherLog.setLevel(Level.INFO);
+        try {
+            work.run();
+            return List.copyOf(appender.list);
+        } finally {
+            watcherLog.detachAppender(appender);
+            watcherLog.setLevel(original);
+        }
+    }
+
     @Test
     void aDiskWaitingInTheRecoveryMargin_saysSoInTheLog_notMerelyNothing() {
         // A filesystem in the gap is in pressure and staying quiet, exactly like a suppressed one, so it has
         // to be as visible in the log — otherwise it is indistinguishable from a disk nobody watches.
-        Logger watcherLog = (Logger) LoggerFactory.getLogger(RemoteDiskWatcher.class);
-        ListAppender<ILoggingEvent> appender = new ListAppender<>();
-        appender.start();
-        watcherLog.addAppender(appender);
-        try {
-            when(machines.getAllMachines()).thenReturn(List.of(sshMachine("vaier")));
-            hasCredential("vaier");
-            watchedAtLevel("vaier", "/");
-            when(runner.run(eq(mid("vaier")), any())).thenReturn(df(82));
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("vaier")));
+        hasCredential("vaier");
+        watchedAtLevel("vaier", "/");
+        when(runner.run(eq(mid("vaier")), any())).thenReturn(df(82));
+
+        List<ILoggingEvent> events = whileCapturingTheLog(() -> {
             watcher.checkRemoteDiskUsage();   // alerts
             when(runner.run(eq(mid("vaier")), any())).thenReturn(df(78));
 
             watcher.checkRemoteDiskUsage();   // under the line but not clear of it — and must say so
+        });
 
-            assertThat(appender.list)
-                .filteredOn(event -> event.getLevel().isGreaterOrEqual(Level.INFO))
-                .anySatisfy(event -> assertThat(event.getFormattedMessage())
-                    .contains("78").contains("80").contains("still in pressure"));
-        } finally {
-            watcherLog.detachAppender(appender);
-        }
+        assertThat(events)
+            .filteredOn(event -> event.getLevel().isGreaterOrEqual(Level.INFO))
+            .anySatisfy(event -> assertThat(event.getFormattedMessage())
+                .contains("78").contains("80").contains("still in pressure"));
     }
 
     @Test
     void aSuppressedAlert_saysSoInTheLog_soALatchedSilentDiskIsDiagnosable() {
         // The no-op branch used to log nothing at all, which is why a disk at 89% and total silence looked
         // identical to a disk nobody was watching. An operator must be able to tell them apart from the log.
-        Logger watcherLog = (Logger) LoggerFactory.getLogger(RemoteDiskWatcher.class);
-        ListAppender<ILoggingEvent> appender = new ListAppender<>();
-        appender.start();
-        watcherLog.addAppender(appender);
-        try {
-            when(machines.getAllMachines()).thenReturn(List.of(sshMachine("vaier")));
-            hasCredential("vaier");
-            when(runner.run(eq(mid("vaier")), any())).thenReturn(df(89));
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("vaier")));
+        hasCredential("vaier");
+        when(runner.run(eq(mid("vaier")), any())).thenReturn(df(89));
 
+        List<ILoggingEvent> events = whileCapturingTheLog(() -> {
             watcher.checkRemoteDiskUsage();   // alerts
             watcher.checkRemoteDiskUsage();   // suppressed — and must say so
+        });
 
-            assertThat(appender.list)
-                .filteredOn(event -> event.getLevel().isGreaterOrEqual(Level.INFO))
-                .anySatisfy(event -> assertThat(event.getFormattedMessage())
-                    .contains("/").contains("89").contains("85"));
-        } finally {
-            watcherLog.detachAppender(appender);
-        }
+        assertThat(events)
+            .filteredOn(event -> event.getLevel().isGreaterOrEqual(Level.INFO))
+            .anySatisfy(event -> assertThat(event.getFormattedMessage())
+                .contains("/").contains("89").contains("85"));
     }
 
     // --- detecting the network behind a machine (#333) -------------------------------------------------
