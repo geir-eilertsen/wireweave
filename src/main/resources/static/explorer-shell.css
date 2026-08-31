@@ -347,15 +347,27 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
     border-bottom: 1px solid var(--border);
     transition: background .5s ease, border-color .5s ease;
 }
+/* min-width:0 so a long machine name gives way rather than shoving the head's verbs off the right edge —
+   the name ellipsises, the dot beside it and the actions stay put. */
 .ex-pane-title {
+    min-width: 0;
     display: flex; align-items: center; gap: 8px;
     font-family: var(--display);
     font-size: 16px;
     font-weight: 600;
     letter-spacing: -.01em;
 }
-.ex-pane-title .is-id { font-family: var(--mono); font-weight: 500; font-size: 15px; }
-.ex-pane-sub { color: var(--text-dim); font-size: 14px; }
+.ex-pane-title .is-id {
+    font-family: var(--mono); font-weight: 500; font-size: 15px;
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* It now carries the operator's own description as well as what the machine is, and a description has
+   no length limit — so it takes what room is left and stops there rather than pushing the head wide. */
+.ex-pane-sub {
+    min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--text-dim); font-size: 14px;
+}
 /* The pane's one action group, hugging the right. It holds every verb that applies right now — the
    selection's, Paste, and the folder's own Refresh and Upload — because the head, the selection toolbar and
    the paste bar were the same label-left/actions-right row three times over, and stacked they buried the
@@ -742,15 +754,6 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 /* An archive is how things stood then; a registry verdict and a tunnel are about now. Both stand down in the
    past, the same way the liveness dots already do. */
 [data-past='1'] .ex-pane .ex-card-marks { display: none; }
-/* "Vaier is root here" (#346), on the fleet card so the question "where am I root?" is answered without
-   opening every machine. Amber rather than red: it is a consequence to know about, not a fault. */
-.ex-card-root {
-    display: inline-block; margin-left: 7px; padding: 0 5px; border-radius: var(--radius-1);
-    font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: .02em;
-    color: var(--yellow); background: rgba(220, 220, 170, .1);
-    border: 1px solid rgba(220, 220, 170, .32);
-}
-
 .ex-kv {
     display: grid;
     grid-template-columns: 128px minmax(0, 1fr);
@@ -778,19 +781,42 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
     transition: border-color .5s ease;
 }
 
+/* Explanation, at the weight explanation deserves. A bordered .ex-note is for a STATE — an empty view, an
+   error, a warning — and every paragraph wearing that same edge is how a pane loses the ability to mark the
+   one paragraph that matters. A hint has no edge and no ground: it hangs under the control it explains and
+   is read only by someone who wanted it. */
+.ex-hint {
+    max-width: 620px;
+    margin-top: 6px;
+    color: var(--text-dim);
+    font-size: 13px;
+    line-height: 1.5;
+}
+/* After a bordered surface a hint needs that surface's breathing room, not a control's — and two hints in a
+   row need a gap, or they read as one grey paragraph nobody finishes. */
+.ex-note + .ex-hint, .ex-standing + .ex-hint, .ex-nudge + .ex-hint, .ex-hint + .ex-hint { margin-top: 10px; }
+/* Who Vaier acts as is the one explanation on a machine that is really a fact about its blast radius. It
+   keeps a hint's shape and steps one shade up, so it reads before the hints it sits among. */
+.ex-hint.is-who { color: var(--text-muted); }
+/* A tickbox and the verbs it gates are two thoughts, not one row that happened to wrap. */
+.ex-check-row + .ex-lactions.is-static { margin-top: 10px; }
+
 /* Progressive-adoption nudges — quiet, evidence-backed invitations on a machine (the domain decides which
    apply; the shell only renders them). A thin accent left-edge and accent glyph mark an opportunity — never
    the warn colour, since a nudge is an offer, not a problem. The action stays a quiet outline button that
    warms to the accent on hover, so three stacked nudges invite rather than shout. */
-.ex-nudge {
+/* One geometry for both, because a nudge and a standing are the same kind of object — a small surface that
+   states something and carries its own verb. Only the left edge separates them, and it carries meaning: the
+   accent means an OFFER, a standing's edge is coloured by how the thing actually stands. */
+.ex-nudge, .ex-standing {
     display: flex; align-items: flex-start; gap: 12px;
     padding: 12px 14px;
     max-width: 640px;
     border: 1px solid var(--border);
-    border-left: 2px solid var(--accent);
     border-radius: var(--radius-1);
     background: var(--bg-card);
 }
+.ex-nudge { border-left: 2px solid var(--accent); }
 .ex-nudge + .ex-nudge { margin-top: 8px; }
 .ex-nudge-ico { flex: 0 0 auto; width: 16px; height: 16px; color: var(--accent); margin-top: 1px; }
 .ex-nudge-text { flex: 1 1 auto; min-width: 0; }
@@ -808,6 +834,36 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 @media (max-width: 560px) {
     .ex-nudge { flex-wrap: wrap; }
     .ex-nudge .ex-btn { margin-left: 28px; }
+}
+
+/* A standing: what the thing is, one word for how it stands, the detail behind that word, and its verbs.
+   The left edge is the word again, at a glance — green where it is good, red where Vaier could not read it,
+   and otherwise the same quiet rule every other surface here wears. */
+.ex-standing { margin-top: 10px; border-left: 2px solid var(--border-hi); }
+.ex-standing:has(.ex-standing-state.is-in)  { border-left-color: var(--green); }
+.ex-standing:has(.ex-standing-state.is-bad) { border-left-color: var(--red); }
+.ex-standing.is-error { border-color: rgba(244, 135, 113, .35); background: rgba(244, 135, 113, .06); }
+.ex-standing-text { flex: 1 1 auto; min-width: 0; }
+.ex-standing-top { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
+.ex-standing-title { color: var(--text); font-weight: 600; }
+/* The same words, in the same colours, as the Credentials view gives the same standings. */
+.ex-standing-state { font-size: 13px; }
+.ex-standing-state.is-in    { color: var(--green); }
+.ex-standing-state.is-out   { color: var(--text-muted); }
+.ex-standing-state.is-muted { color: var(--text-dim); }
+.ex-standing-state.is-bad   { color: var(--red); }
+/* An account name is a coordinate, so it is mono — the same rule the addresses and paths follow. */
+.ex-standing-detail {
+    margin-top: 3px;
+    font-family: var(--mono); font-size: 13px; color: var(--text-muted);
+    overflow-wrap: anywhere;
+}
+.ex-standing-why { margin-top: 4px; color: var(--text-dim); font-size: 12.5px; line-height: 1.45; }
+/* The card already draws the row; the verbs only have to stop growing and sit in the middle of it. */
+.ex-standing .ex-lactions.is-static { flex: 0 0 auto; align-self: center; margin-top: 0; }
+@media (max-width: 560px) {
+    .ex-standing { flex-wrap: wrap; }
+    .ex-standing .ex-lactions.is-static { align-self: flex-start; margin-top: 4px; }
 }
 .ex-note.is-error { border-color: rgba(244, 135, 113, .35); background: rgba(244, 135, 113, .06); }
 .ex-note.is-warn { border-color: rgba(220, 220, 170, .4); background: rgba(220, 220, 170, .06); }
@@ -856,6 +912,158 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
     color: var(--red);
     border-color: var(--red);
     background: rgba(244, 135, 113, .08);
+}
+
+/* --- fleet credentials: the coverage strip --------------------------------------------------------------
+
+   One card per credential, and the strip is the point of it: one cell per machine that CAN hold the
+   credential, so "is my fleet consistent?" is answered before a word is read. Machines with no shell are
+   deliberately not in it (the shell script says why), which is what keeps all-green reachable — a strip that
+   can never come clean is a strip an operator learns to skip past.
+
+   Four tones for seven states, because there are only four things to do: green is done, amber heals itself
+   within five minutes, red wants a person, dim is nobody's fault. */
+
+.ex-creds { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
+
+.ex-cred {
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-2);
+    background: var(--bg-card);
+}
+.ex-cred-top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+/* The name addresses the credential, so it is mono, like every other coordinate in this shell. */
+.ex-cred-name { font-family: var(--mono); font-size: 14px; color: var(--text); }
+.ex-cred-tally { margin-left: auto; font-size: 13px; color: var(--text-muted); white-space: nowrap; }
+
+.ex-cred-strip { display: flex; flex-wrap: wrap; gap: 3px; align-items: center; min-width: 0; }
+.ex-cred-cell { width: 11px; height: 11px; border-radius: var(--radius-1); background: var(--border-hi); flex: none; }
+.ex-cred-cell.is-current     { background: var(--green); }
+.ex-cred-cell.is-drift       { background: var(--yellow); }
+.ex-cred-cell.is-failed      { background: var(--red); }
+.ex-cred-cell.is-unreachable { background: var(--border-hi); }
+/* Hollow rather than merely dark: "there is a machine here and nothing is owed on it" reads better as an
+   outline than as a cell so dim it looks like a rendering gap. */
+.ex-cred-cell.is-muted { background: none; box-shadow: inset 0 0 0 1px var(--border-hi); }
+
+/* Path, mode, and merely whether a secret is held. Mono because two thirds of it is a coordinate. */
+.ex-cred-meta {
+    margin-top: 6px;
+    font-family: var(--mono); font-size: 12px; color: var(--text-dim);
+    overflow-wrap: anywhere;
+}
+
+/* Only the machines that are not in place, grouped by what is true of them. The state label holds a fixed
+   width so the names line up into a column the eye can run down. */
+.ex-cred-exc { display: flex; flex-direction: column; gap: 3px; margin-top: 9px; }
+.ex-cred-exc:empty { display: none; }
+.ex-cred-excrow { display: flex; gap: 10px; align-items: baseline; font-size: 13px; }
+.ex-cred-state { flex: 0 0 116px; }
+.ex-cred-state.is-current     { color: var(--green); }
+.ex-cred-state.is-drift       { color: var(--yellow); }
+.ex-cred-state.is-failed      { color: var(--red); }
+.ex-cred-state.is-unreachable,
+.ex-cred-state.is-muted       { color: var(--text-dim); }
+.ex-cred-who { font-family: var(--mono); color: var(--text-muted); min-width: 0; overflow-wrap: anywhere; }
+.ex-cred-exc .ex-note { margin-top: 5px; font-size: 13px; }
+
+.ex-cred-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 11px; }
+
+/* The invitation, left where the reading starts rather than floated into the middle of an empty pane. */
+.ex-cred-empty { display: flex; flex-direction: column; gap: 14px; align-items: flex-start; }
+
+/* A credential file is routinely several lines, so the secret gets a box with room and the operator may
+   give it more. Mono is inherited from .ex-input, which is right: it is bytes, not prose. */
+.ex-cred-secret { min-height: 96px; font-size: 13px; line-height: 1.45; resize: vertical; }
+
+@media (max-width: 560px) {
+    /* Once the top row wraps, margin-left:auto strands the tally alone on a line where it reads as a stray
+       fragment rather than as the strip's own summary. */
+    .ex-cred-tally { margin-left: 0; }
+    .ex-cred-excrow { flex-direction: column; gap: 1px; }
+    .ex-cred-state { flex: none; }
+    .ex-cred-actions .ex-btn { flex: 1 1 auto; justify-content: center; }
+}
+
+/* --- Claude sign-in: the section under the fleet credentials ------------------------------------------
+
+   Same entry, same question, so it reuses the listing surface rather than inventing a second card shape. The
+   one thing it does NOT reuse is the coverage strip: Vaier does not hold this credential and cannot put it
+   back, so there is no self-healing tally to draw and a strip would promise one. */
+
+.ex-listing.is-claude .ex-lhead,
+.ex-listing.is-claude .ex-lrow { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) 116px; }
+/* Worded buttons, always present — not the file listing's icon verbs that reveal on hover and ride over the
+   last column. At this width those would sit permanently on top of the account they act on. */
+.ex-listing.is-claude .ex-lactions {
+    position: static; opacity: 1; padding-left: 0; background: none; justify-content: flex-end;
+}
+/* The row and its flow are one item, so the open panel is inside the machine it belongs to rather than
+   floating between two rows. */
+.ex-claude-item { min-width: 0; }
+.ex-claude-name {
+    font-family: var(--mono); min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.ex-claude-status { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ex-claude-state { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Three tones for six states, because there are only three things to know: green is done, muted is a machine
+   waiting for you, dim is a fact about the machine rather than anything to do. UNKNOWN is dim on purpose and
+   never shares the signed-out tone — Vaier being unable to ask is not evidence a machine is signed out, and
+   colouring it like one would send an operator to redo a sign-in nothing had undone. */
+.ex-claude-state.is-in    { color: var(--green); }
+.ex-claude-state.is-out   { color: var(--text-muted); }
+.ex-claude-state.is-muted { color: var(--text-dim); }
+.ex-claude-acct {
+    font-size: .74rem; color: var(--text-dim);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* The sign-in unfolding inside the row it belongs to. A modal would make each machine a ceremony, and the
+   operator does several one after another. The accent left edge is the nudge's, for the same reason: this is
+   an invitation to finish something, not a problem to fix. */
+.ex-claude-flow {
+    display: flex; flex-direction: column; gap: 9px;
+    margin: 3px 0 12px; padding: 12px 14px;
+    max-width: 640px;
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--accent);
+    border-radius: var(--radius-1);
+    background: var(--bg-card);
+}
+.ex-claude-step { display: flex; align-items: flex-start; gap: 9px; }
+.ex-claude-num {
+    flex: none; width: 18px; height: 18px;
+    border-radius: 50%;
+    background: var(--rail); color: var(--accent);
+    font-size: 11px; font-weight: 700; line-height: 18px; text-align: center;
+}
+.ex-claude-steptext { color: var(--text-muted); font-size: 13px; line-height: 1.45; min-width: 0; }
+/* Everything under a step lines up past its number, so the two stages read as two blocks rather than four. */
+.ex-claude-url, .ex-claude-code, .ex-claude-actions, .ex-claude-hint { margin-left: 27px; }
+.ex-claude-url { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ex-claude-link {
+    font-family: var(--mono); font-size: 12px; color: var(--accent); text-decoration: none;
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ex-claude-link:hover { text-decoration: underline; }
+.ex-claude-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ex-claude-code { max-width: 320px; }
+.ex-claude-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.ex-claude-hint { color: var(--text-dim); font-size: 12px; line-height: 1.45; }
+
+@media (max-width: 560px) {
+    /* Three columns of a machine's standing do not fit a phone. The row stacks and the header goes with it —
+       column labels over a stacked row name nothing. */
+    .ex-listing.is-claude .ex-lhead { display: none; }
+    .ex-listing.is-claude .ex-lrow { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+    .ex-listing.is-claude .ex-lactions { justify-content: flex-start; }
+    .ex-claude-url, .ex-claude-code, .ex-claude-actions, .ex-claude-hint { margin-left: 0; }
+    .ex-claude-url { flex-wrap: wrap; }
+    .ex-claude-code { max-width: none; }
+    .ex-claude-actions .ex-btn { flex: 1 1 auto; justify-content: center; }
 }
 
 /* --- filesystems and their meters -------------------------------------------------------------------- */
@@ -1494,13 +1702,27 @@ select.ex-input { cursor: pointer; }
 .ex-kit-why { color: var(--text-muted); font-size: 13px; margin-top: 3px; line-height: 1.45; }
 
 /* The Advanced fold — the shell's one place to keep rare or mechanism-heavy controls out of sight. A quiet
-   native <details>, restyled to the shell's hand: a muted summary that brightens on hover, its own hairline
-   above, and a marker that turns as it opens. Deliberately understated — the boldness is spent elsewhere. */
+   native <details>, restyled to the shell's hand: its own hairline above, and a marker that turns as it opens.
+   Deliberately understated — the boldness is spent elsewhere.
+
+   The summary is shaped like a control, because it IS one, and because a fold is often the only thing at the
+   foot of a pane. As dim 13px text it was the least visible element on screen and relied on a section heading
+   above it to be found at all; a heading is not a control and never taught anyone it could be opened. Borrows
+   .ex-btn's outline at a smaller size, so it reads as "there is more here" rather than as a verb — the turning
+   marker is what says which. */
 .ex-adv { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 12px; }
 .ex-adv > .ex-adv-sum {
     list-style: none; cursor: pointer; user-select: none;
-    font-size: 13px; color: var(--text-dim);
     display: inline-flex; align-items: center; gap: 7px;
+    padding: 5px 11px;
+    /* Some summaries are a whole sentence ("Add SSH access — for the web terminal, disk watch & backups"),
+       so the chip wraps inside the pane rather than growing a pill wider than it. */
+    max-width: 100%; text-align: left;
+    border: 1px solid var(--border-hi);
+    border-radius: var(--radius-1);
+    background: var(--bg-card);
+    font-size: 13px; color: var(--text-muted);
+    transition: background .12s, color .12s, border-color .12s;
 }
 .ex-adv > .ex-adv-sum::-webkit-details-marker { display: none; }
 .ex-adv > .ex-adv-sum::before {
@@ -1510,7 +1732,7 @@ select.ex-input { cursor: pointer; }
     transition: transform .12s ease;
 }
 .ex-adv[open] > .ex-adv-sum::before { transform: rotate(90deg); }
-.ex-adv > .ex-adv-sum:hover { color: var(--text-muted); }
+.ex-adv > .ex-adv-sum:hover { color: var(--accent); border-color: var(--accent); }
 .ex-adv > .ex-adv-sum:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: var(--radius-1); }
 .ex-adv > *:not(.ex-adv-sum) { margin-top: 13px; }
 
@@ -1711,7 +1933,10 @@ select.ex-input { cursor: pointer; }
        It is the one thing in this shell that floats, and it earns it: it does this only while something is
        ticked, and while it does it is the only way to act on it. The pane makes room underneath so it can
        never cover the last row of the listing you are choosing from. */
-    .ex-app.has-sel .ex-pane-actions {
+    /* :has(.ex-selverbs) — the bar that floats is the one carrying the SELECTION, and a selection outlives
+       navigating to a machine. Without this scope a machine's head verbs (Edit details) would be yanked into
+       a fixed bottom bar dressed as the selection bar, on the strength of files ticked in a folder elsewhere. */
+    .ex-app.has-sel .ex-pane-actions:has(.ex-selverbs) {
         position: fixed;
         left: 10px; right: 10px; width: auto;
         bottom: calc(10px + env(safe-area-inset-bottom));
@@ -1724,7 +1949,9 @@ select.ex-input { cursor: pointer; }
     }
     /* The hairline splits two rows rather than two neighbours once these wrap, so it is dropped down here. */
     .ex-app.has-sel .ex-pane-actions > .ex-selverbs { padding-right: 0; margin-right: 0; border-right: 0; }
-    .ex-app.has-sel .ex-pane-body { padding-bottom: 148px; }
+    .ex-app.has-sel .ex-pane:has(.ex-selverbs) .ex-pane-body { padding-bottom: 148px; }
+    /* A fold is often the last thing on a pane, so its summary is a real touch target, not a 5px-tall one. */
+    .ex-adv > .ex-adv-sum { padding: 8px 12px; }
 }
 
 /* The narrowest phones. The topbar now carries one control more than it used to (the Vaier menu, which is

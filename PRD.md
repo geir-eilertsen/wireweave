@@ -338,6 +338,7 @@ Keep the operator aware when a container's image has an **update available**. Re
 - **Three verdicts, and UNKNOWN is the point.** `UPDATE_AVAILABLE`, `UP_TO_DATE`, `UNKNOWN`. An unreachable/rate-limited registry, a locally-built image with no registry digest, and a digest-pinned (`@sha256:…`) image all render UNKNOWN — never outdated, never up to date. Collapsing "cannot tell" into either answer makes the monitor lie (into up-to-date it hides the vaultwarden case; into update-available it cries wolf until admins filter the mail).
 - **Daily sweep, 24 h TTL cache.** `ImageUpdateWatcher` runs `@Scheduled(fixedDelay = 24 h, initialDelay = 2 min)`; `ImageUpdateSweep` asks **once per distinct image**, not once per container, because rate limits count requests (anonymous Docker Hub ≈ 100 manifest requests / 6 h). Successful answers are cached 24 h keyed by canonical image reference; **failures are deliberately not cached** — one blip must not blind the next sweep. The 30s container scrape never touches a registry. The sweep is total: a throwing/timing-out registry degrades that one image to UNKNOWN and the sweep carries on.
 - **Edge-transition rollup email.** `ImageUpdateTracker` reports only images that have *just* become out of date; `ImageUpdateRollup` renders one mail listing them (three stale images in one sweep = one email; nothing changed = no email) to every **admin**-role **access entry**, via the shared SMTP notifier. Two rules differ from `PeerConnectivityTracker`, both deliberately: it is **not baseline-quiet** (an image already stale at the first sweep *is* reported — that is the incident this feature exists for; `RemoteDiskPressureTracker` has since made the same call, for the same reason), and **UNKNOWN is not a change** (it leaves the last known verdict standing, so a rate-limited sweep can't re-mail about an image already reported).
+- ✅ **The latch survives a restart.** `ImageUpdateTracker` reaches its state through a driven port (`ForPersistingImageUpdateState`, file-backed by `ImageUpdateStateFileAdapter` in `update-available.yml`) instead of an in-memory map nothing persisted. It was the map that made the operator receive the same two or three images over and over: every restart it came back empty, so the next sweep read images that were genuinely still out of date as *newly* out of date — and this project rebuilds and redeploys several times a day. **The inverse of the disk-alert fix, deliberately.** That one persisted its latch *and* made the first observation after a restart speak, because a disk already full at startup deserves to be heard. An image already known stale does not: the operator has been told, nothing changed while Vaier was down, and repeating it is exactly the noise being removed. Same mechanism, opposite conclusion — which is why the tracker says so in a comment. UNKNOWN still leaves what was known standing, a confirmed pull still clears an image so a genuine regression re-announces, and an image that leaves the sweep is still forgotten. A missing or corrupt state file degrades to knowing nothing — one duplicate mail, never a dead sweep.
 - ✅ **Machine-aware tracking (#57 refinement).** The tracked unit is a **scoped image** — `domain.ScopedImage(machine, image)`, rendered `vaultwarden/server:latest on Apalveien 5` — not a bare image string, because an operator told only the image can't tell which host to SSH into. The sweep is fed containers grouped by machine (`ImageUpdateSweep.MachineContainers`; the Vaier server's own under `LanAnchor.VAIER_SERVER_NAME`, each peer's under `peer.peerName()`) and returns `Map<ScopedImage, UpdateAvailability>`; the tracker, rollup and `UpdateCheckOutcome` are all keyed by it, and the alert names the machine in subject and body. **The registry is still asked once per distinct image string, never once per (machine, image)** — the same tag resolves to the same digest everywhere, so the per-machine granularity comes only from comparing each container's *own* local digest against that one shared registry answer. This also fixed two latent bugs the image-only keying hid: the same tag on two machines with different local digests used to collapse to one last-wins verdict, and a tag going stale on a second machine after the first was already reported used to raise no new alert.
 - **No auto-update, ever.** Read-only detection: Vaier never pulls and never restarts. The mail says so explicitly ("Vaier does not pull or restart anything — updating is your call").
 - **Coverage:** the Vaier server's own containers and VPN **server peer** containers (`ContainerService.sweepImageUpdates`, over the existing snapshots).
@@ -1072,52 +1073,105 @@ Explorer**, which browses a machine's files over a separate SFTP connection shar
 credential vault and host-key trust.) Further remote-telemetry watchers (reboot detection, systemd service
 health, load/temperature) are backlog under #313.
 
-**Backlog — fleet credential (issue TBD).** #307 gave Vaier one **host credential** per machine: a secret
-*Vaier* uses to reach a machine. The mirror image of that is a secret the *operator* needs to exist
-identically **on** every machine, and the motivating case is the Claude Code OAuth credential
-(`~/.claude/.credentials.json`) — today it has to be established by logging in separately on each host, in
-a terminal where copy/paste may not even work. The generic shape is a **fleet credential**: one secret,
-sealed in the vault Vaier already has, reconciled onto every SSH-capable machine. It is deliberately *not*
-a second vault — it reuses `SecretCipher`, the `host-credentials.yml` sealing, and the same SSH road the
-five-minute disk sweep already drives down. (Its glossary entry lands with the code, not before: the name
-is proposed here, and `UBIQUITOUS_LANGUAGE.md` gains **fleet credential** — explicitly distinguished from
-the existing per-machine **host credential** — in the slice that builds it.)
+**Fleet credential ✅ (shipped; issue TBD).** #307 gave Vaier one **host credential** per machine: a
+secret *Vaier* uses to reach a machine. The mirror image of that — a secret the *operator* needs to exist
+identically **on** every machine — now ships as the **fleet credential**: one named secret, sealed in the
+vault Vaier already has, delivered to one path on every machine that runs a shell Vaier can reach, and kept
+there. The motivating case was the Claude Code OAuth credential (`~/.claude/.credentials.json`), which
+otherwise has to be established by logging in separately on each host, in a terminal where copy/paste may
+not even work — but **nothing in the code knows that**, and that case has since left this feature
+entirely: **Claude sign-in** (§6.51) signs each machine's own CLI in rather than copying a credential
+Vaier is not allowed to hold. The generic mechanism is untouched and still right for every other secret. Vaier distributes bytes to a path and verifies what
+arrived; it never reads or interprets the content. That opacity is the feature, not a gap in it: the moment
+Vaier learned what one credential *meant*, this would stop being one feature and start being one per secret.
+It is deliberately **not** a second vault — it reuses `SecretCipher`, the same sealing `host-credentials.yml`
+gets, and the same SSH road the five-minute disk sweep already drives down. `UBIQUITOUS_LANGUAGE.md` §13
+carries **fleet credential** (explicitly contrasted with **host credential**), **distribute**, **withdraw**
+and **fleet-credential standing**; §15 carries the **Credentials view** and its **coverage strip**.
 
-Three questions gate the whole design, and the first one can invalidate it outright:
+- **Domain ✅** — `FleetCredential` (name, `targetPath`, `mode`, content, and whether it has ever been
+  distributed) validates its own name (`[A-Za-z0-9_-]+`, as `PeerId` and `BackupRepository` do, and
+  deliberately not shared with either), its path (absolute or `~/`-relative, safe charset, no `..`) and its
+  mode, and **renders its own shell** for write / verify / remove. Three rules live there rather than in an
+  adapter: every path is single-quoted (with a leading `~` expanded as a double-quoted `"$HOME"`, since a
+  single-quoted tilde is a literal directory called `~`); the content travels **base64-encoded**, so
+  arbitrary bytes survive the shell and the secret never appears in a command line, a shell history or a
+  process list; and every command ends by reporting the file's actual owner, mode and SHA-256 back on a
+  `VAIER-FLEET-CREDENTIAL` marker line. `FleetCredentialState` (`CURRENT`/`STALE`/`MISSING`/`SKIPPED`/
+  `WITHDRAWN`/`FAILED`/`UNREACHABLE`) owns `needsHealing()`; `FleetCredentialTarget` owns *who may receive
+  one* (`sshAccess` **and** a host credential); `FleetCredentialStanding` is one machine's state plus
+  `anyLanded()`, the line a push must cross before the reconcile is licensed; `FleetCredentialView` is the
+  only shape allowed out of the process, carrying neither the content **nor its digest** (a digest of a short
+  secret is a secret). `FleetCredential.toString()` is overridden for the same reason a record's generated
+  one is dangerous here.
+- **Storage ✅** — `ForPersistingFleetCredentials` / `FleetCredentialFileAdapter` over
+  `fleet-credentials.yml`, keyed by the credential's own name (a fleet credential *is* its name; renaming
+  one is creating a different one). Content sealed with the existing `SecretCipher` (`enc:v1:`); name, path,
+  mode and the `distributed` flag in the clear so the file stays legible during a recovery; file locked to
+  `0600` via `SecureFilePermissions`. The `distributed` flag is **on disk on purpose** — it is what licenses
+  the background reconcile, and a latch living in a field is wiped by every redeploy, which is exactly the
+  bug that silenced the disk alerts for months (§6.9).
+- **Use cases and service ✅** — six narrow use cases (`Save`/`Get`/`Delete`/`Distribute`/`Withdraw`/
+  `GetFleetCredentialStandings`). CRUD lands on the existing `TerminalService` — same vault, same cipher,
+  same redaction discipline, so no new `*Service`. Distribution does **not**: it needs the machine list that
+  domain does not own.
+- **Distribution ✅** — `rest.FleetCredentialDistributor`, a driving adapter (driven by an HTTP request and
+  by a clock, as `RemoteDiskWatcher` is), composing `GetMachinesUseCase` + `GetHostCredentialUseCase` +
+  `RunRemoteCommandUseCase` at the driving edge rather than teaching one service about another's data. It
+  decides nothing: eligibility is `FleetCredentialTarget`, the command is the entity's, the reading of the
+  report is the entity's, and the licence to reconcile is `FleetCredentialStanding.anyLanded`.
+- **Reconcile ✅, and deliberately timid** — a `@Scheduled` sweep on the disk sweep's five-minute cadence,
+  offset from it so the two do not knock on every door at the same instant. It **only heals**: it verifies
+  first and writes only where the credential is `MISSING` or `STALE`, and only for a credential the operator
+  has already distributed by hand at least once. A credential never pushed is never pushed by a timer; a
+  withdrawn one is never healed back; an unreachable machine is skipped in silence (machines sleep, and a
+  fleet-wide secret sweep is the last thing that should be emailing anybody). Verification compares
+  **digests**, so a check costs no secret bytes on the wire. Standings are an in-memory observation — nothing
+  is suppressed on their strength and no alert hangs off them, which is why they are *not* on disk.
+- **REST ✅** — `GET /fleet-credentials` (each with its per-machine standings), `PUT|DELETE
+  /fleet-credentials/{name}`, `POST …/{name}/distribute`, `POST …/{name}/withdraw`. Non-whitelisted, so
+  Tier-3 admin auth applies automatically. The name comes from the path, never the body. The secret is
+  **write-only over HTTP**: it arrives and is never returned, not even as a digest.
+- **Credentials view ✅** — a native top-level Explorer entry (`credentials`, key icon) in the **Vaier
+  menu**, beside Security. Each credential is a card with a **coverage strip** — one cell per machine that
+  *could* hold it, coloured by standing — a tally, the machines it is **not** in place on listed worst-first,
+  and Distribute / Withdraw / Replace secret / Delete. `SKIPPED` machines are excluded from the strip by
+  design and named quietly underneath: a phone can never hold the file, and an indicator that can never come
+  clean is one an operator learns to ignore. An empty `machines` list reads "Not checked yet", never "0 of
+  0". "Replace secret", never "Edit" — Vaier will not show what it holds, so a save replaces the secret
+  whole. Withdraw and Delete confirm (Delete by typed name) and say plainly which of the two reaches the
+  fleet; Distribute asks nothing, because that is what the entry is for.
 
-1. **Does the credential survive being shared at all?** If Anthropic's OAuth refresh tokens *rotate*
-   (single-use, reissued on each refresh), then N hosts holding one copy is not a fleet — it is a race:
-   the first host to refresh invalidates every other copy, and the rest fail later, silently, far from the
-   cause. That failure mode is worse than the manual logins it replaces. This must be measured, never
-   assumed. If tokens do rotate, the answer is **not** to sync the file harder but to distribute a
-   different artefact: `claude setup-token` mints a long-lived token designed for non-interactive use,
-   which has no rotation race and can be revoked without killing the operator's own interactive session.
-   The long-lived token is the better primitive regardless, and should be the default plan.
-2. **Ownership and mode**, which Vaier has already been burned by: the JVM runs as uid 1000, and a
-   root-owned `0600` file is silently unreadable rather than loudly broken. A push that lands as `root`
-   produces a credential that exists, looks right, and does not work. The distribution must write as the
-   *target* SSH user, `0600`, and verify the resulting ownership rather than trusting the write.
-3. **Blast radius.** One credential on N hosts means any single host compromise is an account compromise.
-   This is a considered trade on a trusted fleet, not a free one, so the slice that pushes a secret must
-   ship the withdraw alongside it — distribution without one-place revocation is not finished work.
+The three questions that gated the design, and where they landed:
 
-Staged so that nothing is built before it has been earned:
+1. **Does the credential survive being shared at all?** Still the operator's call, and Vaier stays opaque
+   precisely so it remains theirs. If an OAuth provider's refresh tokens *rotate* (single-use, reissued on
+   each refresh), then N hosts holding one copy is not a fleet but a race: the first host to refresh
+   invalidates every other copy, and the rest fail later, silently, far from the cause — a failure mode worse
+   than the manual logins it replaces. The answer is never to sync the file harder; it is to distribute a
+   different artefact. **Claude credentials are the exception, and they are now out of this feature
+   altogether:** Anthropic's terms forbid a third party collecting, storing or intermediating them, so
+   Vaier never holds one — §6.51 signs each machine's own CLI in instead, and the `claude setup-token`
+   fan-out this paragraph once recommended is rejected there on exactly those grounds. For every other
+   secret the choice stays the operator's, because Vaier cannot tell one from another.
+2. **Ownership and mode ✅** — the trap Vaier has already been burned by: the JVM runs as uid 1000, and a
+   root-owned `0600` file is *silently unreadable* rather than loudly broken, so a push that lands as the
+   wrong user produces a credential that exists, looks right, and does not work. The write runs under
+   `umask 077` (never briefly world-readable, even before the `chmod`) as the target SSH user, and is then
+   **verified rather than trusted**: owner, mode and digest are read back off the machine, and a mismatch is
+   `FAILED`, never a quiet success. `readWriteOutcome` has no middle ground — a write is the one moment Vaier
+   knows exactly what should be there. `stat`/`sha256sum` carry a BSD/Synology fallback so a NAS answers the
+   same question a Linux server does.
+3. **Blast radius ✅** — one credential on N hosts means any single host compromise is an account compromise:
+   a considered trade on a trusted fleet, not a free one. So **withdraw shipped alongside distribute** —
+   distribution without one-place revocation would not have been finished work. Withdraw removes the file
+   from every machine Vaier can reach *and* stands the credential down, so the healer stops even where a
+   sleeping machine still holds a copy; the standings say which those are. Delete is the separate, narrower
+   act of making Vaier forget its own copy, and reaches no machine at all.
 
-- **Stage 0 — no code at all.** The Explorer already copies and pastes files across the fleet (§6.21).
-  Distributing the credential by hand costs nothing, answers question (1) for free, and establishes
-  whether the automation is worth writing. Skipping this stage is how a feature acquires machinery it
-  turns out not to need.
-- **Stage 1 — the vault learns a fleet-wide secret.** Narrow use cases (`SaveFleetCredentialUseCase`,
-  `DistributeFleetCredentialUseCase`, `WithdrawFleetCredentialUseCase`) on the existing `TerminalService`
-  — the domain that already owns the vault — with the write itself going out over the existing SSH driven
-  port. No new `*Service`, no new vault, no new transport. Scope is *machines that run a shell*, not every
-  peer: a phone has no `~/.claude` and must never be offered one.
-- **Stage 2 — reconcile rather than fire-and-forget.** The disk sweep already SSHes to every machine on a
-  schedule; a machine missing the credential (rebuilt, restored, newly adopted) is a fact that path can
-  learn for free, and heal, without a second sweep existing to do it.
-
-Prerequisite: nuc02's outstanding key hygiene is unresolved, and pushing a shared secret to a host with a
-world-readable key would hand it to anyone with a login there. That cleanup blocks Stage 1 for that host.
+Prerequisite still outstanding: nuc02's key hygiene is unresolved, and pushing a shared secret to a host with
+a world-readable key would hand it to anyone with a login there. Until that cleanup lands, that host should
+not be a target for a fleet credential.
 
 ---
 
@@ -3461,6 +3515,129 @@ Persisted to `access-sources.yml` (§8; distinct from `access.yml`, which holds 
 **The decision is the domain's.** `ServerPublicAddress.isHairpin(callerIp)` is a value object's predicate with its own test, not a comparison in the service or the controller; `AccessSources.recording` takes the address alongside the geolocation port and owns which place — or no place — an access counts towards. Nothing new can throw on the forward-auth path, and the existing guard asserting a `200` while the recorder throws is untouched.
 
 **Historical entries are not migrated.** Only new accesses are affected. The Frankfurt entry already on disk keeps its 264 and stops growing, then ages out 30 days after its last access like any other place — Vaier prunes by `lastSeen` and has no migration step. Folding its count into the unplaceable entry by hand, with Vaier stopped, is the way to make the totals true today.
+
+### 6.51 Claude sign-in — Vaier orchestrates, the credential never passes through it ✅ (implemented 2026-08-31, issue TBD)
+
+**The terms wrote the architecture, so it is clean by construction rather than by promise.** Anthropic's
+developer terms (`code.claude.com/docs/en/legal-and-compliance`) state that developers "may not collect,
+store, or intermediate Claude.ai credentials or session tokens — sign-in to a Claude account must complete
+through Anthropic's own flow", while *expressly permitting* an end user to sign in to the **unmodified**
+Claude Code binary with their own subscription. Every shape this feature could have taken follows from
+that one sentence: Anthropic's binary runs on the operator's machine, Anthropic's flow completes in the
+operator's own browser, and **Vaier relays a URL out and a code back and persists nothing** — not the URL,
+not the code, not a token. There is deliberately no `For*` persistence port anywhere in the feature; if one
+appears, something has gone wrong.
+
+**Two designs were considered and rejected, recorded here because a future reader will otherwise
+"simplify" the relay back into one of them:**
+
+1. **A central `claude setup-token`, fanned out as a fleet credential.** §6.18 recommended exactly this
+   before the terms were read properly. It is out: minting one credential centrally and pushing it to N
+   machines is Vaier collecting, storing and intermediating a Claude credential, which is the thing the
+   terms name. That the mechanism already existed and would have been half a day's work is precisely why
+   the rejection is written down.
+2. **Distributing `~/.claude/.credentials.json` across machines.** Out twice over. It is unsupported, and
+   it is *technically broken* independently of the terms: OAuth refresh tokens rotate, so the first host to
+   refresh invalidates every other copy and the rest fail later, silently, far from the cause — the
+   rotation race §6.18's question (1) describes. Anthropic's own devcontainer documentation routes around
+   sharing the file, and `anthropics/claude-code` issues #56339 and #54443 are that race being reported by
+   people who tried. **The generic fleet credential remains entirely fine for other secrets** — an API key,
+   a registry login, a config file. It is Claude credentials specifically that Vaier must not hold.
+
+**What ships is a guided, per-machine sign-in of the CLI that is already there.** Vaier runs
+`claude auth login --claudeai` on the target machine, reads the **authorization URL** out of the CLI's
+output and hands it to the operator; they open it in their own browser, approve on Anthropic's pages, and
+Anthropic shows them an **authorization code**, which they paste into Vaier; Vaier writes it into the
+process still waiting on that machine and then re-reads the machine's standing.
+`GET|POST|DELETE /machines/{machineId}/claude-sign-in`, `POST /machines/{machineId}/claude-sign-in/code`
+and `POST /machines/{machineId}/claude-sign-out`, all non-whitelisted, so Tier-3 admin auth applies
+automatically. Every read is **one machine**: drawing a pane must never cost a fleet-wide SSH sweep, and a
+test pins that opening one asks exactly one machine.
+
+**Everything goes through the CLI's own `claude auth` subcommands, and that is the whole design** —
+`auth login --claudeai` to start (the subscription flow, named explicitly rather than left to a default
+that could change), `auth logout` to end, `auth status --json` to ask. Two things fall out of it that
+matter more than the tidiness. The status answer is **authoritative rather than inferred** — no reading of
+a REPL banner, no `stat` on a credential file — and it is structured JSON carrying **no credential material
+at all**, so asking the question is plainly something Vaier is allowed to do. And signing out is the CLI
+releasing its own credential: Vaier never deletes, and never reads, a credential file. Deleting one would
+have worked, and it is exactly the line this feature stays behind.
+
+**`ClaudeSignInState` has six values, and `UNKNOWN` exists so that being unable to *ask* is never reported
+as signed **out**.** `SIGNED_IN`, `SIGNED_OUT`, `NOT_INSTALLED` (a plain fact — a machine without Claude is
+not broken), `UNREACHABLE` (asleep, moved, refusing), `SKIPPED` (no shell Vaier can reach, so not a place a
+sign-in could happen) and `UNKNOWN` (the machine answered with something unreadable). A false `SIGNED_OUT`
+sends an operator to redo a sign-in nothing had undone, so silence is never a "no": `UNKNOWN` is reported
+as itself and drawn apart from signed-out, never folded in with it.
+
+**A sign-in is a fact about a *user on* a machine, and the first version of this said otherwise.** The CLI
+keeps its credential in a user's home directory, and Vaier asks as its **effective user** — the login in
+that machine's host credential — which is frequently not the account the machine's real work runs as. Live,
+Colina 27 reported "signed in, max" for `geir` while the operator's automation, running as `root` on the
+same box, was signed out and expired. Both readings were true; the standing that named only the machine was
+the lie. So `ClaudeSignInStatus` carries its `EffectiveUser` (null only where Vaier holds no login at all,
+because naming one there would be inventing it), and every sentence built from a standing names the user.
+The fleet-wide field went the same way in two steps: first renamed from `signedInEverywhere` to
+`signedInForEveryEffectiveUser` — the question it could honestly settle — and then removed outright with
+the fleet view. "Signed in everywhere" read as a claim about the machines and never was one.
+
+**The view moved onto the machine pane, and two things were lost with it — deliberately, and recorded here
+so reviving them is a decision rather than a rediscovery.** The sign-in first shipped as a second section
+of the Explorer's **Credentials** view; the operator moved it beside a machine's SSH access and host
+credential, where a per-machine, per-user fact belongs, and where the pane's own "Vaier acts as `geir` on
+Colina 27" already establishes whose account is under discussion. Gone with the fleet view: the
+`signedInEverywhereItCan` domain decision, which could not survive the per-user correction intact — it was
+never a claim about machines — and, more painfully, **the warning that fired when the fleet was signed in
+as more than one account**. That is the failure nothing per-machine can catch: every pane reads green
+while half the fleet answers to a different account. It wants reviving as a summary that names the user per
+machine, not as the headline sentence that was removed.
+
+**Backlog — choose which OS user a sign-in applies to.** Vaier signs in as its own effective user, and the
+user that runs the work often is not it: live, Roon kjøkken and Roon loftstue answer as `root` while every
+other machine answers as `geir`, and Colina 27's automation runs as `root` under `/home/openhab` while
+Vaier reads `geir`. Letting the operator pick the user is a real feature with real consequences (it means
+`sudo`, and it means Vaier acting for an account it holds no credential for), so it gets its own slice
+rather than being smuggled into a fix.
+
+**Where it lives.** The domain owns every decision: `ClaudeSignIn` builds the exact strings sent over SSH
+and reads a machine's answer back (the same IO-free shape as `PersistentShell`), including how long a URL
+is worth waiting for and when a sign-in left at its prompt counts as abandoned; `ClaudeSignInOutput`
+contains the one genuinely fragile part — screen-scraping a program Vaier does not own — as pure total
+functions, matching the URL out of the CLI's **OSC 8 hyperlink parameter** (the only place a TUI redraw
+leaves it contiguous) and *structurally* rather than by client id, state or exact path, so an Anthropic
+change breaks loudly instead of silently; `ClaudeSignInStatus`/`ClaudeSignInState`/`ClaudeAccount` are the
+read model, keyed by **machine id** so a rename cannot move one machine's standing onto another.
+`ClaudeSignInRelay` is a **driving adapter** in `rest/` — driven by an HTTP request and by a clock, as
+`FleetCredentialDistributor` and `RemoteDiskWatcher` are — implementing the five narrow use cases and
+composing `GetMachinesUseCase` + `GetHostCredentialUseCase` + `RunRemoteCommandUseCase` at the driving
+edge, which is how Vaier does a cross-domain read. Eligibility is `Machine.runsAShellVaierCanReach`, the
+same question a fleet credential asks, answered in one place rather than copied per feature.
+
+**The CLI needs a PTY and has to outlive the request that started it**, so the sign-in runs inside the
+existing **persistent shell** (`OpenClaudeSignInShellUseCase` on `TerminalService`) under a reserved
+session name — `vaier-claude-sign-in` — which supplies the PTY, keeps the process alive across the gap
+while the operator is away in their browser, and can never land in a pane the operator is using. A
+two-minute sweep ends sign-ins abandoned for a quarter of an hour, because nothing else would: the CLI
+waits at its prompt by design. A pasted code is confined to a URL-safe charset and refused rather than
+quoted, since if the CLI has already exited whatever is written lands in the shell that started it.
+
+**Nothing is stored, and three tests fail if that changes** —
+`ClaudeSignInRelayTest.neverLogsOrShipsTheAuthorizationUrlOrTheCode` (no command and no log line carries
+either), `ClaudeSignInRelayTest.forgetsTheSignInAsSoonAsItEnds`, and
+`TerminalServiceTest.openClaudeSignInShell_persistsNothing` (neither credential store is written). Two of
+them were mutation-verified: the guard was broken deliberately and watched to fail.
+
+**UI: a second section in the Explorer's Credentials view**, deliberately in the same entry rather than an
+entry of its own — one place answers "what is authenticated where", and what differs between the two
+sections is *who holds the secret*. One row per machine with its state in the operator's words, the
+user Vaier acts as there, the **Claude account** it is signed in as, an inline sign-in panel (the URL with a **Copy** button, then the
+code box) and a **Sign out** verb. Inline, not a modal, because signing several machines in one after
+another turns a dialog into a ceremony. No coverage strip and no self-healing: there is nothing Vaier holds
+to put back. A machine with no Claude, no shell or no answer gets no button rather than a button that
+fails, and one sign-in is open at a time — a second would leave a CLI waiting on a machine nobody is going
+back to. When the fleet is signed in as more than one **Claude account**, a quiet line says so: half a
+fleet on the wrong account is invisible until something fails oddly, and it is worth noticing without being
+worth alarming about.
 
 ---
 

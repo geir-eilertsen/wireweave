@@ -6,6 +6,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import net.vaier.adapter.driven.InMemoryContainerSnapshotStore;
 import net.vaier.adapter.driven.InMemoryDockerCommandAccessCache;
+import net.vaier.adapter.driven.InMemoryImageUpdateStateAdapter;
 import net.vaier.adapter.driven.LanServerContainerDiscoveryAdapter;
 
 import net.vaier.domain.AuthMethod;
@@ -143,7 +144,7 @@ class ContainerServiceTest {
 
     @BeforeEach
     void setUp() {
-        tracker = new ImageUpdateTracker();
+        tracker = new ImageUpdateTracker(new InMemoryImageUpdateStateAdapter());
         clock = new MutableClock();
         // The cached snapshots + sweep verdicts live in the store adapter, and the live LAN-server
         // scrape in its own adapter — both real infrastructure fed by the same mocks, so the end-to-end

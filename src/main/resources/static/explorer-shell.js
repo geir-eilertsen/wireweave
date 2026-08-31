@@ -45,6 +45,10 @@
         arrowup: '<circle cx="8" cy="8" r="6"/><path d="M8 11.2V5.2"/><path d="M5.6 7.6L8 5.2l2.4 2.4"/>',
         trash:   '<path d="M3 4.5h10M6.5 4.5V3a.8.8 0 0 1 .8-.8h1.4a.8.8 0 0 1 .8.8v1.5"/><path d="M4.2 4.5l.6 8a1 1 0 0 0 1 .9h4.4a1 1 0 0 0 1-.9l.6-8"/><path d="M6.7 7v4M9.3 7v4"/>',
         shield:  '<path d="M8 1.7l5.1 1.9v3.9c0 3.2-2.1 5.4-5.1 6.5-3-1.1-5.1-3.3-5.1-6.5V3.6z"/><path d="M5.7 8l1.6 1.7L10.4 6"/>',
+        // A fleet credential: bow, shaft and two teeth. Deliberately not `shield` (that is Security, which is
+        // about who Vaier keeps out) and not `clip` — a key is the one shape that says "a secret that opens
+        // something", which is all Vaier ever knows about one.
+        key:     '<circle cx="5.4" cy="10.6" r="2.9"/><path d="M7.5 8.5l5.7-5.7"/><path d="M11.1 4.9l1.5 1.5M12.3 3.7l1.5 1.5"/>',
         shieldhalf: '<path d="M8 1.7l5.1 1.9v3.9c0 3.2-2.1 5.4-5.1 6.5-3-1.1-5.1-3.3-5.1-6.5V3.6z"/><path d="M3 8.3h10"/>',
         map:     '<path d="M8 1.7c-2.5 0-4.4 1.9-4.4 4.3 0 3.1 4.4 8.3 4.4 8.3s4.4-5.2 4.4-8.3c0-2.4-1.9-4.3-4.4-4.3z"/><circle cx="8" cy="6" r="1.6"/>',
         // A GPS crosshair — "find me" in every map app, so it is the one glyph that reads as "report where I
@@ -92,6 +96,7 @@
         { name: 'settings', label: 'Settings', icon: 'gear',   native: true },
         { name: 'users',    label: 'Users',    icon: 'users',  page: 'users.html' },
         { name: 'security', label: 'Security', icon: 'shield', native: true },
+        { name: 'credentials', label: 'Credentials', icon: 'key', native: true },
         { name: 'concepts', label: 'Concepts', icon: 'book',   page: 'concepts.html' },
     ];
 
@@ -178,6 +183,17 @@
                                          //   because this is the list the untrust verb hangs off (#348)
         trustedRead: false,              // whether that read has landed once
         trustedError: '',                // why it failed, when it did — never shown as "nothing trusted"
+        // GET /fleet-credentials — each with where it stands on every machine. Read when the entry is opened
+        // and re-read after every action: the standings are the distributor's own in-memory observation, so
+        // they start empty on a fresh boot and an empty `machines` is "not checked yet", never "nowhere".
+        credentials: { state: 'idle', list: [], error: '' },
+        // GET /machines/{id}/claude-sign-in — where the machine whose pane is open stands, and which OS
+        // user that answer is about. Per-machine on purpose: the fleet read SSHes to every machine in turn,
+        // so using one to draw a single pane would wait on every sleeping box before anything appeared.
+        // `machineId` is whose answer `status` holds, so a stale one is never drawn under a new pane;
+        // `open` marks the sign-in unfolding here, since the CLI waiting on the far side is a live session.
+        claudeSignIn: { machineId: null, state: 'idle', status: null, error: '',
+                        open: null, stage: '', url: '', code: '' },
         palSel: 0,
         myDeviceMachineId: null,         // GET /vpn/peers/my-device — the ONE machine THIS browser's cookie
                                           //   claims, server-decided; never "some browser claims this machine"
@@ -689,9 +705,14 @@
         return ICON[cat] ? cat : 'machine';
     }
 
+    // Every kind that names a top-level global: a native one's kind IS its own name (see kindOf), plus the
+    // one kind the bridged ones share. Derived from GLOBALS rather than spelled out, because the hand-written
+    // list this replaces read `settings || gbridge` and so had already stopped covering Security.
+    const GLOBAL_KINDS = new Set(GLOBALS.map((g) => g.name).concat(['gbridge']));
+
     // {@code segment} is the path segment the row stands on — a machine's identity, a global's name.
     const iconFor = (kind, segment) => {
-        if (kind === 'settings' || kind === 'gbridge') return (GLOBALS.find((g) => g.name === segment) || {}).icon || 'file';
+        if (GLOBAL_KINDS.has(kind)) return (GLOBALS.find((g) => g.name === segment) || {}).icon || 'file';
         if (kind === 'machine') return machineIcon(segment);
         return ICON_FOR[kind] || 'file';
     };
@@ -1114,6 +1135,51 @@
         return el;
     }
 
+    // Explanation, not state. A bordered note reads as a thing that happened or a thing to act on, so a pane
+    // that wears one on every paragraph has nothing left to mark the paragraph that matters — which is how the
+    // machine pane grew five identical boxes. note() is for a state (empty, error, warning); hint() is for
+    // prose that only explains how a control works, and it stays out of the way.
+    function hint(text) {
+        const el = document.createElement('div');
+        el.className = 'ex-hint';
+        el.textContent = text;
+        return el;
+    }
+
+    // "Where this stands, and what to do about it", as one object: the thing, one word for how it stands,
+    // the detail behind that word, and its verbs on the right. It is a nudge's geometry without the accent
+    // edge — a nudge is an offer, this is a fact — and it exists so a standing stops arriving as a heading
+    // plus a paragraph plus a loose row of buttons, which is three things to read for one answer.
+    function standingCard(title, stateText, tone, detail, why, actions) {
+        const wrap = el('div', 'ex-standing');
+        const text = el('div', 'ex-standing-text');
+
+        const top = el('div', 'ex-standing-top');
+        const t = el('span', 'ex-standing-title');
+        t.textContent = title;
+        top.appendChild(t);
+        if (stateText) {
+            const st = el('span', 'ex-standing-state ' + (tone || 'is-muted'));
+            st.textContent = stateText;
+            top.appendChild(st);
+        }
+        text.appendChild(top);
+
+        if (detail) {
+            const d = el('div', 'ex-standing-detail');
+            d.textContent = detail;
+            text.appendChild(d);
+        }
+        if (why) {
+            const w = el('div', 'ex-standing-why');
+            w.textContent = why;
+            text.appendChild(w);
+        }
+        wrap.appendChild(text);
+        if (actions) wrap.appendChild(actions);
+        return wrap;
+    }
+
     // disabledTitle: when set, the card is greyed and inert rather than removed — the entry still names what
     // is there, it just cannot be opened right now (e.g. Vaier's last check found no SSH server). Pass a
     // falsy value for a normal, live card.
@@ -1145,19 +1211,6 @@
         return btn;
     }
 
-    // "Vaier is root here", readable without opening the machine (#346). A tag rather than a third clause
-    // in the note line: that line already carries a type and an address, and a fact with this much
-    // consequence appended to the end of it is a fact that gets skimmed past.
-    function rootTag(username) {
-        const tag = el('span', 'ex-card-root');
-        // The name, not the literal "root". Today they are the same on every machine in the fleet, but
-        // EffectiveUser reserves the right to widen what counts as privileged — and a badge that asserts
-        // a word the backend never sent is a badge that starts lying the day it does.
-        tag.textContent = username;
-        tag.title = 'Vaier logs in as ' + username + ' here — a privileged user';
-        return tag;
-    }
-
     function kv(rows) {
         const dl = document.createElement('dl');
         dl.className = 'ex-kv';
@@ -1180,10 +1233,19 @@
         const kind = kindOf(S.path);
         // Standing anywhere else ends the visit to the Map, so opening it again frames the fleet afresh.
         if (kind !== 'map') _mapFramed = false;
+        // The same reflex, for the same reason: leaving Credentials ends the visit, so opening it again
+        // re-reads where every credential stands. Those standings age on the server — the reconcile runs
+        // every five minutes — and a stale strip is the one thing this entry must never show.
+        if (kind !== 'credentials' && S.credentials.state === 'ready') S.credentials.state = 'idle';
+        // The same reflex for the sign-ins under them, and one thing more: leaving abandons a sign-in in
+        // progress. The flow says so while it is open, and this is what makes it true — the CLI left waiting
+        // on that machine is ended rather than sitting at its prompt for nobody.
+        if (kind !== 'machine') leaveClaudeSignIn();
         if (kind === 'fleet') return renderFleet(pane);
         if (kind === 'map') return renderMap(pane);
         if (kind === 'settings') return renderSettings(pane);
         if (kind === 'security') return renderSecurity(pane);
+        if (kind === 'credentials') return renderCredentials(pane);
         if (kind === 'gbridge') return renderGlobalBridge(pane);
         if (kind === 'machine') return renderMachine(pane);
         if (kind === 'containers') return renderContainers(pane);
@@ -1228,12 +1290,6 @@
                 // made folding the outline away cost nothing.
                 const top = c.querySelector('.ex-card-top');
                 top.insertBefore(machineMarks(m.id), top.querySelector('.ex-dot'));
-                // Where Vaier is root, said on the card itself — the fleet is readable for it without
-                // opening every machine. The backend decided it (domain.EffectiveUser); nothing here
-                // re-judges a username.
-                if (m.effectiveUserPrivileged) {
-                    c.querySelector('.ex-card-note').appendChild(rootTag(m.effectiveUsername));
-                }
                 // A long description is clamped to two lines so one card cannot stand taller than its
                 // neighbours in the grid; the whole of it is a hover away rather than lost.
                 if (purpose) c.querySelector('.ex-card-note').title = purpose;
@@ -1725,15 +1781,32 @@
         if (!m) return pane.appendChild(note('That machine is no longer in the fleet.', true));
 
         const peer = S.peers.get(m.id);
-        const head = paneHead(m.name, true, MACHINE_TYPE[m.type]);
+        // The same subtitle the card the operator just clicked was wearing — what the machine is, and what
+        // the operator said it is FOR. Losing the second half on the way in made the pane say less about the
+        // machine than the grid it came from.
+        const purpose = machineDescription(m);
+        // Vaier's own machine answers differently in three places below, so the question is asked once here.
+        const isVaierServer = !!m.vaierServer;
+        const head = paneHead(m.name, true, MACHINE_TYPE[m.type] + (purpose ? ' · ' + purpose : ''));
         head.querySelector('.ex-pane-title').appendChild(dot(m.id));
+        // The machine's open verbs live where every other pane keeps the verbs that apply right now: the
+        // head's one action group, hugging the right. Editing details is common, and a LAN server's setup
+        // command is the whole of onboarding it — neither had earned a section heading of its own halfway
+        // down the body. The Vaier server is this machine: it is never edited or removed here.
+        if (!isVaierServer) {
+            const acts = el('div', 'ex-pane-actions');
+            acts.appendChild(selVerb('gear', 'Edit details', 'ex-btn', () => editMachine(m)));
+            if (m.type === 'LAN_SERVER') {
+                acts.appendChild(selVerb('shell', 'Setup command', 'ex-btn', () => lanSetupScript(m.id)));
+            }
+            head.appendChild(acts);
+        }
         pane.appendChild(head);
 
         const body = document.createElement('div');
         body.className = 'ex-pane-body';
         // A LAN server has no tunnel, so it never gets mesh rows — blanks would claim one that is merely down.
         const isLan = m.type === 'LAN_SERVER';
-        const isVaierServer = !!m.vaierServer;
         const rows = [];
         if (isVaierServer) {
             rows.push(['Role', 'The fleet’s hub — WireGuard server and reverse proxy']);
@@ -1776,9 +1849,8 @@
         if (reachesInside(m) || inside.length) {
             body.appendChild(section('Inside this machine'));
             if (!inside.length) {
-                body.appendChild(note('Vaier cannot reach anything inside this machine. It has no SSH access, '
-                    + 'so no files, no shell and no disk reading; it runs no Docker Vaier knows of; and nothing '
-                    + 'is published from it. Turn on SSH access below and give it a credential, and it opens up.',
+                body.appendChild(note('Nothing yet — no files, shell or disk without SSH access, no Docker '
+                    + 'Vaier knows of, nothing published. Turn on SSH access below and give it a credential.',
                     false));
             } else {
                 const grid = document.createElement('div');
@@ -1851,37 +1923,56 @@
                 // thing SSH access is for, so it sits with it rather than as a separate entry in the tree.
                 const shellBtn = selVerb('shell', 'Open shell', 'ex-btn is-accent', () => openShellWindow(m.id));
                 // Two distinct, independent reasons a shell cannot open right now — each earns its own words,
-                // since "give it a credential" and "nothing is listening" call for different next steps.
+                // since "give it a credential" and "nothing is listening" call for different next steps. Both
+                // are said in the open as well as in the title: a phone never hovers, so a tooltip is not a
+                // reason the operator can read. When the shell CAN open, the same line says what it is.
+                let shellSays = 'Runs on ' + m.name + ' itself and outlives the window — reopening reattaches '
+                    + 'where you left off; Exit shell, inside it, is what stops it.';
                 if (!m.hasCredential) {
                     shellBtn.disabled = true;
                     shellBtn.title = 'Give this machine an SSH credential first';
+                    shellSays = 'Give this machine an SSH credential and the shell opens.';
                 } else if (noSshServer) {
                     shellBtn.disabled = true;
                     shellBtn.title = 'No SSH server detected on last check';
+                    shellSays = 'No SSH server answered on the last check, so there is nothing to open.';
                 }
                 cred.appendChild(shellBtn);
                 cred.appendChild(selVerb('gear', 'SSH credential', 'ex-btn', () => credentialDialog(m.id)));
                 body.appendChild(cred);
+                body.appendChild(hint(shellSays));
                 // Who Vaier actually is on this machine. The credential's username IS the effective user,
                 // so saying it costs nothing — and it is the whole difference between a delete that
                 // removes a file you did not want and one that removes a file the machine needs to boot.
                 // Nobody chose root on the DietPi boxes; it arrived with the image. Naming it is the first
                 // step to deciding whether it stays.
                 if (m.effectiveUsername) {
-                    const who = note('Vaier acts as ' + m.effectiveUsername + ' on ' + m.name
-                        + (m.effectiveUserPrivileged
-                            ? ', a privileged user. Everything Vaier does here — reading, writing and '
-                              + 'deleting — runs unrestricted.'
-                            : '. It reaches exactly what that user can reach, and nothing else.'), false);
-                    if (m.effectiveUserPrivileged) who.classList.add('is-warn');
-                    body.appendChild(who);
+                    const said = 'Vaier acts as ' + m.effectiveUsername + ' on ' + m.name;
+                    // Privilege is the one fact in this section that earns a bordered box. A warning only
+                    // reads as a warning while the paragraphs beside it are not wearing the same edge.
+                    if (m.effectiveUserPrivileged) {
+                        const warn = note(said + ' — a privileged user, so everything it does here, reading, '
+                            + 'writing and deleting alike, runs unrestricted.', false);
+                        warn.classList.add('is-warn');
+                        body.appendChild(warn);
+                    } else {
+                        // is-who: not an aside. This is the section's blast radius and the line the Claude
+                        // card hangs off, so it reads a shade above the hints around it.
+                        const who = hint(said + ' — it reaches exactly what that user can reach, and '
+                            + 'nothing else.');
+                        who.classList.add('is-who');
+                        body.appendChild(who);
+                    }
                 }
-                body.appendChild(note('The shell opens in its own window and runs on ' + m.name + ' itself, so it '
-                    + 'survives closing the window — and even a Vaier restart. Reopening reattaches you right where '
-                    + 'you left off; Exit shell (inside the window) is the one that stops it.', false));
+                // Claude sign-in belongs here, under "Vaier acts as <user> on <machine>", because it is a
+                // fact about exactly that pairing — the CLI's credential lives in that user's home. Whether
+                // it can happen here at all is the server's call (signInPossibleHere), not a browser copy of
+                // "SSH access AND a credential": that rule lives on Machine, and a second copy of it here
+                // would be a second chance to get it wrong.
+                renderClaudeSignIn(body, m);
             } else {
-                body.appendChild(note('Off — Vaier holds no session to this machine, so it has no shell, files '
-                    + 'or disk reading here. Turn it on to give it an SSH credential.', false));
+                body.appendChild(hint('Without it Vaier has no shell, no files and no disk reading here. '
+                    + 'Turn it on to give this machine an SSH credential.'));
             }
         } else {
             // A phone or a laptop has no SSH story — Vaier cannot reach inside it. What it CAN do is ask the
@@ -1899,32 +1990,26 @@
                 const claimRow = el('div', 'ex-lactions is-static');
                 claimRow.appendChild(selVerb('locate', 'This browser is ' + m.name, 'ex-btn', () => claimDevice(m)));
                 body.appendChild(claimRow);
-                body.appendChild(note('Claim ' + m.name + ' from the browser running on it, and it can report '
-                    + 'where it actually is — with the tunnel down too.', false));
+                body.appendChild(hint('Claim ' + m.name + ' from the browser running on it, and it can report '
+                    + 'where it actually is — with the tunnel down too.'));
             }
         }
 
-        // Everything you do TO the machine, rather than reach INSIDE it. Editing its details is common enough to
-        // sit in the open; the rest — reissuing or regenerating a peer's config, showing a LAN host's setup
-        // script, and removing the machine — is rare or destructive, so it folds away behind Advanced and does
-        // not crowd the pane. The Vaier server is this machine: it is never edited or removed here.
-        if (!m.vaierServer) {
-            body.appendChild(section('This machine'));
-            const edit = el('div', 'ex-lactions is-static');
-            edit.appendChild(selVerb('gear', 'Edit details', 'ex-btn', () => editMachine(m)));
-            if (m.type === 'LAN_SERVER') {
-                edit.appendChild(selVerb('shell', 'Setup command', 'ex-btn', () => lanSetupScript(m.id)));
-            }
-            body.appendChild(edit);
-
+        // What is left of "things you do TO the machine" once its two open verbs sit in the head: reissuing or
+        // regenerating a peer's config, and removing the machine. All rare or destructive, so all folded.
+        //
+        // No heading introduces the fold any more, and it does not need one — a section label was never a
+        // control, and the fold's own summary now is one (see .ex-adv-sum). That is a better answer to "how do
+        // I find this?" than the label was: what you can see is the thing you press.
+        if (!isVaierServer) {
             const adv = disclosure('Advanced');
             if (S.peers.has(m.id)) {
                 const cfg = el('div', 'ex-lactions is-static');
                 cfg.appendChild(selVerb('refresh', 'Reissue config', 'ex-btn', () => reissuePeer(m)));
                 cfg.appendChild(selVerb('refresh', 'Regenerate config', 'ex-btn', () => regenerateMachine(m)));
                 adv.appendChild(cfg);
-                adv.appendChild(note('Reissue re-hands the same identity’s config. Regenerate replaces the '
-                    + 'keypair — a new identity on the VPN — and the old config stops working at once.', false));
+                adv.appendChild(hint('Reissue re-hands the same identity’s config. Regenerate replaces the '
+                    + 'keypair — a new identity on the VPN — and the old config stops working at once.'));
             }
             const rm = el('div', 'ex-lactions is-static');
             rm.appendChild(selVerb('trash', 'Remove machine', 'ex-btn is-danger', () => removeMachine(m)));
@@ -1964,8 +2049,8 @@
         auto.append(box, atxt);
         wrap.appendChild(auto);
 
-        wrap.appendChild(note('This browser is ' + m.name + '. Forget erases its position, its trail and this '
-            + 'claim together.', false));
+        wrap.appendChild(hint('This browser is ' + m.name + '. Forget erases its position, its trail and this '
+            + 'claim together.'));
         return wrap;
     }
 
@@ -6153,6 +6238,648 @@
         }
     }
 
+    // --- fleet credentials: one secret, on every machine that runs a shell ------------------------------
+    //
+    // Each credential answers one question — is my fleet consistent? — with a coverage strip: one cell per
+    // machine that CAN hold the credential, coloured by what the operator should do about it.
+    //
+    // Machines with no shell are deliberately not in that strip. A phone can never hold a file, so counting
+    // one would put all-green permanently out of reach, and an indicator that can never come clean is one you
+    // learn to ignore. They are named quietly underneath instead, where they read as a fact about the fleet
+    // rather than a fault in it.
+
+    // The operator's words for each standing, never the enum's, and four tones for seven states because
+    // there are only four things to do about one: green is done, amber heals itself within five minutes,
+    // red wants a person, dim is nobody's fault. `rank` is worst-first — the order the exceptions are read
+    // in, so a failure can never sit below a machine that was merely asleep.
+    const CRED_STATE = {
+        FAILED:      { label: 'Failed',        tone: 'is-failed',      rank: 0 },
+        STALE:       { label: 'Out of date',   tone: 'is-drift',       rank: 1 },
+        MISSING:     { label: 'Not there yet', tone: 'is-drift',       rank: 2 },
+        UNREACHABLE: { label: 'Unreachable',   tone: 'is-unreachable', rank: 3 },
+        WITHDRAWN:   { label: 'Withdrawn',     tone: 'is-muted',       rank: 4 },
+        CURRENT:     { label: 'In place',      tone: 'is-current',     rank: 5 },
+        SKIPPED:     { label: 'No shell',      tone: 'is-muted',       rank: 6 },
+    };
+    const credState = (s) => CRED_STATE[s] || { label: s, tone: 'is-muted', rank: 3 };
+
+    // Who the strip is drawn from, and the one line the whole design rests on: a machine with no shell Vaier
+    // can reach can never hold the file, so it is neither a cell nor part of the tally.
+    const canHoldCredential = (m) => m.state !== 'SKIPPED';
+
+    async function loadFleetCredentials() {
+        const c = S.credentials;
+        c.state = 'loading';
+        try {
+            const res = await fetch('/fleet-credentials', { cache: 'no-store' });
+            if (!res.ok) throw new Error('read failed');
+            c.list = await res.json();
+            c.state = 'ready';
+            c.error = '';
+        } catch (e) {
+            c.state = 'error';
+            // A failed read, said as a failed read: nothing was distributed or withdrawn by looking.
+            c.error = 'Vaier could not read what it holds for the fleet. That is this read failing — no '
+                + 'credential has moved.';
+        }
+        if (kindOf(S.path) === 'credentials') render();
+    }
+
+    function renderCredentials(pane) {
+        const c = S.credentials;
+        if (c.state === 'idle') loadFleetCredentials();
+
+        const stored = c.state === 'ready'
+            ? (c.list.length ? c.list.length + (c.list.length === 1 ? ' credential' : ' credentials')
+                             : 'Nothing stored')
+            : '';
+        pane.appendChild(paneHead('Credentials', false, stored));
+
+        const body = el('div', 'ex-pane-body');
+        pane.appendChild(body);
+
+        if (c.state === 'idle' || c.state === 'loading') {
+            body.appendChild(note('Reading what Vaier holds for the fleet…', false));
+            return;
+        }
+        if (c.state === 'error') {
+            body.appendChild(note(c.error, true));
+            return;
+        }
+        if (!c.list.length) {
+            body.appendChild(credentialsEmpty());
+            return;
+        }
+
+        const list = el('div', 'ex-creds');
+        c.list.forEach((cred) => list.appendChild(credentialCard(cred)));
+        body.appendChild(list);
+
+        const add = el('div', 'ex-cred-actions');
+        add.appendChild(selVerb('key', 'Add a credential', 'ex-btn', () => credentialFileDialog(null)));
+        body.appendChild(add);
+
+        body.appendChild(hint('Vaier writes each file as the machine’s own login user under umask 077, then '
+            + 'reads owner, mode and digest back off the machine to prove it landed. It puts back anything '
+            + 'that drifts on the five-minute sweep — but never re-pushes what you withdrew.'));
+    }
+
+    function credentialsEmpty() {
+        const wrap = el('div', 'ex-cred-empty');
+        wrap.appendChild(note('Vaier holds no fleet credential yet. A fleet credential is one file — a token, '
+            + 'a licence, a config — that has to exist identically on every machine that runs a shell Vaier '
+            + 'can reach. Store it once here, and Vaier puts it there and keeps it there.', false));
+        wrap.appendChild(selVerb('key', 'Add a credential', 'ex-btn is-accent',
+            () => credentialFileDialog(null)));
+        return wrap;
+    }
+
+    // One card, and the strip above everything else in it: "is my fleet consistent?" is answered before a
+    // word is read. Only the machines that are not in place are named — a list of everything that is fine is
+    // a list nobody finishes.
+    function credentialCard(cred) {
+        const card = el('div', 'ex-cred');
+        const machines = cred.machines || [];
+        const holders = machines.filter(canHoldCredential);
+
+        const top = el('div', 'ex-cred-top');
+        const name = el('span', 'ex-cred-name');
+        name.textContent = cred.name;
+        const strip = el('div', 'ex-cred-strip');
+        holders.forEach((m) => {
+            const cell = el('span', 'ex-cred-cell ' + credState(m.state).tone);
+            cell.title = m.machineName + ' — ' + credState(m.state).label;
+            strip.appendChild(cell);
+        });
+        const tally = el('span', 'ex-cred-tally');
+        tally.textContent = credentialTally(holders);
+        top.append(name, strip, tally);
+        card.appendChild(top);
+
+        const meta = el('div', 'ex-cred-meta');
+        meta.textContent = cred.targetPath + ' · ' + cred.mode + ' · '
+            + (cred.hasSecret ? 'secret held' : 'no secret held');
+        card.appendChild(meta);
+
+        card.appendChild(credentialExceptions(cred, holders, machines));
+
+        const actions = el('div', 'ex-cred-actions');
+        actions.append(
+            selVerb('upload', 'Distribute', 'ex-btn is-accent', () => distributeCredential(cred)),
+            selVerb('key', 'Replace secret', 'ex-btn', () => credentialFileDialog(cred)),
+            selVerb('cross', 'Withdraw', 'ex-btn', () => withdrawCredential(cred)),
+            selVerb('trash', 'Delete', 'ex-btn is-danger', () => deleteCredential(cred)));
+        card.appendChild(actions);
+        return card;
+    }
+
+    // "Not checked yet", never "0 of 0": an empty standings list is the distributor holding no observation —
+    // it observes in memory, so a fresh boot has none — and reporting that as nowhere sends an operator to
+    // fix a fleet that is fine.
+    function credentialTally(holders) {
+        if (!holders.length) return 'Not checked yet';
+        const inPlace = holders.filter((m) => m.state === 'CURRENT').length;
+        return inPlace + ' of ' + holders.length + ' in place';
+    }
+
+    function credentialExceptions(cred, holders, machines) {
+        const exc = el('div', 'ex-cred-exc');
+        holders.filter((m) => m.state !== 'CURRENT')
+            .sort((a, b) => credState(a.state).rank - credState(b.state).rank
+                || String(a.machineName).localeCompare(String(b.machineName)))
+            .forEach((m) => {
+                const row = el('div', 'ex-cred-excrow');
+                const st = el('span', 'ex-cred-state ' + credState(m.state).tone);
+                st.textContent = credState(m.state).label;
+                const who = el('span', 'ex-cred-who');
+                who.textContent = m.machineName;
+                row.append(st, who);
+                exc.appendChild(row);
+            });
+
+        // Named quietly, where they read as a fact about the fleet rather than a fault in it.
+        const skipped = machines.filter((m) => !canHoldCredential(m));
+        if (skipped.length) {
+            exc.appendChild(note(skipped.map((m) => m.machineName).join(', ')
+                + (skipped.length === 1 ? ' runs' : ' run') + ' no shell Vaier can reach, so '
+                + (skipped.length === 1 ? 'it is' : 'they are') + ' not counted.', false));
+        }
+        return exc;
+    }
+
+    // Anything but a 2xx must never read as success, so the server's own sentence is toasted and the caller
+    // stops. Returns what the endpoint answered — the standings, for the two verbs that recompute them.
+    async function credentialAction(url, method, body, failMsg) {
+        try {
+            const res = await fetch(url, body
+                ? { method: method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+                : { method: method });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                toast(err.message || failMsg);
+                return null;
+            }
+            return await res.json().catch(() => true);
+        } catch (e) {
+            toast(failMsg);
+            return null;
+        }
+    }
+
+    // Distributing asks nothing. It is what this entry is for, and a confirm on the one harmless verb is how
+    // an operator learns to click through the two that are not.
+    async function distributeCredential(cred) {
+        toast('Putting ' + cred.name + ' where it belongs…');
+        const standings = await credentialAction(
+            '/fleet-credentials/' + encodeURIComponent(cred.name) + '/distribute', 'POST', null,
+            'Could not distribute ' + cred.name + '.');
+        if (!standings) return;
+        const holders = (Array.isArray(standings) ? standings : []).filter(canHoldCredential);
+        const inPlace = holders.filter((m) => m.state === 'CURRENT').length;
+        toast(cred.name + ' is in place on ' + inPlace + ' of ' + holders.length + '.');
+        loadFleetCredentials();
+    }
+
+    async function withdrawCredential(cred) {
+        const ok = await confirmModal('Withdraw ' + cred.name + ' from the fleet?',
+            'Vaier removes the file from every machine it could have reached and confirms it is gone. This '
+            + 'is how a leaked secret is revoked. Vaier keeps its own copy, so you can put it back — and the '
+            + 'five-minute sweep will not, because a healer that re-pushed a withdrawn secret would undo the '
+            + 'one place revocation happens.', 'Withdraw');
+        if (!ok) return;
+        const standings = await credentialAction(
+            '/fleet-credentials/' + encodeURIComponent(cred.name) + '/withdraw', 'POST', null,
+            'Could not withdraw ' + cred.name + '.');
+        if (!standings) return;
+        toast(cred.name + ' withdrawn.');
+        loadFleetCredentials();
+    }
+
+    // Typed by name, because this is the one verb whose damage is silent: nothing on the fleet changes, so
+    // there is no failure to notice afterwards — only a secret Vaier no longer has.
+    async function deleteCredential(cred) {
+        const ok = await confirmByTypingName('Delete ' + cred.name + '?',
+            'This forgets Vaier’s copy and reaches no machine: wherever ' + cred.name + ' is already in '
+            + 'place, it stays there and Vaier stops watching it. Withdraw it first if you meant to revoke it.',
+            cred.name, 'Delete');
+        if (!ok) return;
+        if (!await credentialAction('/fleet-credentials/' + encodeURIComponent(cred.name), 'DELETE', null,
+            'Could not delete ' + cred.name + '.')) return;
+        toast(cred.name + ' deleted. Nothing on the fleet changed.');
+        loadFleetCredentials();
+    }
+
+    // Add, or replace the secret of one already stored. The name is the identity, so it is fixed once
+    // stored: an editable name would quietly create a second credential and leave the first on the fleet.
+    // There is no field holding the old secret, because Vaier will not show one — a save replaces it whole.
+    function credentialFileDialog(existing) {
+        const scrim = el('div', 'ex-scrim is-on');
+        const dialog = el('div', 'ex-dialog');
+        const h = el('div', 'ex-dialog-title');
+        h.textContent = existing ? 'Replace secret — ' + existing.name : 'New fleet credential';
+
+        const form = el('div', 'ex-form');
+        const field = (label, hintText, control) => {
+            const f = el('div', 'ex-field');
+            const l = el('label');
+            l.textContent = label;
+            f.append(l, control);
+            if (hintText) { const hn = el('div', 'ex-hint'); hn.textContent = hintText; f.appendChild(hn); }
+            return f;
+        };
+
+        const name = el('input', 'ex-input');
+        name.type = 'text'; name.spellcheck = false; name.autocomplete = 'off';
+        name.placeholder = 'anthropic-api-key';
+        const path = el('input', 'ex-input');
+        path.type = 'text'; path.spellcheck = false; path.autocomplete = 'off';
+        path.placeholder = '~/.config/example/token';
+        const mode = el('input', 'ex-input');
+        mode.type = 'text'; mode.spellcheck = false; mode.autocomplete = 'off';
+        mode.value = '0600';
+        const secret = el('textarea', 'ex-input ex-cred-secret');
+        secret.spellcheck = false;
+        secret.placeholder = 'The file’s contents, exactly as they must appear on each machine.';
+
+        if (existing) {
+            name.value = existing.name;
+            name.disabled = true;
+            path.value = existing.targetPath;
+            mode.value = existing.mode;
+        }
+
+        form.append(
+            field('Name', existing ? 'Fixed: this is what the credential is called across the fleet.'
+                                   : 'Vaier’s name for it. Not the filename.', name),
+            field('File path on each machine', 'Written as that machine’s own login user, so ~ is that '
+                + 'user’s home.', path),
+            field('Mode', 'Octal, as chmod takes it. 0600 unless something else has to read it.', mode),
+            field('Secret', 'Write-only: Vaier never shows this again, and a save replaces it whole.', secret));
+
+        const actions = el('div', 'ex-dialog-actions');
+        const cancel = el('button', 'ex-btn'); cancel.textContent = 'Cancel';
+        const ok = el('button', 'ex-btn is-accent'); ok.textContent = 'Save';
+        actions.append(cancel, ok);
+
+        dialog.append(h, form, actions);
+        scrim.appendChild(dialog);
+        document.body.appendChild(scrim);
+
+        const close = () => { scrim.remove(); document.removeEventListener('keydown', onKey); };
+        const onKey = (e) => { if (e.key === 'Escape') close(); };
+        cancel.onclick = close;
+        scrim.onclick = (e) => { if (e.target === scrim) close(); };
+        document.addEventListener('keydown', onKey);
+        (existing ? secret : name).focus();
+
+        ok.onclick = async () => {
+            const nm = existing ? existing.name : name.value.trim();
+            if (!nm || !path.value.trim() || !mode.value.trim() || !secret.value) {
+                toast('A credential needs a name, a path, a mode and a secret.');
+                return;
+            }
+            ok.disabled = true;
+            const saved = await credentialAction('/fleet-credentials/' + encodeURIComponent(nm), 'PUT',
+                { targetPath: path.value.trim(), mode: mode.value.trim(), content: secret.value },
+                'Could not save ' + nm + '.');
+            if (!saved) { ok.disabled = false; return; }
+            close();
+            // Storing is not distributing, and an operator who assumes otherwise leaves the fleet without it.
+            toast('Saved ' + nm + '. Nothing has reached a machine yet — Distribute puts it there.');
+            loadFleetCredentials();
+        };
+    }
+
+    // --- Claude sign-in: the section under the fleet credentials ------------------------------------------
+    // The operator's words for each state, never the enum's. UNKNOWN is the one that matters: the backend goes
+    // to real trouble never to report a false SIGNED_OUT, so "Vaier couldn't tell" must never read as "not
+    // signed in" — that sends an operator to redo a sign-in nothing had undone.
+    // `short` is the same standing said where the subject is already named — on the machine pane the card is
+    // titled Claude, and "Claude · Claude isn’t installed here" says it twice. One map, so the two surfaces
+    // can never drift into two vocabularies.
+    const CLAUDE_STATE = {
+        SIGNED_IN:     { label: 'Signed in',                   short: 'Signed in',     tone: 'is-in'    },
+        SIGNED_OUT:    { label: 'Signed out',                  short: 'Signed out',    tone: 'is-out'   },
+        NOT_INSTALLED: { label: 'Claude isn’t installed here', short: 'Not installed', tone: 'is-muted' },
+        UNREACHABLE:   { label: 'Unreachable',                 short: 'Unreachable',   tone: 'is-muted' },
+        UNKNOWN:       { label: 'Couldn’t tell',               short: 'Couldn’t tell', tone: 'is-muted' },
+    };
+    const claudeState = (st) => CLAUDE_STATE[st] || { label: st, short: st, tone: 'is-muted' };
+
+    async function loadClaudeSignIn(machineId) {
+        const c = S.claudeSignIn;
+        c.machineId = machineId;
+        c.state = 'loading';
+        try {
+            const res = await fetch('/machines/' + encodeURIComponent(machineId) + '/claude-sign-in',
+                { cache: 'no-store' });
+            if (!res.ok) throw new Error('read failed');
+            const status = await res.json();
+            // A pane the operator has already left must not be redrawn from an answer about it.
+            if (c.machineId !== machineId) return;
+            c.status = status;
+            c.state = 'ready';
+            c.error = '';
+        } catch (e) {
+            if (c.machineId !== machineId) return;
+            c.state = 'error';
+            // Said as a failed read, never as a verdict: a machine Vaier could not ask is not a machine that
+            // is signed out, and the whole point of the UNKNOWN state is not to confuse the two.
+            c.error = 'Vaier could not read where this machine stands on Claude. That is this read failing, '
+                + 'not a machine that is signed out.';
+        }
+        if (kindOf(S.path) === 'machine') render();
+    }
+
+    // Drawn on the machine's own pane, directly under "Vaier acts as <user> on <machine>" — which is what
+    // makes the scoping legible without a second sentence repeating it. Only called where a sign-in is
+    // actually possible: the caller has already established SSH access and a stored credential, so SKIPPED
+    // has nothing left to explain and the card simply does not appear.
+    //
+    // A card, not a section. This is a fact about the pairing named on the line above it, and a section
+    // heading between the two would put a rule through the one adjacency that makes either legible.
+    function renderClaudeSignIn(body, m) {
+        const c = S.claudeSignIn;
+        if (c.machineId !== m.id || c.state === 'idle' || c.state === 'loading') {
+            if (c.machineId !== m.id || c.state === 'idle') loadClaudeSignIn(m.id);
+            return body.appendChild(standingCard('Claude', 'Checking…', 'is-muted', '',
+                'Asking ' + m.name + ' whether Claude is signed in…', null));
+        }
+        if (c.state === 'error') {
+            const failed = standingCard('Claude', 'Couldn’t read', 'is-bad', '', c.error, null);
+            failed.classList.add('is-error');
+            return body.appendChild(failed);
+        }
+        const st = c.status;
+        if (!st) return;
+        // Nowhere to sign in is nowhere to draw a card about signing in. The pane already says this machine
+        // has no shell; a card repeating it would spend space on an impossibility instead of an action.
+        if (!st.signInPossibleHere) return;
+
+        body.appendChild(claudeCard(st, m));
+        if (c.open === m.id) body.appendChild(claudeFlow(m));
+    }
+
+    // Where this machine stands, said about the one user it is true of. The whole reason the user is named:
+    // a sign-in lives in that user's home, so "signed in" here was once shown green while the account
+    // actually running the machine's work was expired, with nothing on screen to reveal it. The line above
+    // has just named that user, so this says "another user here" rather than naming them a second time.
+    function claudeCard(st, m) {
+        const who = st.effectiveUsername || 'the user Vaier logs in as';
+        const stand = claudeState(st.state);
+        let detail = '', why = '';
+        if (st.state === 'SIGNED_IN') {
+            detail = [st.accountEmail || 'an Anthropic account', st.subscriptionType, st.accountOrganisation]
+                .filter((x) => x).join(' · ');
+            why = 'This is ' + who + '’s sign-in; another user here signs in separately.';
+        } else if (st.state === 'SIGNED_OUT') {
+            why = 'No sign-in for ' + who + ' here; another user may have their own.';
+        } else if (st.state === 'NOT_INSTALLED') {
+            why = 'Install it on ' + m.name + ' and this offers to sign in.';
+        } else if (st.state === 'UNREACHABLE') {
+            why = m.name + ' didn’t answer, so Vaier can’t say where it stands. It may be asleep.';
+        } else {
+            // UNKNOWN, and anything a newer backend adds. Never drawn as signed out.
+            why = 'That is not the same as signed out — ' + m.name + ' answered with something Vaier '
+                + 'could not read.';
+        }
+        return standingCard('Claude', stand.short, stand.tone, detail, why, claudeVerbs(st, m));
+    }
+
+    // Never offer an action Vaier already knows cannot work. No Claude, no answer at all, or nothing there to
+    // sign out of means no button rather than a button that fails. UNKNOWN keeps one: Vaier could not read
+    // that machine's answer, which is not the same as knowing there is nothing to sign in.
+    function claudeVerbs(st, m) {
+        const who = st.effectiveUsername || 'the user Vaier logs in as';
+        // is-static, because bare .ex-lactions is the hover overlay a listing ROW wears — absolutely
+        // positioned, so without this the verbs escape the Claude section and float off to the pane's edge.
+        const acts = el('div', 'ex-lactions is-static');
+        let any = false;
+
+        // Signing in again is a real thing to want: it is how an account is changed, and how a credential
+        // that has gone bad is replaced. Whether it may happen is the domain's answer, sent decided —
+        // deriving it here from the state name is what left a signed-in machine with no way in.
+        // Outline, never accent. Open shell is this pane's one filled button; a second one beside it would
+        // leave the operator with two things claiming to be the thing to do.
+        if (st.signInCanBegin) {
+            const btn = el('button', 'ex-btn');
+            btn.textContent = st.state === 'SIGNED_IN' ? 'Sign in again' : 'Sign in';
+            btn.title = 'Get an authorization URL from Claude on ' + m.name + ' and approve it in your '
+                + 'browser, signing in as ' + who + '.';
+            if (S.claudeSignIn.open === m.id) {
+                btn.disabled = true;
+                btn.title = 'This sign-in is open below.';
+            }
+            btn.onclick = () => startClaudeSignIn(m);
+            acts.appendChild(btn);
+            any = true;
+        }
+        if (st.state === 'SIGNED_IN') {
+            const out = el('button', 'ex-btn');
+            out.textContent = 'Sign out';
+            out.title = 'Sign ' + who + ' out of Claude on ' + m.name + '.';
+            out.onclick = () => signOutOfClaude(st, m);
+            acts.appendChild(out);
+            any = true;
+        }
+        return any ? acts : null;
+    }
+
+    // Inline in the pane, not a modal. It is two stages of one job, and a dialog would turn each machine into
+    // a ceremony — open, read, copy, close, open the next.
+    function claudeFlow(m) {
+        const c = S.claudeSignIn;
+        const flow = el('div', 'ex-claude-flow');
+
+        if (c.stage === 'starting') {
+            flow.appendChild(note('Asking Claude on ' + m.name + ' for an authorization URL…', false));
+            flow.appendChild(claudeFlowActions(m, null));
+            return flow;
+        }
+
+        const finish = el('button', 'ex-btn is-accent');
+        finish.textContent = c.stage === 'finishing' ? 'Signing in…' : 'Finish';
+        finish.onclick = () => finishClaudeSignIn(m);
+
+        // Both steps are on screen at once. Hiding the code box behind an "I have approved" click would add a
+        // step that tells Vaier nothing it does anything with.
+        flow.appendChild(claudeStep(1, 'Open this in your browser. You approve it there, on Anthropic’s '
+            + 'own pages, and they show you a code to bring back.'));
+        flow.appendChild(claudeUrlRow(c.url));
+
+        flow.appendChild(claudeStep(2, 'Paste the code Anthropic showed you.'));
+        const code = el('input', 'ex-input ex-claude-code');
+        code.type = 'text';
+        code.placeholder = 'Paste the code';
+        code.autocomplete = 'off';
+        code.spellcheck = false;
+        code.value = c.code;
+        code.disabled = c.stage === 'finishing';
+        code.setAttribute('aria-label', 'The code Anthropic showed you for ' + m.name);
+        const sync = () => { finish.disabled = c.stage === 'finishing' || code.value.trim() === ''; };
+        code.oninput = () => { c.code = code.value; sync(); };
+        code.onkeydown = (e) => { if (e.key === 'Enter' && !finish.disabled) finish.click(); };
+        sync();
+        flow.append(code, claudeFlowActions(m, finish));
+
+        const hint = el('div', 'ex-claude-hint');
+        hint.textContent = 'Leaving this machine abandons the sign-in — the Claude CLI waiting on '
+            + m.name + ' is ended rather than left at its prompt.';
+        flow.appendChild(hint);
+        return flow;
+    }
+
+    function claudeStep(number, text) {
+        const step = el('div', 'ex-claude-step');
+        const num = el('span', 'ex-claude-num');
+        num.textContent = String(number);
+        const body = el('span', 'ex-claude-steptext');
+        body.textContent = text;
+        step.append(num, body);
+        return step;
+    }
+
+    // The authorization URL as a real link AND as text to copy: some operators click through, and some paste
+    // it into the browser where they are already signed in to the right Anthropic account.
+    function claudeUrlRow(url) {
+        const wrap = el('div', 'ex-claude-url');
+        const link = el('a', 'ex-claude-link');
+        link.href = url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = url;
+
+        const copy = el('button', 'ex-btn');
+        copy.textContent = 'Copy';
+        copy.onclick = () => {
+            if (!navigator.clipboard) return toast('Select the link and copy it by hand.');
+            navigator.clipboard.writeText(url).then(() => toast('Copied the authorization URL.'))
+                .catch(() => toast('Could not copy. Select the link and copy it by hand.'));
+        };
+        wrap.append(link, copy);
+        return wrap;
+    }
+
+    function claudeFlowActions(m, finish) {
+        const acts = el('div', 'ex-claude-actions');
+        if (finish) acts.appendChild(finish);
+        const cancel = el('button', 'ex-btn');
+        cancel.textContent = 'Cancel';
+        cancel.title = 'End the sign-in waiting on ' + m.name + '.';
+        cancel.onclick = () => cancelClaudeSignIn(m.id, false);
+        acts.appendChild(cancel);
+        return acts;
+    }
+
+    async function startClaudeSignIn(m) {
+        const c = S.claudeSignIn;
+        Object.assign(c, { open: m.id, stage: 'starting', url: '', code: '' });
+        render();
+
+        const started = await claudeCall(claudePath(m.id, '/claude-sign-in'), 'POST', null,
+            'Vaier could not start a sign-in on ' + m.name + '. Open a terminal on that machine and '
+                + 'run claude to sign in by hand — that always works.');
+        // An answer with no URL in it is the same failure as no answer, and gets the same way out. The server
+        // fails loudly rather than returning an empty one, so this is a belt against a shape that changes.
+        if (!started || !started.authorizationUrl) {
+            if (started) {
+                toast('Vaier started a sign-in on ' + m.name + ' but read no authorization URL back. Open a '
+                    + 'terminal on that machine and run claude to sign in by hand.');
+            }
+            Object.assign(c, { open: null, stage: '', url: '' });
+            render();
+            return;
+        }
+        Object.assign(c, { stage: 'open', url: started.authorizationUrl });
+        render();
+    }
+
+    async function finishClaudeSignIn(m) {
+        const c = S.claudeSignIn;
+        const code = (c.code || '').trim();
+        if (!code) return;
+        c.stage = 'finishing';
+        render();
+
+        const status = await claudeCall(claudePath(m.id, '/claude-sign-in/code'), 'POST', { code: code },
+            'Claude on ' + m.name + ' did not accept that code. A code expires within a few minutes '
+                + '— cancel and start again for a fresh one.');
+        // A rejected code leaves the flow open and the URL alive: the usual cause is a typo, and throwing the
+        // URL away would make the operator start over for a mistake they can fix in place.
+        if (!status) { c.stage = 'open'; render(); return; }
+
+        Object.assign(c, { open: null, stage: '', url: '', code: '' });
+        // Where the machine actually landed, re-read from the machine rather than assumed from a 200.
+        await loadClaudeSignIn(m.id);
+        toast(status.state === 'SIGNED_IN'
+            ? 'Signed ' + (status.effectiveUsername || m.name) + ' in on ' + m.name
+                + (status.accountEmail ? ' as ' + status.accountEmail : '') + '.'
+            : 'Claude on ' + m.name + ' took the code but does not report itself signed in. This section '
+                + 'says what it does report.');
+    }
+
+    // One deliberate click and no typed name: signing in again undoes it. The confirm still has to say what it
+    // costs, and whose sign-in it is — signing out "this machine" when Vaier means one user on it is a
+    // surprise waiting to happen.
+    async function signOutOfClaude(st, m) {
+        const who = st.effectiveUsername || 'the user Vaier logs in as';
+        const ok = await confirmModal('Sign ' + who + ' out of Claude on ' + m.name + '?',
+            'Claude stops working for ' + who + ' on ' + m.name + ' until you sign in again. Any other user '
+            + 'on that machine is untouched. Vaier deletes nothing — it runs the CLI’s own logout there — '
+            + 'and signing back in takes a minute.',
+            'Sign out');
+        if (!ok) return;
+        const status = await claudeCall(claudePath(m.id, '/claude-sign-out'), 'POST', null,
+            'Vaier could not sign ' + m.name + ' out. Check the machine is awake and reachable, then '
+                + 'try again.');
+        if (!status) return;
+        await loadClaudeSignIn(m.id);
+        toast('Signed ' + who + ' out of Claude on ' + m.name + '.');
+    }
+
+    // The operator closed the flow. `quiet` is the same thing arriving from the other direction — they left
+    // the machine, which abandons it — and it must not render or re-read, because it runs mid-render.
+    async function cancelClaudeSignIn(machineId, quiet) {
+        Object.assign(S.claudeSignIn, { open: null, stage: '', url: '', code: '' });
+        if (!quiet) render();
+        try {
+            await fetch('/machines/' + encodeURIComponent(machineId) + '/claude-sign-in', { method: 'DELETE' });
+        } catch (e) {
+            // Nothing to say. It is already gone from this side, and the CLI on the machine gives up on its own.
+        }
+        if (!quiet) await loadClaudeSignIn(machineId);
+    }
+
+    function leaveClaudeSignIn() {
+        const c = S.claudeSignIn;
+        if (c.open) cancelClaudeSignIn(c.open, true);
+        Object.assign(c, { machineId: null, state: 'idle', status: null, open: null, stage: '', url: '',
+                           code: '' });
+    }
+
+    const claudePath = (machineId, suffix) => '/machines/' + encodeURIComponent(machineId) + suffix;
+
+    // The server's own message is the one shown whenever there is one. The domain writes the directive copy
+    // for the failure that matters — which CLI output could not be read, and to open a terminal on that
+    // machine instead — and a sentence invented here would only compete with it. `fallback` covers what never
+    // reaches the domain: a Vaier that did not answer, a body that is not JSON.
+    async function claudeCall(url, method, body, fallback) {
+        try {
+            const res = await fetch(url, body
+                ? { method: method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+                : { method: method });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                toast(err.message || fallback);
+                return null;
+            }
+            return res.status === 204 ? true : await res.json().catch(() => true);
+        } catch (e) {
+            toast(fallback);
+            return null;
+        }
+    }
+
     // A top-level global that is still bridged (Users, Concepts) — its page, framed whole, until it is ported.
     function renderGlobalBridge(pane) {
         const g = GLOBALS.find((x) => x.name === S.path[0]);
@@ -7793,6 +8520,47 @@
             ok.onclick = () => close(true);
             document.addEventListener('keydown', onKey);
             ok.focus();
+        });
+    }
+
+    // confirmModal with a lock on it, for the verbs whose damage is silent. The operator has to write the
+    // name out, so the dialog cannot be cleared by the reflex that clears every other one.
+    function confirmByTypingName(title, bodyText, name, confirmLabel) {
+        return new Promise((resolve) => {
+            const scrim = el('div', 'ex-scrim is-on');
+            const dialog = el('div', 'ex-dialog');
+            const h = el('div', 'ex-dialog-title');
+            h.textContent = title;
+            const b = el('div', 'ex-dialog-body');
+            b.textContent = bodyText;   // never markup: it carries the operator's own names and paths
+            const form = el('div', 'ex-form');
+            const f = el('div', 'ex-field');
+            const l = el('label');
+            l.textContent = 'Type ' + name + ' to confirm';
+            const input = el('input', 'ex-input');
+            input.type = 'text'; input.spellcheck = false; input.autocomplete = 'off';
+            f.append(l, input);
+            form.appendChild(f);
+            const actions = el('div', 'ex-dialog-actions');
+            const cancel = el('button', 'ex-btn');
+            cancel.textContent = 'Cancel';
+            const ok = el('button', 'ex-btn is-danger');
+            ok.textContent = confirmLabel || 'Delete';
+            ok.disabled = true;
+            actions.append(cancel, ok);
+            dialog.append(h, b, form, actions);
+            scrim.appendChild(dialog);
+            document.body.appendChild(scrim);
+
+            const close = (result) => { scrim.remove(); document.removeEventListener('keydown', onKey); resolve(result); };
+            const onKey = (e) => { if (e.key === 'Escape') close(false); };
+            input.oninput = () => { ok.disabled = input.value.trim() !== name; };
+            input.onkeydown = (e) => { if (e.key === 'Enter' && !ok.disabled) close(true); };
+            scrim.onclick = (e) => { if (e.target === scrim) close(false); };
+            cancel.onclick = () => close(false);
+            ok.onclick = () => close(true);
+            document.addEventListener('keydown', onKey);
+            input.focus();
         });
     }
 

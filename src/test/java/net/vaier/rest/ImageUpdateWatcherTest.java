@@ -1,6 +1,7 @@
 package net.vaier.rest;
 
 import java.util.List;
+import net.vaier.adapter.driven.InMemoryImageUpdateStateAdapter;
 import net.vaier.domain.TestMachineIds;
 import net.vaier.application.GetMachinesUseCase;
 import net.vaier.application.NotifyAdminsOfUpdateAvailableUseCase;
@@ -40,7 +41,8 @@ class ImageUpdateWatcherTest {
         // that a confirmed pull clears the alert state the watcher would otherwise keep believing.
         machines = mock(GetMachinesUseCase.class);
         lenient().when(machines.getAllMachines()).thenReturn(List.of());
-        watcher = new ImageUpdateWatcher(sweep, notifier, new ImageUpdateTracker(), machines);
+        watcher = new ImageUpdateWatcher(sweep, notifier,
+            new ImageUpdateTracker(new InMemoryImageUpdateStateAdapter()), machines);
     }
 
     private static final String HOST = TestMachineIds.of("Vaier server").value();

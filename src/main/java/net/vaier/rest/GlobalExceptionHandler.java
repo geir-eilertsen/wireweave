@@ -4,6 +4,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.domain.BlockDecisionsUnreadableException;
 import net.vaier.domain.BlockNotLiftedException;
+import net.vaier.domain.ClaudeSignInFailedException;
 import net.vaier.domain.ConflictException;
 import net.vaier.domain.DiskUnreadableException;
 import net.vaier.domain.HostKeyMismatchException;
@@ -201,6 +202,24 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public ResponseEntity<ApiError> handleNoSshServer(NoSshServerException e) {
         return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
                 .body(ApiError.of("NO_SSH_SERVER", e.getMessage(), e.machineName()));
+    }
+
+    /**
+     * A Claude sign-in could not be carried out on a machine — Claude Code is not installed there, or the
+     * CLI never printed an authorization URL Vaier could read.
+     *
+     * <p>The second case is why this mapping exists rather than letting the catch-all take it. Reading a
+     * URL out of a program's terminal output is screen-scraping, and when screen-scraping breaks the
+     * operator has to be told exactly that, together with the way round it that always works — opening a
+     * terminal on the machine and running {@code claude} by hand. A generic {@code 500} would hide the one
+     * sentence that makes the failure recoverable. {@code 502}, like every other far-side refusal, and the
+     * message is the domain's own; it never carries a URL, a code or a token, because a sign-in produces
+     * nothing Vaier is permitted to keep, let alone put in an error.
+     */
+    @ExceptionHandler(ClaudeSignInFailedException.class)
+    public ResponseEntity<ApiError> handleClaudeSignInFailed(ClaudeSignInFailedException e) {
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                .body(ApiError.of("CLAUDE_SIGN_IN_FAILED", e.getMessage()));
     }
 
     /**

@@ -3,20 +3,27 @@ package net.vaier.application.service;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.application.ClearHostKeyUseCase;
+import net.vaier.application.DeleteFleetCredentialUseCase;
 import net.vaier.application.DeleteHostCredentialUseCase;
 import net.vaier.application.EndTerminalSessionUseCase;
 import net.vaier.application.GenerateManagedKeypairUseCase;
+import net.vaier.application.GetFleetCredentialsUseCase;
 import net.vaier.application.GetHostCredentialUseCase;
 import net.vaier.application.GetHostPublicKeyUseCase;
 import net.vaier.application.GetSshServerPresenceUseCase;
+import net.vaier.application.OpenClaudeSignInShellUseCase;
 import net.vaier.application.OpenTerminalSessionUseCase;
 import net.vaier.application.OpenTerminalSessionUseCase.OpenedTerminal;
 import net.vaier.application.RunRemoteCommandUseCase;
+import net.vaier.application.SaveFleetCredentialUseCase;
 import net.vaier.application.SaveHostCredentialUseCase;
 import net.vaier.application.SendHostPasswordUseCase;
 import net.vaier.application.VerifySshCredentialUseCase;
 import net.vaier.domain.AuthMethod;
+import net.vaier.domain.ClaudeSignIn;
 import net.vaier.domain.CommandResult;
+import net.vaier.domain.FleetCredential;
+import net.vaier.domain.FleetCredentialView;
 import net.vaier.domain.HostCredential;
 import net.vaier.domain.HostCredentialView;
 import net.vaier.domain.MachineId;
@@ -31,6 +38,7 @@ import net.vaier.domain.port.ForGeneratingSshKeypairs;
 import net.vaier.domain.port.ForOpeningSshSessions;
 import net.vaier.domain.port.ForOpeningSshSessions.SshOutputListener;
 import net.vaier.domain.port.ForOpeningSshSessions.SshSession;
+import net.vaier.domain.port.ForPersistingFleetCredentials;
 import net.vaier.domain.port.ForPersistingHostCredentials;
 import net.vaier.domain.port.ForResolvingSshTargets;
 import net.vaier.domain.port.ForRunningSshCommands;
@@ -38,6 +46,7 @@ import net.vaier.domain.port.ForTrackingHostKeys;
 import net.vaier.domain.port.ForVerifyingSshCredentials;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -46,6 +55,12 @@ import java.util.Optional;
  * address (peer tunnel IP / LAN address / Vaier host), authenticating from the vault, and pinning the
  * host key on first use. Reads go through the domain's {@link HostCredential#toView() redaction} so
  * raw secrets never leave the process.
+ *
+ * <p>Since the fleet-credential slice it owns the vault's other half too: a {@link FleetCredential} is a
+ * secret that must exist <em>on</em> every machine, the mirror of a host credential Vaier uses to
+ * <em>reach</em> one. Same vault, same cipher, same redaction discipline — which is exactly why it is a
+ * method here rather than a service of its own. Distributing one is not: that needs the machine list this
+ * service does not own, and it is composed at the driving edge by {@code rest.FleetCredentialDistributor}.
  */
 @Service
 @Slf4j
@@ -55,6 +70,7 @@ public class TerminalService implements
     GetHostCredentialUseCase,
     DeleteHostCredentialUseCase,
     OpenTerminalSessionUseCase,
+    OpenClaudeSignInShellUseCase,
     EndTerminalSessionUseCase,
     RunRemoteCommandUseCase,
     SendHostPasswordUseCase,
@@ -62,9 +78,13 @@ public class TerminalService implements
     ClearHostKeyUseCase,
     GetSshServerPresenceUseCase,
     GenerateManagedKeypairUseCase,
-    GetHostPublicKeyUseCase {
+    GetHostPublicKeyUseCase,
+    SaveFleetCredentialUseCase,
+    GetFleetCredentialsUseCase,
+    DeleteFleetCredentialUseCase {
 
     private final ForPersistingHostCredentials forPersistingHostCredentials;
+    private final ForPersistingFleetCredentials forPersistingFleetCredentials;
     private final ForResolvingSshTargets forResolvingSshTargets;
     private final ForOpeningSshSessions forOpeningSshSessions;
     private final ForRunningSshCommands forRunningSshCommands;
@@ -121,6 +141,26 @@ public class TerminalService implements
     }
 
     @Override
+    public void saveFleetCredential(FleetCredential credential) {
+        // The domain decides what a save over a live credential inherits; this only reads the one being
+        // replaced and hands it over. Nothing is distributed here — storing a secret is not pushing it.
+        forPersistingFleetCredentials.save(credential.carryingStandingFrom(
+            forPersistingFleetCredentials.getByName(credential.name())));
+        log.info("Saved fleet credential {}", credential.name());
+    }
+
+    @Override
+    public List<FleetCredentialView> getFleetCredentials() {
+        return forPersistingFleetCredentials.getAll().stream().map(FleetCredential::toView).toList();
+    }
+
+    @Override
+    public void deleteFleetCredential(String name) {
+        forPersistingFleetCredentials.deleteByName(name);
+        log.info("Deleted fleet credential {}", name);
+    }
+
+    @Override
     public void deleteHostCredential(MachineId machineId) {
         forPersistingHostCredentials.deleteByMachine(machineId);
     }
@@ -148,6 +188,18 @@ public class TerminalService implements
         log.info("Opened {} terminal session to {} ({}) for pane {}",
             continuity, machineId, target.host(), PersistentShell.sessionName(paneId));
         return new OpenedTerminal(session, continuity);
+    }
+
+    @Override
+    public SshSession openClaudeSignInShell(MachineId machineId, SshOutputListener onOutput) {
+        SshTarget target = forResolvingSshTargets.resolve(machineId);
+        // Anthropic's own binary, unmodified, in the shell the domain names — this service adds nothing to
+        // the command and reads nothing out of the session. Everything a sign-in produces (the URL, the
+        // code, the token) is Anthropic's, and none of it may be stored here or anywhere else in Vaier.
+        SshSession session = forOpeningSshSessions.open(target, ClaudeSignIn.startCommand(), onOutput);
+        pinOnFirstUse(target, session.hostKeyFingerprint());
+        log.info("Opened a Claude sign-in shell on {} ({})", machineId, target.host());
+        return session;
     }
 
     @Override

@@ -252,4 +252,36 @@ class MachineTest {
 
         assertThat(Machine.labelFor(id, Optional.of("  "))).contains("no longer");
     }
+
+    /**
+     * "Does this machine run a shell Vaier can reach?" — the eligibility every fleet-wide operation that
+     * needs a shell asks: distributing a fleet credential, signing Claude in. It lives here because it is
+     * a fact about a machine, not about either feature, and because the alternative is each feature
+     * keeping its own copy of a two-clause rule to get subtly wrong.
+     */
+    @Test
+    void knowsWhetherItRunsAShellVaierCanReach() {
+        Machine server = machine(MachineType.LAN_SERVER, DeviceCategory.SERVER, null);
+        Machine phone = machine(MachineType.MOBILE_CLIENT, DeviceCategory.PHONE, null);
+
+        assertThat(server.runsAShellVaierCanReach(true)).isTrue();
+        // No login stored — Vaier is not allowed to open a session there at all.
+        assertThat(server.runsAShellVaierCanReach(false)).isFalse();
+        // Nowhere to run a shell, whatever credential Vaier might hold.
+        assertThat(phone.runsAShellVaierCanReach(true)).isFalse();
+    }
+
+    /** The operator's own SSH override wins, in both directions. */
+    @Test
+    void respectsTheOperatorsSshOverrideWhenJudgingShellReach() {
+        assertThat(machine(MachineType.LAN_SERVER, DeviceCategory.SERVER, false)
+            .runsAShellVaierCanReach(true)).isFalse();
+        assertThat(machine(MachineType.MOBILE_CLIENT, DeviceCategory.PHONE, true)
+            .runsAShellVaierCanReach(true)).isTrue();
+    }
+
+    private static Machine machine(MachineType type, DeviceCategory category, Boolean sshOverride) {
+        return new Machine(TestMachineIds.of("m"), "m", type, null, null, null, null, null, null,
+            null, null, null, false, null, category, sshOverride);
+    }
 }

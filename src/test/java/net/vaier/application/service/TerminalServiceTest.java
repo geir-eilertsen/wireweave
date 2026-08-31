@@ -3,7 +3,10 @@ package net.vaier.application.service;
 import net.vaier.application.OpenTerminalSessionUseCase.OpenedTerminal;
 import net.vaier.application.SendHostPasswordUseCase;
 import net.vaier.domain.AuthMethod;
+import net.vaier.domain.ClaudeSignIn;
 import net.vaier.domain.CommandResult;
+import net.vaier.domain.FleetCredential;
+import net.vaier.domain.FleetCredentialView;
 import net.vaier.domain.HostCredential;
 import net.vaier.domain.HostCredentialView;
 import net.vaier.domain.LanAnchor;
@@ -23,6 +26,7 @@ import net.vaier.domain.port.ForGeneratingSshKeypairs;
 import net.vaier.domain.port.ForOpeningSshSessions;
 import net.vaier.domain.port.ForOpeningSshSessions.SshOutputListener;
 import net.vaier.domain.port.ForOpeningSshSessions.SshSession;
+import net.vaier.domain.port.ForPersistingFleetCredentials;
 import net.vaier.domain.port.ForPersistingHostCredentials;
 import net.vaier.domain.port.ForResolvingSshTargets;
 import net.vaier.domain.port.ForRunningSshCommands;
@@ -37,6 +41,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -58,6 +63,7 @@ class TerminalServiceTest {
     }
 
     @Mock ForPersistingHostCredentials forPersistingHostCredentials;
+    @Mock ForPersistingFleetCredentials forPersistingFleetCredentials;
     @Mock ForResolvingSshTargets forResolvingSshTargets;
     @Mock ForOpeningSshSessions forOpeningSshSessions;
     @Mock ForRunningSshCommands forRunningSshCommands;
@@ -485,5 +491,95 @@ class TerminalServiceTest {
 
         assertThatCode(() -> service.endTerminal(mid("nuc"), "pane1")).doesNotThrowAnyException();
         verify(forRunningSshCommands, never()).run(any(), any());
+    }
+
+    // ---- fleet credentials (the vault's other half) -----------------------------------------
+
+    private static FleetCredential fleetCredential() {
+        return FleetCredential.of("claude-oauth", "~/.claude/.credentials.json", "0600",
+            "{\"token\":\"totally-secret-value\"}");
+    }
+
+    @Test
+    void saveFleetCredential_storesItInTheVault() {
+        when(forPersistingFleetCredentials.getByName("claude-oauth")).thenReturn(Optional.empty());
+
+        service.saveFleetCredential(fleetCredential());
+
+        verify(forPersistingFleetCredentials).save(fleetCredential());
+    }
+
+    @Test
+    void saveFleetCredential_keepsTheDistributedStandingOfTheCredentialItReplaces() {
+        when(forPersistingFleetCredentials.getByName("claude-oauth"))
+            .thenReturn(Optional.of(fleetCredential().markDistributed()));
+
+        service.saveFleetCredential(
+            FleetCredential.of("claude-oauth", "~/.claude/.credentials.json", "0640", "new-content"));
+
+        ArgumentCaptor<FleetCredential> saved = ArgumentCaptor.forClass(FleetCredential.class);
+        verify(forPersistingFleetCredentials).save(saved.capture());
+        assertThat(saved.getValue().distributed()).isTrue();
+        assertThat(saved.getValue().mode()).isEqualTo("0640");
+        assertThat(saved.getValue().content()).isEqualTo("new-content");
+    }
+
+    @Test
+    void getFleetCredentials_returnsOnlyRedactedViews() {
+        when(forPersistingFleetCredentials.getAll()).thenReturn(List.of(fleetCredential()));
+
+        List<FleetCredentialView> views = service.getFleetCredentials();
+
+        assertThat(views).hasSize(1);
+        assertThat(views.get(0).name()).isEqualTo("claude-oauth");
+        assertThat(views.get(0).hasSecret()).isTrue();
+        assertThat(views.toString()).doesNotContain("totally-secret-value");
+    }
+
+    @Test
+    void deleteFleetCredential_removesItFromTheVault() {
+        service.deleteFleetCredential("claude-oauth");
+
+        verify(forPersistingFleetCredentials).deleteByName("claude-oauth");
+    }
+
+    // --- Claude sign-in shell -----------------------------------------------------------------------
+
+    /**
+     * A Claude sign-in opens Anthropic's own binary, unmodified, in its own reserved persistent shell —
+     * the same address resolution, the same vault credential and the same trust-on-first-use pin every
+     * other remote shell gets.
+     */
+    @Test
+    void openClaudeSignInShell_runsTheUnmodifiedCliInItsReservedShellAndPinsOnFirstUse() {
+        machineResolvesTo("nuc", "10.13.13.9", null);
+        when(sshSession.hostKeyFingerprint()).thenReturn("SHA256:fresh");
+        when(forOpeningSshSessions.open(any(), any(), any())).thenReturn(sshSession);
+
+        SshSession opened = service.openClaudeSignInShell(mid("nuc"), onOutput);
+
+        assertThat(opened).isSameAs(sshSession);
+        ArgumentCaptor<SshTarget> target = ArgumentCaptor.forClass(SshTarget.class);
+        ArgumentCaptor<String> command = ArgumentCaptor.forClass(String.class);
+        verify(forOpeningSshSessions).open(target.capture(), command.capture(), eq(onOutput));
+        assertThat(target.getValue().host()).isEqualTo("10.13.13.9");
+        assertThat(command.getValue()).isEqualTo(ClaudeSignIn.startCommand());
+        verify(forTrackingHostKeys).pin(mid("nuc"), "SHA256:fresh");
+    }
+
+    /**
+     * Anthropic's terms forbid a third party storing or intermediating Claude credentials, so a sign-in
+     * writes to no store at all. Nothing about it is Vaier's to keep.
+     */
+    @Test
+    void openClaudeSignInShell_persistsNothing() {
+        machineResolvesTo("nuc", "10.13.13.9", "SHA256:pinned");
+        when(sshSession.hostKeyFingerprint()).thenReturn("SHA256:pinned");
+        when(forOpeningSshSessions.open(any(), any(), any())).thenReturn(sshSession);
+
+        service.openClaudeSignInShell(mid("nuc"), onOutput);
+
+        verify(forPersistingHostCredentials, never()).save(any());
+        verify(forPersistingFleetCredentials, never()).save(any());
     }
 }

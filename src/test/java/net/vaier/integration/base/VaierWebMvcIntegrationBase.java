@@ -295,6 +295,42 @@ public abstract class VaierWebMvcIntegrationBase {
     @MockBean
     protected GetHostPublicKeyUseCase getHostPublicKeyUseCase;
 
+    // --- Fleet credential (the vault's fleet-wide half) use cases ---
+    @MockBean
+    protected SaveFleetCredentialUseCase saveFleetCredentialUseCase;
+
+    @MockBean
+    protected GetFleetCredentialsUseCase getFleetCredentialsUseCase;
+
+    @MockBean
+    protected DeleteFleetCredentialUseCase deleteFleetCredentialUseCase;
+
+    @MockBean
+    protected DistributeFleetCredentialUseCase distributeFleetCredentialUseCase;
+
+    @MockBean
+    protected WithdrawFleetCredentialUseCase withdrawFleetCredentialUseCase;
+
+    @MockBean
+    protected GetFleetCredentialStandingsUseCase getFleetCredentialStandingsUseCase;
+
+    // --- Claude sign-in use cases ---
+
+    @MockBean
+    protected GetClaudeSignInStatusUseCase getClaudeSignInStatusUseCase;
+
+    @MockBean
+    protected StartClaudeSignInUseCase startClaudeSignInUseCase;
+
+    @MockBean
+    protected SubmitClaudeSignInCodeUseCase submitClaudeSignInCodeUseCase;
+
+    @MockBean
+    protected CancelClaudeSignInUseCase cancelClaudeSignInUseCase;
+
+    @MockBean
+    protected SignOutOfClaudeUseCase signOutOfClaudeUseCase;
+
     // --- Explorer use cases ---
     @MockBean
     protected BrowseFilesUseCase browseFilesUseCase;

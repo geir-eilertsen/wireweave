@@ -173,10 +173,21 @@ class ExplorerShellTest {
         // blocking at the edge since Slice 1 and Vaier has been reading those decisions since Slice 2 — the
         // Security view and the Map's threat layer are a front for an engine that already runs, not an
         // endpoint invented so a view would have something to show.
+        // /fleet-credentials is the one entry here with the opposite justification, and it is stated rather
+        // than smuggled in: the endpoint did not pre-date its view. A fleet credential is a genuinely new
+        // capability, and its REST surface and its Credentials view shipped together — so this list now
+        // means "no endpoint was invented to make the tree look finished", which is the rule that was
+        // always meant, rather than the stricter "nothing here is new" that happened to hold until now.
+        // Claude sign-in adds no entry at all. It draws on the machine's own pane and every call it makes
+        // — status, start, code, cancel, sign out — is under /machines, which was already here. It briefly
+        // had a /claude-sign-ins fleet read; that was removed when the UI moved onto the machine pane,
+        // because painting one pane must not SSH to the whole fleet, and an endpoint with no caller is
+        // exactly the machinery CLAUDE.md says not to carry.
         List<String> allowed = List.of("/machines", "/vpn/peers", "/lan-servers", "/users/me",
                                        "/docker-services", "/published-services", "/access/services",
                                        "/transfers", "/backup-servers", "/backup-repositories", "/backup-jobs",
-                                       "/settings", "/lan-scan", "/survival-kit", "/security");
+                                       "/settings", "/lan-scan", "/survival-kit", "/security",
+                                       "/fleet-credentials");
         String js = read("explorer-shell.js");
         Matcher m = Pattern.compile("fetch\\([`']([^`']+)[`']").matcher(js);
         int found = 0;
@@ -1761,8 +1772,16 @@ class ExplorerShellTest {
         String block = css.substring(css.indexOf("@media (max-width: 760px)"));
 
         assertThat(block).as("the bar leaves the flow").contains("position: fixed");
-        assertThat(block).as("and the pane makes room under it").contains(".ex-app.has-sel .ex-pane-body");
+        assertThat(block).as("and the pane makes room under it")
+            .contains(".ex-app.has-sel .ex-pane:has(.ex-selverbs) .ex-pane-body");
         assertThat(js).as("which only the shell can know").contains("'has-sel'");
+
+        // Both rules are scoped to the group that actually carries the selection. `has-sel` is set from
+        // S.sel.length alone and a Selection outlives navigating to a machine — and a machine's head now
+        // carries verbs of its own (Edit details). Unscoped, files ticked in some folder would tear those
+        // into a fixed bottom bar dressed as the selection bar, and pad a pane under a bar it never grew.
+        assertThat(block).as("only the group holding the selection floats")
+            .contains(".ex-app.has-sel .ex-pane-actions:has(.ex-selverbs) {");
     }
 
     @Test
@@ -2389,16 +2408,19 @@ class ExplorerShellTest {
     }
 
     @Test
-    void aRootMachineSaysSoOnItsCardAndInItsInspector() throws IOException {
-        // Acceptance criteria 1 and 2 of #346: the machine states which user Vaier acts as, and the fleet
-        // can be read for "where am I root?" without opening every machine.
+    void aRootMachineSaysSoInItsInspector() throws IOException {
+        // Acceptance criterion 1 of #346: the machine states which user Vaier acts as.
+        //
+        // Criterion 2 — the same fact as a badge on every card, so the fleet could be read for "where am I
+        // root?" without opening a machine — was REMOVED at the operator's request. The reasoning behind it
+        // was sound and still lost to reality: on a fleet where Vaier is privileged nearly everywhere, a
+        // badge on nearly every card marks nothing out and becomes wallpaper. The fact is a click away in
+        // the inspector, where it is read at the moment it matters. Do not re-add the badge from #346 alone.
         String js = read("explorer-shell.js");
         assertThat(js).contains("'Vaier acts as ' + m.effectiveUsername");
-        assertThat(js).contains("rootTag(m.effectiveUsername)");
         // The copy names the user the backend sent; it never asserts the word "root" on its own account,
         // because EffectiveUser reserves the right to widen what counts as privileged.
         assertThat(js).doesNotContain("Vaier acts as root");
-        assertThat(read("explorer-shell.css")).contains(".ex-card-root {");
     }
 
     @Test
@@ -2805,5 +2827,152 @@ class ExplorerShellTest {
         assertThat(js.lastIndexOf("if (reachesInside(m) || inside.length) {", from))
             .as("...and is only reachable from inside that guard")
             .isGreaterThan(0);
+    }
+
+    /**
+     * The Claude sign-in section is drawn only where a sign-in could actually happen. Its home is the
+     * machine pane, under "Vaier acts as <user> on <machine>" — so it is already inside the SSH-access
+     * branch — but SSH access alone is not enough: without a stored credential Vaier cannot open a shell,
+     * the backend answers {@code SKIPPED}, and a section rendered there would explain an impossibility
+     * instead of offering an action. Guarded on the credential, it never has to.
+     */
+    @Test
+    void theClaudeSection_isDrawnOnlyWhereASignInCouldHappen() throws IOException {
+        String js = read("explorer-shell.js");
+
+        assertThat(js).as("the section is rendered on the machine pane")
+            .contains("renderClaudeSignIn(body, m)");
+        // The gate is the server's answer, not a rule re-typed here. `Machine.runsAShellVaierCanReach`
+        // is two clauses (SSH access AND a stored credential), and a browser copy of it is a second
+        // chance to get it wrong — which is exactly what the domain's own Javadoc warns about.
+        assertThat(js).as("the server decides whether a sign-in is possible here")
+            .contains("st.signInPossibleHere");
+        assertThat(js).as("no browser copy of the two-clause shell-reach rule")
+            .doesNotContain("if (m.hasCredential) renderClaudeSignIn");
+        // And whether to offer the verb is the domain's rule too: an already-signed-in machine may sign in
+        // again, which a state-string derivation in here got wrong.
+        assertThat(js).as("the server decides whether a sign-in can begin")
+            .contains("st.signInCanBegin");
+        assertThat(js).doesNotContain("st.state !== 'SIGNED_OUT' && st.state !== 'UNKNOWN'");
+    }
+
+    /**
+     * The one state the backend takes real trouble over must survive into the browser: a machine Vaier
+     * could not read is not a machine that is signed out. If UNKNOWN ever rendered as "signed out", an
+     * operator would redo a sign-in that nothing had undone.
+     */
+    @Test
+    void theClaudeSection_neverDrawsAnUnreadableMachineAsSignedOut() throws IOException {
+        String js = read("explorer-shell.js");
+
+        assertThat(js).contains("UNKNOWN:       { label: 'Couldn’t tell'");
+        assertThat(js).as("UNKNOWN keeps its own sentence, distinct from signed out")
+            .contains("That is not the same as ");
+    }
+
+    /**
+     * Vocabulary, enforced because it is exactly the pair an operator could confuse: a machine has an SSH
+     * <b>login</b> and a Claude <b>sign-in</b>, and the thing copied out of the flow is an
+     * <b>authorization URL</b>. "Login link" collides with the first while naming the third.
+     */
+    @Test
+    void theClaudeSection_saysAuthorizationUrlAndNeverLoginLink() throws IOException {
+        String js = read("explorer-shell.js");
+
+        assertThat(js).doesNotContain("login link").doesNotContain("Login link");
+        assertThat(js).contains("Copied the authorization URL.");
+    }
+
+    // --- 20. the Credentials view actually draws ---------------------------------------------------------
+    //
+    // The bug these exist for: `renderPane` dispatched the `credentials` kind to a `renderCredentials` that
+    // was never written. Everything around it had landed — the tree entry, the state slot, the whole CSS
+    // block for the coverage strip, the REST surface, this file's own allowlist entry — so every test passed
+    // and the entry opened onto an empty pane, throwing a ReferenceError nobody saw. A view is not shipped
+    // when the things around it are; it is shipped when something draws it.
+
+    /**
+     * Asserted for every kind the pane can open, not only the one that was missing: a half-landed view fails
+     * exactly this way every time, and the dispatch table is the one place all of them are named.
+     */
+    @Test
+    void everyPaneTheTreeCanOpen_hasAFunctionThatDrawsIt() throws IOException {
+        String js = read("explorer-shell.js");
+        Matcher m = Pattern.compile("kind === '[a-z]+'\\) return (render[A-Za-z]+)\\(pane\\)").matcher(js);
+        int found = 0;
+        while (m.find()) {
+            found++;
+            assertThat(js).as("renderPane dispatches to %s, which is never defined", m.group(1))
+                .contains("function " + m.group(1) + "(");
+        }
+        assertThat(found).as("the dispatch table was not found at all").isGreaterThan(10);
+    }
+
+    @Test
+    void theCredentialsView_readsTheCredentialsItDraws() throws IOException {
+        String js = read("explorer-shell.js");
+
+        assertThat(js).contains("function renderCredentials(");
+        assertThat(js).as("the view reads the endpoint that shipped with it")
+            .contains("fetch('/fleet-credentials'");
+        // The card's three parts, pinned against the CSS that was written for them.
+        assertThat(js).contains("ex-cred-strip").contains("ex-cred-tally").contains("ex-cred-exc");
+        // Every verb the entry exists for.
+        assertThat(js).contains("/distribute").contains("/withdraw");
+    }
+
+    /**
+     * A machine with no shell can never hold the file, so counting one would put all-green permanently out
+     * of reach — and an indicator that can never come clean is one an operator learns to skip past.
+     */
+    @Test
+    void theCoverageStrip_countsOnlyTheMachinesThatCouldHoldTheFile() throws IOException {
+        String js = read("explorer-shell.js");
+
+        assertThat(js).as("SKIPPED is excluded from the strip and the tally")
+            .contains("m.state !== 'SKIPPED'");
+        assertThat(js).as("and named underneath rather than dropped silently")
+            .contains("no shell Vaier can reach");
+    }
+
+    /**
+     * An empty {@code machines} list is the distributor having no observation yet — a fresh boot — not a
+     * credential that is nowhere. "0 of 0" would send an operator to fix a fleet that is fine.
+     */
+    @Test
+    void aCredentialNothingHasCheckedYet_saysSo_ratherThanZeroOfZero() throws IOException {
+        String js = read("explorer-shell.js");
+
+        assertThat(js).contains("Not checked yet");
+        assertThat(js).doesNotContain("' of 0 in place'");
+    }
+
+    /**
+     * The two removals do very different things — one reaches every machine, the other only forgets Vaier's
+     * copy — and an operator who confuses them either leaves a live secret on the fleet or wipes one they
+     * meant to keep. So both confirm, and each says which it is.
+     */
+    @Test
+    void theTwoRemovals_eachSayWhetherItReachesTheFleet() throws IOException {
+        String js = read("explorer-shell.js");
+
+        assertThat(js).as("withdraw is the one that revokes").contains("Withdraw");
+        assertThat(js).as("delete says plainly that it reaches no machine")
+            .contains("reaches no machine");
+        assertThat(js).as("and is confirmed by typing the name, not by one more OK")
+            .contains("function confirmByTypingName(");
+    }
+
+    /**
+     * Vaier will not show a secret it holds, so there is nothing to edit — a save replaces it whole. The
+     * label has to say that, because "Edit" promises a field with the old value in it.
+     */
+    @Test
+    void theSecretIsReplacedWhole_neverEdited() throws IOException {
+        String js = read("explorer-shell.js");
+
+        assertThat(js).contains("Replace secret");
+        assertThat(js).as("storing is not distributing, and the operator is told so")
+            .contains("Nothing has reached a machine yet");
     }
 }

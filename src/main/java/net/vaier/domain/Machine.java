@@ -157,6 +157,21 @@ public record Machine(
 
 
     /**
+     * Whether Vaier can open a shell on this machine — and therefore whether anything that needs one can
+     * happen here at all: delivering a fleet credential, signing its Claude CLI in, running a command. True only when the operator allows Vaier SSH here <em>and</em> Vaier holds a login for it,
+     * which is what {@code hasHostCredential} answers (the credential vault is not this type's to read).
+     *
+     * <p>It lives on the machine because it is a fact about a machine rather than about any one feature,
+     * and because the alternative — each fleet-wide operation keeping its own copy of a two-clause rule —
+     * is two chances to get it subtly wrong. A machine that fails it is never an error: a phone has
+     * nowhere to put a file or run a shell, and a machine with no host credential is one Vaier is not
+     * permitted to open a session to.
+     */
+    public boolean runsAShellVaierCanReach(boolean hasHostCredential) {
+        return effectiveSshAccess() && hasHostCredential;
+    }
+
+    /**
      * What to call the machine {@code machineId} in something a person reads — an admin email, the
      * recovery sheet — given the name the fleet currently has for it, if any.
      *
