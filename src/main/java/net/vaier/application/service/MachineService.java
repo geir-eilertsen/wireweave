@@ -3,6 +3,7 @@ package net.vaier.application.service;
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.application.DetectMachineNetworksUseCase;
 import net.vaier.application.ForgetMachineNetworksUseCase;
+import net.vaier.application.GetClaudeSignInStandingsUseCase;
 import net.vaier.application.GetDiskWatchesUseCase;
 import net.vaier.application.GetMachineDiskStandingsUseCase;
 import net.vaier.application.GetMachineDiskUsageUseCase;
@@ -12,6 +13,7 @@ import net.vaier.application.GetVaierServerUseCase;
 import net.vaier.application.SetDiskWatchUseCase;
 import net.vaier.application.SetMachineSshAccessUseCase;
 import net.vaier.config.ConfigResolver;
+import net.vaier.domain.ClaudeSignInStatus;
 import net.vaier.domain.CommandResult;
 import net.vaier.domain.DiskUnreadableException;
 import net.vaier.domain.DiskWatch;
@@ -34,6 +36,7 @@ import net.vaier.domain.port.ForGettingPeerConfigurations;
 import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
 import net.vaier.domain.port.ForGettingVpnClients;
 import net.vaier.domain.port.ForPersistingAppConfiguration;
+import net.vaier.domain.port.ForHoldingClaudeSignInStandings;
 import net.vaier.domain.port.ForHoldingMachineDiskStandings;
 import net.vaier.domain.port.ForResolvingVaierServerIdentity;
 import net.vaier.domain.port.ForPersistingDiskWatches;
@@ -58,8 +61,8 @@ import java.util.stream.Collectors;
 @Slf4j
 public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase,
     SetMachineSshAccessUseCase, GetMachineDiskUsageUseCase, GetMachineDiskStandingsUseCase,
-    GetDiskWatchesUseCase, SetDiskWatchUseCase, DetectMachineNetworksUseCase, GetMachineNetworksUseCase,
-    ForgetMachineNetworksUseCase {
+    GetClaudeSignInStandingsUseCase, GetDiskWatchesUseCase, SetDiskWatchUseCase,
+    DetectMachineNetworksUseCase, GetMachineNetworksUseCase, ForgetMachineNetworksUseCase {
 
     private final ForGettingPeerConfigurations forGettingPeerConfigurations;
     private final ForGettingVpnClients forGettingVpnClients;
@@ -76,6 +79,7 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
     private final ForReadingMachineNetworks forReadingMachineNetworks;
     private final ForCachingMachineNetworks forCachingMachineNetworks;
     private final ForHoldingMachineDiskStandings forHoldingMachineDiskStandings;
+    private final ForHoldingClaudeSignInStandings forHoldingClaudeSignInStandings;
     private final ForPublishingEvents forPublishingEvents;
     private final ConfigResolver configResolver;
 
@@ -94,6 +98,7 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
                           ForReadingMachineNetworks forReadingMachineNetworks,
                           ForCachingMachineNetworks forCachingMachineNetworks,
                           ForHoldingMachineDiskStandings forHoldingMachineDiskStandings,
+                          ForHoldingClaudeSignInStandings forHoldingClaudeSignInStandings,
                           ForPublishingEvents forPublishingEvents,
                           ConfigResolver configResolver) {
         this.forGettingPeerConfigurations = forGettingPeerConfigurations;
@@ -111,6 +116,7 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
         this.forReadingMachineNetworks = forReadingMachineNetworks;
         this.forCachingMachineNetworks = forCachingMachineNetworks;
         this.forHoldingMachineDiskStandings = forHoldingMachineDiskStandings;
+        this.forHoldingClaudeSignInStandings = forHoldingClaudeSignInStandings;
         this.forPublishingEvents = forPublishingEvents;
         this.configResolver = configResolver;
     }
@@ -192,6 +198,20 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
     @Override
     public List<MachineDiskStanding> getMachineDiskStandings() {
         return forHoldingMachineDiskStandings.getAll();
+    }
+
+    /**
+     * The fleet's <b>Claude sign-in standing</b>s — the Claude half of the Explorer's machine marks.
+     *
+     * <p>A pure read of what {@code RemoteDiskWatcher}'s existing five-minute trip already asked. No SSH,
+     * nothing woken: the per-machine {@code GetClaudeSignInStatusUseCase} runs the CLI's {@code auth
+     * status} over a shell, and one of those per card would open the Explorer by waking the house. A
+     * machine the sweep has not reached is simply absent, and the caller must draw nothing for it — an
+     * unasked machine is not a machine that is signed out.
+     */
+    @Override
+    public List<ClaudeSignInStatus> getClaudeSignInStandings() {
+        return forHoldingClaudeSignInStandings.getAll();
     }
 
     /**

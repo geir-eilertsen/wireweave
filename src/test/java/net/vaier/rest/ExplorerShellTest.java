@@ -836,7 +836,7 @@ class ExplorerShellTest {
         String body = js.substring(from, js.indexOf("\n    // --- the tree", from));
 
         assertThat(body).contains("svg('disk'");
-        assertThat(body).contains("DISK_DOT[");
+        assertThat(body).contains("DISK_MARK[");
         assertThat(body).contains("standing.level");
         assertThat(body).contains("standing.mountPoint");
         assertThat(body).contains("standing.usedPercent");
@@ -844,7 +844,7 @@ class ExplorerShellTest {
         assertThat(body).doesNotContain("thresholdPercent >").doesNotContain("usedPercent >");
 
         String css = read("explorer-shell.css");
-        assertThat(css).contains(".ex-mark.is-up").contains(".ex-mark.is-degraded").contains(".ex-mark.is-down");
+        assertThat(css).contains(".ex-mark.is-disk").contains(".ex-mark.is-degraded").contains(".ex-mark.is-down");
     }
 
     @Test
@@ -864,6 +864,129 @@ class ExplorerShellTest {
         String loaderBody = js.substring(loader, js.indexOf("\n    }", loader));
         // A failed read empties the map rather than leaving yesterday's verdicts on the cards.
         assertThat(loaderBody).contains("new Map()");
+    }
+
+    // --- where the fleet stands on Claude sign-in, on the same machine cards ---------------------------
+    //
+    // The fifth fact the five-minute sweep learns, drawn as a fifth mark. It is deliberately NOT the
+    // per-machine /machines/{id}/claude-sign-in read: that one SSHes to a machine and asks the CLI, so a
+    // card-per-machine version of it would put a fleet-wide SSH sweep behind opening the Explorer.
+
+    @Test
+    void theFleetsClaudeStanding_isReadOnceFromWhatTheSweepAlreadyTook_neverAFleetWideSshOnPageLoad()
+            throws IOException {
+        String js = read("explorer-shell.js");
+        assertThat(js).contains("'/machines/claude-standings'");
+
+        int from = js.indexOf("async function loadClaudeStandings(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        // One request for the whole fleet. A per-machine loop here would be the SSH sweep in disguise.
+        assertThat(body.split("fetch\\(", -1).length - 1).as("exactly one request").isEqualTo(1);
+        assertThat(body).doesNotContain("S.machines").doesNotContain("claude-sign-in");
+
+        // Read at boot, alongside the other fleet loads — never from render().
+        int init = js.indexOf("async function init(");
+        assertThat(js.substring(init)).contains("loadClaudeStandings()");
+        int render = js.indexOf("\n    function render(");
+        assertThat(js.substring(render, js.indexOf("\n    function", render + 10)))
+            .as("render() must never fetch").doesNotContain("loadClaudeStandings(");
+    }
+
+    @Test
+    void aChangedClaudeStanding_arrivesOnTheStreamTheFleetPageAlreadyHoldsOpen() throws IOException {
+        // Same shape as disk-standing-changed: the backend publishes on the `vpn-peers` topic only when a
+        // machine's standing actually moved, with an empty body, and the browser re-reads the one
+        // memory-backed endpoint. No second connection, no timer, no five-minute drumbeat.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function watchFleet(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    // The fleet's second stream", from));
+        assertThat(body).contains("'claude-standing-changed'");
+        assertThat(body).contains("loadClaudeStandings()");
+        // A dropped stream re-syncs the standing along with the rest of the fleet, or a card would sit on a
+        // sign-in that moved while the browser was disconnected.
+        assertThat(body).contains("loadClaudeStandings(), loadContainers()");
+    }
+
+    @Test
+    void aMachineCard_wearsWhereItStandsOnClaude_inTheOneVocabularyBothSurfacesShare() throws IOException {
+        // The machine pane already has a map of the operator's words for each state. The card must tint
+        // itself from that same map rather than growing a second one — two state maps is two vocabularies
+        // one rename away from disagreeing about what a machine is doing.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function machineMarks(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    // --- the tree", from));
+
+        assertThat(body).contains("svg('claude'");
+        assertThat(body).contains("claudeState(");
+        // The browser looks the tone up; it never decides which states are a standing. That verdict travels
+        // from the domain on the response, like DiskStandingLevel does.
+        assertThat(body).contains("claude.saysWhereTheSignInStands");
+        assertThat(body).as("no state list in the browser")
+            .doesNotContain("'SIGNED_IN'").doesNotContain("'SIGNED_OUT'");
+        assertThat(body).as("the account is named when there is one").contains("accountEmail");
+        // Exactly one state map in the whole file, and the card tone lives on it.
+        assertThat(js.split("const CLAUDE_STATE = \\{", -1).length - 1).as("one state map").isEqualTo(1);
+        assertThat(js).contains("card:");
+        assertThat(js).contains("ICON").contains("claude:");
+    }
+
+    @Test
+    void aMachineTheSweepHasNotReachedYet_drawsNoClaudeMarkAtAll_becauseAbsenceIsNotAVerdict()
+            throws IOException {
+        // This matters more here than it does for disks. The backend goes to real trouble never to report a
+        // SIGNED_OUT the CLI did not say — UNKNOWN exists precisely so "Vaier couldn't tell" never reads as
+        // "not signed in" — and a card that invented a mark for a machine nobody asked would undo all of it.
+        // NOT_INSTALLED, SKIPPED, UNREACHABLE and UNKNOWN carry no card tone, so they draw nothing either.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function machineMarks(");
+        String body = js.substring(from, js.indexOf("\n    // --- the tree", from));
+
+        assertThat(body).contains("claude.saysWhereTheSignInStands");
+        // No fallback tone anywhere: nothing that could turn "not read" into a mark.
+        assertThat(body).doesNotContain("|| 'SIGNED").doesNotContain("'is-up'");
+
+        // The one map decides which states are a standing at all — the four quiet ones have no card tone.
+        int map = js.indexOf("const CLAUDE_STATE = {");
+        String mapBody = js.substring(map, js.indexOf("\n    };", map));
+        for (String quiet : new String[] {"NOT_INSTALLED", "UNREACHABLE", "UNKNOWN", "SKIPPED"}) {
+            int row = mapBody.indexOf(quiet);
+            assertThat(row).as("%s is in the shared map", quiet).isPositive();
+            int lineEnd = mapBody.indexOf("\n", row);
+            assertThat(lineEnd < 0 ? mapBody.substring(row) : mapBody.substring(row, lineEnd))
+                .as("%s draws no card mark", quiet).doesNotContain("card:");
+        }
+
+        int loader = js.indexOf("async function loadClaudeStandings(");
+        String loaderBody = js.substring(loader, js.indexOf("\n    }", loader));
+        // A failed read empties the map rather than leaving a sign-in that may have moved on the cards.
+        assertThat(loaderBody).contains("new Map()");
+    }
+
+    @Test
+    void theClaudeMark_wearsClaudesOwnClay_neverTheTroubleLights() throws IOException {
+        // Green, amber and red are the disk and backup marks' vocabulary, and they mean trouble. A sign-in
+        // is presence, not an outage, so the Claude mark says "Claude" in hue and says whether anyone is
+        // signed in by weight — the same clay, worn hollow when signed out.
+        String js = read("explorer-shell.js");
+        int map = js.indexOf("const CLAUDE_STATE = {");
+        String mapBody = js.substring(map, js.indexOf("\n    };", map));
+        assertThat(mapBody).contains("card: 'is-claude'").contains("card: 'is-claude-out'");
+        assertThat(mapBody).as("no trouble tint on a sign-in")
+            .doesNotContain("'is-up'").doesNotContain("'is-degraded'").doesNotContain("'is-down'");
+
+        // Claude's own clay is a token of its own, deliberately outside the traffic-light palette rather
+        // than borrowing --orange, which the warning vocabulary owns.
+        assertThat(read("styles.css")).contains("--claude:").contains("#d97757");
+
+        String css = read("explorer-shell.css");
+        assertThat(css).contains(".ex-mark.is-claude { color: var(--claude); }");
+        assertThat(css).contains(".ex-mark.is-claude-out { color: var(--claude); opacity: .45; }");
+        // The hollow: same hue at a lighter stroke, so at 16px it reads as dormant rather than as a
+        // second colour saying something else.
+        assertThat(css).contains(".ex-mark.is-claude-out svg { stroke-width: 1.1; }");
     }
 
     // --- what a machine card says it is -----------------------------------------------------------------
@@ -3024,5 +3147,99 @@ class ExplorerShellTest {
         String js = read("explorer-shell.js");
 
         assertThat(js).contains("tree.scrollTop = resume;");
+    }
+
+    // --- 22. a mark says WHAT it is; only trouble recolours it ---------------------------------------------
+    //
+    // The Claude mark set the rule when it took Claude's clay: colour identifies the thing, and state is
+    // carried some other way. These extend it to the rest of the marks, and retire the one hue that was never
+    // Vaier's — `--green: #4ec9b0` is VS Code Dark+'s type colour, borrowed by the palette this project
+    // explicitly moved off, and left behind when everything around it was replaced.
+    //
+    // What must NOT change is the alarm. A disk over its threshold and a backup that failed are the two things
+    // on a card worth interrupting someone for, so amber and red still override the identity colour outright.
+
+    /**
+     * The identity colours live as tokens beside {@code --claude}, so a mark's hue is named once and the
+     * concept it belongs to is legible at the definition rather than only at the use.
+     */
+    @Test
+    void eachMarkedConcept_hasAColourOfItsOwn() throws IOException {
+        String css = read("styles.css");
+
+        assertThat(css).as("Docker's own blue, borrowed the same way Claude's clay is")
+            .contains("--docker:");
+        assertThat(css).contains("--backup:").contains("--disk:");
+    }
+
+    /**
+     * The point of the change: a healthy disk and a good backup stop wearing the shared green and wear their
+     * own hue. Asserted on the maps rather than the CSS, because the map is where a state is turned into a
+     * colour and where a regression would actually land.
+     */
+    @Test
+    void aHealthyMark_wearsItsConceptsColour_notTheSharedGreen() throws IOException {
+        String js = read("explorer-shell.js");
+
+        assertThat(js).as("a clear disk is disk-coloured").contains("CLEAR: 'is-disk'");
+        assertThat(js).as("a good backup is backup-coloured").contains("SUCCESS: 'is-backup'");
+
+        // And the shared green is gone from the marks entirely rather than left behind as a rule nothing
+        // reaches — dead tints are how a retired vocabulary quietly comes back.
+        // The brace matters: `.ex-mark.is-update` — the container nudge, which is still amber and still
+        // wanted — contains this rule's whole selector as a prefix.
+        assertThat(read("explorer-shell.css")).doesNotContain(".ex-mark.is-up {");
+    }
+
+    /**
+     * The alarm is the thing this change must not cost. A disk over its threshold and a failed or incomplete
+     * backup still take the trouble colours, overriding the identity hue.
+     */
+    @Test
+    void troubleStillOverridesTheIdentityColour() throws IOException {
+        String js = read("explorer-shell.js");
+
+        assertThat(js).contains("CLOSING: 'is-degraded'").contains("BREACHING: 'is-down'");
+        assertThat(js).as("INCOMPLETE reads red, not amber — the archive looks fine until you need it")
+            .contains("INCOMPLETE: 'is-down'");
+    }
+
+    /**
+     * A mark carries identity; a dot is pure status and stays a traffic light. The two diverge on success
+     * alone, so the mark map is DERIVED from the dot map rather than written out beside it — a new backup
+     * outcome added to one can then never be forgotten in the other.
+     */
+    @Test
+    void theMarkMapIsDerivedFromTheDotMap_soANewOutcomeCannotBeForgotten() throws IOException {
+        String js = read("explorer-shell.js");
+
+        assertThat(js).contains("RUN_MARK = { ...RUN_DOT,");
+        assertThat(js).as("the dot itself is untouched — a liveness dot is status, not identity")
+            .contains("SUCCESS: 'is-up'");
+    }
+
+    /**
+     * Docker is a borrowed identity exactly as Claude is, so its capability glyph wears its own blue. It has
+     * to keep it while the row is hovered or selected, where the rest of the strip lifts from dim to muted —
+     * the hover rule is more specific than a bare class and would otherwise win.
+     */
+    @Test
+    void theDockerGlyph_keepsItsBlueOnHoverAndSelection() throws IOException {
+        String css = read("explorer-shell.css");
+
+        assertThat(css).contains(".ex-row:hover .ex-cap.is-docker");
+        assertThat(css).contains(".ex-row.is-sel .ex-cap.is-docker");
+    }
+
+    /**
+     * The rest of the capability strip stays deliberately quiet. It says what a machine IS, not how it is
+     * doing, and colouring it would put it in competition with the marks that do carry a verdict.
+     */
+    @Test
+    void theRestOfTheCapabilityStrip_staysQuiet() throws IOException {
+        String css = read("explorer-shell.css");
+
+        assertThat(css).doesNotContain(".ex-cap.is-relay {");
+        assertThat(css).doesNotContain(".ex-cap.is-backupserver {");
     }
 }

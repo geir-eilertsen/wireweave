@@ -1,6 +1,14 @@
 package net.vaier.domain;
 
+import net.vaier.domain.port.ForHoldingClaudeSignInStandings;
+import net.vaier.domain.port.ForPublishingEvents;
 import org.junit.jupiter.api.Test;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -142,5 +150,130 @@ class ClaudeSignInStatusTest {
         assertThat(ClaudeSignInStatus.read(NAS, "nas", GEIR, present()).signInIsPossibleHere()).isTrue();
         assertThat(ClaudeSignInStatus.read(NAS, "nas", GEIR, ClaudeSignInOutput.CLI_ABSENT_MARKER)
             .signInIsPossibleHere()).isTrue();
+    }
+
+    /**
+     * The question a fleet card's mark is gated on, answered here rather than in the browser.
+     *
+     * <p>Two of the six readings say where the sign-in actually stands. The other four say only that there
+     * is no answer to be had — no CLI, no shell, no reply, or a reply Vaier could not read — and a surface
+     * that turned any of them into a mark would be reporting a sign-in nobody observed. That is the same
+     * failure {@code UNKNOWN} exists to prevent, so it is decided once, here.
+     */
+    @Test
+    void saysWhetherItReportsWhereTheSignInStands_ratherThanLeavingACardToDecide() {
+        assertThat(ClaudeSignInStatus.read(NAS, "nas", GEIR, present()).saysWhereTheSignInStands()).isTrue();
+        assertThat(ClaudeSignInStatus.read(NAS, "nas", GEIR, absent()).saysWhereTheSignInStands()).isTrue();
+
+        assertThat(ClaudeSignInStatus.read(NAS, "nas", GEIR, ClaudeSignInOutput.CLI_ABSENT_MARKER)
+            .saysWhereTheSignInStands()).isFalse();
+        assertThat(ClaudeSignInStatus.read(NAS, "nas", GEIR, "garbled").saysWhereTheSignInStands()).isFalse();
+        assertThat(ClaudeSignInStatus.unreachable(NAS, "nas", GEIR).saysWhereTheSignInStands()).isFalse();
+        assertThat(ClaudeSignInStatus.skipped(PHONE, "phone", null).saysWhereTheSignInStands()).isFalse();
+    }
+
+    // --- retaining a reading, so a fleet card can wear it ----------------------------------------------
+    //
+    // The five-minute sweep asks every machine it can already reach where it stands on Claude, and that
+    // answer used to be read once, on one machine's own pane, and nowhere else. "Commit it, and wake the
+    // fleet only if it moved" is a decision about standings, so it lives here rather than in the watcher.
+
+    /** Records what it is handed and hands back what it replaced, like the real in-memory hold. */
+    private static final class HeldStandings implements ForHoldingClaudeSignInStandings {
+        private final Map<MachineId, ClaudeSignInStatus> held = new HashMap<>();
+
+        @Override
+        public Optional<ClaudeSignInStatus> record(ClaudeSignInStatus standing) {
+            return Optional.ofNullable(held.put(standing.machineId(), standing));
+        }
+
+        @Override
+        public List<ClaudeSignInStatus> getAll() {
+            return List.copyOf(held.values());
+        }
+
+        @Override
+        public void retainOnly(Set<MachineId> machineIds) {
+            held.keySet().retainAll(machineIds);
+        }
+    }
+
+    /** Counts what the fleet was told, which is the only thing these tests care about. */
+    private static final class CountingPublisher implements ForPublishingEvents {
+        private int published;
+
+        @Override
+        public void publish(String topic, String eventName, String data) {
+            published++;
+        }
+    }
+
+    @Test
+    void retain_commitsTheReading_andWakesTheFleetOnce() {
+        HeldStandings held = new HeldStandings();
+        CountingPublisher publisher = new CountingPublisher();
+
+        ClaudeSignInStatus.retain(ClaudeSignInStatus.read(NAS, "nas", GEIR, present()), held, publisher);
+
+        assertThat(held.getAll()).singleElement()
+            .satisfies(standing -> assertThat(standing.state()).isEqualTo(ClaudeSignInState.SIGNED_IN));
+        assertThat(publisher.published).isEqualTo(1);
+    }
+
+    @Test
+    void retain_readingTheSameStandingAgain_tellsTheFleetNothing() {
+        HeldStandings held = new HeldStandings();
+        CountingPublisher publisher = new CountingPublisher();
+        ClaudeSignInStatus.retain(ClaudeSignInStatus.read(NAS, "nas", GEIR, present()), held, publisher);
+
+        ClaudeSignInStatus.retain(ClaudeSignInStatus.read(NAS, "nas", GEIR, present()), held, publisher);
+
+        assertThat(publisher.published).isEqualTo(1);
+    }
+
+    @Test
+    void retain_aMachineThatSignedOut_wakesTheFleetAgain() {
+        HeldStandings held = new HeldStandings();
+        CountingPublisher publisher = new CountingPublisher();
+        ClaudeSignInStatus.retain(ClaudeSignInStatus.read(NAS, "nas", GEIR, present()), held, publisher);
+
+        ClaudeSignInStatus.retain(ClaudeSignInStatus.read(NAS, "nas", GEIR, absent()), held, publisher);
+
+        assertThat(publisher.published).isEqualTo(2);
+        assertThat(held.getAll()).singleElement()
+            .satisfies(standing -> assertThat(standing.state()).isEqualTo(ClaudeSignInState.SIGNED_OUT));
+    }
+
+    /**
+     * A machine that changed accounts without changing state. The account is half of what the card says on
+     * hover, so a whole-value comparison is the point: anything an open Explorer is now getting wrong is a
+     * reason to wake it, and nothing else is.
+     */
+    @Test
+    void retain_aMachineNowSignedInAsSomebodyElse_wakesTheFleet() {
+        HeldStandings held = new HeldStandings();
+        CountingPublisher publisher = new CountingPublisher();
+        ClaudeSignInStatus.retain(ClaudeSignInStatus.read(NAS, "nas", GEIR, present()), held, publisher);
+
+        ClaudeSignInStatus.retain(new ClaudeSignInStatus(NAS, "nas", GEIR, ClaudeSignInState.SIGNED_IN,
+            new ClaudeAccount("someone.else@example.com", "Example Org", "max")), held, publisher);
+
+        assertThat(publisher.published).isEqualTo(2);
+    }
+
+    /**
+     * A reading that never happened is not a standing. The sweep hands nothing here for a machine it never
+     * asked, and nothing must be recorded — a card drawing a mark for a machine Vaier did not look at is
+     * exactly the absence-read-as-health failure the disk mark was bitten by.
+     */
+    @Test
+    void retain_nothingRead_recordsNothingAndSaysNothing() {
+        HeldStandings held = new HeldStandings();
+        CountingPublisher publisher = new CountingPublisher();
+
+        ClaudeSignInStatus.retain(null, held, publisher);
+
+        assertThat(held.getAll()).isEmpty();
+        assertThat(publisher.published).isZero();
     }
 }

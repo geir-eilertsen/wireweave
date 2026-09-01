@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import net.vaier.application.*;
 import net.vaier.config.ConfigResolver;
 import net.vaier.domain.port.ForGeolocatingIps;
+import net.vaier.domain.port.ForHoldingClaudeSignInStandings;
 import net.vaier.domain.port.ForPublishingEvents;
 import net.vaier.domain.port.ForSubscribingToEvents;
 import net.vaier.domain.port.ForTrackingPeerConfigRetrieval;
@@ -38,6 +39,9 @@ public abstract class VaierWebMvcIntegrationBase {
 
     @MockBean
     protected ForPublishingEvents forPublishingEvents;
+
+    @MockBean
+    protected ForHoldingClaudeSignInStandings forHoldingClaudeSignInStandings;
 
     @MockBean
     protected ForSubscribingToEvents forSubscribingToEvents;
@@ -266,6 +270,9 @@ public abstract class VaierWebMvcIntegrationBase {
 
     @MockBean
     protected GetMachineDiskStandingsUseCase getMachineDiskStandingsUseCase;
+
+    @MockBean
+    protected GetClaudeSignInStandingsUseCase getClaudeSignInStandingsUseCase;
 
     @MockBean
     protected SetDiskWatchUseCase setDiskWatchUseCase;

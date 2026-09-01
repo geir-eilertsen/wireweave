@@ -3627,17 +3627,91 @@ either), `ClaudeSignInRelayTest.forgetsTheSignInAsSoonAsItEnds`, and
 `TerminalServiceTest.openClaudeSignInShell_persistsNothing` (neither credential store is written). Two of
 them were mutation-verified: the guard was broken deliberately and watched to fail.
 
-**UI: a second section in the Explorer's Credentials view**, deliberately in the same entry rather than an
-entry of its own — one place answers "what is authenticated where", and what differs between the two
-sections is *who holds the secret*. One row per machine with its state in the operator's words, the
-user Vaier acts as there, the **Claude account** it is signed in as, an inline sign-in panel (the URL with a **Copy** button, then the
-code box) and a **Sign out** verb. Inline, not a modal, because signing several machines in one after
-another turns a dialog into a ceremony. No coverage strip and no self-healing: there is nothing Vaier holds
-to put back. A machine with no Claude, no shell or no answer gets no button rather than a button that
-fails, and one sign-in is open at a time — a second would leave a CLI waiting on a machine nobody is going
-back to. When the fleet is signed in as more than one **Claude account**, a quiet line says so: half a
-fleet on the wrong account is invisible until something fails oddly, and it is worth noticing without being
-worth alarming about.
+**UI: a card on the machine's own pane**, drawn directly under "Vaier acts as ‹user› on ‹machine›". A
+sign-in belongs to a *user on* a machine, so the line naming that pairing is what makes the card's scope
+legible without a second sentence repeating it — a card, not a section, because a section heading between
+the two would put a rule through the one adjacency that makes either readable. Whether a sign-in can happen
+there at all is the server's call (`signInPossibleHere` on the read model), never a browser copy of "SSH
+access AND a credential". The card carries the state in the operator's words, the **Claude account** it is
+signed in as, an inline sign-in panel (the URL with a **Copy** button, then the code box) and a **Sign out**
+verb. Inline, not a modal, because signing several machines in one after another turns a dialog into a
+ceremony. No coverage strip and no self-healing: there is nothing Vaier holds to put back. A machine with no
+Claude, no shell or no answer gets no button rather than a button that fails, and one sign-in is open at a
+time — a second would leave a CLI waiting on a machine nobody is going back to.
+
+**Corrected 2026-09-01: this was specced as a second section in the Explorer's Credentials view, and that is
+not what shipped.** The reasoning for it — one place answers "what is authenticated where", and what differs
+between the two sections is *who holds the secret* — lost to the stronger one: a sign-in is a fact about a
+*user on* a machine, and the machine's pane already says which user that is. The Credentials view holds
+**fleet credentials** and nothing else. Three docs described the fleet-wide table for months (README, the
+promo page, and the glossary's **Credentials view** entry, which claimed "one row per machine"); all three
+are corrected. The **fleet-wide "signed in as more than one Claude account" line** specced here was never
+built either — see the backlog.
+
+**The fleet's Claude sign-in standing, on the machine cards ✅ (implemented 2026-09-01, issue TBD).** A
+sign-in stated only on a machine's own pane is a sign-in nobody looks at: half the fleet expires quietly and
+the first sign of it is work that stopped happening. The fleet listing now carries it as a fifth **machine
+mark** — and the whole design is about paying nothing new for it.
+
+**No new trip.** `RemoteDiskWatcher` is already *the one trip Vaier makes to every credentialed machine*
+every five minutes (§6.25, §6.33, §6.37), and it now learns a fifth fact there, through the very same
+`GetClaudeSignInStatusUseCase` the machine's own pane asks — one path to a sign-in answer, and no second one
+that could report a state the CLI never said. Behind the same two guards as everything else on that trip,
+so a phone or a machine with no stored login is never asked and never marked, and in its own try/catch for
+the reason `detectNetworks` is: a fifth question must not be able to take the first four down with it, nor
+reach the `NoSshServerException` handler and withdraw an **SSH server presence** that `df` has already
+earned.
+
+**Held in memory, and read from memory.** `ForHoldingClaudeSignInStandings` /
+`InMemoryClaudeSignInStandingCache` is the sibling of the disk standings' cache: keyed by **machine id** so
+a **rename** cannot cross two machines' sign-ins, `retainOnly`-pruned on each sweep so a deleted machine
+leaves no reading behind, and deliberately without a `forget` — every reading *is* a standing, including the
+quiet ones. `GetClaudeSignInStandingsUseCase` on `MachineService` reads it and
+`GET /machines/claude-standings` serves the whole fleet in one request that **reaches no machine** (a
+literal segment under `/machines`, so it is admin-gated with the rest of them). That is exactly what
+`GET /machines/{machineId}/claude-sign-in` is not: a per-card version of that one would put a fleet-wide SSH
+sweep behind opening the Explorer, every sleeping box waited on before anything appeared. Nothing is
+persisted, and nothing here could carry a secret — a standing is read from `claude auth status --json`,
+which emits no credential material at all.
+
+**The domain decides what a fresh reading does.** `ClaudeSignInStatus.retain(status, standings, events)` is
+a domain method handed the ports rather than a branch in the watcher: a null status — a machine never asked,
+or a read that blew up — records nothing whatsoever, and the publish is gated on `differsFrom`, so a fleet
+sitting still says nothing every five minutes. That comparison is whole-value on purpose: a machine quietly
+moved onto a different **Claude account** is something an open Explorer is getting wrong even though its
+state never left `SIGNED_IN`. A change goes out as `claude-standing-changed` on the `vpn-peers` topic the
+fleet page already holds open — empty body, no second connection, no timer — exactly as
+`disk-standing-changed` does, and the browser answers it with one re-read of the memory-backed endpoint.
+
+**Absence is not a verdict, and this is where that has teeth.** Only `SIGNED_IN` and `SIGNED_OUT`
+carry a card tone in `CLAUDE_STATE`, the one map the machine pane already reads its words from, so
+two surfaces can never drift into two vocabularies. `NOT_INSTALLED`, `SKIPPED`, `UNREACHABLE`, `UNKNOWN` and
+a machine the sweep has simply not reached draw **nothing at all**. `UNKNOWN` exists precisely so that being
+unable to *ask* is never reported as signed **out** (see above), and a mark invented from silence would undo
+that work. Like the disk mark, the Claude mark stands down while the Explorer is showing an **archive**:
+where a machine stands on Claude is a fact about now. Guarded in `ExplorerShellTest` — one fleet-wide read at
+boot and never from `render()`, the tone read off the single state map, no fallback tone anywhere, and a
+failed read empties the map rather than leaving stale sign-ins on the cards.
+
+**The mark wears Claude's colour, not a traffic light ✅ (2026-09-01).** Green, amber and red are the disk
+and backup marks' vocabulary and they mean *trouble*; a sign-in is presence. So both marked states wear one
+token, `--claude: #d97757` — Claude's own clay, added beside `--orange` and deliberately outside the
+green/amber/red palette — and signed-out is that same clay worn hollow (`opacity: .45`, a `1.1` stroke), so
+at 16px it reads as present-but-dormant rather than as a second colour saying something else. Colour says
+whose sign-in it is; weight says whether anyone holds one. `CLAUDE_STATE` stays the single map both surfaces
+read: only the two `card:` values changed.
+
+**Every reading is a standing ✅ (2026-09-01).** The sweep was the only place a reading was *kept*, so an
+operator who signed a machine in watched its fleet card go on saying signed-out for up to five minutes —
+proven live: `/machines/{id}/claude-sign-in` answered `SIGNED_IN` while `/machines/claude-standings` still
+held `SIGNED_OUT` for the same machine. `ClaudeSignInController` is a driving adapter exactly as
+`RemoteDiskWatcher` is, and its three reading paths — opening a machine's pane, completing a sign-in,
+signing out — now each retain what they read through the same `ClaudeSignInStatus.retain(...)`, so the
+domain keeps deciding what a fresh reading does and `claude-standing-changed` still fires only on a real
+change. This is the **machine disk standing** rule applied to its sibling: a standing is retained from every
+reading, not from the scheduled one alone. Deliberately *not* in `ClaudeSignInRelay`, whose javadoc carries
+a tripwire against any `For*` port appearing in that file — a compliance invariant worth more than the
+convenience, even for an in-memory cache holding no credential material.
 
 ---
 
@@ -3762,6 +3836,14 @@ The backlog is tracked in [GitHub Issues](https://github.com/getvaier/vaier/issu
 **#352 — an Update action for the operator's own containers. Shipped 2026-08-03; full account in §6.37.** The mechanism was already on disk: every container in the fleet is compose-managed and Docker records `com.docker.compose.project.config_files`, `.working_dir` and `.service`, so an update is `docker compose -f <config_files> pull <service>` then `… up -d <service>` over SSH — a credential Vaier already held. **Over SSH rather than through the Docker API**, for two reasons that both hold: recreating a container through the API means allowing **create and remove** on `docker-socket-proxy`, whose entire job is to be narrow (`CONTAINERS`, `EVENTS`, `EXEC`, `IMAGES`, `PING`, `POST`, `ALLOW_RESTARTS` today); and rebuilding a container from its `inspect` output means re-deriving networks, volumes, env, labels, restart policy, healthcheck, capabilities and devices by hand, where anything missed comes back as a container that is subtly different and reports success. Compose recreates its own service faithfully, and the labels are the daemon telling us how. Scope, as shipped: **the operator's containers only** — Vaier's own stack is pinned by a Vaier release and moves with #343, so a per-container button there would be a second, conflicting update path for the same images; a container with **no compose labels** keeps its mark but gets no action, with the reason said plainly, because a recreate that silently drops config is worse than no button. The compose path arrives as a **container label**, which is metadata a container writes about itself: validated and quoted, never interpolated into a shell.
 
 **#353 — then stop marking what nobody can act on.** `traefik:v3.6.14` reads `UPDATE_AVAILABLE`, and checking rather than assuming showed the sweep is *right*: the local digest is `sha256:1c1be626…` and Docker Hub serves `sha256:4cda3393…` for the same tag today — upstream re-pushed it, as they do for a base-image rebuild. Only a **digest** pin is ruled un-driftable; a pinned tag is still asked about, correctly. It is nonetheless an alert whose only honest resolution is *wait for a Vaier release* — and `ImageUpdateTracker` is edge-triggered and deliberately not baseline-quiet, so it arrives as **admin mail**, which is what `feedback_notify_only_on_trouble` exists to prevent: an alert nobody can act on teaches the operator to filter the channel, and that costs the alerts that matter. The fix is to stop sweeping Vaier's own stack entirely — not sweep-and-hide, since an image nobody can act on should not spend the registries' rate limit either. ~~keeping `vaier` itself, because Settings → Update is a real button~~ — **the kept-`vaier` exception was rejected by the operator when this shipped: `vaier` is dropped too, and Settings asks the registry for itself. See §6.38 for why the exception was worse than no exception.** `VaierServerCatalogue` already answers *is this Vaier's own stack?* and is build-guarded against `docker-compose.yml` (§6.36). **Sequenced after #352 on purpose:** silencing first would be silencing the messenger everywhere, including where the message is worth acting on. Worth knowing: only containers **with exposed ports** are scraped, so CrowdSec, Dex, oauth2-proxy and the bouncer are absent from this list today — the problem is wider than it looks and would grow the moment one of them declared a port.
+
+**A quiet line when the fleet is split across two Claude accounts (specced in §6.51, not built).** The
+sign-in spec called for a line saying so when the fleet is signed in as more than one **Claude account** —
+half a fleet on the wrong account is invisible until something fails oddly, and it is worth noticing without
+being worth alarming about. It went unbuilt with the fleet-wide table it was to sit in. The ingredients now
+exist: the **Claude sign-in standing** of every machine is held in memory and already carries the account,
+so the fleet's accounts can be counted without asking a machine anything. Where it would go is the open
+question — the fleet listing has cards, not a summary line.
 
 **Continuous background position reporting (deliberately not built, discussed alongside §6.45).** §6.45's **device claim** is one-shot-or-quietly-refreshed-on-visit: a claimed device shares its **reported position** when someone opens Vaier in that browser, or when the operator taps Share, never in the background. An OwnTracks-style companion app would keep a phone's position current *continuously*, tunnel or not, visit or not — closer to what a fleet map wants. Rejected for now on the same ground as the survival kit's printed sheet: it needs a standing background app granted always-on location on the phone, which is the opposite of the no-agent, ask-nothing-of-the-device approach §6.45 took on purpose. Worth another look only if the quiet-refresh-on-visit model proves too stale in practice.
 

@@ -23,6 +23,14 @@
     --red:          #f48771;
     --orange:       #ce9178;
     --yellow:       #dcdcaa;
+    /* Identity colours. A mark on a machine card says WHAT it is in colour and lets trouble recolour it —
+       so a healthy disk or a good backup wears its own hue rather than one shared green, and amber and red
+       still override outright. Two are borrowed from the things they name; two are Vaier's own. The green
+       above stays for dots, which are pure status. */
+    --claude:       #d97757;   /* Claude's own clay */
+    --docker:       #2496ed;   /* Docker's own blue */
+    --backup:       #35e0b5;   /* an archive kept safe */
+    --disk:         #a78bfa;   /* a filesystem with room */
     /* Depth, drawn rather than counted: the hairline that runs down a level of the Explorer's tree. Dimmer
        than --border, because a guide is not an edge. */
     --rail:         #1e2733;

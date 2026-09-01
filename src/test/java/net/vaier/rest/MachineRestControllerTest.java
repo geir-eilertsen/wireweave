@@ -6,6 +6,7 @@ import net.vaier.application.ClearHostKeyUseCase;
 import net.vaier.application.GetBackupJobsUseCase;
 import net.vaier.application.GetBackupRunsUseCase;
 import net.vaier.application.GetBackupServersUseCase;
+import net.vaier.application.GetClaudeSignInStandingsUseCase;
 import net.vaier.application.GetHostCredentialUseCase;
 import net.vaier.application.GetLanServerReachabilityUseCase;
 import net.vaier.application.GetMachineDiskStandingsUseCase;
@@ -26,6 +27,10 @@ import net.vaier.domain.DeviceCategory;
 import net.vaier.domain.HostCredentialView;
 import net.vaier.domain.LanAnchor;
 import net.vaier.domain.Machine;
+import net.vaier.domain.ClaudeAccount;
+import net.vaier.domain.ClaudeSignInState;
+import net.vaier.domain.ClaudeSignInStatus;
+import net.vaier.domain.EffectiveUser;
 import net.vaier.domain.MachineDiskStanding;
 import net.vaier.domain.MachineNetworks;
 import net.vaier.domain.MachineNudge;
@@ -71,6 +76,7 @@ class MachineRestControllerTest {
     @Mock ClearHostKeyUseCase clearHostKeyUseCase;
     @Mock GetMachineDiskUsageUseCase getMachineDiskUsageUseCase;
     @Mock GetMachineDiskStandingsUseCase getMachineDiskStandingsUseCase;
+    @Mock GetClaudeSignInStandingsUseCase getClaudeSignInStandingsUseCase;
     @Mock SetDiskWatchUseCase setDiskWatchUseCase;
     @Mock GetPublishableServicesUseCase getPublishableServicesUseCase;
     @Mock GetBackupJobsUseCase getBackupJobsUseCase;
@@ -675,5 +681,57 @@ class MachineRestControllerTest {
 
         assertThatThrownBy(() -> controller.nudges(mid("ghost").value()))
             .isInstanceOf(NotFoundException.class);
+    }
+
+    // --- the fleet's Claude sign-in standings, in one request ---
+
+    @Test
+    void claudeStandings_answerForTheWholeFleetInOneRequest_fromWhatTheSweepAlreadyRead() {
+        // Deliberately not the per-machine /machines/{id}/claude-sign-in read: that one SSHes to a machine
+        // and asks the CLI. Doing it per card would put a fleet-wide SSH sweep behind opening the Explorer.
+        when(getClaudeSignInStandingsUseCase.getClaudeSignInStandings()).thenReturn(List.of(
+            claudeStanding(mid("NAS"), "nas", "root", ClaudeSignInState.SIGNED_IN, "operator@example.com"),
+            claudeStanding(mid("Colina 27"), "colina27", "geir", ClaudeSignInState.SIGNED_OUT, null)));
+
+        var standings = controller.claudeStandings();
+
+        assertThat(standings).extracting(MachineRestController.ClaudeStandingResponse::machineId,
+                MachineRestController.ClaudeStandingResponse::state,
+                MachineRestController.ClaudeStandingResponse::accountEmail,
+                MachineRestController.ClaudeStandingResponse::effectiveUsername)
+            .containsExactly(
+                tuple(mid("NAS").value(), "SIGNED_IN", "operator@example.com", "root"),
+                tuple(mid("Colina 27").value(), "SIGNED_OUT", null, "geir"));
+    }
+
+    @Test
+    void claudeStandings_carryTheDomainsOwnVerdictOnWhetherTheyReportASignInAtAll() {
+        // Which readings are a standing worth marking is the domain's call, not the browser's — the same
+        // reason DiskStandingLevel travels rather than being recomputed from a percentage. "No CLI here"
+        // and "it didn't answer" are not sign-in verdicts, and a card must not turn them into one.
+        when(getClaudeSignInStandingsUseCase.getClaudeSignInStandings()).thenReturn(List.of(
+            claudeStanding(mid("NAS"), "nas", "root", ClaudeSignInState.SIGNED_IN, "operator@example.com"),
+            claudeStanding(mid("Colina 27"), "colina27", "geir", ClaudeSignInState.NOT_INSTALLED, null),
+            claudeStanding(mid("kitchen"), "kitchen", "root", ClaudeSignInState.UNKNOWN, null)));
+
+        assertThat(controller.claudeStandings())
+            .extracting(MachineRestController.ClaudeStandingResponse::saysWhereTheSignInStands)
+            .containsExactly(true, false, false);
+    }
+
+    @Test
+    void claudeStandings_beforeTheFirstSweep_areEmpty_soNoCardDrawsAMarkItDidNotEarn() {
+        // Absence is not a verdict, and here it matters more than for disks: the backend goes to real
+        // trouble never to report a false SIGNED_OUT, and an invented "nothing known = signed out" would
+        // undo exactly that.
+        when(getClaudeSignInStandingsUseCase.getClaudeSignInStandings()).thenReturn(List.of());
+
+        assertThat(controller.claudeStandings()).isEmpty();
+    }
+
+    private static ClaudeSignInStatus claudeStanding(MachineId machineId, String machineName, String user,
+                                                     ClaudeSignInState state, String email) {
+        return new ClaudeSignInStatus(machineId, machineName, EffectiveUser.of(user), state,
+            email == null ? null : new ClaudeAccount(email, "Example Org", "max"));
     }
 }

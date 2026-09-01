@@ -8,6 +8,10 @@ import net.vaier.domain.DiskUnreadableException;
 import net.vaier.domain.DiskWatch;
 import net.vaier.domain.LanServer;
 import net.vaier.domain.Machine;
+import net.vaier.domain.ClaudeAccount;
+import net.vaier.domain.ClaudeSignInState;
+import net.vaier.domain.ClaudeSignInStatus;
+import net.vaier.domain.EffectiveUser;
 import net.vaier.domain.MachineDiskStanding;
 import net.vaier.domain.MachineId;
 import net.vaier.domain.MachineNetworks;
@@ -21,6 +25,7 @@ import net.vaier.domain.port.ForGettingPeerConfigurations;
 import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
 import net.vaier.domain.port.ForCachingMachineNetworks;
 import net.vaier.domain.port.ForGettingVpnClients;
+import net.vaier.domain.port.ForHoldingClaudeSignInStandings;
 import net.vaier.domain.port.ForHoldingMachineDiskStandings;
 import net.vaier.domain.port.ForReadingMachineNetworks;
 import net.vaier.domain.port.ForPersistingAppConfiguration;
@@ -85,6 +90,7 @@ class MachineServiceTest {
     @Mock ForReadingMachineNetworks forReadingMachineNetworks;
     @Mock ForCachingMachineNetworks forCachingMachineNetworks;
     @Mock ForHoldingMachineDiskStandings forHoldingMachineDiskStandings;
+    @Mock ForHoldingClaudeSignInStandings forHoldingClaudeSignInStandings;
     @Mock ForPublishingEvents forPublishingEvents;
 
     MachineService service;
@@ -101,7 +107,8 @@ class MachineServiceTest {
             forPersistingAppConfiguration, forResolvingSshTargets, forRunningSshCommands,
             forTrackingHostKeys, forPersistingDiskWatches,
             forResolvingVaierServerIdentity, forReadingMachineNetworks, forCachingMachineNetworks,
-            forHoldingMachineDiskStandings, forPublishingEvents, configResolver);
+            forHoldingMachineDiskStandings, forHoldingClaudeSignInStandings, forPublishingEvents,
+            configResolver);
         lenient().when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of());
         lenient().when(forGettingVpnClients.getClients()).thenReturn(List.of());
         lenient().when(forGettingLanServers.getAll()).thenReturn(List.of());
@@ -734,5 +741,26 @@ class MachineServiceTest {
         service.forgetMachineNetworksExcept(Set.of(kept));
 
         verify(forCachingMachineNetworks).retainOnly(Set.of(kept));
+    }
+
+    // --- the fleet's Claude sign-in standings ----------------------------------------------------------
+
+    @Test
+    void claudeSignInStandings_areServedFromWhatTheSweepAlreadyRead_withoutTouchingAMachine() {
+        // The per-machine read SSHes to a machine and asks the CLI. This one must not: it is the fleet
+        // listing's ambience, and an SSH round trip per card would open the Explorer by waking the house.
+        ClaudeSignInStatus nas = new ClaudeSignInStatus(mid("NAS"), "NAS", EffectiveUser.of("root"),
+            ClaudeSignInState.SIGNED_IN, new ClaudeAccount("operator@example.com", "Example Org", "max"));
+        when(forHoldingClaudeSignInStandings.getAll()).thenReturn(List.of(nas));
+
+        assertThat(service.getClaudeSignInStandings()).containsExactly(nas);
+        verify(forRunningSshCommands, never()).run(any(), anyString());
+    }
+
+    @Test
+    void claudeSignInStandings_beforeTheFirstSweep_areEmpty_neverAFleetOfSignedOutMachines() {
+        when(forHoldingClaudeSignInStandings.getAll()).thenReturn(List.of());
+
+        assertThat(service.getClaudeSignInStandings()).isEmpty();
     }
 }

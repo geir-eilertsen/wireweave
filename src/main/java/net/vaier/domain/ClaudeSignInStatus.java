@@ -1,5 +1,8 @@
 package net.vaier.domain;
 
+import net.vaier.domain.port.ForHoldingClaudeSignInStandings;
+import net.vaier.domain.port.ForPublishingEvents;
+
 /**
  * Where one <em>user on</em> one machine stands on {@link ClaudeSignIn Claude sign-in}: the machine's
  * identity and display name, the {@link EffectiveUser} the answer is about, the
@@ -78,6 +81,65 @@ public record ClaudeSignInStatus(MachineId machineId, String machineName, Effect
      */
     public boolean signInIsPossibleHere() {
         return state != ClaudeSignInState.SKIPPED;
+    }
+
+    /**
+     * Whether this reading says where the sign-in actually stands, or only that there is no answer to be
+     * had. True for {@link ClaudeSignInState#SIGNED_IN} and {@link ClaudeSignInState#SIGNED_OUT} alone.
+     *
+     * <p>The other four are not verdicts about a sign-in: there is no CLI, no shell, no reply, or a reply
+     * Vaier could not read. This is what a fleet card's mark is gated on, and it is decided here for the
+     * same reason {@code UNKNOWN} exists at all — a surface that turned "couldn't tell" into a mark would
+     * be reporting a sign-in nobody observed. The browser looks up how to tint it; it never gets to decide
+     * which readings count.
+     */
+    public boolean saysWhereTheSignInStands() {
+        return state == ClaudeSignInState.SIGNED_IN || state == ClaudeSignInState.SIGNED_OUT;
+    }
+
+    /**
+     * <b>Keep this reading as the machine's standing</b>, and wake an open Explorer only if it says
+     * something the last one did not. The five-minute sweep hands every answer it gets here, so there is
+     * exactly one place that decides what a fresh reading does to a fleet card.
+     *
+     * <p><b>A reading that never happened is not a standing.</b> {@code status} is null for a machine the
+     * sweep never asked — one it cannot open a shell on, or whose read blew up — and nothing is recorded
+     * for it. That is the point: a card drawing a mark for a machine nobody asked is the same
+     * absence-read-as-health failure the disk mark was bitten by, and it would be worse here, because the
+     * read side is built never to report a sign-in state the CLI did not actually say.
+     *
+     * <p>The publish is gated on {@link #differsFrom} so a fleet sitting still says nothing every five
+     * minutes, and it goes out on the stream the fleet page already holds open — no second connection, and
+     * no timer.
+     */
+    public static void retain(ClaudeSignInStatus status, ForHoldingClaudeSignInStandings standings,
+                              ForPublishingEvents events) {
+        if (status == null) {
+            return;
+        }
+        if (status.differsFrom(standings.record(status).orElse(null))) {
+            events.publish(SSE_TOPIC, SSE_EVENT, "");
+        }
+    }
+
+    /**
+     * Where a changed standing is announced: the stream the fleet page already holds open for peer
+     * liveness, exactly as a changed disk standing is.
+     */
+    private static final String SSE_TOPIC = "vpn-peers";
+    private static final String SSE_EVENT = "claude-standing-changed";
+
+    /**
+     * Whether this standing says anything the last one did not — the question that decides whether the
+     * fleet is woken at all. {@code previous} is null for a machine never read before, and a first reading
+     * always speaks.
+     *
+     * <p>A whole-value comparison on purpose: the account is half of what a card says on hover, so a
+     * machine quietly moved onto a different Anthropic account is something an open Explorer is currently
+     * getting wrong, even though its state never left {@code SIGNED_IN}.
+     */
+    public boolean differsFrom(ClaudeSignInStatus previous) {
+        return !this.equals(previous);
     }
 
     /** The login name this standing is about, or null when Vaier holds no login for the machine. */

@@ -3,6 +3,7 @@ package net.vaier.rest;
 import lombok.extern.slf4j.Slf4j;
 import net.vaier.application.DetectMachineNetworksUseCase;
 import net.vaier.application.ForgetMachineNetworksUseCase;
+import net.vaier.application.GetClaudeSignInStatusUseCase;
 import net.vaier.application.GetDiskWatchesUseCase;
 import net.vaier.application.GetHostCredentialUseCase;
 import net.vaier.application.GetMachinesUseCase;
@@ -10,6 +11,7 @@ import net.vaier.application.NotifyAdminsOfDiskFillForecastUseCase;
 import net.vaier.application.NotifyAdminsOfRemoteDiskPressureUseCase;
 import net.vaier.application.RunRemoteCommandUseCase;
 import net.vaier.config.ConfigResolver;
+import net.vaier.domain.ClaudeSignInStatus;
 import net.vaier.domain.CommandResult;
 import net.vaier.domain.DiskWatch;
 import net.vaier.domain.DiskWatches;
@@ -22,6 +24,7 @@ import net.vaier.domain.RemoteDiskPressureTracker;
 import net.vaier.domain.DockerCommandAccess;
 import net.vaier.domain.RemoteDiskUsage;
 import net.vaier.domain.SshServerPresence;
+import net.vaier.domain.port.ForHoldingClaudeSignInStandings;
 import net.vaier.domain.port.ForHoldingMachineDiskStandings;
 import net.vaier.domain.port.ForPersistingDiskFillTrends;
 import net.vaier.domain.port.ForPersistingDiskPressureState;
@@ -39,11 +42,12 @@ import java.util.stream.Collectors;
 /**
  * <b>The fleet's five-minute rounds.</b> Its name says disks because disks are what it was built for and
  * still its largest job, but what it really is now is <em>the one trip Vaier makes to every credentialed
- * machine</em>, and four things are learned on it: each machine's filesystems (and the alerts they raise),
- * its {@link net.vaier.domain.SshServerPresence}, the network it sits on, and — since #352 — its
- * {@link DockerCommandAccess}. New facts belong here rather than in a sweep of their own precisely because
- * the sign-in has already been paid for; the name is the thing that has fallen behind, and renaming it is
- * worth its own change rather than riding along with a behaviour one.
+ * machine</em>, and five things are learned on it: each machine's filesystems (and the alerts they raise),
+ * its {@link SshServerPresence}, the network it sits on, its {@link DockerCommandAccess}
+ * (#352), and where it stands on {@link net.vaier.domain.ClaudeSignIn Claude sign-in}. New facts belong
+ * here rather than in a sweep of their own precisely because the sign-in has already been paid for; the
+ * name is the thing that has fallen behind, and renaming it is worth its own change rather than riding
+ * along with a behaviour one.
  *
  * <p>Polls <b>every real filesystem</b> of every SSH-accessible machine that Vaier holds a credential for
  * and emails admins when a watched one crosses its alert threshold. This covers the Vaier host itself (via
@@ -128,6 +132,10 @@ public class RemoteDiskWatcher {
     // reads Docker's API over the tunnel and never needs the docker group this asks about.
     private final ForRecordingDockerCommandAccess dockerAccessRecorder;
     private final ForPersistingDiskFillTrends diskFillTrends;
+    // The fifth fact, asked through the very same use case a machine's own pane asks — so there is one
+    // path to a sign-in answer and no second one that could report a state the CLI never said.
+    private final GetClaudeSignInStatusUseCase claudeSignIn;
+    private final ForHoldingClaudeSignInStandings claudeStandings;
     private final RemoteDiskPressureTracker tracker;
     private final RemoteDiskForecastTracker forecastTracker;
 
@@ -151,7 +159,9 @@ public class RemoteDiskWatcher {
                              ForgetMachineNetworksUseCase forgetMachineNetworks,
                              ForHoldingMachineDiskStandings diskStandings,
                              ForRecordingDockerCommandAccess dockerAccessRecorder,
-                             ForPersistingDiskFillTrends diskFillTrends) {
+                             ForPersistingDiskFillTrends diskFillTrends,
+                             GetClaudeSignInStatusUseCase claudeSignIn,
+                             ForHoldingClaudeSignInStandings claudeStandings) {
         this.machines = machines;
         this.credentials = credentials;
         this.remoteCommand = remoteCommand;
@@ -167,6 +177,8 @@ public class RemoteDiskWatcher {
         this.diskStandings = diskStandings;
         this.dockerAccessRecorder = dockerAccessRecorder;
         this.diskFillTrends = diskFillTrends;
+        this.claudeSignIn = claudeSignIn;
+        this.claudeStandings = claudeStandings;
         // The domain owns the port call; this watcher only hands it in. Both trackers' state is on disk
         // precisely so that a redeploy — several a day here — no longer wipes what admins have already been
         // told, nor the week of samples the forecast projects from.
@@ -188,6 +200,7 @@ public class RemoteDiskWatcher {
         sshPresenceRecorder.retainOnly(fleet);
         dockerAccessRecorder.retainOnly(fleet);
         diskStandings.retainOnly(fleet);
+        claudeStandings.retainOnly(fleet);
         diskFillTrends.retainOnly(fleet);
         forgetMachineNetworks.forgetMachineNetworksExcept(fleet);
     }
@@ -206,6 +219,31 @@ public class RemoteDiskWatcher {
         }
         checkDisks(machine, watches, globalThreshold);
         detectNetworks(machine);
+        readClaudeSignIn(machine);
+    }
+
+    /**
+     * Reads where this machine stands on Claude sign-in and retains it, so the Explorer's fleet cards can
+     * wear it without any of them asking a machine anything.
+     *
+     * <p>Behind the same two guards as everything else on this trip, so the standing exists for exactly the
+     * machines Vaier can actually reach — a phone, or a machine with no stored login, is never asked and
+     * never marked.
+     *
+     * <p>In its own try/catch for the same reason {@link #detectNetworks} is: a fifth question on this trip
+     * must never be able to take the first four down with it, and must not reach the
+     * {@link NoSshServerException} handler and withdraw an SSH-server presence {@code df} has already
+     * earned. A read that failed retains nothing at all — the domain records only what it was actually
+     * told.
+     */
+    private void readClaudeSignIn(Machine machine) {
+        ClaudeSignInStatus status = null;
+        try {
+            status = claudeSignIn.getClaudeSignInStatus(machine.id());
+        } catch (Exception e) {
+            log.debug("Could not read where {} stands on Claude: {}", machine.name(), e.getMessage());
+        }
+        ClaudeSignInStatus.retain(status, claudeStandings, eventPublisher);
     }
 
     /**

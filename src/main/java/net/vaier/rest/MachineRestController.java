@@ -6,6 +6,7 @@ import net.vaier.application.ClearHostKeyUseCase;
 import net.vaier.application.GetBackupJobsUseCase;
 import net.vaier.application.GetBackupRunsUseCase;
 import net.vaier.application.GetBackupServersUseCase;
+import net.vaier.application.GetClaudeSignInStandingsUseCase;
 import net.vaier.application.GetHostCredentialUseCase;
 import net.vaier.application.GetLanServerReachabilityUseCase;
 import net.vaier.application.GetMachineDiskStandingsUseCase;
@@ -58,6 +59,7 @@ public class MachineRestController {
     private final ClearHostKeyUseCase clearHostKeyUseCase;
     private final GetMachineDiskUsageUseCase getMachineDiskUsageUseCase;
     private final GetMachineDiskStandingsUseCase getMachineDiskStandingsUseCase;
+    private final GetClaudeSignInStandingsUseCase getClaudeSignInStandingsUseCase;
     private final SetDiskWatchUseCase setDiskWatchUseCase;
     private final GetPublishableServicesUseCase getPublishableServicesUseCase;
     private final GetBackupJobsUseCase getBackupJobsUseCase;
@@ -317,6 +319,61 @@ public class MachineRestController {
      */
     record DiskStandingResponse(String machineId, String mountPoint, int usedPercent, int thresholdPercent,
                                 int breachingFilesystems, int watchedFilesystems, String level) {}
+
+    /**
+     * <b>The whole fleet's Claude sign-in standing, in one request</b> — the Claude mark on every machine
+     * card, and the sibling of {@link #diskStandings()} in every way that matters.
+     *
+     * <p>It reaches no machine. The standings are what {@code RemoteDiskWatcher}'s existing five-minute trip
+     * already asked each machine's CLI and now retains in memory. That is what makes it safe on page load,
+     * and it is exactly what {@code GET /machines/{machineId}/claude-sign-in} is not: that one opens a shell
+     * and runs {@code claude auth status}, so a per-card version of it would put a fleet-wide SSH sweep
+     * behind opening the Explorer.
+     *
+     * <p>A machine the sweep has not reached — a cold start, no SSH access, no stored credential — is simply
+     * <b>absent</b> from the list. The client's contract is to draw nothing for a machine that is not here,
+     * and that contract matters more than it does for disks: {@code ClaudeSignInState} exists partly so that
+     * "Vaier couldn't tell" can never be reported as "signed out", and a mark invented from absence would
+     * undo it.
+     *
+     * <p>A literal path segment under {@code /machines}, so it is admin-gated with the rest of them.
+     */
+    @GetMapping("/claude-standings")
+    public List<ClaudeStandingResponse> claudeStandings() {
+        return getClaudeSignInStandingsUseCase.getClaudeSignInStandings().stream()
+            .map(standing -> new ClaudeStandingResponse(standing.machineId().value(),
+                standing.effectiveUsername(), standing.state().name(),
+                standing.saysWhereTheSignInStands(),
+                standing.account() == null ? null : standing.account().email()))
+            .toList();
+    }
+
+    /**
+     * One machine's <b>Claude sign-in standing</b>: where the OS user Vaier acts as there stands on Claude
+     * sign-in, and which account when it is signed in and said so.
+     *
+     * <p>{@code state} is the domain's own {@code ClaudeSignInState}, travelling as a name — the browser is
+     * never a second place deciding what a sign-in reading means, the same reason {@code DiskStandingLevel}
+     * travels rather than being recomputed from a percentage.
+     *
+     * <p>{@code effectiveUsername} is not decoration: a Claude sign-in lives in one user's home directory,
+     * so a standing that named only the machine once let Vaier report a healthy account while the user
+     * actually running that machine's work was expired.
+     *
+     * <p>It carries no credential material and could not — every field is read from {@code claude auth
+     * status --json}, which emits none.
+     *
+     * @param machineId         the machine's identity, never its name
+     * @param effectiveUsername the OS user the standing is about, or null when Vaier holds no login there
+     * @param state             {@code SIGNED_IN}, {@code SIGNED_OUT}, {@code NOT_INSTALLED},
+     *                          {@code UNREACHABLE}, {@code SKIPPED} or {@code UNKNOWN}
+     * @param saysWhereTheSignInStands whether this reading is a verdict about a sign-in at all, and so
+     *                          whether a card marks it — the domain's answer, never re-derived from
+     *                          {@code state} in the browser
+     * @param accountEmail      the account it is signed in as, or null when there is none to name
+     */
+    record ClaudeStandingResponse(String machineId, String effectiveUsername, String state,
+                                  boolean saysWhereTheSignInStands, String accountEmail) {}
 
     /**
      * Watch or mute one filesystem on one machine, optionally at its own threshold (#325).

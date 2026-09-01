@@ -1,5 +1,6 @@
 package net.vaier.rest;
 
+import net.vaier.adapter.driven.InMemoryClaudeSignInStandingCache;
 import net.vaier.application.CancelClaudeSignInUseCase;
 import net.vaier.application.GetClaudeSignInStatusUseCase;
 import net.vaier.application.StartClaudeSignInUseCase;
@@ -12,10 +13,10 @@ import net.vaier.domain.ClaudeSignInStatus;
 import net.vaier.domain.EffectiveUser;
 import net.vaier.domain.MachineId;
 import net.vaier.domain.TestMachineIds;
+import net.vaier.domain.port.ForPublishingEvents;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.web.servlet.MockMvc;
@@ -23,9 +24,11 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.util.List;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
@@ -50,13 +53,19 @@ class ClaudeSignInControllerTest {
     @Mock SubmitClaudeSignInCodeUseCase submitClaudeSignInCodeUseCase;
     @Mock CancelClaudeSignInUseCase cancelClaudeSignInUseCase;
     @Mock SignOutOfClaudeUseCase signOutOfClaudeUseCase;
+    @Mock ForPublishingEvents events;
 
-    @InjectMocks ClaudeSignInController controller;
+    // The real store, so these tests assert what the fleet endpoint would actually serve next.
+    private final InMemoryClaudeSignInStandingCache standings = new InMemoryClaudeSignInStandingCache();
 
+    private ClaudeSignInController controller;
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
+        controller = new ClaudeSignInController(getClaudeSignInStatusUseCase, startClaudeSignInUseCase,
+            submitClaudeSignInCodeUseCase, cancelClaudeSignInUseCase, signOutOfClaudeUseCase,
+            standings, events);
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
             .setControllerAdvice(new GlobalExceptionHandler()).build();
     }
@@ -181,5 +190,75 @@ class ClaudeSignInControllerTest {
     void refusesASignOutPathSegmentThatIsNotAMachineIdentity() throws Exception {
         mockMvc.perform(post("/machines/nas/claude-sign-out"))
             .andExpect(status().isBadRequest());
+    }
+
+    // --- every reading is a standing ------------------------------------------------------------------
+    //
+    // The sweep is not the only place a machine's sign-in is read. It used to be the only place a reading
+    // was kept, so an operator who signed a machine in watched its fleet card stay signed-out for up to
+    // five minutes — the answer was on screen in the pane and thrown away. The disk sibling already retains
+    // from every reading; these three do the same, through the one domain method that decides it.
+
+    /**
+     * The payoff. A sign-in the operator just completed is what the fleet is served next, and an open
+     * Explorer is woken to come and get it.
+     */
+    @Test
+    void completingASignIn_isTheFleetsStandingAtOnce_andWakesAnOpenExplorer() throws Exception {
+        when(submitClaudeSignInCodeUseCase.submitClaudeSignInCode(NAS, "abc123#xyz")).thenReturn(
+            ClaudeSignInStatus.read(NAS, "nas", EffectiveUser.of("geir"), SIGNED_IN_JSON));
+
+        mockMvc.perform(post("/machines/" + NAS.value() + "/claude-sign-in/code")
+                .contentType(APPLICATION_JSON).content("{\"code\":\"abc123#xyz\"}"))
+            .andExpect(status().isOk());
+
+        assertThat(standings.getAll()).singleElement()
+            .returns(ClaudeSignInState.SIGNED_IN, ClaudeSignInStatus::state);
+        verify(events).publish("vpn-peers", "claude-standing-changed", "");
+    }
+
+    /** Signing out is a reading too — the card must not keep saying signed in until the next sweep. */
+    @Test
+    void signingOut_isTheFleetsStandingAtOnce() throws Exception {
+        when(signOutOfClaudeUseCase.signOutOfClaude(NAS)).thenReturn(
+            ClaudeSignInStatus.read(NAS, "nas", EffectiveUser.of("geir"), "{\"loggedIn\": false}"));
+
+        mockMvc.perform(post("/machines/" + NAS.value() + "/claude-sign-out"))
+            .andExpect(status().isOk());
+
+        assertThat(standings.getAll()).singleElement()
+            .returns(ClaudeSignInState.SIGNED_OUT, ClaudeSignInStatus::state);
+        verify(events).publish("vpn-peers", "claude-standing-changed", "");
+    }
+
+    /**
+     * Opening a machine's pane is the reading that fixes a standing the sweep took before something moved
+     * outside Vaier — someone signing in over SSH themselves, say.
+     */
+    @Test
+    void lookingAtOneMachine_retainsWhatThatLookRead() throws Exception {
+        when(getClaudeSignInStatusUseCase.getClaudeSignInStatus(NAS)).thenReturn(
+            ClaudeSignInStatus.read(NAS, "nas", EffectiveUser.of("geir"), SIGNED_IN_JSON));
+
+        mockMvc.perform(get("/machines/" + NAS.value() + "/claude-sign-in"))
+            .andExpect(status().isOk());
+
+        assertThat(standings.getAll()).singleElement()
+            .returns(ClaudeSignInState.SIGNED_IN, ClaudeSignInStatus::state);
+    }
+
+    /**
+     * A first reading always speaks; a second look at a machine that has not moved says nothing more. The
+     * domain gates that, not the controller — which is the whole reason the controller calls it.
+     */
+    @Test
+    void aSecondLookAtAMachineThatHasNotMoved_wakesNobodyAgain() throws Exception {
+        when(getClaudeSignInStatusUseCase.getClaudeSignInStatus(NAS)).thenReturn(
+            ClaudeSignInStatus.read(NAS, "nas", EffectiveUser.of("geir"), SIGNED_IN_JSON));
+
+        mockMvc.perform(get("/machines/" + NAS.value() + "/claude-sign-in"));
+        mockMvc.perform(get("/machines/" + NAS.value() + "/claude-sign-in"));
+
+        verify(events, times(1)).publish("vpn-peers", "claude-standing-changed", "");
     }
 }

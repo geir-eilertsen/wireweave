@@ -6,11 +6,13 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import net.vaier.adapter.driven.InMemoryDiskFillTrendAdapter;
 import net.vaier.adapter.driven.InMemoryDiskPressureStateAdapter;
+import net.vaier.adapter.driven.InMemoryClaudeSignInStandingCache;
 import net.vaier.adapter.driven.InMemoryMachineDiskStandingCache;
 import net.vaier.domain.MachineId;
 import net.vaier.domain.TestMachineIds;
 import net.vaier.domain.port.ForPersistingDiskFillTrends;
 import net.vaier.domain.port.ForPersistingDiskPressureState;
+import net.vaier.application.GetClaudeSignInStatusUseCase;
 import net.vaier.application.GetDiskWatchesUseCase;
 import net.vaier.application.GetHostCredentialUseCase;
 import net.vaier.application.DetectMachineNetworksUseCase;
@@ -21,12 +23,16 @@ import net.vaier.application.NotifyAdminsOfRemoteDiskPressureUseCase;
 import net.vaier.application.RunRemoteCommandUseCase;
 import net.vaier.config.ConfigResolver;
 import net.vaier.domain.AuthMethod;
+import net.vaier.domain.ClaudeAccount;
+import net.vaier.domain.ClaudeSignInState;
+import net.vaier.domain.ClaudeSignInStatus;
 import net.vaier.domain.CommandResult;
 import net.vaier.domain.DeviceCategory;
 import net.vaier.domain.DiskFillForecast;
 import net.vaier.domain.DiskFillForecastCleared;
 import net.vaier.domain.DiskWatch;
 import net.vaier.domain.DiskWatches;
+import net.vaier.domain.EffectiveUser;
 import net.vaier.domain.HostCredentialView;
 import net.vaier.domain.Machine;
 import net.vaier.domain.MachineType;
@@ -67,9 +73,10 @@ import static org.mockito.Mockito.when;
 
 class RemoteDiskWatcherTest {
 
-    /** The two SSE events this watcher publishes on the fleet stream, named so assertions can tell them apart. */
+    /** The SSE events this watcher publishes on the fleet stream, named so assertions can tell them apart. */
     private static final String SSH_PRESENCE_EVENT = "ssh-server-presence-changed";
     private static final String DISK_STANDING_EVENT = "disk-standing-changed";
+    private static final String CLAUDE_STANDING_EVENT = "claude-standing-changed";
 
     private static MachineId mid(String name) {
         return TestMachineIds.of(name);
@@ -90,6 +97,8 @@ class RemoteDiskWatcherTest {
     ForPersistingDiskFillTrends fillTrends;
     InMemoryMachineDiskStandingCache standings;
     ForRecordingDockerCommandAccess dockerAccessRecorder;
+    GetClaudeSignInStatusUseCase claudeSignIn;
+    InMemoryClaudeSignInStandingCache claudeStandings;
     SteppableClock clock;
     RemoteDiskWatcher watcher;
 
@@ -121,6 +130,11 @@ class RemoteDiskWatcherTest {
         fillTrends = new InMemoryDiskFillTrendAdapter();
         standings = new InMemoryMachineDiskStandingCache();
         dockerAccessRecorder = mock(ForRecordingDockerCommandAccess.class);
+        claudeSignIn = mock(GetClaudeSignInStatusUseCase.class);
+        claudeStandings = new InMemoryClaudeSignInStandingCache();
+        // Nothing said about Claude unless a test says it: an unstubbed answer would be a null standing,
+        // which is exactly "the sweep learned nothing here".
+        lenient().when(claudeSignIn.getClaudeSignInStatus(any())).thenReturn(null);
         clock = new SteppableClock();
         // Nothing configured: every filesystem is watched at the global threshold (#325).
         lenient().when(diskWatches.getDiskWatches()).thenReturn(new DiskWatches(List.of()));
@@ -132,7 +146,8 @@ class RemoteDiskWatcherTest {
     private RemoteDiskWatcher newWatcher() {
         return new RemoteDiskWatcher(machines, credentials, runner, notifier, forecastNotifier,
             diskWatches, configResolver, clock, sshPresenceRecorder, eventPublisher, pressureState,
-            detectMachineNetworks, forgetMachineNetworks, standings, dockerAccessRecorder, fillTrends);
+            detectMachineNetworks, forgetMachineNetworks, standings, dockerAccessRecorder, fillTrends,
+            claudeSignIn, claudeStandings);
     }
 
     /** 1024-blocks in a GiB, and a 100 GiB filesystem to spend them on. */
@@ -1188,5 +1203,112 @@ class RemoteDiskWatcherTest {
         watcher.checkRemoteDiskUsage();
 
         verify(dockerAccessRecorder).retainOnly(Set.of(mid("colina27")));
+    }
+
+    // --- where the fleet stands on Claude sign-in, learned on the trip already paid for ----------------
+    //
+    // The fifth fact this one trip teaches. It is read through the very same use case a machine's own pane
+    // asks — no second SSH path, and nothing that could report a SIGNED_OUT the CLI never said — and it is
+    // asked only of the machines this sweep has already qualified.
+
+    private ClaudeSignInStatus signedIn(String machine, String email) {
+        return new ClaudeSignInStatus(mid(machine), machine, EffectiveUser.of("root"),
+            ClaudeSignInState.SIGNED_IN, new ClaudeAccount(email, "Example Org", "max"));
+    }
+
+    private ClaudeSignInStatus signedOut(String machine) {
+        return new ClaudeSignInStatus(mid(machine), machine, EffectiveUser.of("root"),
+            ClaudeSignInState.SIGNED_OUT, null);
+    }
+
+    @Test
+    void theSweep_alsoLearnsWhereAMachineStandsOnClaude_onTheTripItIsAlreadyMaking() {
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("kitchen")));
+        hasCredential("kitchen");
+        when(runner.run(eq(mid("kitchen")), any())).thenReturn(df(40));
+        when(claudeSignIn.getClaudeSignInStatus(mid("kitchen")))
+            .thenReturn(signedIn("kitchen", "operator@example.com"));
+
+        watcher.checkRemoteDiskUsage();
+
+        assertThat(claudeStandings.getAll()).singleElement().satisfies(standing -> {
+            assertThat(standing.machineId()).isEqualTo(mid("kitchen"));
+            assertThat(standing.state()).isEqualTo(ClaudeSignInState.SIGNED_IN);
+            assertThat(standing.account().email()).isEqualTo("operator@example.com");
+        });
+    }
+
+    @Test
+    void aMachineTheSweepSkips_isNeverAskedWhereItStandsOnClaude() {
+        // No stored credential: this sweep never opens a shell there at all, so it has learned nothing and
+        // must not put a standing on that machine's card.
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("kitchen")));
+        when(credentials.getHostCredential(mid("kitchen"))).thenReturn(Optional.empty());
+
+        watcher.checkRemoteDiskUsage();
+
+        verify(claudeSignIn, never()).getClaudeSignInStatus(any());
+        assertThat(claudeStandings.getAll()).isEmpty();
+    }
+
+    @Test
+    void aClaudeStandingThatMoved_wakesTheExplorerOnTheStreamItAlreadyHolds() {
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("kitchen")));
+        hasCredential("kitchen");
+        when(runner.run(eq(mid("kitchen")), any())).thenReturn(df(40));
+        when(claudeSignIn.getClaudeSignInStatus(mid("kitchen")))
+            .thenReturn(signedIn("kitchen", "operator@example.com"), signedOut("kitchen"));
+
+        watcher.checkRemoteDiskUsage();
+        watcher.checkRemoteDiskUsage();
+
+        verify(eventPublisher, times(2)).publish(eq("vpn-peers"), eq(CLAUDE_STANDING_EVENT), anyString());
+    }
+
+    @Test
+    void aClaudeStandingThatDidNotMove_wakesNobody_soThisIsNotAFiveMinuteDrumbeat() {
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("kitchen")));
+        hasCredential("kitchen");
+        when(runner.run(eq(mid("kitchen")), any())).thenReturn(df(40));
+        when(claudeSignIn.getClaudeSignInStatus(mid("kitchen")))
+            .thenReturn(signedIn("kitchen", "operator@example.com"));
+
+        watcher.checkRemoteDiskUsage();
+        watcher.checkRemoteDiskUsage();
+        watcher.checkRemoteDiskUsage();
+
+        verify(eventPublisher, times(1)).publish(eq("vpn-peers"), eq(CLAUDE_STANDING_EVENT), anyString());
+    }
+
+    @Test
+    void aMachineThatLeftTheFleet_doesNotKeepItsClaudeStanding() {
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("kitchen")));
+        hasCredential("kitchen");
+        when(runner.run(eq(mid("kitchen")), any())).thenReturn(df(40));
+        when(claudeSignIn.getClaudeSignInStatus(mid("kitchen")))
+            .thenReturn(signedIn("kitchen", "operator@example.com"));
+        watcher.checkRemoteDiskUsage();
+
+        when(machines.getAllMachines()).thenReturn(List.of());
+        watcher.checkRemoteDiskUsage();
+
+        assertThat(claudeStandings.getAll()).isEmpty();
+    }
+
+    @Test
+    void aClaudeReadThatBlewUp_costsTheMachineNoneOfItsDiskAlerts() {
+        // A fifth question on the same trip must never be able to take the first four down with it — the
+        // same rule the network detection is written to, for the same reason.
+        when(machines.getAllMachines()).thenReturn(List.of(sshMachine("kitchen")));
+        hasCredential("kitchen");
+        when(runner.run(eq(mid("kitchen")), any())).thenReturn(df(91));
+        when(claudeSignIn.getClaudeSignInStatus(mid("kitchen")))
+            .thenThrow(new IllegalStateException("boom"));
+
+        assertThatCode(() -> watcher.checkRemoteDiskUsage()).doesNotThrowAnyException();
+
+        assertThat(standings.getAll()).hasSize(1);
+        assertThat(claudeStandings.getAll()).isEmpty();
+        verify(notifier, times(1)).notifyAdminsOfRemoteDiskPressure(any(), anyInt());
     }
 }

@@ -28,6 +28,9 @@
         box:     '<rect x="2.2" y="4.4" width="11.6" height="8.6" rx="1"/><path d="M2.2 7.3h11.6M5.6 4.4v2.9"/>',
         route:   '<circle cx="8" cy="8" r="6.2"/><path d="M1.9 8h12.2"/><path d="M8 1.8c1.7 1.9 2.6 3.9 2.6 6.2S9.7 12.3 8 14.2C6.3 12.3 5.4 10.3 5.4 8S6.3 3.7 8 1.8z"/>',
         disk:    '<rect x="2" y="3.4" width="12" height="9.2" rx="1"/><circle cx="8" cy="8" r="2.3"/><circle cx="8" cy="8" r=".45" fill="currentColor" stroke="none"/>',
+        // Claude sign-in: an eight-ray burst, cardinals long and diagonals short. Deliberately not
+        // Anthropic's mark — this is Vaier saying where a machine stands, not their logo.
+        claude:  '<path d="M8 1.7v12.6M1.7 8h12.6"/><path d="M5.2 5.2l5.6 5.6M10.8 5.2l-5.6 5.6"/>',
         copy:    '<rect x="5.5" y="5.5" width="8" height="8.2" rx="1.2"/><path d="M3.4 10.5H3a1 1 0 0 1-1-1V3.2a1 1 0 0 1 1-1h6.3a1 1 0 0 1 1 1v.4"/>',
         download:'<path d="M8 2v7.5"/><path d="M4.7 6.5L8 9.8l3.3-3.3"/><path d="M2.5 13.5h11"/>',
         // Download's own glyph, turned over: the arrow leaves the baseline instead of arriving at it. The two
@@ -149,6 +152,9 @@
         diskStandings: new Map(),        // machine identity -> how its disks stand, as the backend's 5-minute sweep
                                          //   last read them. A machine that is absent has NOT been read — never
                                          //   a machine whose disks are fine (GET /machines/disk-standings)
+        claudeStandings: new Map(),      // machine identity -> where it stands on Claude sign-in, as that same
+                                         //   sweep last read it. A machine that is absent has NOT been asked —
+                                         //   never one that is signed out (GET /machines/claude-standings)
         roots: new Map(),                // (machine identity, at) -> where a file tree begins (its SFTP root, #326)
         at: null,                        // the archive being browsed, or null for the present — the live filesystem
         archives: new Map(),             // machine identity -> { state, list, error }: its archives, the rail's stops
@@ -593,6 +599,23 @@
         S.diskStandings = next;
     }
 
+    // Where the whole fleet stands on Claude sign-in, in ONE request — the Claude mark on every machine card.
+    //
+    // The same exception loadDiskStandings earns, for the same reason. This is NOT the per-machine
+    // /machines/{id}/claude-sign-in read: that one opens a shell and runs the CLI's own `auth status`, so a
+    // card-per-machine version of it would put a fleet-wide SSH sweep behind opening the Explorer. The
+    // five-minute sweep is on every credentialed machine anyway, so it asks there and this reads memory.
+    async function loadClaudeStandings() {
+        const next = new Map();
+        try {
+            const res = await fetch('/machines/claude-standings', { cache: 'no-store' });
+            if (res.ok) for (const standing of await res.json()) next.set(standing.machineId, standing);
+        } catch (e) {
+            // A read that failed leaves the cards bare. "Vaier could not ask" is never drawn as an answer.
+        }
+        S.claudeStandings = next;
+    }
+
     // One machine's filesystems, read when they are looked at (#323 slice C, every filesystem since #325).
     // Vaier has computed this on a schedule since the disk alerts shipped and only ever emailed about it;
     // this is the same reading, looked at.
@@ -829,7 +852,9 @@
 
     function capIcon(kind, title) {
         const s = document.createElement('span');
-        s.className = 'ex-cap';
+        // The kind rides on the class so a borrowed identity can wear its own colour (Docker's blue). The
+        // rest have no rule and stay dim — that is the strip doing its job, not an omission.
+        s.className = 'ex-cap is-' + kind;
         s.title = title;
         s.innerHTML = svg(kind, 'ex-cap-ico');
         return s;
@@ -850,7 +875,10 @@
     // never a second place deciding when a disk is in trouble, exactly as it never recomputes a filesystem's
     // aboveThreshold in the disk pane. There is deliberately no entry for "not read": a machine the sweep has
     // not reached has no standing at all, and a standing that does not exist draws nothing.
-    const DISK_DOT = { CLEAR: 'is-up', CLOSING: 'is-degraded', BREACHING: 'is-down' };
+    // A clear disk wears the disk's own colour rather than the shared green; closing and breaching still
+    // take the trouble colours outright, because a filling disk is the thing on this card worth interrupting
+    // someone for. Named MARK, not DOT: nothing draws a disk dot, and the old name said otherwise.
+    const DISK_MARK = { CLEAR: 'is-disk', CLOSING: 'is-degraded', BREACHING: 'is-down' };
     const DISK_WORD = { CLEAR: 'well under', CLOSING: 'closing on', BREACHING: 'over' };
 
     function machineMarks(machineId) {
@@ -860,7 +888,7 @@
 
         const job = jobsOn(machineId)[0];
         if (job) {
-            const b = el('span', 'ex-mark ' + (RUN_DOT[job.lastRunStatus] || 'is-idle'));
+            const b = el('span', 'ex-mark ' + (RUN_MARK[job.lastRunStatus] || 'is-idle'));
             b.innerHTML = svg('archive', 'ex-cap-ico');
             b.title = RUN_WORD[job.lastRunStatus] || 'No backup has run yet';
             marks.appendChild(b);
@@ -874,7 +902,7 @@
         // the update mark, how full a disk is is a fact about now, so it stands down in the past.
         const standing = S.diskStandings.get(machineId);
         if (!S.at && standing) {
-            const d = el('span', 'ex-mark ' + DISK_DOT[standing.level]);
+            const d = el('span', 'ex-mark ' + DISK_MARK[standing.level]);
             d.innerHTML = svg('disk', 'ex-cap-ico');
             // The number is shown only where it is worth an eye. A percentage on every card would be a row
             // of digits nobody reads; on the two that are filling it is the thing you were looking for.
@@ -890,6 +918,28 @@
                       + ' watched filesystems are over theirs)'
                     : '');
             marks.appendChild(d);
+        }
+
+        // Where this machine stands on Claude, from that same sweep — again, nothing is asked to draw it.
+        //
+        // Whether a reading is a verdict about a sign-in at all is the server's answer, not a state list
+        // kept here — the same reason the disk mark takes DiskStandingLevel rather than recomputing it. So
+        // a machine the sweep has not reached, one with no Claude on it, and one that did not answer all
+        // draw nothing. Absence matters more here than it does for disks: the backend goes to real trouble
+        // never to report a sign-in the CLI did not say, and a mark invented from silence would undo it.
+        // The tone comes from CLAUDE_STATE, the one map the machine pane reads its words from. And like the
+        // disk mark, this is a fact about now, so it stands down in the past.
+        const claude = S.claudeStandings.get(machineId);
+        if (!S.at && claude && claude.saysWhereTheSignInStands) {
+            const c = el('span', 'ex-mark ' + claudeState(claude.state).card);
+            c.innerHTML = svg('claude', 'ex-cap-ico');
+            // A sign-in lives in one user's home, so the title names the user it is about — a standing that
+            // named only the machine once reported a healthy account while the user doing that machine's
+            // work was expired.
+            c.title = 'Claude · ' + claudeState(claude.state).label
+                + (claude.accountEmail ? ' as ' + claude.accountEmail : '')
+                + (claude.effectiveUsername ? ' (Vaier acts as ' + claude.effectiveUsername + ' here)' : '');
+            marks.appendChild(c);
         }
 
         // The registry verdict is about now, and an archive is about then — the same reason updateMark and the
@@ -5491,6 +5541,11 @@
     const RUN_DOT = { SUCCESS: 'is-up', WARNING: 'is-degraded', INCOMPLETE: 'is-down', FAILED: 'is-down',
                       RUNNING: 'is-idle', UNKNOWN: 'is-idle' };
 
+    // The same outcomes as a mark rather than a dot. A mark says WHAT it is in colour and lets trouble
+    // recolour it; a dot is pure status and stays a traffic light. They diverge on success alone — and this
+    // is derived rather than written out, so a new outcome added above can never be forgotten here.
+    const RUN_MARK = { ...RUN_DOT, SUCCESS: 'is-backup' };
+
     // A run's summary is only shown when it is a short, human line. Borg's own {@code --json} stats can end up
     // stored here — a multi-line braces-y blob — and that is never dumped into the status line; the status and
     // the time say enough, and a failure's diagnostics get their own note below.
@@ -6586,11 +6641,16 @@
     // `short` is the same standing said where the subject is already named — on the machine pane the card is
     // titled Claude, and "Claude · Claude isn’t installed here" says it twice. One map, so the two surfaces
     // can never drift into two vocabularies.
+    // `card` is the tint a fleet card's mark wears, on this same map for the same reason. Only the two
+    // states the server marks at all need one — it decides which those are, this only says what they look
+    // like. Both wear Claude's own clay rather than a traffic light: green/amber/red are the disk and
+    // backup marks' words for trouble, and a sign-in is presence. Signed out is the same clay, hollow.
     const CLAUDE_STATE = {
-        SIGNED_IN:     { label: 'Signed in',                   short: 'Signed in',     tone: 'is-in'    },
-        SIGNED_OUT:    { label: 'Signed out',                  short: 'Signed out',    tone: 'is-out'   },
+        SIGNED_IN:     { label: 'Signed in',                   short: 'Signed in',     tone: 'is-in',    card: 'is-claude' },
+        SIGNED_OUT:    { label: 'Signed out',                  short: 'Signed out',    tone: 'is-out',   card: 'is-claude-out' },
         NOT_INSTALLED: { label: 'Claude isn’t installed here', short: 'Not installed', tone: 'is-muted' },
         UNREACHABLE:   { label: 'Unreachable',                 short: 'Unreachable',   tone: 'is-muted' },
+        SKIPPED:       { label: 'No shell Vaier can reach',    short: 'No shell here', tone: 'is-muted' },
         UNKNOWN:       { label: 'Couldn’t tell',               short: 'Couldn’t tell', tone: 'is-muted' },
     };
     const claudeState = (st) => CLAUDE_STATE[st] || { label: st, short: st, tone: 'is-muted' };
@@ -9208,7 +9268,8 @@
                 // reloaded is a worse lie than offering it again, and the containers we re-read below are the
                 // honest answer about what is actually running.
                 _updating.clear();
-                Promise.all([loadFleet(), loadLanServers(), loadDiskStandings(), loadContainers()])
+                Promise.all([loadFleet(), loadLanServers(), loadDiskStandings(),
+                    loadClaudeStandings(), loadContainers()])
                     .then(render);
             }
             opened = true;
@@ -9247,6 +9308,9 @@
         // empty body, so this re-reads the one memory-backed endpoint and repaints the marks. A machine that
         // stopped being readable is not corrected here by guesswork: the sweep says so, or it says nothing.
         events.addEventListener('disk-standing-changed', () => loadDiskStandings().then(render));
+        // And where a machine stands on Claude, learned on that same trip and published the same way: only on
+        // a change, empty body, one re-read of the one memory-backed endpoint.
+        events.addEventListener('claude-standing-changed', () => loadClaudeStandings().then(render));
         // An update this browser (or another one) asked for has settled. It rides on this stream rather than
         // one of its own for the same reason everything else here does — the fleet already holds it open — and
         // it is what ends the wait: a pull is minutes, so the request returned 202 and nothing has been asking
@@ -9452,6 +9516,9 @@
         // mark whether or not anyone opens that machine, and render() must never fetch. Not awaited: it is a
         // memory-backed read that wakes nothing, and no part of the first paint depends on it.
         loadDiskStandings().then(render);
+        // And where the fleet stands on Claude, for the same reason and at the same cost: memory-backed,
+        // nothing woken, and a mark a machine card carries whether or not anyone opens that machine.
+        loadClaudeStandings().then(render);
 
         watchFleet();
         watchServices();

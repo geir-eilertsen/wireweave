@@ -300,6 +300,13 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 .ex-cap { display: inline-flex; color: var(--text-dim); }
 .ex-cap-ico { width: 13px; height: 13px; }
 .ex-row:hover .ex-cap, .ex-row.is-sel .ex-cap { color: var(--text-muted); }
+/* Docker is a borrowed identity exactly as Claude is, so its glyph wears its own blue — and keeps it where
+   the rest of the strip lifts from dim to muted, since that hover rule outranks a bare class. The other
+   capabilities stay quiet on purpose: they say what a machine IS, and colouring them would put them in
+   competition with the marks that carry a verdict. */
+.ex-cap.is-docker,
+.ex-row:hover .ex-cap.is-docker,
+.ex-row.is-sel .ex-cap.is-docker { color: var(--docker); }
 
 .ex-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; }
 .ex-dot.is-up { background: var(--green); box-shadow: 0 0 6px rgba(78, 201, 176, .5); }
@@ -746,10 +753,19 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
    how that fact is going; the title says it in words. */
 .ex-card-marks { display: inline-flex; align-items: center; gap: 7px; flex: none; }
 .ex-mark { display: inline-flex; align-items: center; gap: 2px; color: var(--text-dim); }
-.ex-mark.is-up { color: var(--green); }
 .ex-mark.is-degraded { color: var(--yellow); }
 .ex-mark.is-down { color: var(--red); }
 .ex-mark.is-update { color: var(--yellow); }
+/* Identity, not status: a mark wears the colour of the thing it is about, and only trouble recolours it.
+   The green these two used to share was VS Code Dark+'s, left behind by the palette rewrite that replaced
+   everything around it. */
+.ex-mark.is-backup { color: var(--backup); }
+.ex-mark.is-disk { color: var(--disk); }
+/* Colour says "Claude", weight says whether anyone is signed in — so the signed-out mark is the same hue
+   worn hollow, never a second colour competing with the disk and backup marks' trouble lights. */
+.ex-mark.is-claude { color: var(--claude); }
+.ex-mark.is-claude-out { color: var(--claude); opacity: .45; }
+.ex-mark.is-claude-out svg { stroke-width: 1.1; }
 .ex-mark-n { font-family: var(--mono); font-size: 10.5px; line-height: 1; }
 /* An archive is how things stood then; a registry verdict and a tunnel are about now. Both stand down in the
    past, the same way the liveness dots already do. */

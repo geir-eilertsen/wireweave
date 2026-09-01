@@ -10,6 +10,8 @@ import net.vaier.application.SubmitClaudeSignInCodeUseCase;
 import net.vaier.domain.ClaudeAccount;
 import net.vaier.domain.ClaudeSignInStatus;
 import net.vaier.domain.MachineId;
+import net.vaier.domain.port.ForHoldingClaudeSignInStandings;
+import net.vaier.domain.port.ForPublishingEvents;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -31,6 +33,13 @@ import org.springframework.web.bind.annotation.RestController;
  * waiting CLI. Neither is stored, and neither is logged — the log lines here name a machine and nothing
  * else. The credential the CLI ends up with never comes near this controller at all: it is written by
  * the CLI on the machine, and Vaier only ever asks the CLI whether it is signed in.
+ *
+ * <p><b>Every reading here is also the fleet's standing.</b> This controller reads a machine's sign-in
+ * three ways, and each one is as good an answer as the five-minute sweep's — better, since it is newer.
+ * They used to be spent on the pane and thrown away, so an operator who had just signed a machine in
+ * watched its fleet card go on saying signed-out for up to five minutes. {@link ClaudeSignInStatus#retain}
+ * is the one place that decides what a fresh reading does to a card, and a driving adapter calling it is
+ * the same shape {@code RemoteDiskWatcher} already has.
  */
 @RestController
 @RequiredArgsConstructor
@@ -42,6 +51,8 @@ public class ClaudeSignInController {
     private final SubmitClaudeSignInCodeUseCase submitClaudeSignInCodeUseCase;
     private final CancelClaudeSignInUseCase cancelClaudeSignInUseCase;
     private final SignOutOfClaudeUseCase signOutOfClaudeUseCase;
+    private final ForHoldingClaudeSignInStandings claudeStandings;
+    private final ForPublishingEvents events;
 
     /**
      * Where one machine — and the OS user Vaier acts as on it — stands. Deliberately per-machine: this is
@@ -51,7 +62,7 @@ public class ClaudeSignInController {
     @GetMapping("/machines/{machineId}/claude-sign-in")
     public ResponseEntity<MachineResponse> status(@PathVariable String machineId) {
         return ResponseEntity.ok(MachineResponse.from(
-            getClaudeSignInStatusUseCase.getClaudeSignInStatus(MachineId.of(machineId))));
+            retained(getClaudeSignInStatusUseCase.getClaudeSignInStatus(MachineId.of(machineId)))));
     }
 
     /**
@@ -72,7 +83,7 @@ public class ClaudeSignInController {
                                                       @RequestBody CodeRequest request) {
         MachineId machine = MachineId.of(machineId);
         return ResponseEntity.ok(MachineResponse.from(
-            submitClaudeSignInCodeUseCase.submitClaudeSignInCode(machine, request.code())));
+            retained(submitClaudeSignInCodeUseCase.submitClaudeSignInCode(machine, request.code()))));
     }
 
     /**
@@ -83,7 +94,17 @@ public class ClaudeSignInController {
     public ResponseEntity<MachineResponse> signOut(@PathVariable String machineId) {
         MachineId machine = MachineId.of(machineId);
         log.info("Signing {} out of Claude", machine);
-        return ResponseEntity.ok(MachineResponse.from(signOutOfClaudeUseCase.signOutOfClaude(machine)));
+        return ResponseEntity.ok(
+            MachineResponse.from(retained(signOutOfClaudeUseCase.signOutOfClaude(machine))));
+    }
+
+    /**
+     * Keep this reading as the machine's standing on the way out to the operator. The domain decides what
+     * that means — including whether anything moved enough to wake an open Explorer.
+     */
+    private ClaudeSignInStatus retained(ClaudeSignInStatus status) {
+        ClaudeSignInStatus.retain(status, claudeStandings, events);
+        return status;
     }
 
     /** The operator closed the dialog. Ends the CLI left waiting at its prompt on that machine. */
