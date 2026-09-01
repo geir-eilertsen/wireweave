@@ -3713,6 +3713,23 @@ reading, not from the scheduled one alone. Deliberately *not* in `ClaudeSignInRe
 a tripwire against any `For*` port appearing in that file — a compliance invariant worth more than the
 convenience, even for an in-memory cache holding no credential material.
 
+**The identity colours left the fleet cards ✅ (2026-09-01).** `--disk`, `--backup`, `--docker` and `--claude`
+had been a fleet-card vocabulary only; everywhere else in the Explorer an entry's glyph inherited whatever
+colour its surroundings gave it. `TINT_FOR` and one seam, `entryIco()`, now carry the same four tokens out to
+every surface that draws an **entry** — the rail's tree rows, the "Inside this machine" cards, ⌘K search
+results, and the Containers/Services listing rows — keyed off the entry's *kind*, never off its glyph: `repo`
+and `container` both draw the `box` shape, so a rule written against the glyph name would have painted every
+Docker container backup-aqua. Everything else keeps the colour it inherits. The same pass reached two marks
+that had been stragglers rather than surfaces: the Claude sign-in standing on a machine's own pane wore green
+where its fleet card already wore clay, so one machine's own page disagreed with its own card; it now reads
+`is-claude-in`/`is-claude-out` off the same `CLAUDE_STATE` map instead of the generic `is-in`/`is-out` tone.
+And the backed-up shield in the file browser wore the plain brand accent, which said *this is Vaier* rather
+than *this is backed up*; it now wears `--backup`, with the half-shield the same hue faded rather than plain
+dim grey. None of this touches the status indicators: liveness dots, the update-available mark, the nudge
+glyph and the capability strip's dim relay/backup-server glyphs are unchanged, because they report state and
+the identity colours report what a thing *is* — the same distinction `--claude` already drew against green,
+amber and red, now drawn everywhere an entry's glyph appears rather than on the fleet cards alone.
+
 ---
 
 ## 7. End-to-End Workflows
@@ -3802,6 +3819,8 @@ All original open questions have been resolved:
 ---
 
 ## 12. Backlog
+
+**Status hover text on a machine's dot (found stale 2026-09-01).** `UBIQUITOUS_LANGUAGE.md` and `docs/NETWORKING.md` both described a per-machine tooltip giving the liveness state in words plus its evidence ("connected, last handshake 12s ago"). No such tooltip has ever existed — the dot carries no `title` at all — so both entries were corrected rather than kept. It is worth building now in a way it was not before: the fleet page paints only trouble, so a machine that is up, one that is asleep and one nothing has ever probed all draw nothing, and the words are the only thing that could still tell them apart. The listing's "N online" count is currently the sole place that gap shows. Note the placement problem it has to solve: a healthy dot is an invisible 6px target, so the text belongs on the machine's name or card rather than on the dot itself.
 
 **Backup survival kit (next up, designed 2026-07-23).** Everything needed to read Vaier's backups is currently *inside* Vaier, in a circle: repository passphrases are encrypted in its config store; the key that decrypts them (`SecretCipher`, `vault.key`) sits in the same directory; and that directory is backed up to the backup server — encrypted with a passphrase held in the store being backed up. Losing the Vaier server leaves an encrypted repository whose passphrase is inside itself, and every other machine's archives in the same position. Nothing warns, because nothing is broken until everything is.
 

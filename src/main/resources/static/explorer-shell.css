@@ -268,6 +268,12 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 .ex-twist.is-leaf { visibility: hidden; }
 
 .ex-ico { flex: none; width: 14px; height: 14px; }
+/* An entry's glyph says WHAT it is about, in the same colours the fleet cards' marks wear — and the class is
+   chosen by the entry's KIND, never by its glyph, because a backup repository and a container both draw the
+   `box`. Trouble still outranks identity: the failed-directory rule below is more specific and wins. */
+.ex-ico.is-disk { color: var(--disk); }
+.ex-ico.is-backup { color: var(--backup); }
+.ex-ico.is-docker { color: var(--docker); }
 
 /* Depth is read, not counted: one hairline runs down each level of the tree. Only its offset is set per
    level, by the script that knows the depth. */
@@ -308,11 +314,20 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 .ex-row:hover .ex-cap.is-docker,
 .ex-row.is-sel .ex-cap.is-docker { color: var(--docker); }
 
-.ex-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; }
-.ex-dot.is-up { background: var(--green); box-shadow: 0 0 6px rgba(78, 201, 176, .5); }
+/* The dot paints only trouble, and takes space only when it paints. A blank 6px held open on every healthy
+   machine is the same noise a green dot was, just invisible — so the layout shifts when something goes
+   amber or red, which is the one moment a row has earned the right to draw the eye. */
+.ex-dot { display: none; flex: none; width: 6px; height: 6px; border-radius: 50%; }
+.ex-dot.is-degraded, .ex-dot.is-down { display: block; }
+/* There is deliberately no `is-up` rule: a machine that is fine is not news, and a green dot on every
+   healthy machine made the one that had fallen over compete with a dozen that hadn't. The element still
+   takes its 6px so names line up, and what IS news moved to the card behind it (.ex-card.is-down). */
 .ex-dot.is-degraded { background: var(--yellow); }   /* on the network, but its Docker scrape is failing */
 .ex-dot.is-down { background: var(--red); }
-.ex-dot.is-idle { background: var(--text-dim); }
+/* No `is-idle` rule either: a sleeping phone is not news, and neither is a machine nothing has probed.
+   Amber and red are the whole vocabulary — the fleet page paints trouble and stays silent otherwise.
+   The cost, stated where someone would look for the rule: an unprobed machine now reads the same as a
+   healthy one, and the listing's "N online" count is where that gap still shows. */
 /* An archived view has no liveness to report, so the pane drops its dots. The tree keeps its own: it stands
    in the present regardless of which archive the pane is showing, and blanking it implied the whole fleet
    had gone dark. */
@@ -720,6 +735,14 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 }
 .ex-card:hover { border-color: var(--accent); background: var(--bg-hover); }
 .ex-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The alarm the dot stopped carrying, on the surface it cannot be missed on — the same reddish wash a
+   failed read already wears elsewhere. It needs its own hover: the plain .ex-card:hover above is just as
+   specific and comes first, so without this a down card would turn its red off under the pointer. */
+.ex-card.is-down { border-color: rgba(244, 135, 113, .35); background: rgba(244, 135, 113, .06); }
+.ex-card.is-down:hover { border-color: rgba(244, 135, 113, .6); background: rgba(244, 135, 113, .12); }
+/* And then the dot inside it says nothing: the card already said it. The dot still paints in the rail,
+   which has no card behind it to carry the alarm. */
+.ex-card.is-down .ex-dot.is-down { display: none; }
 /* Same "greyed, not removed" treatment as .ex-btn:disabled — a card Vaier cannot open right now still
    names what is there. */
 .ex-card:disabled { opacity: .4; cursor: not-allowed; }
@@ -853,21 +876,24 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 }
 
 /* A standing: what the thing is, one word for how it stands, the detail behind that word, and its verbs.
-   The left edge is the word again, at a glance — green where it is good, red where Vaier could not read it,
-   and otherwise the same quiet rule every other surface here wears. */
+   The left edge is the word again, at a glance — the subject's own colour where it stands well, red where
+   Vaier could not read it, and otherwise the same quiet rule every other surface here wears. */
 .ex-standing { margin-top: 10px; border-left: 2px solid var(--border-hi); }
-.ex-standing:has(.ex-standing-state.is-in)  { border-left-color: var(--green); }
+.ex-standing:has(.ex-standing-state.is-claude-in) { border-left-color: var(--claude); }
 .ex-standing:has(.ex-standing-state.is-bad) { border-left-color: var(--red); }
 .ex-standing.is-error { border-color: rgba(244, 135, 113, .35); background: rgba(244, 135, 113, .06); }
 .ex-standing-text { flex: 1 1 auto; min-width: 0; }
 .ex-standing-top { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
 .ex-standing-title { color: var(--text); font-weight: 600; }
-/* The same words, in the same colours, as the Credentials view gives the same standings. */
+/* Claude's standing wears Claude's own clay, signed out the same hue faded — the very tints its fleet-card
+   mark uses, so one machine cannot read clay on its card and green on its pane. The tones are Claude-scoped
+   rather than the generic good/bad pair they replaced: a sign-in is presence, not a traffic light. Red stays
+   for the read that FAILED, which genuinely is trouble. */
 .ex-standing-state { font-size: 13px; }
-.ex-standing-state.is-in    { color: var(--green); }
-.ex-standing-state.is-out   { color: var(--text-muted); }
+.ex-standing-state.is-claude-in { color: var(--claude); }
+.ex-standing-state.is-claude-out { color: var(--claude); opacity: .45; }
 .ex-standing-state.is-muted { color: var(--text-dim); }
-.ex-standing-state.is-bad   { color: var(--red); }
+.ex-standing-state.is-bad { color: var(--red); }
 /* An account name is a coordinate, so it is mono — the same rule the addresses and paths follow. */
 .ex-standing-detail {
     margin-top: 3px;
@@ -1784,11 +1810,13 @@ select.ex-input { cursor: pointer; }
 /* A machine's job subheading, and its last-run status line — a dot and a phrase, the fleet's own four colours. */
 .ex-sub { font-family: var(--mono); font-size: 14px; color: var(--text); margin: 16px 0 6px; }
 .ex-runline { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text-muted); }
-/* The backed-up mark in the file browser: a small shield in the accent, riding just after the name. The
-   half-shield (a folder that only contains backed-up things) is the same glyph, muted — present, but lesser. */
-.ex-shield { display: inline-flex; align-items: center; margin-left: 5px; color: var(--accent); flex: none; }
+/* The backed-up mark in the file browser: a small shield riding just after the name. It says "this is backed
+   up", which is backup identity and not Vaier's brand, so it wears the backup colour rather than the accent.
+   The half-shield (a folder that only contains backed-up things) is the same hue faded — present, but lesser
+   — the same way the signed-out Claude mark stays clay instead of switching colour. */
+.ex-shield { display: inline-flex; align-items: center; margin-left: 5px; color: var(--backup); flex: none; }
 .ex-shield .ex-ico { width: 12px; height: 12px; }
-.ex-shield.is-partial { color: var(--text-dim); }
+.ex-shield.is-partial { color: var(--backup); opacity: .45; }
 
 /* The Update available mark (#57): a newer image is being served for the tag this container runs. Yellow, the
    same advisory colour the degraded dot uses — nothing is broken, the container is running fine, and red has

@@ -3242,4 +3242,232 @@ class ExplorerShellTest {
         assertThat(css).doesNotContain(".ex-cap.is-relay {");
         assertThat(css).doesNotContain(".ex-cap.is-backupserver {");
     }
+
+    // --- 23. the identity colours leave the fleet cards ----------------------------------------------------
+    //
+    // §22 gave each marked concept a hue of its own. It stopped at the fleet cards, so the same disk was
+    // violet on its card and plain grey two clicks away in the tree, and the same machine's Claude standing
+    // was clay on its card and GREEN on its pane. These carry the four colours out to the entry glyphs, the
+    // Claude standing and the backed-up shield — and pin the boundary that makes the scheme readable at all:
+    // amber and red are still spent on nothing but trouble, and a status dot is never given an identity hue.
+
+    /**
+     * An entry's glyph says WHAT it is about. The map exists so the rule is written once and the three
+     * surfaces that draw an entry — the tree row, the "Inside this machine" grid, the ⌘K palette — cannot
+     * drift into three vocabularies.
+     */
+    @Test
+    void anEntrysGlyph_wearsTheColourOfWhatItIsAbout() throws IOException {
+        String js = read("explorer-shell.js");
+
+        assertThat(js).as("a filesystem is violet").contains("disk: 'is-disk'");
+        assertThat(js).as("an archive and the repository holding it are both backup-coloured")
+            .contains("backup: 'is-backup'").contains("repo: 'is-backup'");
+        assertThat(js).as("Docker is a borrowed identity, so it keeps its own blue")
+            .contains("containers: 'is-docker'").contains("container: 'is-docker'");
+
+        String css = read("explorer-shell.css");
+        assertThat(css).contains(".ex-ico.is-disk { color: var(--disk); }");
+        assertThat(css).contains(".ex-ico.is-backup { color: var(--backup); }");
+        assertThat(css).contains(".ex-ico.is-docker { color: var(--docker); }");
+    }
+
+    /**
+     * The trap this whole map exists to avoid: {@code ICON_FOR} sends a backup repository and both container
+     * kinds to the same {@code box} glyph, so a tint written against the GLYPH would paint every Docker
+     * container backup-aqua and every repository Docker-blue. The tint is therefore keyed off the kind, and
+     * this asserts the two collide on the glyph while staying apart on the colour.
+     */
+    @Test
+    void theEntryTint_isKeyedOffTheKindAndNeverTheGlyph() throws IOException {
+        String js = read("explorer-shell.js");
+
+        assertThat(js).as("the collision is real — three kinds, one glyph")
+            .contains("containers: 'box', container: 'box'").contains("repo: 'box'");
+        assertThat(js).as("and the tint still tells them apart")
+            .contains("repo: 'is-backup'").contains("container: 'is-docker'");
+        assertThat(js).as("because it is looked up by kind").contains("TINT_FOR[kind]");
+    }
+
+    /**
+     * One rule, applied at the three call sites that draw an entry, rather than three copies of a
+     * conditional — so a fourth surface gets the colours by construction and none can be forgotten.
+     */
+    @Test
+    void allThreeEntrySurfaces_drawTheirGlyphThroughTheOneTintedSeam() throws IOException {
+        String js = read("explorer-shell.js");
+
+        assertThat(js).as("the tree row").contains("+ entryIco(kind, path[path.length - 1]);");
+        assertThat(js).as("the Inside-this-machine card").contains("card(entryIco(kid.kind, kid.name),");
+        assertThat(js).as("the palette result")
+            .contains("item.innerHTML = entryIco(entry.kind, entry.path[entry.path.length - 1]);");
+        assertThat(js).as("and the seam is the one place an entry glyph is built — no surface goes round it")
+            .containsOnlyOnce("svg(iconFor(");
+    }
+
+    /**
+     * The Containers pane lists the same things the tree does, so its rows go through the same seam and its
+     * glyphs come out Docker-blue. A published service is not a borrowed identity and keeps the inherited
+     * colour — it rides along only because it is the other listing of entries.
+     */
+    @Test
+    void theContainerRows_wearDockerBlue() throws IOException {
+        String js = read("explorer-shell.js");
+
+        assertThat(js).contains("entryIco('container'), c.containerName");
+        assertThat(js).contains("listRow(entryIco('service')");
+    }
+
+    /**
+     * The inconsistency this pass exists to end: {@code claudeCard()} tinted its state word through the
+     * generic {@code is-in} tone, which renders {@code var(--green)} — so one machine's Claude standing read
+     * green on its pane and clay on its fleet card, contradicting the design comment sitting on the card's
+     * own mark. Signed in is solid clay, signed out the same hue faded, exactly as the mark does it.
+     */
+    @Test
+    void theClaudeStandingOnThePane_wearsTheSameClayAsItsFleetCard() throws IOException {
+        String js = read("explorer-shell.js");
+        assertThat(js).contains("tone: 'is-claude-in'").contains("tone: 'is-claude-out'");
+
+        String css = read("explorer-shell.css");
+        assertThat(css).contains(".ex-standing-state.is-claude-in { color: var(--claude); }");
+        assertThat(css).contains(".ex-standing-state.is-claude-out { color: var(--claude); opacity: .45; }");
+        assertThat(css).as("the left edge is the same word again, so it follows the word")
+            .contains(".ex-standing:has(.ex-standing-state.is-claude-in) { border-left-color: var(--claude); }");
+        assertThat(css).as("and the green tone it used to reach for is gone rather than left lying about")
+            .doesNotContain(".ex-standing-state.is-in {");
+    }
+
+    /**
+     * A sign-in is presence, not a verdict — but a standing Vaier could not READ still is one. The clay tone
+     * is Claude-scoped so it recolours nothing else, and the trouble and unknown tones on the same card are
+     * untouched.
+     */
+    @Test
+    void theClaudeTintIsClaudeScoped_andLeavesTroubleAndUnknownAlone() throws IOException {
+        String css = read("explorer-shell.css");
+
+        assertThat(css).contains(".ex-standing-state.is-bad { color: var(--red); }");
+        assertThat(css).contains(".ex-standing-state.is-muted { color: var(--text-dim); }");
+        assertThat(css).contains(".ex-standing:has(.ex-standing-state.is-bad) { border-left-color: var(--red); }");
+    }
+
+    /**
+     * The shield in the file browser means "this is backed up" — backup identity, not brand — so it stops
+     * wearing the generic accent cyan. The half-shield reuses the same hue faded rather than switching to a
+     * second colour, mirroring how the signed-out Claude mark stays clay.
+     */
+    @Test
+    void theBackedUpShield_wearsBackupsOwnColour_notTheGenericBrand() throws IOException {
+        String css = read("explorer-shell.css");
+
+        assertThat(css).contains(".ex-shield { display: inline-flex; align-items: center; margin-left: 5px; "
+            + "color: var(--backup); flex: none; }");
+        assertThat(css).contains(".ex-shield.is-partial { color: var(--backup); opacity: .45; }");
+    }
+
+    /**
+     * The boundary the whole scheme rests on. A dot reports STATE and stays a traffic light; amber is still
+     * spent on nothing but an advisory. Handing either an identity hue would leave the fleet with colours
+     * that no longer say anything.
+     *
+     * <p>The up dot was asserted here too until the fleet stopped drawing one — a healthy machine is not news.
+     * That is a narrowing of this guard, not a hole in it: the states that still paint are still the traffic
+     * light, and section 24 holds the line that removing green did not quietly turn "unknown" into "fine".
+     */
+    @Test
+    void theStatusIndicators_keepTheirTrafficLight() throws IOException {
+        String css = read("explorer-shell.css");
+
+        assertThat(css).contains(".ex-dot.is-down { background: var(--red); }");
+        assertThat(css).contains(".ex-dot.is-degraded { background: var(--yellow); }");
+        assertThat(css).as("the update mark is advisory, and advisory is amber")
+            .contains(".ex-mark.is-update { color: var(--yellow); }");
+        assertThat(css).as("the nudge glyph is uniformly accent by design")
+            .contains(".ex-nudge-ico").contains("color: var(--accent); margin-top: 1px; }");
+    }
+
+    // --- 24. up draws nothing; the card carries the alarm --------------------------------------------------
+    //
+    // A green dot on every healthy machine is decoration on the case nobody has to act on, and it made the two
+    // machines in trouble compete for the eye with the eleven that were fine. Vaier's own rule elsewhere is to
+    // speak only on trouble. These pin that rule onto the fleet's most-looked-at surface.
+
+    /**
+     * A dot that paints nothing takes no space either. Keeping the 6px as a reservation was the first cut, on
+     * the theory that names should line up down the fleet — but a blank slot on every healthy machine is the
+     * same noise a green dot was, only harder to point at. Layout now shifts when a machine goes amber or red,
+     * which is exactly the moment a row has earned the right to draw attention to itself.
+     */
+    @Test
+    void aMachineThatIsUp_drawsNoDotAndReservesNoSpace() throws IOException {
+        String css = read("explorer-shell.css");
+
+        assertThat(css).as("up has no paint left").doesNotContain(".ex-dot.is-up {");
+        assertThat(css).as("and nothing is laid out for a dot that will not paint")
+            .contains(".ex-dot { display: none;");
+        assertThat(css).as("only the two that paint take their place back")
+            .contains(".ex-dot.is-degraded, .ex-dot.is-down { display: block; }");
+    }
+
+    /**
+     * Only trouble paints. Amber and red are the whole vocabulary now — a machine that is fine, one that is
+     * asleep, and one nothing has probed yet all draw nothing.
+     *
+     * <p>This test asserted the opposite for exactly one deploy, and the reversal is deliberate rather than a
+     * guard someone gave up on: grey was kept so that "nobody has asked yet" could not be read as "fine", and
+     * the operator judged the dots on a routinely-sleeping phone and laptop to be worth more than that
+     * distinction. What it costs is real and recorded here — on the fleet listing, an unprobed machine is now
+     * indistinguishable from a healthy one, and the header's "N online" count is the only place the gap still
+     * shows. UNKNOWN is still mapped and still named in the domain; it simply has no colour any more.
+     */
+    @Test
+    void onlyTroublePaints_soAnUnprobedMachineLooksLikeAHealthyOne() throws IOException {
+        String css = read("explorer-shell.css");
+        String js = read("explorer-shell.js");
+
+        assertThat(css).doesNotContain(".ex-dot.is-idle");
+        assertThat(css).as("amber and red are the whole vocabulary")
+            .contains(".ex-dot.is-degraded").contains(".ex-dot.is-down");
+        assertThat(js).as("the state is still MAPPED — it lost its colour, not its meaning")
+            .contains("'UNKNOWN':  'is-idle'");
+    }
+
+    /** What the dot stopped saying, said where it cannot be missed. */
+    @Test
+    void aMachineThatIsDown_reddensItsWholeCard() throws IOException {
+        String css = read("explorer-shell.css");
+
+        assertThat(css).contains(".ex-card.is-down");
+        assertThat(css).as("and keeps a hover of its own, which the plain .ex-card:hover would have stolen")
+            .contains(".ex-card.is-down:hover");
+    }
+
+    /**
+     * The dot and the card behind it are two renderings of one answer, so they are painted in one place. Two
+     * call sites asking {@code livenessOf} separately is how a card ends up red around a dot that has gone
+     * grey — and the live repaint on the stream would only ever fix one of them.
+     */
+    @Test
+    void theDotAndTheCardAroundIt_arePaintedFromOneAnswer() throws IOException {
+        String js = read("explorer-shell.js");
+
+        assertThat(js).containsOnlyOnce("function paintLiveness(");
+        assertThat(js).as("the card class is toggled there and nowhere else")
+            .containsOnlyOnce("classList.toggle('is-down'");
+    }
+
+    /**
+     * Once the card is red the dot inside it is the same word twice, so it stands down there — and only
+     * there. The rail has no card to redden, so a machine's row keeps the red dot as its only way of saying
+     * the machine has fallen over.
+     */
+    @Test
+    void aReddenedCard_dropsTheDotThatWouldRepeatIt() throws IOException {
+        String css = read("explorer-shell.css");
+
+        assertThat(css).contains(".ex-card.is-down .ex-dot.is-down");
+        assertThat(css).as("but the dot itself still paints, for the rail that has no card behind it")
+            .contains(".ex-dot.is-down { background: var(--red); }");
+    }
 }

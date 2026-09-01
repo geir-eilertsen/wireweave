@@ -740,6 +740,19 @@
         return ICON_FOR[kind] || 'file';
     };
 
+    // A glyph's colour says WHAT the entry is about — the same four the fleet cards' marks wear. Keyed off the
+    // KIND and never off the glyph: ICON_FOR sends `repo`, `containers` and `container` to the one `box`, so a
+    // rule written against the glyph name would paint every Docker container backup-aqua. Everything else keeps
+    // the colour it inherits — amber and red stay spent on trouble alone, and green belongs to the dots.
+    const TINT_FOR = { disk: 'is-disk', backup: 'is-backup', repo: 'is-backup',
+                       containers: 'is-docker', container: 'is-docker' };
+
+    // The one place an entry's glyph is built. Every surface that draws an entry — the tree row, the machine
+    // pane's grid, the palette, the listing rows — goes through here, so the colours cannot drift into four
+    // vocabularies and a fifth surface gets them for free.
+    const entryIco = (kind, segment) =>
+        svg(iconFor(kind, segment), 'ex-ico' + (TINT_FOR[kind] ? ' ' + TINT_FOR[kind] : ''));
+
     // Mono for anything with a coordinate, sans for anything human. A machine name, a path, a container name
     // and a DNS name are addresses; "Backups" is a word.
     const MONO_KINDS = new Set(['machine', 'files', 'dir', 'file', 'containers', 'container', 'services',
@@ -792,10 +805,18 @@
         return 'is-idle';   // a machine with no liveness source at all — honest, not a bug
     }
 
+    // The dot and the card around it are two renderings of one answer, so one place gives both. Asking
+    // livenessOf twice is how a card ends up red around a dot that has gone grey — and the stream's repaint
+    // would only ever have fixed one of them.
+    function paintLiveness(el) {
+        const state = livenessOf(el.getAttribute('data-ex-dot'));
+        el.className = 'ex-dot ' + state;
+        const card = el.closest('.ex-card');
+        if (card) card.classList.toggle('is-down', state === 'is-down');
+    }
+
     function paintDots() {
-        document.querySelectorAll('[data-ex-dot]').forEach((dot) => {
-            dot.className = 'ex-dot ' + livenessOf(dot.getAttribute('data-ex-dot'));
-        });
+        document.querySelectorAll('[data-ex-dot]').forEach(paintLiveness);
     }
 
     function dot(machineId) {
@@ -1007,7 +1028,7 @@
         row.style.paddingLeft = (8 + depth * 13) + 'px';
         row.innerHTML = svg('chev', 'ex-twist' + (expandable ? (isOpen ? ' is-open' : '') : ' is-leaf')
                 + (busy ? ' is-busy' : ''))
-            + svg(iconFor(kind, path[path.length - 1]), 'ex-ico');
+            + entryIco(kind, path[path.length - 1]);
 
         const name = document.createElement('span');
         name.className = 'ex-lbl ' + (MONO_KINDS.has(kind) ? 'is-id' : 'is-word');
@@ -1239,18 +1260,19 @@
     // disabledTitle: when set, the card is greyed and inert rather than removed — the entry still names what
     // is there, it just cannot be opened right now (e.g. Vaier's last check found no SSH server). Pass a
     // falsy value for a normal, live card.
-    function card(icon, name, nameIsId, noteText, onClick, dotMachineId, disabledTitle) {
+    function card(ico, name, nameIsId, noteText, onClick, dotMachineId, disabledTitle) {
         const btn = document.createElement('button');
         btn.className = 'ex-card';
 
         const top = document.createElement('div');
         top.className = 'ex-card-top';
-        top.innerHTML = svg(icon, 'ex-ico');
+        top.innerHTML = ico;
         const nm = document.createElement('span');
         nm.className = 'ex-card-name' + (nameIsId ? '' : ' is-word');
         nm.textContent = name;
         top.appendChild(nm);
-        if (dotMachineId) top.appendChild(dot(dotMachineId));
+        const liveDot = dotMachineId ? dot(dotMachineId) : null;
+        if (liveDot) top.appendChild(liveDot);
         btn.appendChild(top);
 
         const n = document.createElement('div');
@@ -1264,6 +1286,8 @@
         } else {
             btn.onclick = onClick;
         }
+        // Only now is the dot inside the card, so the painter can reach both from the one answer.
+        if (liveDot) paintLiveness(liveDot);
         return btn;
     }
 
@@ -1360,7 +1384,7 @@
                 // hidden, only put where an address belongs — renderMachine still lists it under the machine's
                 // details, so this is a move, not a removal. A machine nobody has described says just its type.
                 const purpose = machineDescription(m);
-                const c = card(machineIcon(m.id), m.name, true,
+                const c = card(svg(machineIcon(m.id), 'ex-ico'), m.name, true,
                     MACHINE_TYPE[m.type] + (purpose ? ' · ' + purpose : ''),
                     () => { S.open.add(key(['fleet', m.id])); go(['fleet', m.id]); }, m.id);
                 // What the machine is saying without being opened — capabilities, its last backup's outcome,
@@ -1388,7 +1412,7 @@
         // same machines, not another machine, and dropping it into the grid above would have said it was one.
         body.appendChild(section('The fleet, seen whole'));
         const views = el('div', 'ex-grid');
-        views.appendChild(card('map', 'Map', false, 'Where the machines physically are',
+        views.appendChild(card(svg('map', 'ex-ico'), 'Map', false, 'Where the machines physically are',
             () => go(['fleet', 'map'])));
         body.appendChild(views);
 
@@ -1950,7 +1974,7 @@
                 inside.forEach((kid) => {
                     const disabledTitle = (noSshServer && SSH_ENTRY_KINDS.has(kid.kind))
                         ? 'No SSH server detected on last check' : null;
-                    grid.appendChild(card(iconFor(kid.kind, kid.name), kid.name, true,
+                    grid.appendChild(card(entryIco(kid.kind, kid.name), kid.name, true,
                         NOTE[kid.name], () => go(['fleet', m.id, kid.name]), null, disabledTitle));
                 });
                 body.appendChild(grid);
@@ -3834,7 +3858,8 @@
         rows.appendChild(listHead(['Name', 'Image', 'State']));
         found.forEach((c) => {
             rows.appendChild(listRow(
-                'box', c.containerName, () => go(['fleet', machineId, 'containers', c.containerName]),
+                entryIco('container'), c.containerName,
+                () => go(['fleet', machineId, 'containers', c.containerName]),
                 [c.image || '—', c.state || 'unknown'],
                 c.state === 'running' ? 'OK' : 'DOWN', updateMark(c)));
         });
@@ -3906,7 +3931,7 @@
         } else {
             const rows = el('div', 'ex-listing is-wide');
             rows.appendChild(listHead(['Published at', 'Backend', 'State']));
-            found.forEach((s) => rows.appendChild(listRow('route', s.dnsAddress || serviceName(s),
+            found.forEach((s) => rows.appendChild(listRow(entryIco('service'), s.dnsAddress || serviceName(s),
                 () => go(['fleet', machineId, 'services', serviceName(s)]),
                 [(s.hostAddress || '') + (s.hostPort ? ':' + s.hostPort : ''), s.state || 'UNKNOWN'], s.state)));
             body.appendChild(rows);
@@ -4544,13 +4569,14 @@
     }
 
     // `mark` is an optional badge riding just after the name — the same shape the file browser's shield takes.
-    function listRow(icon, name, onClick, meta, state, mark) {
+    // `ico` arrives already built, so a listed container is tinted by the same seam the tree's rows use.
+    function listRow(ico, name, onClick, meta, state, mark) {
         const row = document.createElement('div');
         row.className = 'ex-lrow';
 
         const btn = document.createElement('button');
         btn.className = 'ex-lname';
-        btn.innerHTML = svg(icon, 'ex-ico');
+        btn.innerHTML = ico;
         const nm = document.createElement('span');
         nm.className = 'ex-nm';
         nm.textContent = name;
@@ -6641,13 +6667,15 @@
     // `short` is the same standing said where the subject is already named — on the machine pane the card is
     // titled Claude, and "Claude · Claude isn’t installed here" says it twice. One map, so the two surfaces
     // can never drift into two vocabularies.
-    // `card` is the tint a fleet card's mark wears, on this same map for the same reason. Only the two
-    // states the server marks at all need one — it decides which those are, this only says what they look
-    // like. Both wear Claude's own clay rather than a traffic light: green/amber/red are the disk and
-    // backup marks' words for trouble, and a sign-in is presence. Signed out is the same clay, hollow.
+    // `card` is the tint a fleet card's mark wears and `tone` the tint of the same standing said on the
+    // machine pane, on this same map for the same reason. Only the two states the server marks at all need
+    // one — it decides which those are, this only says what they look like. Both surfaces wear Claude's own
+    // clay rather than a traffic light: green/amber/red are the disk and backup marks' words for trouble, and
+    // a sign-in is presence. Signed out is the same clay, hollow. The pane read GREEN here until the identity
+    // colours reached it, so one machine's standing contradicted its own card.
     const CLAUDE_STATE = {
-        SIGNED_IN:     { label: 'Signed in',                   short: 'Signed in',     tone: 'is-in',    card: 'is-claude' },
-        SIGNED_OUT:    { label: 'Signed out',                  short: 'Signed out',    tone: 'is-out',   card: 'is-claude-out' },
+        SIGNED_IN:     { label: 'Signed in',                   short: 'Signed in',     tone: 'is-claude-in',  card: 'is-claude' },
+        SIGNED_OUT:    { label: 'Signed out',                  short: 'Signed out',    tone: 'is-claude-out', card: 'is-claude-out' },
         NOT_INSTALLED: { label: 'Claude isn’t installed here', short: 'Not installed', tone: 'is-muted' },
         UNREACHABLE:   { label: 'Unreachable',                 short: 'Unreachable',   tone: 'is-muted' },
         SKIPPED:       { label: 'No shell Vaier can reach',    short: 'No shell here', tone: 'is-muted' },
@@ -8852,7 +8880,7 @@
             // The last segment, exactly as the tree's rows do it — a machine's icon reads off its identity and
             // a global's off its own name, and both of those are the tail of the path. Reading path[1] instead
             // gave every Vaier entry the fallback file glyph.
-            item.innerHTML = svg(iconFor(entry.kind, entry.path[entry.path.length - 1]), 'ex-ico');
+            item.innerHTML = entryIco(entry.kind, entry.path[entry.path.length - 1]);
 
             const pth = document.createElement('span');
             pth.className = 'ex-pth';
