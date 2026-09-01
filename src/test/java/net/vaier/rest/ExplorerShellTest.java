@@ -2975,4 +2975,54 @@ class ExplorerShellTest {
         assertThat(js).as("storing is not distributing, and the operator is told so")
             .contains("Nothing has reached a machine yet");
     }
+
+    // --- 21. a re-render is not a navigation --------------------------------------------------------------
+    //
+    // The bug these exist for: the pane is repainted under the operator constantly and without being asked —
+    // the Claude sign-in read lands an SSH round-trip after the machine page opened, a disk standing moves on
+    // the five-minute sweep, a container update settles, a stream reconnects. Every one of those went through
+    // `renderPane`, which blanked the pane and forced `scrollTop = 0`. Standing halfway down a long machine
+    // page, that is not a repaint an operator can see past: the page scrolls itself away from where they are,
+    // mid-read, for a change somewhere else entirely.
+
+    /**
+     * The offset belongs to the view, not to the pane, and a repaint of the view you are already standing in
+     * has to put it back. This is the whole fix: nothing else about the render changes.
+     */
+    @Test
+    void repaintingTheViewYouAreStandingIn_leavesYouWhereYouWereStanding() throws IOException {
+        String js = read("explorer-shell.js");
+
+        assertThat(js).as("the pane no longer forces itself to the top on every single render")
+            .doesNotContain("pane.scrollTop = 0;");
+        assertThat(js).as("the view the offset belongs to is named in one place")
+            .contains("function paneViewKey(");
+        assertThat(js).contains("pane.scrollTop = resume;");
+    }
+
+    /**
+     * The opposite bug, and the reason the offset is keyed by view rather than simply kept: restoring it
+     * unconditionally would open a machine halfway down, at wherever the operator happened to be standing on
+     * the machine before it.
+     */
+    @Test
+    void movingToAnotherView_startsAtItsTop() throws IOException {
+        String js = read("explorer-shell.js");
+
+        assertThat(js).contains("view === _paneView ? pane.scrollTop : 0");
+        assertThat(js).as("and the past is a different view of the same path, not the same one")
+            .contains("key(S.path) + '@'");
+    }
+
+    /**
+     * The rail loses the operator's place the same way on the same renders, and needs no assignment to do it:
+     * emptying it collapses its height, which drops its own scroll to the top. A folded-open fleet is long
+     * enough for that to be just as disorienting as the pane.
+     */
+    @Test
+    void theRailIsRebuiltInPlace_notScrolledBackToItsTop() throws IOException {
+        String js = read("explorer-shell.js");
+
+        assertThat(js).contains("tree.scrollTop = resume;");
+    }
 }

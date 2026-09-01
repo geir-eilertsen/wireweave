@@ -914,6 +914,11 @@
 
     function renderTree() {
         const tree = $('exTree');
+        // The rail is emptied and rebuilt on every one of those same repaints, and it needs no assignment to
+        // lose the operator's place: emptying it collapses its height, which drops its scroll to the top by
+        // itself. Unconditional here, unlike the pane — the rail is always showing the one same thing, the
+        // fleet, however far into it you have walked.
+        const resume = tree.scrollTop;
         tree.textContent = '';
 
         const label = document.createElement('div');
@@ -921,6 +926,7 @@
         label.textContent = 'Fleet';
         tree.appendChild(label);
         tree.appendChild(branch(['fleet'], 'fleet', 'fleet', 0));
+        tree.scrollTop = resume;
 
         // Vaier's own entries used to hang here as a second root, which made this a forest. They are in the
         // topbar menu now — the one surface that survives the tree being folded away or absent — and a second
@@ -1224,11 +1230,27 @@
         return dl;
     }
 
+    // Which view the pane is showing. The past is a different view of the same path — the amber light is a
+    // different reading of the same directory, not the same page — so the time is part of the identity.
+    function paneViewKey() {
+        return key(S.path) + '@' + (S.at || '');
+    }
+
+    let _paneView = '';
+
     function renderPane() {
         const pane = $('exPane');
+        // A repaint is not a navigation, and the pane is repainted constantly without being asked: the Claude
+        // sign-in read lands an SSH round-trip after a machine page opens, the five-minute sweep moves a disk
+        // standing, a container update settles, a stream reconnects. Blanking the pane drops it to the top,
+        // which read as the page scrolling itself away from the operator mid-sentence. So where they were
+        // standing in THIS view is put back; only a real move to another view starts at its top.
+        const view = paneViewKey();
+        const resume = view === _paneView ? pane.scrollTop : 0;
+        _paneView = view;
+
         pane.className = 'ex-pane';
         pane.textContent = '';
-        pane.scrollTop = 0;
 
         const kind = kindOf(S.path);
         // Standing anywhere else ends the visit to the Map, so opening it again frames the fleet afresh.
@@ -1241,6 +1263,13 @@
         // progress. The flow says so while it is open, and this is what makes it true — the CLI left waiting
         // on that machine is ended rather than sitting at its prompt for nobody.
         if (kind !== 'machine') leaveClaudeSignIn();
+
+        drawPane(pane, kind);
+        // After the drawing, because the offset can only be restored against the height the drawing gives it.
+        pane.scrollTop = resume;
+    }
+
+    function drawPane(pane, kind) {
         if (kind === 'fleet') return renderFleet(pane);
         if (kind === 'map') return renderMap(pane);
         if (kind === 'settings') return renderSettings(pane);
