@@ -130,6 +130,7 @@
             + '&id=' + encodeURIComponent(machineId) + '&pane=' + encodeURIComponent(pane),
             'vaier-shell-' + encodeURIComponent(pane), 'popup,width=1024,height=680');
     });
+    btnDup.classList.add('tw-dup');   // wide screens only — see terminal-window.css
     btnDup.title = 'Open a second, separate shell on ' + machine;
     const btnPaste = actionButton('Paste', pasteClipboard);
     const btnPassword = actionButton('Send password', () => send({ type: 'send-password' }));
@@ -138,7 +139,20 @@
     // The one distinction people miss: closing the window keeps the shell alive to reattach; Exit stops it.
     btnEnd.title = 'Stop this shell for good on ' + machine + '. Just closing the window keeps it running — and '
         + 'it even survives a Vaier restart — so reopening reattaches right where you left off.';
-    $('twActions').append(btnDup, btnPaste, btnPassword, btnEnd);
+    // Where this machine stands on Claude, and the way in. Hidden until something is known — and left hidden
+    // where the server says a sign-in is impossible here, because a control explaining an impossibility is
+    // worth less than no control.
+    const btnClaude = actionButton('Claude', toggleClaude);
+    // The three ways out of a modal, all of them expected: the ×, the ground around it, and Escape.
+    $('twClaudeClose').onclick = () => setClaudePanel(false);
+    $('twScrim').onclick = (e) => { if (e.target === $('twScrim')) setClaudePanel(false); };
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !$('twScrim').hidden) { e.preventDefault(); setClaudePanel(false); }
+    });
+    btnClaude.hidden = true;
+    btnClaude.setAttribute('aria-expanded', 'false');
+    btnClaude.setAttribute('aria-controls', 'twScrim');
+    $('twActions').append(btnClaude, btnDup, btnPaste, btnPassword, btnEnd);
     refreshActions();
 
     function actionButton(label, onClick) {
@@ -151,6 +165,47 @@
         btnPassword.title = state.promptShowing ? 'Send the stored password' : PASSWORD_DISABLED_REASON;
         btnPaste.disabled = !state.connected;
         btnPaste.title = state.connected ? 'Paste the clipboard into this shell' : PASTE_DISABLED_REASON;
+    }
+
+    // --- Claude, in the window that is this machine's terminal ------------------------------------------
+    //
+    // Signing in to Claude runs the CLI in one OS user's home on one machine. This window IS that machine as
+    // that user, so this is where it belongs — claude-sign-in.js draws and drives the whole thing, and all
+    // that is left here is the bar control and the terminal's size.
+    let claude = null;
+
+    function startClaude() {
+        claude = window.VaierClaude.mount($('twClaude'), machineId, machine);
+        claude.onUpdate(showClaudeStanding);
+    }
+
+    function showClaudeStanding(view) {
+        btnClaude.hidden = !view.draw;
+        if (!view.draw) { setClaudePanel(false); return; }
+        // The word is only "Claude". The standing is said by the clay below and spelled out on the title, and
+        // saying it on the button as well made it half again the width of every other control in the bar.
+        btnClaude.className = 'tw-btn tw-claude-btn ' + window.VaierClaude.words(view.state).tone;
+        btnClaude.title = view.title;
+    }
+
+    function toggleClaude() { setClaudePanel($('twScrim').hidden); }
+
+    // Over the shell, not in it: the sign-in takes no rows from the terminal, so nothing here re-fits and
+    // nothing is told to the far side. That is the point of the modal — a terminal redrawn at the wrong size
+    // under a running command is a corrupted screen, and now it cannot happen from this control at all.
+    function setClaudePanel(open) {
+        const scrim = $('twScrim');
+        if (open === !scrim.hidden) return;
+        scrim.hidden = !open;
+        btnClaude.setAttribute('aria-expanded', String(open));
+        if (open) {
+            // Focus leaves the terminal, or the first thing typed into the code box would go to the shell.
+            $('twClaudeClose').focus();
+        } else {
+            // Putting it away abandons a sign-in in progress, exactly as leaving the machine used to.
+            if (claude) claude.leave();
+            term.focus();
+        }
     }
 
     // Pasting from a button, not only from Ctrl/Cmd+V: a soft keyboard has no Ctrl at all, and a browser
@@ -482,6 +537,7 @@
     if (machineId) {
         claimPane();
         connect();
+        startClaude();
     } else {
         setStatus('Finding ' + machine + '…');
         fetch('/machines')
@@ -508,6 +564,7 @@
                 setStatus(null);
                 claimPane();   // only now is there an identity to file the session under
                 connect();
+                startClaude();
             })
             .catch(() => setStatus('Could not reach Vaier to find ' + machine + '.', true));
     }

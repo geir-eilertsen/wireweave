@@ -20,6 +20,20 @@
         <span class="tw-status" id="twStatus"></span>
         <span class="tw-actions" id="twActions"></span>
     </header>
+    <!-- The sign-in (claude-sign-in.js), over the shell rather than in it. It sat between the bar and the
+         terminal, which meant opening it took rows away from whatever was running and every open, close and
+         change of standing had to re-fit the shell and tell the far side. A modal costs the terminal nothing,
+         so the one failure that does not look like a UI bug — a screen redrawn at the wrong size under a
+         running command — cannot happen at all. -->
+    <div class="tw-scrim" id="twScrim" hidden>
+        <div class="tw-modal" role="dialog" aria-modal="true" aria-labelledby="twClaudeTitle">
+            <div class="tw-modal-head">
+                <span class="tw-modal-title" id="twClaudeTitle">Claude</span>
+                <button type="button" class="tw-modal-close" id="twClaudeClose" aria-label="Close">&#215;</button>
+            </div>
+            <div class="tw-claude" id="twClaude"></div>
+        </div>
+    </div>
     <div class="tw-main">
         <div class="tw-term" id="twTerm"></div>
     </div>
@@ -31,6 +45,7 @@
     <script src="vendor/xterm/5.3.0/xterm-addon-fit.js"></script>
     <script src="vendor/xterm/5.3.0/xterm-addon-web-links.js"></script>
     <script src="terminal-panes.js"></script>
+    <script src="claude-sign-in.js"></script>
     <script src="terminal-window.js"></script>
 </body>
 </html>

@@ -3637,7 +3637,10 @@ signed in as, an inline sign-in panel (the URL with a **Copy** button, then the 
 verb. Inline, not a modal, because signing several machines in one after another turns a dialog into a
 ceremony. No coverage strip and no self-healing: there is nothing Vaier holds to put back. A machine with no
 Claude, no shell or no answer gets no button rather than a button that fails, and one sign-in is open at a
-time — a second would leave a CLI waiting on a machine nobody is going back to.
+time — a second would leave a CLI waiting on a machine nobody is going back to. *(Moved 2026-09-02: the
+sign-in itself left the machine's pane for that machine's own **web terminal** — see the last entry in this
+section. Everything else this paragraph settles still holds — `signInPossibleHere` as the server's call, the
+inline never-modal flow, no coverage strip, and no button offered where Vaier already knows one cannot work.)*
 
 **Corrected 2026-09-01: this was specced as a second section in the Explorer's Credentials view, and that is
 not what shipped.** The reasoning for it — one place answers "what is authenticated where", and what differs
@@ -3721,14 +3724,69 @@ results, and the Containers/Services listing rows — keyed off the entry's *kin
 and `container` both draw the `box` shape, so a rule written against the glyph name would have painted every
 Docker container backup-aqua. Everything else keeps the colour it inherits. The same pass reached two marks
 that had been stragglers rather than surfaces: the Claude sign-in standing on a machine's own pane wore green
-where its fleet card already wore clay, so one machine's own page disagreed with its own card; it now reads
+where its fleet card already wore clay, so one machine's own page disagreed with its own card; it then read
 `is-claude-in`/`is-claude-out` off the same `CLAUDE_STATE` map instead of the generic `is-in`/`is-out` tone.
+*(That standing has since left the pane for the machine's **web terminal**, where it still takes its tone from
+that one map — which now lives in `claude-sign-in.js` as the single copy. See the last entry in this section.)*
 And the backed-up shield in the file browser wore the plain brand accent, which said *this is Vaier* rather
 than *this is backed up*; it now wears `--backup`, with the half-shield the same hue faded rather than plain
 dim grey. None of this touches the status indicators: liveness dots, the update-available mark, the nudge
 glyph and the capability strip's dim relay/backup-server glyphs are unchanged, because they report state and
 the identity colours report what a thing *is* — the same distinction `--claude` already drew against green,
 amber and red, now drawn everywhere an entry's glyph appears rather than on the fleet cards alone.
+
+**The sign-in moved into the machine's own terminal window ✅ (2026-09-02, no issue — the operator asked for
+it).** Where a sign-in is drawn is not a layout question, and the machine pane was the wrong answer from the
+start. Signing in *is* a terminal act: it runs the `claude` CLI in one OS user's home on one machine, and
+what it leaves behind belongs to that user alone. The **web terminal** window IS that machine's shell as
+that user — the same login, the same home — so the sign-in belongs there and nowhere else. The machine's
+pane is where an operator reads *about* a machine; the shell is where they act *on* it, and the whole
+`EffectiveUser` argument this section already makes (§6.51, "a fact about a *user on* a machine") is the
+argument for the move. It also ends a smaller lie: the pane offered a sign-in beside every other fact about
+the machine, so nothing on screen said which login it would land in except a sentence.
+
+**Nothing behind it moved.** No Java changed, no endpoint, no request or response shape, no step of the
+flow: `GET|POST|DELETE /machines/{machineId}/claude-sign-in`, `POST …/claude-sign-in/code` and
+`POST /machines/{machineId}/claude-sign-out` are identical, and Vaier still neither holds nor intermediates
+a Claude credential. This is a move and a restyle, and it should be read as no new capability.
+
+**One module, two surfaces, one vocabulary.** `static/claude-sign-in.js` is an IIFE exposing
+`window.VaierClaude.words(state)` — the operator's words and tints for a **Claude sign-in state** — and
+`window.VaierClaude.mount(host, machineId, machineName)`, which draws and drives the whole sign-in and hands
+the host page back only what it owns: what the standing looks like in its own chrome (`onUpdate`) and the
+operator putting the panel away (`leave`). `explorer.html` loads it **for the words alone**, so a machine
+card's Claude mark and its shell's standing can never drift into two vocabularies; `terminal.html` loads it
+for the UI. The old `CLAUDE_STATE` map in `explorer-shell.js` is gone — the comment above it had worried for
+two entries about "two surfaces, one map", and that is now structural rather than a discipline. With it went
+`renderClaudeSignIn`, the pane's `standingCard(...)` helper, the `.ex-standing` styles and the
+`S.claudeSignIn` slice of shell state.
+
+**In the window.** The top bar gains a **Claude** control reading "Claude · Signed in" in Claude's own clay
+(`--claude`), hollow and unweighted when signed out, muted for the answers that are not a verdict — the
+same colour doctrine the fleet mark set, said in the same words. Clicking it drops the panel in **between
+the bar and the terminal**: the standing, its explanation, the verbs (Sign in / Sign in again / Sign out)
+and the two-step flow. Between, not floating over, because opening it must visibly cost terminal rows rather
+than hide part of the screen — and because both directions then have to `refit()` and `sendResize()`, since
+a terminal left at dimensions the remote does not share is a corrupted screen, not a cosmetic problem. Where
+the server says a sign-in is impossible there (`signInPossibleHere` false) **no control is drawn at all**,
+which is the same rule the pane's card followed: a control explaining an impossibility is worth less than no
+control. A read that merely *failed* is not that verdict and still draws, saying Vaier could not tell.
+
+**The fleet-card mark is untouched** — same clay, same hollow-when-signed-out, same five-minute-sweep
+source, same "no mark at all" for the quiet states — and is now the *only* place a machine's Claude
+standing appears outside its own shell, which is what makes it worth what it costs.
+
+**One line of copy changed, because it stopped being true.** The flow used to warn that "Leaving this
+machine abandons the sign-in", which was a fact about navigating away from a pane. It now reads "Closing
+this panel abandons the sign-in — the Claude CLI waiting on ‹machine› is ended rather than left at its
+prompt." Putting the panel away still abandons an in-progress sign-in (`leave()` → `DELETE`, and
+deliberately *without* a re-read, since nothing is on screen to show the answer to).
+
+**Guarded in `ExplorerShellTest`**, which now covers the window as a surface an operator reads: the Explorer
+must not fetch `claude-sign-in` at all and must not carry a state map of its own (it calls
+`window.VaierClaude.words(`), the window must mount `window.VaierClaude.mount(` and hide its control on
+`!view.draw`, and the existing invariants — never drawing an unreadable machine as signed out, saying
+**authorization URL** rather than "login link" — moved with the code they guard.
 
 ---
 
@@ -3876,7 +3934,7 @@ question — the fleet listing has cards, not a summary line.
 
 **Every pane reordered by the same rule: Go → Do → Know → Danger ✅ (2026-09-02).** The Inspector's panes had grown their sections in the order features were added rather than the order an operator reads them, and the worst instance was the machine pane: a details table, then a "Connection details" fold, then "Inside this machine", then "Suggested next steps", then "SSH access", then "This device", then an "Advanced" fold — answering *what is this* before *where can I go* on the page an operator lands on most. One rule now governs every pane that carries these bands (the fleet, a machine, a container, the container listing, a service, the backup server, a backup repository): the ways OUT of the page come first and under no heading — a navigable grid, or the listing that *is* the page's content; what the operator can act on comes next, under `section('What to do next')`, the same wording on all seven panes now, replacing bespoke headings like "Suggested next steps" and "Publish a service by hand"; what the thing IS — reference, mostly behind a `disclosure(...)` fold — comes third, headed "About this machine" / "About this service" / "About this container" / "About this server" / "About these credentials"; and anything able to undo work comes last, inside a new `dangerFold(...)`.
 
-**The machine pane, specifically.** "SSH access" is no longer a heading of its own — it had become a junk drawer grouped by mechanism rather than by purpose, holding the access toggle, the SSH credential, "Open shell" and the whole Claude sign-in block, which share nothing except that they all travel over SSH. Broken up by what each thing IS: the shell is now one of the ways INTO a machine, a card beside files, containers, services, disk and backup in the ways-out grid at the top of the page (SSH is only how it travels, and there is no "Open shell" button any more — the card itself opens the shell); the access toggle sits under "What to do next" while access is off, since granting it is the one step that unlocks everything else on the page, and moves quietly into "About this machine" once access is on, because at that point it is a fact rather than a step; and the Claude standing is its own thing on the page now, not the tail of an SSH section. "Inside this machine" is gone as a heading — the ways-out grid is the top of the page, not a fourth section — and so is the fleet page's "Machines" heading over its own grid, for the same reason: a grid that is already the page's content does not need a label repeating what the subtitle just said.
+**The machine pane, specifically.** "SSH access" is no longer a heading of its own — it had become a junk drawer grouped by mechanism rather than by purpose, holding the access toggle, the SSH credential, "Open shell" and the whole Claude sign-in block, which share nothing except that they all travel over SSH. Broken up by what each thing IS: the shell is now one of the ways INTO a machine, a card beside files, containers, services, disk and backup in the ways-out grid at the top of the page (SSH is only how it travels, and there is no "Open shell" button any more — the card itself opens the shell); the access toggle sits under "What to do next" while access is off, since granting it is the one step that unlocks everything else on the page, and moves quietly into "About this machine" once access is on, because at that point it is a fact rather than a step; and the Claude standing is its own thing on the page now, not the tail of an SSH section *(corrected 2026-09-02: it has since left the machine's page altogether for that machine's **web terminal**, a sign-in being an act in one login's shell — see §6.51)*. "Inside this machine" is gone as a heading — the ways-out grid is the top of the page, not a fourth section — and so is the fleet page's "Machines" heading over its own grid, for the same reason: a grid that is already the page's content does not need a label repeating what the subtitle just said.
 
 **Two kinds of fold, now visibly different.** `disclosure(...)` still hides reference nobody needs day to day (connection details, a repository's storage details); a new `dangerFold(...)` — warning-coloured, carrying a warning glyph — hides what can undo work, and every `disclosure('Advanced')` in the shell is gone. Folds are now named by their contents ("Backing up other users' files", "The network behind this machine", "Sub-path, root redirect and the direct LAN link") or by their verb ("Unpublish this service", "Stop backing up this machine", "Edit or forget these backups", "Provision, authorize or remove this backup server"). The backup-server pane was the clearest case: Provision, Authorize a host, Setup script, Edit coordinates and Remove designation used to sit inside the same "Server details" fold as the server's own coordinates — a fold that promised only details was exactly where the operator would find the button that takes the fleet's backup server away. Coordinates and operations are now two folds, and the operations one is a danger fold. A repository's own pane and the backup-server pane both used to open on a details fold above their content (the archives, the coordinates); both now open on the content, with the fold beneath it.
 

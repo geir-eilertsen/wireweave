@@ -910,7 +910,7 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 }
 /* After a bordered surface a hint needs that surface's breathing room, not a control's — and two hints in a
    row need a gap, or they read as one grey paragraph nobody finishes. */
-.ex-note + .ex-hint, .ex-standing + .ex-hint, .ex-nudge + .ex-hint, .ex-hint + .ex-hint { margin-top: 10px; }
+.ex-note + .ex-hint, .ex-nudge + .ex-hint, .ex-hint + .ex-hint { margin-top: 10px; }
 /* Who Vaier acts as is the one explanation on a machine that is really a fact about its blast radius. It
    keeps a hint's shape and steps one shade up, so it reads before the hints it sits among. */
 .ex-hint.is-who { color: var(--text-muted); }
@@ -921,19 +921,16 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
    apply; the shell only renders them). A thin accent left-edge and accent glyph mark an opportunity — never
    the warn colour, since a nudge is an offer, not a problem. The action stays a quiet outline button that
    warms to the accent on hover, so three stacked nudges invite rather than shout. */
-/* One geometry for both, because a nudge and a standing are the same kind of object — a small surface that
-   states something and carries its own verb. Only the left edge separates them, and it carries meaning: the
-   accent means an OFFER, a standing's edge is coloured by how the thing actually stands. */
-.ex-nudge, .ex-standing {
+.ex-nudge {
     display: flex; align-items: flex-start; gap: 14px;
     padding: 15px 17px;
     max-width: 680px;
     border: 1px solid transparent;
     border-radius: var(--radius-2);
     background: var(--bg-card);
+    border-left: 3px solid var(--accent);
     box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, .04);
 }
-.ex-nudge { border-left: 3px solid var(--accent); }
 .ex-nudge + .ex-nudge { margin-top: 10px; }
 .ex-nudge-ico { flex: 0 0 auto; width: 18px; height: 18px; color: var(--accent); margin-top: 1px; }
 .ex-nudge-text { flex: 1 1 auto; min-width: 0; }
@@ -953,38 +950,6 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
     .ex-nudge .ex-btn { margin-left: 28px; }
 }
 
-/* A standing: what the thing is, one word for how it stands, the detail behind that word, and its verbs.
-   The left edge is the word again, at a glance — the subject's own colour where it stands well, red where
-   Vaier could not read it, and otherwise the same quiet rule every other surface here wears. */
-.ex-standing { margin-top: 12px; border-left: 3px solid var(--border-hi); }
-.ex-standing:has(.ex-standing-state.is-claude-in) { border-left-color: var(--claude); }
-.ex-standing:has(.ex-standing-state.is-bad) { border-left-color: var(--red); }
-.ex-standing.is-error { border-color: rgba(244, 135, 113, .35); background: rgba(244, 135, 113, .06); }
-.ex-standing-text { flex: 1 1 auto; min-width: 0; }
-.ex-standing-top { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
-.ex-standing-title { color: var(--text); font-weight: 600; font-size: 15.5px; }
-/* Claude's standing wears Claude's own clay, signed out the same hue faded — the very tints its fleet-card
-   mark uses, so one machine cannot read clay on its card and green on its pane. The tones are Claude-scoped
-   rather than the generic good/bad pair they replaced: a sign-in is presence, not a traffic light. Red stays
-   for the read that FAILED, which genuinely is trouble. */
-.ex-standing-state { font-size: 14px; }
-.ex-standing-state.is-claude-in { color: var(--claude); }
-.ex-standing-state.is-claude-out { color: var(--claude); opacity: .45; }
-.ex-standing-state.is-muted { color: var(--text-dim); }
-.ex-standing-state.is-bad { color: var(--red); }
-/* An account name is a coordinate, so it is mono — the same rule the addresses and paths follow. */
-.ex-standing-detail {
-    margin-top: 4px;
-    font-family: var(--mono); font-size: 13.5px; color: var(--text-muted);
-    overflow-wrap: anywhere;
-}
-.ex-standing-why { margin-top: 5px; color: var(--text-dim); font-size: 13.5px; line-height: 1.5; }
-/* The card already draws the row; the verbs only have to stop growing and sit in the middle of it. */
-.ex-standing .ex-lactions.is-static { flex: 0 0 auto; align-self: center; margin-top: 0; }
-@media (max-width: 560px) {
-    .ex-standing { flex-wrap: wrap; }
-    .ex-standing .ex-lactions.is-static { align-self: flex-start; margin-top: 4px; }
-}
 .ex-note.is-error { border-color: rgba(244, 135, 113, .35); background: rgba(244, 135, 113, .06); }
 .ex-note.is-warn { border-color: rgba(220, 220, 170, .4); background: rgba(220, 220, 170, .06); }
 .ex-note code { font-family: var(--mono); font-size: 14px; color: var(--accent); }
@@ -1104,86 +1069,6 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
     .ex-cred-excrow { flex-direction: column; gap: 1px; }
     .ex-cred-state { flex: none; }
     .ex-cred-actions .ex-btn { flex: 1 1 auto; justify-content: center; }
-}
-
-/* --- Claude sign-in: the section under the fleet credentials ------------------------------------------
-
-   Same entry, same question, so it reuses the listing surface rather than inventing a second card shape. The
-   one thing it does NOT reuse is the coverage strip: Vaier does not hold this credential and cannot put it
-   back, so there is no self-healing tally to draw and a strip would promise one. */
-
-.ex-listing.is-claude .ex-lhead,
-.ex-listing.is-claude .ex-lrow { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) 116px; }
-/* Worded buttons, always present — not the file listing's icon verbs that reveal on hover and ride over the
-   last column. At this width those would sit permanently on top of the account they act on. */
-.ex-listing.is-claude .ex-lactions {
-    position: static; opacity: 1; padding-left: 0; background: none; justify-content: flex-end;
-}
-/* The row and its flow are one item, so the open panel is inside the machine it belongs to rather than
-   floating between two rows. */
-.ex-claude-item { min-width: 0; }
-.ex-claude-name {
-    font-family: var(--mono); min-width: 0;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-
-.ex-claude-status { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.ex-claude-state { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* Three tones for six states, because there are only three things to know: green is done, muted is a machine
-   waiting for you, dim is a fact about the machine rather than anything to do. UNKNOWN is dim on purpose and
-   never shares the signed-out tone — Vaier being unable to ask is not evidence a machine is signed out, and
-   colouring it like one would send an operator to redo a sign-in nothing had undone. */
-.ex-claude-state.is-in    { color: var(--green); }
-.ex-claude-state.is-out   { color: var(--text-muted); }
-.ex-claude-state.is-muted { color: var(--text-dim); }
-.ex-claude-acct {
-    font-size: 13.5px; color: var(--text-dim);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-
-/* The sign-in unfolding inside the row it belongs to. A modal would make each machine a ceremony, and the
-   operator does several one after another. The accent left edge is the nudge's, for the same reason: this is
-   an invitation to finish something, not a problem to fix. */
-.ex-claude-flow {
-    display: flex; flex-direction: column; gap: 9px;
-    margin: 3px 0 12px; padding: 12px 14px;
-    max-width: 640px;
-    border: 1px solid var(--border);
-    border-left: 2px solid var(--accent);
-    border-radius: var(--radius-1);
-    background: var(--bg-card);
-}
-.ex-claude-step { display: flex; align-items: flex-start; gap: 9px; }
-.ex-claude-num {
-    flex: none; width: 18px; height: 18px;
-    border-radius: 50%;
-    background: var(--rail); color: var(--accent);
-    font-size: 12.5px; font-weight: 700; line-height: 20px; text-align: center;
-}
-.ex-claude-steptext { color: var(--text-muted); font-size: 13px; line-height: 1.45; min-width: 0; }
-/* Everything under a step lines up past its number, so the two stages read as two blocks rather than four. */
-.ex-claude-url, .ex-claude-code, .ex-claude-actions, .ex-claude-hint { margin-left: 27px; }
-.ex-claude-url { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.ex-claude-link {
-    font-family: var(--mono); font-size: 13px; color: var(--accent); text-decoration: none;
-    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.ex-claude-link:hover { text-decoration: underline; }
-.ex-claude-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.ex-claude-code { max-width: 320px; }
-.ex-claude-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-.ex-claude-hint { color: var(--text-dim); font-size: 13.5px; line-height: 1.5; }
-
-@media (max-width: 560px) {
-    /* Three columns of a machine's standing do not fit a phone. The row stacks and the header goes with it —
-       column labels over a stacked row name nothing. */
-    .ex-listing.is-claude .ex-lhead { display: none; }
-    .ex-listing.is-claude .ex-lrow { grid-template-columns: minmax(0, 1fr); gap: 4px; }
-    .ex-listing.is-claude .ex-lactions { justify-content: flex-start; }
-    .ex-claude-url, .ex-claude-code, .ex-claude-actions, .ex-claude-hint { margin-left: 0; }
-    .ex-claude-url { flex-wrap: wrap; }
-    .ex-claude-code { max-width: none; }
-    .ex-claude-actions .ex-btn { flex: 1 1 auto; justify-content: center; }
 }
 
 /* --- filesystems and their meters -------------------------------------------------------------------- */

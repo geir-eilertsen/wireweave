@@ -179,11 +179,13 @@ class ExplorerShellTest {
         // capability, and its REST surface and its Credentials view shipped together — so this list now
         // means "no endpoint was invented to make the tree look finished", which is the rule that was
         // always meant, rather than the stricter "nothing here is new" that happened to hold until now.
-        // Claude sign-in adds no entry at all. It draws on the machine's own pane and every call it makes
-        // — status, start, code, cancel, sign out — is under /machines, which was already here. It briefly
-        // had a /claude-sign-ins fleet read; that was removed when the UI moved onto the machine pane,
-        // because painting one pane must not SSH to the whole fleet, and an endpoint with no caller is
-        // exactly the machinery CLAUDE.md says not to carry.
+        // Claude sign-in adds no entry at all — and it no longer fetches from this file either: the UI
+        // moved into the pop-out shell window (claude-sign-in.js), so what the shell keeps is the machine
+        // card's mark, drawn from the fleet standings the five-minute sweep already took. Every call the
+        // sign-in makes — status, start, code, cancel, sign out — is under /machines, which was already
+        // here. It briefly had a /claude-sign-ins fleet read; that was removed because painting one pane
+        // must not SSH to the whole fleet, and an endpoint with no caller is exactly the machinery
+        // CLAUDE.md says not to carry.
         List<String> allowed = List.of("/machines", "/vpn/peers", "/lan-servers", "/users/me",
                                        "/docker-services", "/published-services", "/access/services",
                                        "/transfers", "/backup-servers", "/backup-repositories", "/backup-jobs",
@@ -258,8 +260,10 @@ class ExplorerShellTest {
         // UBIQUITOUS_LANGUAGE.md §11 bans "node": a thing in the fleet is a machine, and a thing in the tree
         // is an entry.
         Pattern node = Pattern.compile("\\bnodes?\\b", Pattern.CASE_INSENSITIVE);
+        // claude-sign-in.js is Explorer-adjacent shipped prose — the Explorer loads it for the machine
+        // card's Claude mark — so it is held to the same vocabulary as the rest of the shell.
         for (String asset : List.of("explorer.html", "explorer-shell.js", "explorer-shell.css",
-                                    "explorer-listing.js")) {
+                                    "explorer-listing.js", "claude-sign-in.js")) {
             assertThat(node.matcher(read(asset)).find()).as("\"node\" in %s", asset).isFalse();
         }
     }
@@ -280,10 +284,14 @@ class ExplorerShellTest {
             "\\b(machine|peer) id\\b", "nothing — a machine is named, not numbered",
             "\\brepositor(y|ies)\\b", "whose backups these are (the store label)");
 
-        for (String prose : proseLiterals(read("explorer-shell.js"))) {
+        // The sign-in's prose was covered here while it lived in explorer-shell.js. Moving it to the shell
+        // window must not move it out of the guard, or the copy nobody re-reads is the copy that drifts.
+        List<String> prose = new ArrayList<>(proseLiterals(read("explorer-shell.js")));
+        prose.addAll(proseLiterals(read("claude-sign-in.js")));
+        for (String line : prose) {
             for (Map.Entry<String, String> term : banned.entrySet()) {
-                assertThat(Pattern.compile(term.getKey(), Pattern.CASE_INSENSITIVE).matcher(prose).find())
-                    .as("\"%s\" is mechanism — say %s. Found in: %s", term.getKey(), term.getValue(), prose)
+                assertThat(Pattern.compile(term.getKey(), Pattern.CASE_INSENSITIVE).matcher(line).find())
+                    .as("\"%s\" is mechanism — say %s. Found in: %s", term.getKey(), term.getValue(), line)
                     .isFalse();
             }
         }
@@ -396,14 +404,17 @@ class ExplorerShellTest {
         assertThat(styles).contains("--radius-1:");
         assertThat(styles).contains("--radius-2:");
 
-        String css = read("explorer-shell.css");
-        assertThat(css).contains("var(--rail)");
-        // Every corner in the new stylesheet comes from a token — no eighth raw radius value.
-        Matcher m = Pattern.compile("border-radius:\\s*([^;]+);").matcher(css);
-        while (m.find()) {
-            String value = m.group(1).trim();
-            assertThat(value).as("raw radius %s", value)
-                .matches("(var\\(--radius-[012]\\)|50%|9999px)");
+        assertThat(read("explorer-shell.css")).contains("var(--rail)");
+        // Every corner in the new stylesheets comes from a token — no eighth raw radius value. The shell
+        // window joined this when the Claude sign-in moved into it: it is now a surface an operator reads,
+        // not just a bar over a terminal.
+        for (String sheet : List.of("explorer-shell.css", "terminal-window.css")) {
+            Matcher m = Pattern.compile("border-radius:\\s*([^;]+);").matcher(read(sheet));
+            while (m.find()) {
+                String value = m.group(1).trim();
+                assertThat(value).as("raw radius %s in %s", value, sheet)
+                    .matches("(var\\(--radius-[012]\\)|50%|9999px)");
+            }
         }
     }
 
@@ -921,16 +932,30 @@ class ExplorerShellTest {
         String body = js.substring(from, js.indexOf("\n    // --- the tree", from));
 
         assertThat(body).contains("'claude',");
-        assertThat(body).contains("claudeState(");
+        assertThat(body).contains("claudeWords(");
         // The browser looks the tone up; it never decides which states are a standing. That verdict travels
         // from the domain on the response, like DiskStandingLevel does.
         assertThat(body).contains("claude.saysWhereTheSignInStands");
         assertThat(body).as("no state list in the browser")
             .doesNotContain("'SIGNED_IN'").doesNotContain("'SIGNED_OUT'");
         assertThat(body).as("the account is named when there is one").contains("accountEmail");
-        // Exactly one state map in the whole file, and the card tone lives on it.
-        assertThat(js.split("const CLAUDE_STATE = \\{", -1).length - 1).as("one state map").isEqualTo(1);
-        assertThat(js).contains("card:");
+
+        // The map itself moved out with the sign-in, into claude-sign-in.js — which the Explorer now loads
+        // for exactly this, the mark's words. So the assertion gets stronger rather than weaker: exactly
+        // one state map across every shipped asset, not merely one within this file.
+        List<String> withTheMap = new ArrayList<>();
+        try (var assets = Files.list(STATIC)) {
+            for (Path asset : assets.filter(a -> a.toString().endsWith(".js")).toList()) {
+                int found = Files.readString(asset).split("const CLAUDE_STATE = \\{", -1).length - 1;
+                assertThat(found).as("%s declares the state map twice", asset.getFileName()).isLessThan(2);
+                if (found == 1) withTheMap.add(asset.getFileName().toString());
+            }
+        }
+        assertThat(withTheMap).as("one state map, in the file that owns the sign-in")
+            .containsExactly("claude-sign-in.js");
+        assertThat(read("explorer-shell.js")).as("the card reads it rather than keeping its own")
+            .contains("window.VaierClaude.words(");
+        assertThat(read("claude-sign-in.js")).contains("card:");
         assertThat(js).contains("ICON").contains("claude:");
     }
 
@@ -950,8 +975,11 @@ class ExplorerShellTest {
         assertThat(body).doesNotContain("|| 'SIGNED").doesNotContain("'is-up'");
 
         // The one map decides which states are a standing at all — the four quiet ones have no card tone.
-        int map = js.indexOf("const CLAUDE_STATE = {");
-        String mapBody = js.substring(map, js.indexOf("\n    };", map));
+        // It lives in claude-sign-in.js since the sign-in moved to the shell window; the mark it feeds is
+        // still the Explorer's, which is exactly why one shared map matters.
+        String claudeJs = read("claude-sign-in.js");
+        int map = claudeJs.indexOf("const CLAUDE_STATE = {");
+        String mapBody = claudeJs.substring(map, claudeJs.indexOf("\n    };", map));
         for (String quiet : new String[] {"NOT_INSTALLED", "UNREACHABLE", "UNKNOWN", "SKIPPED"}) {
             int row = mapBody.indexOf(quiet);
             assertThat(row).as("%s is in the shared map", quiet).isPositive();
@@ -971,7 +999,9 @@ class ExplorerShellTest {
         // Green, amber and red are the disk and backup marks' vocabulary, and they mean trouble. A sign-in
         // is presence, not an outage, so the Claude mark says "Claude" in hue and says whether anyone is
         // signed in by weight — the same clay, worn hollow when signed out.
-        String js = read("explorer-shell.js");
+        // The map moved to claude-sign-in.js with the sign-in; the mark and its CSS stayed here, which is
+        // the whole point of the two surfaces sharing one vocabulary.
+        String js = read("claude-sign-in.js");
         int map = js.indexOf("const CLAUDE_STATE = {");
         String mapBody = js.substring(map, js.indexOf("\n    };", map));
         assertThat(mapBody).contains("card: 'is-claude'").contains("card: 'is-claude-out'");
@@ -2980,18 +3010,29 @@ class ExplorerShellTest {
     }
 
     /**
-     * The Claude sign-in section is drawn only where a sign-in could actually happen. Its home is the
-     * machine pane, under "Vaier acts as <user> on <machine>" — so it is already inside the SSH-access
-     * branch — but SSH access alone is not enough: without a stored credential Vaier cannot open a shell,
-     * the backend answers {@code SKIPPED}, and a section rendered there would explain an impossibility
-     * instead of offering an action. Guarded on the credential, it never has to.
+     * The Claude sign-in is drawn only where a sign-in could actually happen. Its home is now the pop-out
+     * shell window — signing in runs the CLI in one OS user's home, so it belongs to the window that IS
+     * that machine's terminal as that user, not to the pane where you read about a machine. The rule that
+     * gates it is untouched: SSH access alone is not enough, because without a stored credential Vaier
+     * cannot open a shell at all, the backend answers {@code SKIPPED}, and a control offered there would
+     * explain an impossibility instead of offering an action. The domain's own words — "A section
+     * explaining why a sign-in is impossible is worth less than no section."
+     *
+     * <p>Retargeted at {@code claude-sign-in.js}, which owns the decision now, plus the two ends of the
+     * move: the shell window mounts it, and the machine pane no longer draws it anywhere.
      */
     @Test
     void theClaudeSection_isDrawnOnlyWhereASignInCouldHappen() throws IOException {
-        String js = read("explorer-shell.js");
+        String js = read("claude-sign-in.js");
 
-        assertThat(js).as("the section is rendered on the machine pane")
-            .contains("renderClaudeSignIn(body, m)");
+        assertThat(read("terminal-window.js")).as("the shell window is where a sign-in is drawn")
+            .contains("window.VaierClaude.mount(");
+        assertThat(read("explorer-shell.js")).as("and the machine pane draws none of it")
+            .doesNotContain("renderClaudeSignIn").doesNotContain("claude-sign-in'");
+        // Nothing at all where a sign-in is impossible — not a greyed control, not an explanation. The bar
+        // hides its control on the same verdict the module refuses to draw on.
+        assertThat(read("terminal-window.js")).as("no control where a sign-in cannot happen")
+            .contains("btnClaude.hidden = !view.draw");
         // The gate is the server's answer, not a rule re-typed here. `Machine.runsAShellVaierCanReach`
         // is two clauses (SSH access AND a stored credential), and a browser copy of it is a second
         // chance to get it wrong — which is exactly what the domain's own Javadoc warns about.
@@ -3013,11 +3054,19 @@ class ExplorerShellTest {
      */
     @Test
     void theClaudeSection_neverDrawsAnUnreadableMachineAsSignedOut() throws IOException {
-        String js = read("explorer-shell.js");
+        // Retargeted at claude-sign-in.js, which now holds both the state map and the sentence. The move
+        // added a second way to get this wrong and the guard covers it: a read that FAILS still draws a
+        // control, because "Vaier couldn't tell" is not the verdict that withholds one — and what it says
+        // is that the read failed, never that the machine is signed out.
+        String js = read("claude-sign-in.js");
 
         assertThat(js).contains("UNKNOWN:       { label: 'Couldn’t tell'");
         assertThat(js).as("UNKNOWN keeps its own sentence, distinct from signed out")
             .contains("That is not the same as ");
+        assertThat(js).as("a failed read is said as a failed read")
+            .contains("That is this read ");
+        assertThat(js).as("and a failed read is never dressed as a standing the server took")
+            .contains("if (c.phase === 'error') return { draw: true, state: 'UNKNOWN'");
     }
 
     /**
@@ -3027,10 +3076,13 @@ class ExplorerShellTest {
      */
     @Test
     void theClaudeSection_saysAuthorizationUrlAndNeverLoginLink() throws IOException {
-        String js = read("explorer-shell.js");
-
-        assertThat(js).doesNotContain("login link").doesNotContain("Login link");
-        assertThat(js).contains("Copied the authorization URL.");
+        // Retargeted at claude-sign-in.js, which owns the copy now — and kept over the two pages that load
+        // it, so the phrase cannot creep back in on either side of the move.
+        assertThat(read("claude-sign-in.js")).contains("Copied the authorization URL.");
+        for (String asset : List.of("claude-sign-in.js", "explorer-shell.js", "terminal-window.js")) {
+            assertThat(read(asset)).as("\"login link\" in %s", asset)
+                .doesNotContain("login link").doesNotContain("Login link");
+        }
     }
 
     // --- 20. the Credentials view actually draws ---------------------------------------------------------
@@ -3348,23 +3400,37 @@ class ExplorerShellTest {
     }
 
     /**
-     * The inconsistency this pass exists to end: {@code claudeCard()} tinted its state word through the
-     * generic {@code is-in} tone, which renders {@code var(--green)} — so one machine's Claude standing read
-     * green on its pane and clay on its fleet card, contradicting the design comment sitting on the card's
-     * own mark. Signed in is solid clay, signed out the same hue faded, exactly as the mark does it.
+     * The inconsistency this pass exists to end: the Claude card tinted its state word through the generic
+     * {@code is-in} tone, which renders {@code var(--green)} — so one machine's Claude standing read green
+     * where it was said and clay on its machine card, contradicting the design comment sitting on the
+     * card's own mark. Signed in is solid clay, signed out the same hue faded, exactly as the mark does it.
+     *
+     * <p>Renamed and retargeted: the standing is no longer said on the machine pane at all. It is said in
+     * the pop-out shell window, where the sign-in now lives, and its tones are the {@code tw-*} rules in
+     * that window's stylesheet. The tone NAMES are unchanged on purpose — they come off the one shared
+     * state map, so the card and the shell window still cannot disagree about one machine.
      */
     @Test
-    void theClaudeStandingOnThePane_wearsTheSameClayAsItsFleetCard() throws IOException {
-        String js = read("explorer-shell.js");
+    void theClaudeStandingInTheShellWindow_wearsTheSameClayAsItsFleetCard() throws IOException {
+        String js = read("claude-sign-in.js");
         assertThat(js).contains("tone: 'is-claude-in'").contains("tone: 'is-claude-out'");
 
-        String css = read("explorer-shell.css");
-        assertThat(css).contains(".ex-standing-state.is-claude-in { color: var(--claude); }");
-        assertThat(css).contains(".ex-standing-state.is-claude-out { color: var(--claude); opacity: .45; }");
+        String css = read("terminal-window.css");
+        assertThat(css).contains(".tw-claude-state.is-claude-in { color: var(--claude); }");
+        assertThat(css).contains(".tw-claude-state.is-claude-out { color: var(--claude); opacity: .45; }");
         assertThat(css).as("the left edge is the same word again, so it follows the word")
-            .contains(".ex-standing:has(.ex-standing-state.is-claude-in) { border-left-color: var(--claude); }");
-        assertThat(css).as("and the green tone it used to reach for is gone rather than left lying about")
-            .doesNotContain(".ex-standing-state.is-in {");
+            .contains(".tw-claude-card:has(.tw-claude-state.is-claude-in) { border-left-color: var(--claude); }");
+        // The bar's own control says the same standing in the same clay, hollow when nobody holds a
+        // sign-in — never amber or red, which belong to trouble.
+        assertThat(css).contains(".tw-claude-btn.is-claude-in {").contains(".tw-claude-btn.is-claude-out {");
+        assertThat(css.substring(css.indexOf(".tw-claude-btn.is-claude-in {"),
+                                 css.indexOf(".tw-claude-btn.is-muted")))
+            .as("a sign-in is presence, not an outage")
+            .doesNotContain("var(--red)").doesNotContain("var(--orange)").doesNotContain("var(--yellow)");
+        // And the green tone it used to reach for is gone rather than left lying about — on either sheet.
+        assertThat(css).doesNotContain(".tw-claude-state.is-in {");
+        assertThat(read("explorer-shell.css")).doesNotContain(".ex-standing-state.is-in {")
+            .doesNotContain(".ex-standing-state.is-claude-in");
     }
 
     /**
@@ -3374,11 +3440,14 @@ class ExplorerShellTest {
      */
     @Test
     void theClaudeTintIsClaudeScoped_andLeavesTroubleAndUnknownAlone() throws IOException {
-        String css = read("explorer-shell.css");
+        // Retargeted at terminal-window.css, which carries these tones now the sign-in is drawn there. The
+        // invariant is the same one: the clay is scoped to the Claude standing, and the trouble and unknown
+        // tones sitting on the very same card are untouched by it.
+        String css = read("terminal-window.css");
 
-        assertThat(css).contains(".ex-standing-state.is-bad { color: var(--red); }");
-        assertThat(css).contains(".ex-standing-state.is-muted { color: var(--text-dim); }");
-        assertThat(css).contains(".ex-standing:has(.ex-standing-state.is-bad) { border-left-color: var(--red); }");
+        assertThat(css).contains(".tw-claude-state.is-bad { color: var(--red); }");
+        assertThat(css).contains(".tw-claude-state.is-muted { color: var(--text-dim); }");
+        assertThat(css).contains(".tw-claude-card:has(.tw-claude-state.is-bad) { border-left-color: var(--red); }");
     }
 
     /**

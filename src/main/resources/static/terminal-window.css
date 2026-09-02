@@ -61,6 +61,221 @@ body.tw {
 .tw-btn:disabled:hover { border-color: var(--border-hi); color: var(--text-muted); }
 .tw-btn.tw-danger:hover { border-color: var(--red); color: var(--red); }
 
+/* --- Claude, in this window ---------------------------------------------------------------------------
+
+   A sign-in is a terminal act — it runs the CLI in one OS user's home — so it belongs to the window that IS
+   that machine's terminal as that user. The bar carries where the machine stands; clicking it opens the
+   sign-in over the shell, taking no rows from it. */
+
+/* The bar's control says only "Claude". It said "Claude · Signed in" and was half again the width of every
+   other button in a bar that already carries four — and the standing was being said twice, since the clay
+   below already carries it and the title spells it out. */
+.tw-claude-btn { font-weight: 500; }
+
+/* Clay says WHOSE sign-in this is; weight says whether anyone holds one. Amber and red belong to trouble,
+   and a sign-in is presence, not an outage — so the signed-out button keeps the hue and goes hollow rather
+   than picking up a warning colour. The quiet states (no Claude, no answer) stay in the ordinary text tone:
+   they are facts about the machine, not a standing to read at a glance. */
+.tw-claude-btn.is-claude-in {
+    color: var(--claude);
+    border-color: var(--claude);
+    font-weight: 600;
+}
+.tw-claude-btn.is-claude-out {
+    color: var(--claude);
+    border-color: rgba(217, 119, 87, .45);   /* --claude, hollow */
+    font-weight: 400;
+}
+/* The answers that are not a verdict about a sign-in — no Claude here, no answer at all — carry no clay at
+   all, resting or hovered. There is no standing to wear one. */
+.tw-claude-btn.is-muted { color: var(--text-dim); }
+.tw-claude-btn.is-claude-in:hover,
+.tw-claude-btn.is-claude-out:hover { border-color: var(--claude); color: var(--claude); }
+
+/* The scrim and the sheet it holds. [hidden] has to be spelled out on the scrim because it is a flex box
+   when it is open. */
+.tw-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 8vh 16px 16px;
+    background: rgba(0, 0, 0, .55);
+}
+.tw-scrim[hidden] { display: none; }
+.tw-modal {
+    display: flex;
+    flex-direction: column;
+    width: min(620px, 100%);
+    max-height: 84vh;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-hi);
+    border-radius: var(--radius-2);
+    box-shadow: var(--shadow-2);
+    overflow: hidden;
+}
+.tw-modal-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px 12px;
+    border-bottom: 1px solid var(--border);
+}
+.tw-modal-title {
+    flex: 1;
+    font-family: var(--display);
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--text);
+}
+.tw-modal-close {
+    flex: none;
+    width: 30px; height: 30px;
+    display: flex; align-items: center; justify-content: center;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: var(--radius-1);
+    color: var(--text-muted);
+    font-size: 20px; line-height: 1;
+    cursor: pointer;
+}
+.tw-modal-close:hover { color: var(--text); border-color: var(--border-hi); }
+.tw-modal-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tw-claude {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow-y: auto;
+    padding: 16px;
+}
+
+/* What the panel had to say about the last thing the operator did — the line a toast would have carried, in
+   the one place they are already looking. */
+.tw-claude-msg {
+    max-width: 680px;
+    padding: 9px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-1);
+    background: var(--bg-card);
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+/* "Where this stands, and what to do about it" as one object: the thing, one word for how it stands, the
+   detail behind that word, and its verbs. The left edge is that word again, at a glance. */
+.tw-claude-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    max-width: 680px;
+    padding: 13px 15px;
+    border: 1px solid transparent;
+    border-left: 3px solid var(--border-hi);
+    border-radius: var(--radius-2);
+    background: var(--bg-card);
+    box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, .04);
+}
+.tw-claude-card:has(.tw-claude-state.is-claude-in) { border-left-color: var(--claude); }
+.tw-claude-card:has(.tw-claude-state.is-bad) { border-left-color: var(--red); }
+.tw-claude-card.is-error { border-color: rgba(244, 135, 113, .35); background: rgba(244, 135, 113, .06); }
+.tw-claude-text { flex: 1 1 auto; min-width: 0; }
+.tw-claude-top { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
+.tw-claude-name { color: var(--text); font-weight: 600; font-size: 15px; }
+/* The same clay the machine card's mark wears, signed out the same hue faded — so one machine cannot read
+   clay on its card and something else in its own shell. Red stays for the read that FAILED, which genuinely
+   is trouble; dim is a fact about the machine rather than a standing. */
+.tw-claude-state { font-size: 14px; }
+.tw-claude-state.is-claude-in { color: var(--claude); }
+.tw-claude-state.is-claude-out { color: var(--claude); opacity: .45; }
+.tw-claude-state.is-muted { color: var(--text-dim); }
+.tw-claude-state.is-bad { color: var(--red); }
+/* An account name is a coordinate, so it is mono — the same rule addresses and paths follow. */
+.tw-claude-detail {
+    margin-top: 4px;
+    font-family: var(--mono); font-size: 13px; color: var(--text-muted);
+    overflow-wrap: anywhere;
+}
+.tw-claude-why { margin-top: 5px; color: var(--text-dim); font-size: 13px; line-height: 1.5; }
+.tw-claude-acts { flex: 0 0 auto; align-self: center; display: flex; gap: 6px; }
+
+/* The sign-in unfolding under the standing it belongs to. The accent left edge is an invitation to finish
+   something, not a problem to fix. */
+.tw-claude-flow {
+    display: flex; flex-direction: column; gap: 9px;
+    max-width: 640px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--accent);
+    border-radius: var(--radius-1);
+    background: var(--bg-card);
+}
+.tw-claude-step { display: flex; align-items: flex-start; gap: 9px; }
+.tw-claude-num {
+    flex: none; width: 18px; height: 18px;
+    border-radius: 50%;
+    background: var(--bg); color: var(--accent);
+    font-size: 12.5px; font-weight: 700; line-height: 18px; text-align: center;
+}
+.tw-claude-steptext { color: var(--text-muted); font-size: 13px; line-height: 1.45; min-width: 0; }
+/* Everything under a step lines up past its number, so the two stages read as two blocks rather than four. */
+.tw-claude-url, .tw-claude-code, .tw-claude-actions, .tw-claude-hint { margin-left: 27px; }
+.tw-claude-url { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+/* The URL is no longer the control — the button beside it is — so it steps back to being what it is:
+   the address that button goes to, there to be read or copied when opening it here is not what is wanted
+   (approving on a phone, say, while the shell is on a laptop). */
+.tw-claude-link {
+    flex: 1 1 100%;
+    font-family: var(--mono); font-size: 12.5px; color: var(--text-dim); text-decoration: none;
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tw-claude-link:hover { color: var(--text-muted); text-decoration: underline; }
+.tw-claude-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* An <a> wearing the primary button's clothes: it opens in a new tab on a plain click, and still does the
+   things a link does that a button cannot — middle-click, open in a new window, copy the address. */
+.tw-claude-open { text-decoration: none; }
+.tw-claude-code { max-width: 320px; }
+.tw-claude-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.tw-claude-hint { color: var(--text-dim); font-size: 13px; line-height: 1.5; }
+
+.tw-input {
+    padding: 8px 10px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-hi);
+    border-radius: var(--radius-1);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13px;
+}
+.tw-input:focus { outline: none; border-color: var(--accent); }
+.tw-input:disabled { opacity: .5; }
+/* The one filled button in this window: the step that completes the job the panel was opened for. */
+.tw-btn.tw-accent { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+.tw-btn.tw-accent:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: var(--bg); }
+.tw-btn.tw-accent:disabled:hover { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+
+/* Signing out is the one thing here that undoes work, so it is asked rather than assumed. This window has no
+   overlay layer of its own, so the dialog brings one. */
+.tw-scrim {
+    position: fixed; inset: 0; z-index: 40;
+    display: flex; align-items: center; justify-content: center;
+    padding: 20px;
+    background: rgba(0, 0, 0, .6);
+}
+.tw-dialog {
+    width: min(460px, 100%);
+    padding: 20px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-2);
+    box-shadow: var(--shadow-2);
+}
+.tw-dialog-title { color: var(--text); font-size: 16px; font-weight: 600; }
+.tw-dialog-body { margin-top: 9px; color: var(--text-muted); font-size: 13px; line-height: 1.55; }
+.tw-dialog-actions { margin-top: 18px; display: flex; justify-content: flex-end; gap: 8px; }
+
 .tw-main {
     flex: 1 1 auto;
     min-height: 0;
@@ -105,12 +320,36 @@ body.tw {
 @media (max-width: 720px) {
     .tw-keys { display: flex; }
     /* The top bar stays one line: smaller action buttons, the status truncates, and the buttons scroll
-       sideways rather than wrapping the bar to a second row (which would eat terminal height). */
-    .tw-bar { gap: 6px; padding: 7px 8px; }
-    .tw-name { font-size: 13px; }
-    .tw-btn { padding: 4px 8px; min-height: 32px; font-size: 13px; white-space: nowrap; }
-    .tw-actions { gap: 5px; overflow-x: auto; scrollbar-width: none; }
+       sideways rather than wrapping the bar to a second row (which would eat terminal height).
+       `flex: 0 1 auto` with `min-width: 0` is what makes that true, and its absence was a real bug rather
+       than a tuning problem: the base rule says `flex: none`, so the strip sized to its contents however
+       narrow the screen, its own overflow-x never engaged, and the bar's minimum width became the whole row
+       of buttons. On a phone that pushed the last of them off the right edge with no way to reach them, and
+       left the terminal fitting itself to a box wider than the screen. */
+    .tw-bar { gap: 6px; padding: 6px 8px; }
+    .tw-name { font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .tw-btn { padding: 4px 9px; min-height: 30px; font-size: 12.5px; white-space: nowrap; }
+    .tw-actions { flex: 0 1 auto; min-width: 0; gap: 5px; overflow-x: auto; scrollbar-width: none; }
     .tw-actions::-webkit-scrollbar { display: none; }
+    /* The status gives way before the verbs do: it is usually empty, and a verb you cannot reach is worse
+       than a sentence you cannot finish. */
+    .tw-status { flex: 0 1 auto; }
+    /* Duplicate opens a second shell in its own window, which is a wide-screen idea — a phone has no window
+       manager to arrange them with, and it is the one control here whose absence costs nothing. */
+    .tw-dup { display: none; }
+    /* The panel is already most of a phone screen, so it drops its indent and its card stacks. */
+    /* A phone gives the sheet nearly the whole screen: the code box and the approval button are the only
+       things on it, and a centred card with a margin all round would leave neither room. Inset by a hair
+       rather than run to the edge, so it keeps the corner every other surface has. */
+    .tw-scrim { padding: 10px; align-items: stretch; }
+    .tw-modal { width: 100%; max-height: 100%; }
+    .tw-claude { padding: 12px; }
+    .tw-claude-card { flex-wrap: wrap; }
+    .tw-claude-acts { align-self: flex-start; margin-top: 6px; }
+    .tw-claude-url, .tw-claude-code, .tw-claude-actions, .tw-claude-hint { margin-left: 0; }
+    .tw-claude-url { flex-wrap: wrap; }
+    .tw-claude-code { max-width: none; }
+    .tw-claude-actions .tw-btn { flex: 1 1 auto; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -202,13 +202,6 @@
         // and re-read after every action: the standings are the distributor's own in-memory observation, so
         // they start empty on a fresh boot and an empty `machines` is "not checked yet", never "nowhere".
         credentials: { state: 'idle', list: [], error: '' },
-        // GET /machines/{id}/claude-sign-in — where the machine whose pane is open stands, and which OS
-        // user that answer is about. Per-machine on purpose: the fleet read SSHes to every machine in turn,
-        // so using one to draw a single pane would wait on every sleeping box before anything appeared.
-        // `machineId` is whose answer `status` holds, so a stale one is never drawn under a new pane;
-        // `open` marks the sign-in unfolding here, since the CLI waiting on the far side is a live session.
-        claudeSignIn: { machineId: null, state: 'idle', status: null, error: '',
-                        open: null, stage: '', url: '', code: '' },
         palSel: 0,
         myDeviceMachineId: null,         // GET /vpn/peers/my-device — the ONE machine THIS browser's cookie
                                           //   claims, server-decided; never "some browser claims this machine"
@@ -941,6 +934,11 @@
         return m;
     }
 
+    // Where a machine stands on Claude, in the one vocabulary the shell window's sign-in also speaks
+    // (claude-sign-in.js). A second map here is two vocabularies one rename away from disagreeing about
+    // what a machine is doing — which is why the words live with the UI that acts on them, not here.
+    const claudeWords = (state) => window.VaierClaude.words(state);
+
     function machineMarks(machineId) {
         const marks = el('span', 'ex-card-marks');
 
@@ -983,16 +981,16 @@
         // a machine the sweep has not reached, one with no Claude on it, and one that did not answer all
         // draw nothing. Absence matters more here than it does for disks: the backend goes to real trouble
         // never to report a sign-in the CLI did not say, and a mark invented from silence would undo it.
-        // The tone comes from CLAUDE_STATE, the one map the machine pane reads its words from. And like the
+        // The tone comes from claudeWords, the one map the shell window's sign-in reads too. And like the
         // disk mark, this is a fact about now, so it stands down in the past.
         const claude = S.claudeStandings.get(machineId);
         if (!S.at && claude && claude.saysWhereTheSignInStands) {
-            const c = mark(claudeState(claude.state).card || 'is-claude-out', 'claude',
-                claudeState(claude.state).chip || 'Claude');
+            const c = mark(claudeWords(claude.state).card || 'is-claude-out', 'claude',
+                claudeWords(claude.state).chip || 'Claude');
             // A sign-in lives in one user's home, so the title names the user it is about — a standing that
             // named only the machine once reported a healthy account while the user doing that machine's
             // work was expired.
-            c.title = 'Claude — ' + claudeState(claude.state).label
+            c.title = 'Claude — ' + claudeWords(claude.state).label
                 + (claude.accountEmail ? ' as ' + claude.accountEmail : '')
                 + (claude.effectiveUsername ? ' (Vaier acts as ' + claude.effectiveUsername + ' here)' : '');
             marks.appendChild(c);
@@ -1254,40 +1252,6 @@
         return el;
     }
 
-    // "Where this stands, and what to do about it", as one object: the thing, one word for how it stands,
-    // the detail behind that word, and its verbs on the right. It is a nudge's geometry without the accent
-    // edge — a nudge is an offer, this is a fact — and it exists so a standing stops arriving as a heading
-    // plus a paragraph plus a loose row of buttons, which is three things to read for one answer.
-    function standingCard(title, stateText, tone, detail, why, actions) {
-        const wrap = el('div', 'ex-standing');
-        const text = el('div', 'ex-standing-text');
-
-        const top = el('div', 'ex-standing-top');
-        const t = el('span', 'ex-standing-title');
-        t.textContent = title;
-        top.appendChild(t);
-        if (stateText) {
-            const st = el('span', 'ex-standing-state ' + (tone || 'is-muted'));
-            st.textContent = stateText;
-            top.appendChild(st);
-        }
-        text.appendChild(top);
-
-        if (detail) {
-            const d = el('div', 'ex-standing-detail');
-            d.textContent = detail;
-            text.appendChild(d);
-        }
-        if (why) {
-            const w = el('div', 'ex-standing-why');
-            w.textContent = why;
-            text.appendChild(w);
-        }
-        wrap.appendChild(text);
-        if (actions) wrap.appendChild(actions);
-        return wrap;
-    }
-
     // disabledTitle: when set, the card is greyed and inert rather than removed — the entry still names what
     // is there, it just cannot be opened right now (e.g. Vaier's last check found no SSH server). Pass a
     // falsy value for a normal, live card.
@@ -1377,11 +1341,6 @@
         // re-reads where every credential stands. Those standings age on the server — the reconcile runs
         // every five minutes — and a stale strip is the one thing this entry must never show.
         if (kind !== 'credentials' && S.credentials.state === 'ready') S.credentials.state = 'idle';
-        // The same reflex for the sign-ins under them, and one thing more: leaving abandons a sign-in in
-        // progress. The flow says so while it is open, and this is what makes it true — the CLI left waiting
-        // on that machine is ended rather than sitting at its prompt for nobody.
-        if (kind !== 'machine') leaveClaudeSignIn();
-
         drawPane(pane, kind);
         // After the drawing, because the offset can only be restored against the height the drawing gives it.
         pane.scrollTop = resume;
@@ -2152,14 +2111,6 @@
         wireRows.push(['Docker', m.runsDocker ? (m.dockerPort ? 'Yes — port ' + m.dockerPort : 'Yes') : 'No']);
         wires.appendChild(kv(wireRows));
         body.appendChild(wires);
-
-        // Where this machine stands on Claude — a fact about the machine and the user Vaier acts as there,
-        // not about the transport that reads it, which is why it is its own thing rather than the tail of an
-        // "SSH access" section. The card titles itself, so it needs no heading. Whether a sign-in can happen
-        // here at all is the server's call (signInPossibleHere), not a browser copy of "SSH access AND a
-        // credential": that rule lives on Machine, and a second copy of it here would be a second chance to
-        // get it wrong.
-        if (reachable && m.sshAccess) renderClaudeSignIn(body, m);
 
         // --- danger: rare, and able to undo work ------------------------------------------------------
         //
@@ -6800,344 +6751,6 @@
             toast('Saved ' + nm + '. Nothing has reached a machine yet — Distribute puts it there.');
             loadFleetCredentials();
         };
-    }
-
-    // --- Claude sign-in: the section under the fleet credentials ------------------------------------------
-    // The operator's words for each state, never the enum's. UNKNOWN is the one that matters: the backend goes
-    // to real trouble never to report a false SIGNED_OUT, so "Vaier couldn't tell" must never read as "not
-    // signed in" — that sends an operator to redo a sign-in nothing had undone.
-    // `short` is the same standing said where the subject is already named — on the machine pane the card is
-    // titled Claude, and "Claude · Claude isn’t installed here" says it twice. One map, so the two surfaces
-    // can never drift into two vocabularies.
-    // `card` is the tint a fleet card's mark wears and `tone` the tint of the same standing said on the
-    // machine pane, on this same map for the same reason. Only the two states the server marks at all need
-    // one — it decides which those are, this only says what they look like. Both surfaces wear Claude's own
-    // clay rather than a traffic light: green/amber/red are the disk and backup marks' words for trouble, and
-    // a sign-in is presence. Signed out is the same clay, hollow. The pane read GREEN here until the identity
-    // colours reached it, so one machine's standing contradicted its own card.
-    const CLAUDE_STATE = {
-        SIGNED_IN:     { label: 'Signed in',                   short: 'Signed in',     chip: 'Claude signed in',  tone: 'is-claude-in',  card: 'is-claude' },
-        SIGNED_OUT:    { label: 'Signed out',                  short: 'Signed out',    chip: 'Claude signed out', tone: 'is-claude-out', card: 'is-claude-out' },
-        NOT_INSTALLED: { label: 'Claude isn’t installed here', short: 'Not installed', chip: 'No Claude here',    tone: 'is-muted' },
-        UNREACHABLE:   { label: 'Unreachable',                 short: 'Unreachable',   chip: 'Claude unreachable', tone: 'is-muted' },
-        SKIPPED:       { label: 'No shell Vaier can reach',    short: 'No shell here', chip: 'No shell for Claude', tone: 'is-muted' },
-        UNKNOWN:       { label: 'Couldn’t tell',               short: 'Couldn’t tell', chip: 'Claude unknown',    tone: 'is-muted' },
-    };
-    const claudeState = (st) => CLAUDE_STATE[st] || { label: st, short: st, tone: 'is-muted' };
-
-    async function loadClaudeSignIn(machineId) {
-        const c = S.claudeSignIn;
-        c.machineId = machineId;
-        c.state = 'loading';
-        try {
-            const res = await fetch('/machines/' + encodeURIComponent(machineId) + '/claude-sign-in',
-                { cache: 'no-store' });
-            if (!res.ok) throw new Error('read failed');
-            const status = await res.json();
-            // A pane the operator has already left must not be redrawn from an answer about it.
-            if (c.machineId !== machineId) return;
-            c.status = status;
-            c.state = 'ready';
-            c.error = '';
-        } catch (e) {
-            if (c.machineId !== machineId) return;
-            c.state = 'error';
-            // Said as a failed read, never as a verdict: a machine Vaier could not ask is not a machine that
-            // is signed out, and the whole point of the UNKNOWN state is not to confuse the two.
-            c.error = 'Vaier could not read where this machine stands on Claude. That is this read failing, '
-                + 'not a machine that is signed out.';
-        }
-        if (kindOf(S.path) === 'machine') render();
-    }
-
-    // Drawn on the machine's own pane, directly under "Vaier acts as <user> on <machine>" — which is what
-    // makes the scoping legible without a second sentence repeating it. Only called where a sign-in is
-    // actually possible: the caller has already established SSH access and a stored credential, so SKIPPED
-    // has nothing left to explain and the card simply does not appear.
-    //
-    // A card, not a section. This is a fact about the pairing named on the line above it, and a section
-    // heading between the two would put a rule through the one adjacency that makes either legible.
-    function renderClaudeSignIn(body, m) {
-        const c = S.claudeSignIn;
-        if (c.machineId !== m.id || c.state === 'idle' || c.state === 'loading') {
-            if (c.machineId !== m.id || c.state === 'idle') loadClaudeSignIn(m.id);
-            return body.appendChild(standingCard('Claude', 'Checking…', 'is-muted', '',
-                'Asking ' + m.name + ' whether Claude is signed in…', null));
-        }
-        if (c.state === 'error') {
-            const failed = standingCard('Claude', 'Couldn’t read', 'is-bad', '', c.error, null);
-            failed.classList.add('is-error');
-            return body.appendChild(failed);
-        }
-        const st = c.status;
-        if (!st) return;
-        // Nowhere to sign in is nowhere to draw a card about signing in. The pane already says this machine
-        // has no shell; a card repeating it would spend space on an impossibility instead of an action.
-        if (!st.signInPossibleHere) return;
-
-        body.appendChild(claudeCard(st, m));
-        if (c.open === m.id) body.appendChild(claudeFlow(m));
-    }
-
-    // Where this machine stands, said about the one user it is true of. The whole reason the user is named:
-    // a sign-in lives in that user's home, so "signed in" here was once shown green while the account
-    // actually running the machine's work was expired, with nothing on screen to reveal it. The line above
-    // has just named that user, so this says "another user here" rather than naming them a second time.
-    function claudeCard(st, m) {
-        const who = st.effectiveUsername || 'the user Vaier logs in as';
-        const stand = claudeState(st.state);
-        let detail = '', why = '';
-        if (st.state === 'SIGNED_IN') {
-            detail = [st.accountEmail || 'an Anthropic account', st.subscriptionType, st.accountOrganisation]
-                .filter((x) => x).join(' · ');
-            why = 'This is ' + who + '’s sign-in; another user here signs in separately.';
-        } else if (st.state === 'SIGNED_OUT') {
-            why = 'No sign-in for ' + who + ' here; another user may have their own.';
-        } else if (st.state === 'NOT_INSTALLED') {
-            why = 'Install it on ' + m.name + ' and this offers to sign in.';
-        } else if (st.state === 'UNREACHABLE') {
-            why = m.name + ' didn’t answer, so Vaier can’t say where it stands. It may be asleep.';
-        } else {
-            // UNKNOWN, and anything a newer backend adds. Never drawn as signed out.
-            why = 'That is not the same as signed out — ' + m.name + ' answered with something Vaier '
-                + 'could not read.';
-        }
-        return standingCard('Claude', stand.short, stand.tone, detail, why, claudeVerbs(st, m));
-    }
-
-    // Never offer an action Vaier already knows cannot work. No Claude, no answer at all, or nothing there to
-    // sign out of means no button rather than a button that fails. UNKNOWN keeps one: Vaier could not read
-    // that machine's answer, which is not the same as knowing there is nothing to sign in.
-    function claudeVerbs(st, m) {
-        const who = st.effectiveUsername || 'the user Vaier logs in as';
-        // is-static, because bare .ex-lactions is the hover overlay a listing ROW wears — absolutely
-        // positioned, so without this the verbs escape the Claude section and float off to the pane's edge.
-        const acts = el('div', 'ex-lactions is-static');
-        let any = false;
-
-        // Signing in again is a real thing to want: it is how an account is changed, and how a credential
-        // that has gone bad is replaced. Whether it may happen is the domain's answer, sent decided —
-        // deriving it here from the state name is what left a signed-in machine with no way in.
-        // Outline, never accent. The filled buttons on a machine belong to what Vaier is suggesting the
-        // operator do next; signing in again is a repair, offered where the standing is read, not a step
-        // being urged.
-        if (st.signInCanBegin) {
-            const btn = el('button', 'ex-btn');
-            btn.textContent = st.state === 'SIGNED_IN' ? 'Sign in again' : 'Sign in';
-            btn.title = 'Get an authorization URL from Claude on ' + m.name + ' and approve it in your '
-                + 'browser, signing in as ' + who + '.';
-            if (S.claudeSignIn.open === m.id) {
-                btn.disabled = true;
-                btn.title = 'This sign-in is open below.';
-            }
-            btn.onclick = () => startClaudeSignIn(m);
-            acts.appendChild(btn);
-            any = true;
-        }
-        if (st.state === 'SIGNED_IN') {
-            const out = el('button', 'ex-btn');
-            out.textContent = 'Sign out';
-            out.title = 'Sign ' + who + ' out of Claude on ' + m.name + '.';
-            out.onclick = () => signOutOfClaude(st, m);
-            acts.appendChild(out);
-            any = true;
-        }
-        return any ? acts : null;
-    }
-
-    // Inline in the pane, not a modal. It is two stages of one job, and a dialog would turn each machine into
-    // a ceremony — open, read, copy, close, open the next.
-    function claudeFlow(m) {
-        const c = S.claudeSignIn;
-        const flow = el('div', 'ex-claude-flow');
-
-        if (c.stage === 'starting') {
-            flow.appendChild(note('Asking Claude on ' + m.name + ' for an authorization URL…', false));
-            flow.appendChild(claudeFlowActions(m, null));
-            return flow;
-        }
-
-        const finish = el('button', 'ex-btn is-accent');
-        finish.textContent = c.stage === 'finishing' ? 'Signing in…' : 'Finish';
-        finish.onclick = () => finishClaudeSignIn(m);
-
-        // Both steps are on screen at once. Hiding the code box behind an "I have approved" click would add a
-        // step that tells Vaier nothing it does anything with.
-        flow.appendChild(claudeStep(1, 'Open this in your browser. You approve it there, on Anthropic’s '
-            + 'own pages, and they show you a code to bring back.'));
-        flow.appendChild(claudeUrlRow(c.url));
-
-        flow.appendChild(claudeStep(2, 'Paste the code Anthropic showed you.'));
-        const code = el('input', 'ex-input ex-claude-code');
-        code.type = 'text';
-        code.placeholder = 'Paste the code';
-        code.autocomplete = 'off';
-        code.spellcheck = false;
-        code.value = c.code;
-        code.disabled = c.stage === 'finishing';
-        code.setAttribute('aria-label', 'The code Anthropic showed you for ' + m.name);
-        const sync = () => { finish.disabled = c.stage === 'finishing' || code.value.trim() === ''; };
-        code.oninput = () => { c.code = code.value; sync(); };
-        code.onkeydown = (e) => { if (e.key === 'Enter' && !finish.disabled) finish.click(); };
-        sync();
-        flow.append(code, claudeFlowActions(m, finish));
-
-        const hint = el('div', 'ex-claude-hint');
-        hint.textContent = 'Leaving this machine abandons the sign-in — the Claude CLI waiting on '
-            + m.name + ' is ended rather than left at its prompt.';
-        flow.appendChild(hint);
-        return flow;
-    }
-
-    function claudeStep(number, text) {
-        const step = el('div', 'ex-claude-step');
-        const num = el('span', 'ex-claude-num');
-        num.textContent = String(number);
-        const body = el('span', 'ex-claude-steptext');
-        body.textContent = text;
-        step.append(num, body);
-        return step;
-    }
-
-    // The authorization URL as a real link AND as text to copy: some operators click through, and some paste
-    // it into the browser where they are already signed in to the right Anthropic account.
-    function claudeUrlRow(url) {
-        const wrap = el('div', 'ex-claude-url');
-        const link = el('a', 'ex-claude-link');
-        link.href = url;
-        link.target = '_blank';
-        link.rel = 'noopener noreferrer';
-        link.textContent = url;
-
-        const copy = el('button', 'ex-btn');
-        copy.textContent = 'Copy';
-        copy.onclick = () => {
-            if (!navigator.clipboard) return toast('Select the link and copy it by hand.');
-            navigator.clipboard.writeText(url).then(() => toast('Copied the authorization URL.'))
-                .catch(() => toast('Could not copy. Select the link and copy it by hand.'));
-        };
-        wrap.append(link, copy);
-        return wrap;
-    }
-
-    function claudeFlowActions(m, finish) {
-        const acts = el('div', 'ex-claude-actions');
-        if (finish) acts.appendChild(finish);
-        const cancel = el('button', 'ex-btn');
-        cancel.textContent = 'Cancel';
-        cancel.title = 'End the sign-in waiting on ' + m.name + '.';
-        cancel.onclick = () => cancelClaudeSignIn(m.id, false);
-        acts.appendChild(cancel);
-        return acts;
-    }
-
-    async function startClaudeSignIn(m) {
-        const c = S.claudeSignIn;
-        Object.assign(c, { open: m.id, stage: 'starting', url: '', code: '' });
-        render();
-
-        const started = await claudeCall(claudePath(m.id, '/claude-sign-in'), 'POST', null,
-            'Vaier could not start a sign-in on ' + m.name + '. Open a terminal on that machine and '
-                + 'run claude to sign in by hand — that always works.');
-        // An answer with no URL in it is the same failure as no answer, and gets the same way out. The server
-        // fails loudly rather than returning an empty one, so this is a belt against a shape that changes.
-        if (!started || !started.authorizationUrl) {
-            if (started) {
-                toast('Vaier started a sign-in on ' + m.name + ' but read no authorization URL back. Open a '
-                    + 'terminal on that machine and run claude to sign in by hand.');
-            }
-            Object.assign(c, { open: null, stage: '', url: '' });
-            render();
-            return;
-        }
-        Object.assign(c, { stage: 'open', url: started.authorizationUrl });
-        render();
-    }
-
-    async function finishClaudeSignIn(m) {
-        const c = S.claudeSignIn;
-        const code = (c.code || '').trim();
-        if (!code) return;
-        c.stage = 'finishing';
-        render();
-
-        const status = await claudeCall(claudePath(m.id, '/claude-sign-in/code'), 'POST', { code: code },
-            'Claude on ' + m.name + ' did not accept that code. A code expires within a few minutes '
-                + '— cancel and start again for a fresh one.');
-        // A rejected code leaves the flow open and the URL alive: the usual cause is a typo, and throwing the
-        // URL away would make the operator start over for a mistake they can fix in place.
-        if (!status) { c.stage = 'open'; render(); return; }
-
-        Object.assign(c, { open: null, stage: '', url: '', code: '' });
-        // Where the machine actually landed, re-read from the machine rather than assumed from a 200.
-        await loadClaudeSignIn(m.id);
-        toast(status.state === 'SIGNED_IN'
-            ? 'Signed ' + (status.effectiveUsername || m.name) + ' in on ' + m.name
-                + (status.accountEmail ? ' as ' + status.accountEmail : '') + '.'
-            : 'Claude on ' + m.name + ' took the code but does not report itself signed in. This section '
-                + 'says what it does report.');
-    }
-
-    // One deliberate click and no typed name: signing in again undoes it. The confirm still has to say what it
-    // costs, and whose sign-in it is — signing out "this machine" when Vaier means one user on it is a
-    // surprise waiting to happen.
-    async function signOutOfClaude(st, m) {
-        const who = st.effectiveUsername || 'the user Vaier logs in as';
-        const ok = await confirmModal('Sign ' + who + ' out of Claude on ' + m.name + '?',
-            'Claude stops working for ' + who + ' on ' + m.name + ' until you sign in again. Any other user '
-            + 'on that machine is untouched. Vaier deletes nothing — it runs the CLI’s own logout there — '
-            + 'and signing back in takes a minute.',
-            'Sign out');
-        if (!ok) return;
-        const status = await claudeCall(claudePath(m.id, '/claude-sign-out'), 'POST', null,
-            'Vaier could not sign ' + m.name + ' out. Check the machine is awake and reachable, then '
-                + 'try again.');
-        if (!status) return;
-        await loadClaudeSignIn(m.id);
-        toast('Signed ' + who + ' out of Claude on ' + m.name + '.');
-    }
-
-    // The operator closed the flow. `quiet` is the same thing arriving from the other direction — they left
-    // the machine, which abandons it — and it must not render or re-read, because it runs mid-render.
-    async function cancelClaudeSignIn(machineId, quiet) {
-        Object.assign(S.claudeSignIn, { open: null, stage: '', url: '', code: '' });
-        if (!quiet) render();
-        try {
-            await fetch('/machines/' + encodeURIComponent(machineId) + '/claude-sign-in', { method: 'DELETE' });
-        } catch (e) {
-            // Nothing to say. It is already gone from this side, and the CLI on the machine gives up on its own.
-        }
-        if (!quiet) await loadClaudeSignIn(machineId);
-    }
-
-    function leaveClaudeSignIn() {
-        const c = S.claudeSignIn;
-        if (c.open) cancelClaudeSignIn(c.open, true);
-        Object.assign(c, { machineId: null, state: 'idle', status: null, open: null, stage: '', url: '',
-                           code: '' });
-    }
-
-    const claudePath = (machineId, suffix) => '/machines/' + encodeURIComponent(machineId) + suffix;
-
-    // The server's own message is the one shown whenever there is one. The domain writes the directive copy
-    // for the failure that matters — which CLI output could not be read, and to open a terminal on that
-    // machine instead — and a sentence invented here would only compete with it. `fallback` covers what never
-    // reaches the domain: a Vaier that did not answer, a body that is not JSON.
-    async function claudeCall(url, method, body, fallback) {
-        try {
-            const res = await fetch(url, body
-                ? { method: method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
-                : { method: method });
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                toast(err.message || fallback);
-                return null;
-            }
-            return res.status === 204 ? true : await res.json().catch(() => true);
-        } catch (e) {
-            toast(fallback);
-            return null;
-        }
     }
 
     // A top-level global that is still bridged (Users, Concepts) — its page, framed whole, until it is ported.
