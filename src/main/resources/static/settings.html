@@ -12,23 +12,22 @@
         }
 
         .settings-section-title {
-            font-size: 0.7rem;
+            font-size: 0.95rem;
             font-weight: 700;
-            letter-spacing: 0.1em;
-            text-transform: uppercase;
-            color: var(--text-muted);
+            color: var(--text);
             margin-bottom: 0.75rem;
         }
 
         .settings-card {
             background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 2px;
+            border: 1px solid transparent;
+            border-radius: var(--radius-2);
             padding: 1rem 1.25rem;
             display: flex;
             align-items: center;
             justify-content: space-between;
             gap: 1.5rem;
+            box-shadow: var(--shadow-1);
         }
 
         .settings-card + .settings-card {
@@ -41,14 +40,14 @@
         }
 
         .settings-card-title {
-            font-size: 0.85rem;
+            font-size: 0.9rem;
             font-weight: 500;
             color: var(--text);
             margin-bottom: 0.3rem;
         }
 
         .settings-card-desc {
-            font-size: 0.78rem;
+            font-size: 0.9rem;
             color: var(--text-muted);
             line-height: 1.5;
         }
@@ -64,7 +63,7 @@
         }
 
         .file-label {
-            font-size: 0.78rem;
+            font-size: 0.875rem;
             color: var(--text-muted);
             font-family: var(--mono);
             white-space: nowrap;
@@ -82,7 +81,7 @@
             margin-top: 0.75rem;
             background: #111;
             border: 1px solid var(--border);
-            border-radius: 2px;
+            border-radius: var(--radius-2);
             overflow: hidden;
         }
 
@@ -90,28 +89,24 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 0.4rem 0.75rem;
+            padding: 0.5rem 0.75rem;
             background: var(--bg-card);
             border-bottom: 1px solid var(--border);
-            font-size: 0.72rem;
+            font-size: 0.85rem;
             color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.07em;
             font-weight: 600;
         }
 
         .import-log-status {
-            font-size: 0.72rem;
+            font-size: 0.85rem;
             color: var(--text-dim);
-            text-transform: none;
-            letter-spacing: 0;
             font-weight: 400;
         }
 
         .import-log-body {
             padding: 0.6rem 0.75rem;
             font-family: var(--mono);
-            font-size: 0.75rem;
+            font-size: 0.8rem;
             line-height: 1.7;
             color: #ccc;
             max-height: 280px;
@@ -130,22 +125,21 @@
             padding: 0.75rem 1rem;
             background: var(--bg-card);
             border: 1px solid #6b5a2a;
-            border-radius: 2px;
+            border-radius: var(--radius-2);
+            box-shadow: var(--shadow-1);
         }
 
         .warnings-title {
-            font-size: 0.75rem;
+            font-size: 0.85rem;
             font-weight: 600;
             color: #ddb640;
             margin-bottom: 0.5rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
         }
 
         .warnings-list ul {
             margin: 0;
             padding-left: 1.2rem;
-            font-size: 0.78rem;
+            font-size: 0.875rem;
             color: var(--text-muted);
             line-height: 1.6;
         }
@@ -153,9 +147,10 @@
         /* Editable settings cards */
         .settings-form-card {
             background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 2px;
+            border: 1px solid transparent;
+            border-radius: var(--radius-2);
             padding: 1rem 1.25rem;
+            box-shadow: var(--shadow-1);
         }
 
         .settings-form-card + .settings-form-card {
@@ -163,14 +158,14 @@
         }
 
         .settings-form-card-title {
-            font-size: 0.85rem;
+            font-size: 0.9rem;
             font-weight: 500;
             color: var(--text);
             margin-bottom: 0.75rem;
         }
 
         .settings-form-card-desc {
-            font-size: 0.78rem;
+            font-size: 0.9rem;
             color: var(--text-muted);
             margin-bottom: 1rem;
             line-height: 1.5;
@@ -192,23 +187,27 @@
         }
 
         .settings-form-field label {
-            font-size: 0.72rem;
+            font-size: 0.85rem;
             color: var(--text-muted);
             font-weight: 500;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
         }
 
         .settings-form-field input {
             background: var(--bg);
             border: 1px solid var(--border);
-            border-radius: 2px;
+            border-radius: var(--radius-1);
             color: var(--text);
             font-family: var(--mono);
-            font-size: 0.8rem;
-            padding: 0.4rem 0.6rem;
+            font-size: 0.9rem;
+            padding: 0.5rem 0.6rem;
             width: 100%;
             box-sizing: border-box;
+            min-height: 34px;
+        }
+
+        /* Only genuine addresses/secrets keep the mono face — port and threshold are plain numbers. */
+        #smtpPort, #diskThreshold {
+            font-family: inherit;
         }
 
         .settings-form-field input:focus {
@@ -228,7 +227,7 @@
         }
 
         .settings-form-note {
-            font-size: 0.72rem;
+            font-size: 0.85rem;
             color: var(--text-dim);
             font-style: italic;
         }
@@ -289,7 +288,7 @@
                         <input type="text" id="smtpSender" placeholder="noreply@example.com">
                     </div>
                 </div>
-                <div class="settings-form-row" style="margin-top: 1rem; padding: 0.75rem; border: 1px dashed var(--color-border, #3c3c3c); border-radius: 4px; align-items: flex-end;">
+                <div class="settings-form-row" style="margin-top: 1rem; padding: 0.75rem; border: 1px dashed var(--color-border, #3c3c3c); border-radius: var(--radius-1); align-items: flex-end;">
                     <div class="settings-form-field" style="flex: 1;">
                         <label>Send a test email to</label>
                         <input type="email" id="smtpTestRecipient" placeholder="you@example.com" autocomplete="email">

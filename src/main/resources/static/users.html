@@ -25,7 +25,7 @@
         }
 
         .users-head-text p {
-            font-size: 0.8rem;
+            font-size: 0.9rem;
             color: var(--text-muted);
             margin-top: 0.2rem;
         }
@@ -39,12 +39,12 @@
 
         /* Amber count of identities waiting at the door — only rendered when there are any. */
         .waiting-pill {
-            font-size: 0.72rem;
+            font-size: 0.8rem;
             font-weight: 600;
             color: #ddb640;
             background: rgba(221, 182, 64, 0.12);
             border: 1px solid #6b5a2a;
-            border-radius: 2px;
+            border-radius: var(--radius-1);
             padding: 0.2rem 0.55rem;
             white-space: nowrap;
         }
@@ -53,16 +53,17 @@
         .preapprove-panel {
             display: none;
             background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 2px;
-            padding: 0.9rem 1rem;
+            border: 1px solid transparent;
+            border-radius: var(--radius-2);
+            padding: 1rem;
             margin-bottom: 1.25rem;
+            box-shadow: var(--shadow-1);
         }
 
         .preapprove-panel.open { display: block; }
 
         .preapprove-panel .hint {
-            font-size: 0.78rem;
+            font-size: 0.875rem;
             color: var(--text-muted);
             margin-bottom: 0.6rem;
             line-height: 1.5;
@@ -91,9 +92,10 @@
 
         .person {
             background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 2px;
-            padding: 0.85rem 1rem;
+            border: 1px solid transparent;
+            border-radius: var(--radius-2);
+            padding: 1rem 1.25rem;
+            box-shadow: var(--shadow-1);
             display: grid;
             grid-template-columns: auto 1fr auto;
             grid-template-areas:
@@ -113,19 +115,19 @@
             background: rgba(221, 182, 64, 0.05);
         }
 
-        /* Signature: a per-identity monogram. Square (matching the IDE 2px radius, not a social
-           round avatar); background/foreground hues are derived from the email so each person keeps
-           a stable colour. Pending identities are forced amber to read as "not yet one of us". */
+        /* Signature: a per-identity monogram. Square, not a social round avatar; background/foreground
+           hues are derived from the email so each person keeps a stable colour. Pending identities are
+           forced amber to read as "not yet one of us". */
         .mono {
             grid-area: mono;
             width: 38px;
             height: 38px;
-            border-radius: 2px;
+            border-radius: var(--radius-1);
             display: flex;
             align-items: center;
             justify-content: center;
             font-family: var(--mono);
-            font-size: 0.82rem;
+            font-size: 0.9rem;
             font-weight: 600;
             letter-spacing: 0.02em;
             user-select: none;
@@ -148,25 +150,22 @@
         }
 
         .person-email {
-            font-family: var(--mono);
-            font-size: 0.76rem;
+            font-size: 0.85rem;
             color: var(--text-muted);
             word-break: break-all;
         }
 
         /* When there is no display name yet, the email is promoted to the primary line. */
         .person-email.primary {
-            font-size: 0.85rem;
+            font-size: 0.9rem;
             color: var(--text);
         }
 
         .role-badge {
-            font-size: 0.66rem;
+            font-size: 0.8rem;
             font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
             padding: 0.08rem 0.4rem;
-            border-radius: 2px;
+            border-radius: var(--radius-1);
             border: 1px solid var(--border);
             color: var(--text-muted);
         }
@@ -185,7 +184,7 @@
             inset: 0;
             width: 38px;
             height: 38px;
-            border-radius: 2px;
+            border-radius: var(--radius-1);
             object-fit: cover;
             background: var(--bg-card);
         }
@@ -220,7 +219,7 @@
         .lastadmin-note {
             grid-area: actions;
             justify-self: end;
-            font-size: 0.72rem;
+            font-size: 0.85rem;
             color: var(--text-muted);
             font-style: italic;
             max-width: 15rem;
@@ -239,10 +238,8 @@
         .person.pending .groups-cell { border-top-color: #514627; }
 
         .groups-label {
-            font-size: 0.66rem;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            color: var(--text-dim);
+            font-size: 0.8rem;
+            color: var(--text-muted);
             padding-top: 0.55rem;
             flex-shrink: 0;
         }
@@ -274,9 +271,8 @@
             background: var(--bg-input);
             border: 1px solid var(--border-hi);
             color: var(--text);
-            border-radius: 2px;
-            font-family: var(--mono);
-            font-size: 0.76rem;
+            border-radius: var(--radius-1);
+            font-size: 0.85rem;
         }
 
         .chip-remove {
@@ -292,8 +288,8 @@
         .chip-remove:hover { color: var(--red); }
 
         .chip-empty {
-            font-size: 0.76rem;
-            color: var(--text-dim);
+            font-size: 0.85rem;
+            color: var(--text-muted);
             font-style: italic;
         }
 
@@ -307,18 +303,19 @@
         .chip-input-row .form-input {
             flex: 1;
             min-width: 0;
-            font-size: 0.78rem;
-            padding: 0.3rem 0.5rem;
+            font-size: 0.875rem;
+            padding: 0.45rem 0.6rem;
+            min-height: 32px;
         }
 
         .empty {
             text-align: center;
             padding: 2.5rem 1rem;
             color: var(--text-muted);
-            font-size: 0.85rem;
+            font-size: 0.9rem;
             line-height: 1.6;
             border: 1px dashed var(--border);
-            border-radius: 2px;
+            border-radius: var(--radius-2);
         }
 
         @media (max-width: 600px) {
@@ -376,10 +373,10 @@
         <div class="modal-content">
             <div class="modal-header">Revoke access</div>
             <div id="revokeAccessError" style="display:none"></div>
-            <p style="font-size:0.85rem;color:var(--text-muted)">
-                Remove access for <code style="color:var(--text);background:var(--bg-input);padding:0.1rem 0.3rem;border-radius:2px" id="revokeAccessEmail"></code>?
+            <p style="font-size:0.9rem;color:var(--text-muted)">
+                Remove access for <code style="color:var(--text);background:var(--bg-input);padding:0.1rem 0.3rem;border-radius:var(--radius-1)" id="revokeAccessEmail"></code>?
             </p>
-            <p style="font-size:0.78rem;color:var(--text-muted);margin-top:0.5rem;">Their access stops now. If they sign in again they'll come back awaiting approval.</p>
+            <p style="font-size:0.875rem;color:var(--text-muted);margin-top:0.5rem;">Their access stops now. If they sign in again they'll come back awaiting approval.</p>
             <div class="modal-actions">
                 <button class="btn btn-secondary" onclick="closeModal('revokeAccessModal')">Cancel</button>
                 <button class="btn btn-danger" onclick="confirmRevokeAccess()">Revoke access</button>

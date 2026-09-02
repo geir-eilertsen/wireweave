@@ -35,7 +35,7 @@
             padding: 1.5rem 1.6rem;
             margin-bottom: 2rem;
             border: 1px solid var(--border);
-            border-radius: 14px;
+            border-radius: var(--radius-2);
             background:
                 radial-gradient(120% 160% at 88% -20%, rgba(76, 201, 230, 0.10), transparent 55%),
                 linear-gradient(180deg, #151c26, #121821);
@@ -45,7 +45,7 @@
             flex-shrink: 0;
             width: 60px;
             height: 60px;
-            border-radius: 14px;
+            border-radius: var(--radius-2);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -79,7 +79,7 @@
             min-width: 78px;
             padding: 0.6rem 0.8rem;
             border: 1px solid var(--border);
-            border-radius: 10px;
+            border-radius: var(--radius-1);
             background: rgba(255, 255, 255, 0.015);
         }
 
@@ -91,10 +91,8 @@
         }
 
         .stat .l {
-            font-size: 0.66rem;
-            text-transform: uppercase;
-            letter-spacing: 0.09em;
-            color: var(--text-dim);
+            font-size: 0.8rem;
+            color: var(--text-muted);
             margin-top: 0.35rem;
         }
 
@@ -114,7 +112,7 @@
         .peer-rail {
             width: 18px;
             height: 2px;
-            border-radius: 2px;
+            border-radius: var(--radius-1);
             background: var(--accent);
             opacity: 0.8;
         }
@@ -122,15 +120,12 @@
         .peer-head h2 {
             font-family: var(--display);
             font-weight: 600;
-            font-size: 0.82rem;
-            letter-spacing: 0.13em;
-            text-transform: uppercase;
-            color: var(--text-muted);
+            font-size: 0.9rem;
+            color: var(--text);
         }
 
         .peer-count {
-            font-family: var(--mono);
-            font-size: 0.68rem;
+            font-size: 0.8rem;
             color: var(--text-dim);
             margin-left: 0.2rem;
         }
@@ -147,10 +142,11 @@
             display: flex;
             align-items: center;
             gap: 0.75rem;
-            padding: 0.8rem 0.9rem;
+            padding: 1rem 1.1rem;
             background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 11px;
+            border: 1px solid transparent;
+            border-radius: var(--radius-2);
+            box-shadow: var(--shadow-1);
             text-decoration: none;
             color: var(--text);
             transition: transform 0.12s, border-color 0.12s, background 0.12s;
@@ -171,7 +167,7 @@
         .tile-icon {
             width: 38px;
             height: 38px;
-            border-radius: 10px;
+            border-radius: var(--radius-1);
             flex-shrink: 0;
             display: flex;
             align-items: center;
@@ -209,7 +205,7 @@
 
         .tile-sub {
             font-family: var(--mono);
-            font-size: 0.72rem;
+            font-size: 0.8rem;
             color: var(--text-muted);
             line-height: 1.3;
             white-space: nowrap;
@@ -262,12 +258,12 @@
             z-index: 20;
             background: var(--bg-panel);
             border: 1px solid var(--border-hi);
-            border-radius: 6px;
+            border-radius: var(--radius-1);
             padding: 0.4rem 0.55rem;
-            font-size: 0.72rem;
+            font-size: 0.8rem;
             line-height: 1.5;
             white-space: nowrap;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+            box-shadow: var(--shadow-2);
             opacity: 0;
             pointer-events: none;
             transition: opacity 0.12s;
@@ -291,7 +287,7 @@
             .hero h1 { font-size: 1.4rem; }
             .stats { width: 100%; }
             .stat { flex: 1; min-width: 0; }
-            .grid { grid-template-columns: 1fr 1fr; gap: 0.55rem; }
+            .grid { grid-template-columns: 1fr 1fr; gap: 0.75rem; }
             .tile-sub { display: none; }
         }
     </style>

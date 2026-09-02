@@ -25,11 +25,9 @@
 
 .ex-col-label {
     font-family: var(--display);
-    font-size: .68rem;
+    font-size: .8rem;
     font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: .1em;
-    color: var(--text-dim);
+    color: var(--text-muted);
 }
 
 .ex-machine {
@@ -42,8 +40,9 @@
     border: 0;
     border-left: 2px solid transparent;
     color: var(--text-muted);
-    font-family: var(--mono);
-    font-size: .78rem;
+    /* A machine is named, not addressed — sans, like the shell's own fleet cards. */
+    font-family: inherit;
+    font-size: .9rem;
     text-align: left;
     cursor: pointer;
 }
@@ -74,7 +73,7 @@
     flex: 1;
     min-width: 0;
     font-family: var(--mono);
-    font-size: .78rem;
+    font-size: .875rem;
     color: var(--text-muted);
     overflow-x: auto;
     white-space: nowrap;
@@ -94,8 +93,7 @@
 .ex-crumb-here { color: var(--text); }
 
 .ex-count {
-    font-family: var(--mono);
-    font-size: .72rem;
+    font-size: .8rem;
     color: var(--text-dim);
     white-space: nowrap;
 }
@@ -111,7 +109,7 @@
     grid-template-columns: 1fr 90px 132px;
     align-items: center;
     gap: .5rem;
-    padding: .3rem 1rem;
+    padding: .45rem 1rem;
     border-left: 2px solid transparent;
 }
 .ex-row:hover { background: var(--bg-hover); }
@@ -138,7 +136,7 @@
 
 .ex-size, .ex-time {
     font-family: var(--mono);
-    font-size: .74rem;
+    font-size: .8rem;
     color: var(--text-dim);
     font-variant-numeric: tabular-nums;
 }
@@ -150,10 +148,10 @@
     margin: 1.5rem 1rem;
     padding: 1.5rem;
     border: 1px dashed var(--border-hi);
-    border-radius: 2px;
+    border-radius: var(--radius-2);
     text-align: center;
     color: var(--text-muted);
-    font-size: .8rem;
+    font-size: .9rem;
 }
 .ex-note.is-error {
     border-style: solid;
@@ -164,7 +162,7 @@
 }
 .ex-note code {
     font-family: var(--mono);
-    font-size: .76rem;
+    font-size: .85rem;
     color: var(--text);
 }
 

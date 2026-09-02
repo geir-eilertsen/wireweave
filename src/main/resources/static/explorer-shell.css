@@ -57,14 +57,14 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
     display: flex;
     align-items: center;
     gap: 1px;
-    height: 28px;
-    padding: 0 9px;
+    height: 34px;
+    padding: 0 11px;
     margin: 0 14px;
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: var(--radius-1);
     font-family: inherit;   /* one font across the navigation — the tree's own, matching it and the listing */
-    font-size: 14px;
+    font-size: 15px;
     overflow-x: auto;
     scrollbar-width: none;
     transition: border-color .5s ease, background .5s ease;
@@ -72,7 +72,7 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 .ex-addressbar::-webkit-scrollbar { display: none; }
 
 .ex-crumb {
-    padding: 2px 4px;
+    padding: 3px 6px;
     border: 0;
     background: none;
     border-radius: var(--radius-1);
@@ -84,21 +84,21 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 }
 .ex-crumb:hover { color: var(--accent); }
 .ex-crumb-sep { color: var(--text-dim); flex: none; }
-.ex-crumb-here { color: var(--text); font-weight: 500; padding: 2px 4px; white-space: nowrap; }
+.ex-crumb-here { color: var(--text); font-weight: 600; padding: 3px 6px; white-space: nowrap; }
 
 .ex-kbd {
     flex: none;
     display: flex;
     align-items: center;
     gap: 5px;
-    height: 28px;
-    padding: 0 9px;
+    height: 34px;
+    padding: 0 11px;
     background: none;
     border: 1px solid var(--border);
     border-radius: var(--radius-1);
-    color: var(--text-dim);
-    font-family: var(--mono);
-    font-size: 12px;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 14px;
     cursor: pointer;
 }
 .ex-kbd:hover { color: var(--text-muted); border-color: var(--border-hi); }
@@ -138,19 +138,19 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
     display: inline-flex;
     align-items: center;
     gap: 7px;
-    height: 30px;
-    padding: 0 10px;
+    height: 34px;
+    padding: 0 12px;
     background: none;
     border: 1px solid var(--border);
     border-radius: var(--radius-1);
-    color: var(--text-dim);
-    font-family: var(--mono);
-    font-size: 12px;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 14px;
     cursor: pointer;
     transition: color .12s, border-color .12s;
 }
 .ex-vmenu-btn:hover,
-.ex-vmenu-btn[aria-expanded='true'] { color: var(--text-muted); border-color: var(--border-hi); }
+.ex-vmenu-btn[aria-expanded='true'] { color: var(--text); border-color: var(--border-hi); }
 .ex-vmenu-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .ex-vmenu-ico { flex: none; }
 
@@ -186,15 +186,21 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 .ex-vmenu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .ex-vmenu-item .ex-ico { flex: none; color: var(--text-dim); }
 .ex-vmenu-item:hover .ex-ico { color: var(--text-muted); }
-/* Separates the two roots — the fleet above, Vaier's own below. The tree said the same thing with two column
-   headings; a menu this short says it with one line. */
-.ex-vmenu-rule { height: 1px; margin: 5px 9px; background: var(--border); }
+/* The menu's groups. A rule between two halves said only "these are not those"; a named group says what
+   each one is FOR, which is the question an operator opening this menu is actually asking. */
+.ex-vmenu-group {
+    padding: 9px 9px 4px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-dim);
+}
+.ex-vmenu-group:first-child { padding-top: 4px; }
 
 /* --- main ------------------------------------------------------------------------------------------ */
 
 .ex-main {
     display: grid;
-    grid-template-columns: 258px minmax(0, 1fr);
+    grid-template-columns: 276px minmax(0, 1fr);
     min-height: 0;
 }
 /* The tree is optional and the choice is remembered (localStorage), so the pane simply takes the whole
@@ -207,7 +213,7 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 
 .ex-tree {
     background: var(--bg-panel);
-    border-right: 1px solid var(--border);
+    border-right: 1px solid var(--rail);
     overflow-y: auto;
     padding: 8px 0 20px;
     transition: background .5s ease, border-color .5s ease;
@@ -219,22 +225,23 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
     border: 3px solid var(--bg-panel);
 }
 
+/* Sentence case at reading size, not 10.9px of tracked uppercase in the dimmest tone on the page.
+   A label that has to be deciphered is doing the opposite of labelling. */
 .ex-col-label {
-    padding: 4px 14px 8px;
+    padding: 10px 16px 8px;
     font-family: var(--display);
-    font-size: .68rem;
-    font-weight: 700;
-    letter-spacing: .1em;
-    text-transform: uppercase;
-    color: var(--text-dim);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-muted);
 }
 
 .ex-row {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     width: 100%;
-    padding: 3px 10px 3px 0;
+    min-height: 32px;
+    padding: 5px 10px 5px 0;
     background: none;
     border: 0;
     text-align: left;
@@ -267,7 +274,7 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 .ex-twist.is-open { transform: rotate(90deg); }
 .ex-twist.is-leaf { visibility: hidden; }
 
-.ex-ico { flex: none; width: 14px; height: 14px; }
+.ex-ico { flex: none; width: 16px; height: 16px; }
 /* An entry's glyph says WHAT it is about, in the same colours the fleet cards' marks wear — and the class is
    chosen by the entry's KIND, never by its glyph, because a backup repository and a container both draw the
    `box`. Trouble still outranks identity: the failed-directory rule below is more specific and wins. */
@@ -296,15 +303,15 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 /* One font for the whole rail. The tree is navigation, not a terminal: an address and a word sit side by
    side as siblings under a machine (files, shell, containers, disk), so they read as one list rather than
    two typefaces. Identifiers keep their mono home in the Inspector title, where a path IS the content. */
-.ex-lbl { font-size: 14px; }
+.ex-lbl { font-size: 15px; }
 
 /* The domain's four-state MachineStatus, in four colours — the same four the fleet page uses. UNKNOWN is
    grey on purpose: it means no probe has run, and a green dot there would be a claim Vaier cannot make. */
 /* A machine's capability glyphs (Docker, relay), riding just before its liveness dot. Dim by default so they
    read as quiet metadata, not controls; they lift to full colour with the row on hover/selection. */
-.ex-caps { flex: none; display: inline-flex; align-items: center; gap: 4px; }
+.ex-caps { flex: none; display: inline-flex; align-items: center; gap: 6px; }
 .ex-cap { display: inline-flex; color: var(--text-dim); }
-.ex-cap-ico { width: 13px; height: 13px; }
+.ex-cap-ico { width: 15px; height: 15px; }
 .ex-row:hover .ex-cap, .ex-row.is-sel .ex-cap { color: var(--text-muted); }
 /* Docker is a borrowed identity exactly as Claude is, so its glyph wears its own blue — and keeps it where
    the rest of the strip lifts from dim to muted, since that hover rule outranks a bare class. The other
@@ -317,7 +324,7 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 /* The dot paints only trouble, and takes space only when it paints. A blank 6px held open on every healthy
    machine is the same noise a green dot was, just invisible — so the layout shifts when something goes
    amber or red, which is the one moment a row has earned the right to draw the eye. */
-.ex-dot { display: none; flex: none; width: 6px; height: 6px; border-radius: 50%; }
+.ex-dot { display: none; flex: none; width: 8px; height: 8px; border-radius: 50%; }
 .ex-dot.is-degraded, .ex-dot.is-down { display: block; }
 /* There is deliberately no `is-up` rule: a machine that is fine is not news, and a green dot on every
    healthy machine made the one that had fallen over compete with a dozen that hadn't. The element still
@@ -363,8 +370,8 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 
 .ex-pane-head {
     position: sticky; top: 0; z-index: 2;
-    display: flex; align-items: center; gap: 12px;
-    padding: 12px 18px;
+    display: flex; align-items: center; gap: 14px;
+    padding: 16px 24px;
     background: var(--bg);
     border-bottom: 1px solid var(--border);
     transition: background .5s ease, border-color .5s ease;
@@ -375,12 +382,14 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
     min-width: 0;
     display: flex; align-items: center; gap: 8px;
     font-family: var(--display);
-    font-size: 16px;
+    font-size: 21px;
     font-weight: 600;
-    letter-spacing: -.01em;
+    letter-spacing: -.015em;
 }
+/* A path IS the content here, so it keeps its mono home — at a size that no longer asks to be
+   squinted at, and only a shade down from the words beside it rather than a size down. */
 .ex-pane-title .is-id {
-    font-family: var(--mono); font-weight: 500; font-size: 15px;
+    font-family: var(--mono); font-weight: 500; font-size: 19px; letter-spacing: -.02em;
     min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 /* It now carries the operator's own description as well as what the machine is, and a description has
@@ -388,7 +397,7 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 .ex-pane-sub {
     min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    color: var(--text-dim); font-size: 14px;
+    color: var(--text-muted); font-size: 15px;
 }
 /* The pane's one action group, hugging the right. It holds every verb that applies right now — the
    selection's, Paste, and the folder's own Refresh and Upload — because the head, the selection toolbar and
@@ -403,37 +412,23 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
     padding-right: 10px; margin-right: 4px;
     border-right: 1px solid var(--border);
 }
-.ex-pane-actions .ex-btn { padding: 4px 10px; }
-.ex-pane-body { padding: 16px 18px 40px; }
-
-.ex-btn {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 5px 11px;
-    border: 1px solid var(--border-hi);
-    border-radius: var(--radius-1);
-    background: var(--bg-card);
-    color: var(--text-muted);
-    font-family: inherit;
-    font-size: 14px;
-    cursor: pointer;
-    transition: background .12s, color .12s, border-color .12s;
-}
-.ex-btn:hover { background: var(--bg-hover); color: var(--text); border-color: var(--accent); }
-.ex-btn .ex-ico { width: 13px; height: 13px; }
+.ex-pane-actions .ex-btn { min-height: 32px; padding: 6px 12px; }
+.ex-pane-body { padding: 26px 28px 64px; }
 
 /* file listing — a leading checkbox column for multi-select, then name, size, modified */
 .ex-listing { display: flex; flex-direction: column; }
 .ex-lhead, .ex-lrow {
     display: grid;
-    grid-template-columns: 26px minmax(0, 1fr) 92px 148px;
-    gap: 12px;
+    grid-template-columns: 30px minmax(0, 1fr) 104px 164px;
+    gap: 14px;
     align-items: center;
-    padding: 5px 10px;
+    min-height: 38px;
+    padding: 7px 12px;
 }
 .ex-lhead {
-    font-family: var(--display);
-    font-size: .68rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
-    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 13px; font-weight: 600;
+    color: var(--text-muted);
     border-bottom: 1px solid var(--border);
     transition: border-color .5s ease;
 }
@@ -448,8 +443,8 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 .ex-check { display: flex; align-items: center; justify-content: center; cursor: pointer; }
 .ex-check input {
     appearance: none; -webkit-appearance: none;
-    width: 15px; height: 15px; margin: 0;
-    border: 1.5px solid var(--text-dim); border-radius: var(--radius-1);
+    width: 17px; height: 17px; margin: 0;
+    border: 1.5px solid var(--text-dim); border-radius: var(--radius-0);
     background: var(--bg);
     cursor: pointer; position: relative;
     transition: border-color .12s, background .12s;
@@ -457,11 +452,11 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 .ex-check input:hover { border-color: var(--accent); }
 .ex-check input:checked, .ex-check input:indeterminate { background: var(--accent); border-color: var(--accent); }
 .ex-check input:checked::after {
-    content: ''; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px;
+    content: ''; position: absolute; left: 5px; top: 2px; width: 4px; height: 9px;
     border: solid var(--bg); border-width: 0 2px 2px 0; transform: rotate(45deg);
 }
 .ex-check input:indeterminate::after {
-    content: ''; position: absolute; left: 3px; top: 6px; width: 7px; height: 2px; background: var(--bg);
+    content: ''; position: absolute; left: 4px; top: 7px; width: 8px; height: 2px; background: var(--bg);
 }
 .ex-check input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
@@ -487,7 +482,7 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 .ex-lrow:hover .ex-lactions { background: linear-gradient(to right, transparent, var(--bg-card) 30%); }
 .ex-iconbtn {
     display: flex; align-items: center; justify-content: center;
-    width: 27px; height: 24px;
+    width: 32px; height: 30px;
     padding: 0;
     background: none; border: 0; border-radius: var(--radius-1);
     color: var(--text-muted);
@@ -511,30 +506,37 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
     display: none;
     align-items: center; gap: 6px;
     min-width: 0;
-    font-size: 12.5px;
+    font-size: 13px;
     color: var(--text-dim);
     font-variant-numeric: tabular-nums;
 }
 .ex-lsub span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* A shared button for the shell's few real verbs (Paste, a dialog's Confirm/Cancel). styles.css owns .btn,
-   so this is ex-btn — same restraint, this page's tokens. */
+   so this is ex-btn — same restraint, this page's tokens. Set in the app's own sans at reading size: a verb
+   is a word to be read, not a caption, and 11.5px of tracked display face made every action on the page
+   look like fine print. */
 .ex-btn {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 5px 12px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    min-height: 34px;
+    padding: 7px 14px;
     background: var(--bg-card);
     border: 1px solid var(--border-hi);
     border-radius: var(--radius-1);
     color: var(--text);
-    font-family: var(--display); font-size: .72rem; font-weight: 600; letter-spacing: .02em;
+    font-family: inherit; font-size: 14.5px; font-weight: 500;
     cursor: pointer;
-    transition: border-color .12s, background .12s, color .12s;
+    transition: border-color .12s, background .12s, color .12s, box-shadow .12s;
 }
-.ex-btn:hover { border-color: var(--accent); color: var(--accent); }
+.ex-btn:hover { background: var(--bg-hover); border-color: var(--accent); color: var(--accent); }
 .ex-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.ex-btn.is-accent { background: var(--accent); border-color: var(--accent); color: var(--bg); }
-.ex-btn.is-accent:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: var(--bg); }
-.ex-btn .ex-ico { width: 14px; height: 14px; }
+.ex-btn.is-accent {
+    background: var(--accent); border-color: var(--accent); color: #0d1418;
+    font-weight: 600;
+    box-shadow: var(--shadow-1);
+}
+.ex-btn.is-accent:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: #0d1418; }
+.ex-btn .ex-ico { width: 16px; height: 16px; }
 .ex-btn:disabled { opacity: .4; cursor: not-allowed; }
 .ex-btn:disabled:hover { color: var(--text); border-color: var(--border-hi); background: var(--bg-card); }
 
@@ -577,7 +579,7 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 .ex-dropzone-title { font-size: 17px; font-weight: 600; color: var(--text); }
 .ex-dropzone-where {
     margin-top: 4px;
-    font-family: var(--mono); font-size: 12.5px; color: var(--text-muted);
+    font-family: var(--mono); font-size: 13px; color: var(--text-muted);
     overflow-wrap: anywhere;
 }
 /* One font across the navigation: the same entry reads identically in the tree, the address bar and the
@@ -592,7 +594,7 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
     background: none;
     border: 0;
     text-align: left;
-    font-family: inherit; font-size: 14px;
+    font-family: inherit; font-size: 15px;
     color: var(--text);
 }
 .ex-lname .ex-nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -605,7 +607,7 @@ a.ex-lname { color: var(--text); text-decoration: none; }
 button.ex-lname:hover .ex-nm, a.ex-lname:hover .ex-nm { color: var(--accent); text-decoration: underline; }
 button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .ex-lmeta {
-    font-family: inherit; font-size: 13px;
+    font-family: inherit; font-size: 13.5px;
     color: var(--text-dim);
     font-variant-numeric: tabular-nums;
 }
@@ -644,8 +646,8 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
     background: none;
     border: 1px solid var(--border-hi);
     border-radius: 9999px;
-    font-family: var(--display);
-    font-size: .62rem; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+    font-family: inherit;
+    font-size: 13px; font-weight: 600;
     color: var(--text-muted);
     cursor: pointer;
     transition: color .2s, background .2s, border-color .2s;
@@ -711,61 +713,97 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
     flex: none;
     max-width: 38%;
     text-align: right;
-    font-size: 12px;
+    font-size: 13.5px;
     color: var(--text-muted);
-    line-height: 1.35;
+    line-height: 1.4;
     transition: opacity .3s ease;
 }
 .ex-rail-stamp { display: block; font-family: var(--mono); color: var(--text); }
 .ex-rail-ago { color: var(--text-dim); }
 
-/* cards */
-.ex-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
+/* cards
+   A card is an object you are being offered, so it is lifted off the ground rather than fenced in with a
+   hairline: surface plus shadow, which is also what lets two adjacent cards read as two things instead of a
+   grid of boxes. It is wider than it was (210px could not hold a machine's name and its marks side by side)
+   and it stacks badge · name · description · marks, so the eye lands on the same three places on every card. */
+.ex-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(272px, 1fr)); gap: 16px; }
 .ex-card {
-    display: block;
+    display: flex;
+    flex-direction: column;
+    gap: 11px;
     width: 100%;
-    padding: 12px 13px;
+    padding: 16px 17px 17px;
     background: var(--bg-card);
-    border: 1px solid var(--border);
+    border: 1px solid transparent;   /* a seam for high-contrast modes, where a shadow says nothing */
     border-radius: var(--radius-2);
+    /* Lit from above: the hairline of light on the top edge is what makes a dark surface read as an object
+       sitting under a lamp rather than as a lighter rectangle. It is the whole reason the border could go. */
+    box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, .045);
     text-align: left;
     font-family: inherit;
     cursor: pointer;
-    transition: border-color .12s, background .5s ease;
+    transition: background .5s ease, box-shadow .16s ease;
 }
-.ex-card:hover { border-color: var(--accent); background: var(--bg-hover); }
+.ex-card:hover {
+    background: var(--bg-hover);
+    box-shadow: var(--shadow-2), inset 0 1px 0 rgba(255, 255, 255, .06);
+}
+
+/* The card's identity, given a shape. The badge wears the colour of the thing it names and tints its own
+   ground from it, so a disk reads violet and an archive green before a word of the card is read. Neutral
+   accent when the card names something with no identity colour of its own. */
+.ex-badge {
+    flex: none;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 40px; height: 40px;
+    border-radius: var(--radius-1);
+    color: var(--accent);
+    background: var(--bg-hover);
+    background: color-mix(in srgb, currentColor 15%, transparent);
+}
+.ex-badge .ex-ico { width: 20px; height: 20px; color: inherit; }
+.ex-badge.is-disk { color: var(--disk); }
+.ex-badge.is-backup { color: var(--backup); }
+.ex-badge.is-docker { color: var(--docker); }
+.ex-badge.is-claude { color: var(--claude); }
 .ex-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* The alarm the dot stopped carrying, on the surface it cannot be missed on — the same reddish wash a
    failed read already wears elsewhere. It needs its own hover: the plain .ex-card:hover above is just as
    specific and comes first, so without this a down card would turn its red off under the pointer. */
-.ex-card.is-down { border-color: rgba(244, 135, 113, .35); background: rgba(244, 135, 113, .06); }
-.ex-card.is-down:hover { border-color: rgba(244, 135, 113, .6); background: rgba(244, 135, 113, .12); }
+.ex-card.is-down { border-color: rgba(244, 135, 113, .40); background: rgba(244, 135, 113, .07); }
+.ex-card.is-down:hover { border-color: rgba(244, 135, 113, .65); background: rgba(244, 135, 113, .13); }
+.ex-card.is-down .ex-badge { color: var(--red); }
 /* And then the dot inside it says nothing: the card already said it. The dot still paints in the rail,
    which has no card behind it to carry the alarm. */
 .ex-card.is-down .ex-dot.is-down { display: none; }
 /* Same "greyed, not removed" treatment as .ex-btn:disabled — a card Vaier cannot open right now still
    names what is there. */
-.ex-card:disabled { opacity: .4; cursor: not-allowed; }
-.ex-card:disabled:hover { border-color: var(--border); background: var(--bg-card); }
-.ex-card-top { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; }
-.ex-card-top .ex-ico { width: 15px; height: 15px; }
+.ex-card:disabled { opacity: .45; cursor: not-allowed; }
+.ex-card:disabled:hover { background: var(--bg-card); box-shadow: var(--shadow-1); }
+.ex-card-top { display: flex; align-items: center; gap: 11px; }
+/* A name is a word, not a coordinate. Every card here names a machine ("Apalveien 5") or a place on one
+   ("files", "disk") — none of them is a path, and setting them in 14px mono was what made a page of ordinary
+   nouns read like a config dump. Mono keeps the places it earns: the pane title, the listing's paths, keys,
+   compose files and log tails. */
 .ex-card-name {
     flex: 1; min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    font-family: var(--mono); font-size: 14px;
+    /* The display face, because these are names — the one place on the page where Vaier's own voice belongs
+       and the only type on the fleet that is doing anything but reporting. */
+    font-family: var(--display); font-size: 16.5px; font-weight: 600; letter-spacing: -.015em;
     color: var(--text);
 }
-.ex-card-name.is-word { font-family: inherit; }
 /* The note carries the machine's own description now, not its tunnel address — free text, so it has to be
    bounded. Two lines, clamped, with the whole of it on hover: cards sit in an auto-fill grid, and one card
    growing to five lines drags a whole row with it. `overflow-wrap: anywhere` keeps a long unbroken word (a
    path, a hostname) inside the card rather than widening it, and the box still flows the inline "root" tag
    after the text. */
 .ex-card-note {
-    font-size: 13px; color: var(--text-dim);
+    font-size: 14px; line-height: 1.45; color: var(--text-dim);
     display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
     overflow: hidden; overflow-wrap: anywhere;
 }
+.ex-card-note:empty { display: none; }
 
 /* What a machine says without being opened: its capabilities, how its last backup went, and whether anything
    on it wants a newer image. This is the ambience the tree used to carry on rows for machines you were not
@@ -774,11 +812,38 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
    The backup outcome is a tinted archive glyph and NOT a second dot: beside the liveness dot, one bare
    coloured dot that might mean either is worse than none. The glyph says which fact it is; the colour says
    how that fact is going; the title says it in words. */
-.ex-card-marks { display: inline-flex; align-items: center; gap: 7px; flex: none; }
-.ex-mark { display: inline-flex; align-items: center; gap: 2px; color: var(--text-dim); }
-.ex-mark.is-degraded { color: var(--yellow); }
-.ex-mark.is-down { color: var(--red); }
-.ex-mark.is-update { color: var(--yellow); }
+/* Everything a machine says without being opened, on one strip: what it IS (Docker, Backup server) and how
+   it is DOING (its last backup, its disks, Claude, waiting updates), each a glyph and the word for it. The
+   word used to live only in a `title` — which is to say, only for someone holding a pointer who already
+   suspected there was something to hover.
+
+   A quiet mark has no ground at all. Giving every one a pill turned a healthy fleet into a wall of grey
+   lozenges, and spent on the ordinary case the one device that should have been reserved for the urgent
+   one. So the marks read as a line of small facts, and trouble is the only thing on the card wearing a
+   shape — which is what makes it impossible to miss. */
+.ex-card-marks { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 15px; }
+.ex-mark {
+    display: inline-flex; align-items: center; gap: 6px;
+    color: var(--text-dim);
+    font-size: 13px; line-height: 1.4;
+}
+/* Colour says what a thing is: the glyph wears the identity, the word stays legible beside it. */
+.ex-mark-lbl { color: var(--text-muted); white-space: nowrap; }
+/* Trouble, and only trouble, is given a shape — the whole mark recoloured on a tinted ground. */
+.ex-mark.is-degraded, .ex-mark.is-update,
+.ex-mark.is-down {
+    margin: -3px 0;
+    padding: 3px 11px 3px 9px;
+    border-radius: 9999px;
+}
+.ex-mark.is-degraded, .ex-mark.is-update { color: var(--yellow); background: rgba(220, 220, 170, .14); }
+.ex-mark.is-down { color: var(--red); background: rgba(244, 135, 113, .14); }
+.ex-mark.is-degraded .ex-mark-lbl,
+.ex-mark.is-update .ex-mark-lbl,
+.ex-mark.is-down .ex-mark-lbl { color: inherit; }
+/* Docker is a borrowed identity, so its glyph wears its own blue here exactly as it does in the rail. The
+   other two capabilities stay dim on purpose: they say what a machine is, not how it is doing. */
+.ex-mark.is-docker { color: var(--docker); }
 /* Identity, not status: a mark wears the colour of the thing it is about, and only trouble recolours it.
    The green these two used to share was VS Code Dark+'s, left behind by the palette rewrite that replaced
    everything around it. */
@@ -787,36 +852,48 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 /* Colour says "Claude", weight says whether anyone is signed in — so the signed-out mark is the same hue
    worn hollow, never a second colour competing with the disk and backup marks' trouble lights. */
 .ex-mark.is-claude { color: var(--claude); }
-.ex-mark.is-claude-out { color: var(--claude); opacity: .45; }
-.ex-mark.is-claude-out svg { stroke-width: 1.1; }
-.ex-mark-n { font-family: var(--mono); font-size: 10.5px; line-height: 1; }
+/* Hollow, not faded. Fading the whole chip was fine while it was a lone glyph; now that it carries a word,
+   45% opacity drops that word to about 2.8:1 — unreadable, and on the one state an operator is meant to act
+   on. So the glyph alone goes hollow and the word keeps its strength. */
+.ex-mark.is-claude-out { color: var(--claude); }
+.ex-mark.is-claude-out svg { stroke-width: 1.1; opacity: .5; }
+.ex-mark .ex-cap-ico { flex: none; width: 14px; height: 14px; }
 /* An archive is how things stood then; a registry verdict and a tunnel are about now. Both stand down in the
    past, the same way the liveness dots already do. */
 [data-past='1'] .ex-pane .ex-card-marks { display: none; }
 .ex-kv {
     display: grid;
-    grid-template-columns: 128px minmax(0, 1fr);
-    gap: 3px 14px;
-    margin-bottom: 18px;
-    max-width: 620px;
+    grid-template-columns: 168px minmax(0, 1fr);
+    gap: 10px 20px;
+    margin-bottom: 26px;
+    max-width: 680px;
 }
-.ex-kv dt { color: var(--text-dim); font-size: 14px; }
-.ex-kv dd { margin: 0; font-family: var(--mono); font-size: 14px; color: var(--text); overflow-wrap: anywhere; }
+.ex-kv dt { color: var(--text-muted); font-size: 14.5px; }
+/* A detail value is prose until the call site says otherwise. Mono is for the ones that are an address —
+   a path, a host, an image, a fingerprint — and those keep it, at a size that still lines up with the sans
+   beside them. */
+.ex-kv dd { margin: 0; font-family: inherit; font-size: 14.5px; color: var(--text); overflow-wrap: anywhere; }
+.ex-kv dd.is-coord { font-family: var(--mono); font-size: 14px; }
 
+/* A section heading is how you find the part of the pane you came for, so it is set to be found: reading
+   size, sentence case, full strength. It was 10.9px of tracked uppercase in the page's dimmest tone —
+   quieter than the body text underneath it, which is the one thing a heading must never be. */
 .ex-sect {
-    margin: 22px 0 10px;
+    margin: 34px 0 14px;
     font-family: var(--display);
-    font-size: .68rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
-    color: var(--text-dim);
+    font-size: 16px; font-weight: 600; letter-spacing: -.01em;
+    color: var(--text);
 }
 .ex-sect:first-child { margin-top: 0; }
 
 .ex-note {
-    padding: 11px 13px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-1);
+    padding: 15px 17px;
+    background: var(--bg-panel);
+    border: 1px solid transparent;
+    border-radius: var(--radius-2);
     color: var(--text-muted);
-    max-width: 640px;
+    line-height: 1.55;
+    max-width: 680px;
     transition: border-color .5s ease;
 }
 
@@ -825,11 +902,11 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
    one paragraph that matters. A hint has no edge and no ground: it hangs under the control it explains and
    is read only by someone who wanted it. */
 .ex-hint {
-    max-width: 620px;
-    margin-top: 6px;
+    max-width: 660px;
+    margin-top: 7px;
     color: var(--text-dim);
-    font-size: 13px;
-    line-height: 1.5;
+    font-size: 13.5px;
+    line-height: 1.55;
 }
 /* After a bordered surface a hint needs that surface's breathing room, not a control's — and two hints in a
    row need a gap, or they read as one grey paragraph nobody finishes. */
@@ -848,25 +925,26 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
    states something and carries its own verb. Only the left edge separates them, and it carries meaning: the
    accent means an OFFER, a standing's edge is coloured by how the thing actually stands. */
 .ex-nudge, .ex-standing {
-    display: flex; align-items: flex-start; gap: 12px;
-    padding: 12px 14px;
-    max-width: 640px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-1);
+    display: flex; align-items: flex-start; gap: 14px;
+    padding: 15px 17px;
+    max-width: 680px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-2);
     background: var(--bg-card);
+    box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, .04);
 }
-.ex-nudge { border-left: 2px solid var(--accent); }
-.ex-nudge + .ex-nudge { margin-top: 8px; }
-.ex-nudge-ico { flex: 0 0 auto; width: 16px; height: 16px; color: var(--accent); margin-top: 1px; }
+.ex-nudge { border-left: 3px solid var(--accent); }
+.ex-nudge + .ex-nudge { margin-top: 10px; }
+.ex-nudge-ico { flex: 0 0 auto; width: 18px; height: 18px; color: var(--accent); margin-top: 1px; }
 .ex-nudge-text { flex: 1 1 auto; min-width: 0; }
-.ex-nudge-title { color: var(--text); font-weight: 600; }
-.ex-nudge-why { color: var(--text-muted); font-size: 13px; margin-top: 3px; line-height: 1.45; }
+.ex-nudge-title { color: var(--text); font-weight: 600; font-size: 15.5px; }
+.ex-nudge-why { color: var(--text-muted); font-size: 14px; margin-top: 4px; line-height: 1.5; }
 /* "What that means ›" — the way out to the Concepts entry, on the one nudge whose answer changes what Vaier
    may do on a machine. Deliberately a quiet muted link rather than a second button: the card has one action,
    and a second thing shaped like an action is a second thing to weigh. */
 .ex-nudge-more {
     display: inline-block; margin-top: 6px;
-    color: var(--text-muted); font-size: 12px; text-decoration: none;
+    color: var(--text-muted); font-size: 13.5px; text-decoration: none;
 }
 .ex-nudge-more:hover, .ex-nudge-more:focus-visible { color: var(--accent); text-decoration: underline; }
 .ex-nudge .ex-btn { flex: 0 0 auto; align-self: center; white-space: nowrap; }
@@ -878,29 +956,29 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 /* A standing: what the thing is, one word for how it stands, the detail behind that word, and its verbs.
    The left edge is the word again, at a glance — the subject's own colour where it stands well, red where
    Vaier could not read it, and otherwise the same quiet rule every other surface here wears. */
-.ex-standing { margin-top: 10px; border-left: 2px solid var(--border-hi); }
+.ex-standing { margin-top: 12px; border-left: 3px solid var(--border-hi); }
 .ex-standing:has(.ex-standing-state.is-claude-in) { border-left-color: var(--claude); }
 .ex-standing:has(.ex-standing-state.is-bad) { border-left-color: var(--red); }
 .ex-standing.is-error { border-color: rgba(244, 135, 113, .35); background: rgba(244, 135, 113, .06); }
 .ex-standing-text { flex: 1 1 auto; min-width: 0; }
 .ex-standing-top { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
-.ex-standing-title { color: var(--text); font-weight: 600; }
+.ex-standing-title { color: var(--text); font-weight: 600; font-size: 15.5px; }
 /* Claude's standing wears Claude's own clay, signed out the same hue faded — the very tints its fleet-card
    mark uses, so one machine cannot read clay on its card and green on its pane. The tones are Claude-scoped
    rather than the generic good/bad pair they replaced: a sign-in is presence, not a traffic light. Red stays
    for the read that FAILED, which genuinely is trouble. */
-.ex-standing-state { font-size: 13px; }
+.ex-standing-state { font-size: 14px; }
 .ex-standing-state.is-claude-in { color: var(--claude); }
 .ex-standing-state.is-claude-out { color: var(--claude); opacity: .45; }
 .ex-standing-state.is-muted { color: var(--text-dim); }
 .ex-standing-state.is-bad { color: var(--red); }
 /* An account name is a coordinate, so it is mono — the same rule the addresses and paths follow. */
 .ex-standing-detail {
-    margin-top: 3px;
-    font-family: var(--mono); font-size: 13px; color: var(--text-muted);
+    margin-top: 4px;
+    font-family: var(--mono); font-size: 13.5px; color: var(--text-muted);
     overflow-wrap: anywhere;
 }
-.ex-standing-why { margin-top: 4px; color: var(--text-dim); font-size: 12.5px; line-height: 1.45; }
+.ex-standing-why { margin-top: 5px; color: var(--text-dim); font-size: 13.5px; line-height: 1.5; }
 /* The card already draws the row; the verbs only have to stop growing and sit in the middle of it. */
 .ex-standing .ex-lactions.is-static { flex: 0 0 auto; align-self: center; margin-top: 0; }
 @media (max-width: 560px) {
@@ -909,7 +987,7 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 }
 .ex-note.is-error { border-color: rgba(244, 135, 113, .35); background: rgba(244, 135, 113, .06); }
 .ex-note.is-warn { border-color: rgba(220, 220, 170, .4); background: rgba(220, 220, 170, .06); }
-.ex-note code { font-family: var(--mono); font-size: 13px; color: var(--accent); }
+.ex-note code { font-family: var(--mono); font-size: 14px; color: var(--accent); }
 
 /* --- containers and services (#323 slice C) --------------------------------------------------------- */
 
@@ -944,7 +1022,7 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 .ex-tsource { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .ex-tip { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ex-torigin {
-    font-size: .74rem; color: var(--text-muted);
+    font-size: 13.5px; color: var(--text-muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
@@ -979,8 +1057,8 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 .ex-cred-name { font-family: var(--mono); font-size: 14px; color: var(--text); }
 .ex-cred-tally { margin-left: auto; font-size: 13px; color: var(--text-muted); white-space: nowrap; }
 
-.ex-cred-strip { display: flex; flex-wrap: wrap; gap: 3px; align-items: center; min-width: 0; }
-.ex-cred-cell { width: 11px; height: 11px; border-radius: var(--radius-1); background: var(--border-hi); flex: none; }
+.ex-cred-strip { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; }
+.ex-cred-cell { width: 13px; height: 13px; border-radius: var(--radius-0); background: var(--border-hi); flex: none; }
 .ex-cred-cell.is-current     { background: var(--green); }
 .ex-cred-cell.is-drift       { background: var(--yellow); }
 .ex-cred-cell.is-failed      { background: var(--red); }
@@ -991,8 +1069,8 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 
 /* Path, mode, and merely whether a secret is held. Mono because two thirds of it is a coordinate. */
 .ex-cred-meta {
-    margin-top: 6px;
-    font-family: var(--mono); font-size: 12px; color: var(--text-dim);
+    margin-top: 7px;
+    font-family: var(--mono); font-size: 13.5px; color: var(--text-dim);
     overflow-wrap: anywhere;
 }
 
@@ -1059,7 +1137,7 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 .ex-claude-state.is-out   { color: var(--text-muted); }
 .ex-claude-state.is-muted { color: var(--text-dim); }
 .ex-claude-acct {
-    font-size: .74rem; color: var(--text-dim);
+    font-size: 13.5px; color: var(--text-dim);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
@@ -1080,21 +1158,21 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
     flex: none; width: 18px; height: 18px;
     border-radius: 50%;
     background: var(--rail); color: var(--accent);
-    font-size: 11px; font-weight: 700; line-height: 18px; text-align: center;
+    font-size: 12.5px; font-weight: 700; line-height: 20px; text-align: center;
 }
 .ex-claude-steptext { color: var(--text-muted); font-size: 13px; line-height: 1.45; min-width: 0; }
 /* Everything under a step lines up past its number, so the two stages read as two blocks rather than four. */
 .ex-claude-url, .ex-claude-code, .ex-claude-actions, .ex-claude-hint { margin-left: 27px; }
 .ex-claude-url { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .ex-claude-link {
-    font-family: var(--mono); font-size: 12px; color: var(--accent); text-decoration: none;
+    font-family: var(--mono); font-size: 13px; color: var(--accent); text-decoration: none;
     min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .ex-claude-link:hover { text-decoration: underline; }
 .ex-claude-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .ex-claude-code { max-width: 320px; }
 .ex-claude-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-.ex-claude-hint { color: var(--text-dim); font-size: 12px; line-height: 1.45; }
+.ex-claude-hint { color: var(--text-dim); font-size: 13.5px; line-height: 1.5; }
 
 @media (max-width: 560px) {
     /* Three columns of a machine's standing do not fit a phone. The row stacks and the header goes with it —
@@ -1115,11 +1193,12 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
    The block reuses the card's surface rather than inventing one: same background, same border, same radius. */
 .ex-fs {
     max-width: 620px;
-    margin-bottom: 10px;
-    padding: 12px 13px;
+    margin-bottom: 12px;
+    padding: 16px 17px;
     background: var(--bg-card);
-    border: 1px solid var(--border);
+    border: 1px solid transparent;
     border-radius: var(--radius-2);
+    box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, .04);
     transition: border-color .12s, opacity .12s, background .5s ease;
 }
 /* A breaching filesystem borrows the error note's exact framing — one red, one meaning, page-wide. */
@@ -1130,11 +1209,11 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 
 .ex-fs-top { display: flex; align-items: baseline; gap: 10px; margin-bottom: 9px; }
 /* Mount point and device are coordinates, so they are mono — the shell's one type rule. */
-.ex-fs-mount { font-family: var(--mono); font-size: 14px; color: var(--text); }
-.ex-fs-dev { font-family: var(--mono); font-size: 13px; color: var(--text-dim); }
+.ex-fs-mount { font-family: var(--mono); font-size: 15px; font-weight: 500; color: var(--text); }
+.ex-fs-dev { font-family: var(--mono); font-size: 13.5px; color: var(--text-dim); }
 .ex-fs-size {
     margin-left: auto;
-    font-size: 13px;
+    font-size: 14px;
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
@@ -1148,8 +1227,8 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 .ex-fs-ctl label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
 .ex-fs-ctl input[type='checkbox'] { accent-color: var(--accent); cursor: pointer; }
 .ex-thresh {
-    width: 56px;
-    padding: 3px 6px;
+    width: 62px;
+    padding: 5px 8px;
     background: var(--bg-panel);
     border: 1px solid var(--border);
     border-radius: var(--radius-1);
@@ -1169,10 +1248,10 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
     position: relative;
     display: flex;
     align-items: center;
-    height: 26px;
-    max-width: 620px;
-    margin-bottom: 18px;
-    padding: 0 10px;
+    height: 32px;
+    max-width: 680px;
+    margin-bottom: 20px;
+    padding: 0 12px;
     background: var(--bg-panel);
     border: 1px solid var(--border);
     border-radius: var(--radius-1);
@@ -1210,7 +1289,7 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
     position: relative;
     margin-left: auto;
     font-family: var(--mono);
-    font-size: 13px;
+    font-size: 14px; font-weight: 500;
     font-variant-numeric: tabular-nums;
     color: var(--text-muted);
 }
@@ -1252,21 +1331,22 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 }
 .ex-pal input {
     width: 100%;
-    padding: 14px 16px;
+    padding: 17px 20px;
     border: 0;
     border-bottom: 1px solid var(--border);
     background: transparent;
     color: var(--text);
-    font-family: var(--mono);
-    font-size: 15px;
+    font-family: inherit;
+    font-size: 17px;
     outline: none;
 }
 .ex-pal input::placeholder { color: var(--text-dim); }
-.ex-pal-list { max-height: 320px; overflow-y: auto; padding: 6px; }
+.ex-pal-list { max-height: 380px; overflow-y: auto; padding: 8px; }
 .ex-pal-item {
-    display: flex; align-items: center; gap: 9px;
+    display: flex; align-items: center; gap: 11px;
     width: 100%;
-    padding: 7px 10px;
+    min-height: 38px;
+    padding: 8px 12px;
     background: none;
     border: 0;
     border-radius: var(--radius-1);
@@ -1279,11 +1359,11 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 .ex-pal-item .ex-pth {
     flex: 1; min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    font-family: var(--mono); font-size: 14px;
+    font-family: var(--mono); font-size: 14.5px;
 }
 .ex-pal-item .ex-pth mark { background: none; color: var(--accent); }
 .ex-pal-item .ex-kind {
-    font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase;
+    font-size: 13px;
     color: var(--text-dim);
 }
 .ex-pal-empty { padding: 22px 16px; color: var(--text-dim); text-align: center; }
@@ -1309,12 +1389,12 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 .ex-clip.is-on { display: flex; }
 .ex-clip-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
 .ex-clip-title {
-    font-family: var(--display); font-size: .64rem; font-weight: 700;
-    letter-spacing: .1em; text-transform: uppercase; color: var(--text-dim);
+    font-family: var(--display); font-size: 14px; font-weight: 600;
+    color: var(--text);
 }
 .ex-clip-clear {
     padding: 2px 6px; background: none; border: 0; border-radius: var(--radius-1);
-    color: var(--text-dim); font-size: 12px; cursor: pointer;
+    color: var(--text-dim); font-size: 13.5px; cursor: pointer;
 }
 .ex-clip-clear:hover { color: var(--accent); }
 .ex-clip-clear:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -1347,10 +1427,10 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 .ex-xfer-fill.is-indeterminate { animation: ex-slide 1.1s ease-in-out infinite; }
 @keyframes ex-slide { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
 .ex-xfer-meta {
-    margin-top: 5px; font-family: var(--mono); font-size: 11.5px; color: var(--text-dim);
+    margin-top: 5px; font-family: var(--mono); font-size: 12.5px; color: var(--text-dim);
     font-variant-numeric: tabular-nums;
 }
-.ex-xfer .ex-note { margin-top: 5px; padding: 6px 8px; font-size: 12px; }
+.ex-xfer .ex-note { margin-top: 5px; padding: 7px 9px; font-size: 13px; }
 
 /* Toasts sit bottom-left, clear of the tray (bottom-right), so one never covers the other. Brief,
    self-dismissing, never modal. */
@@ -1403,31 +1483,31 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
 
 /* A confirm dialog, centred over its own scrim (reusing .ex-scrim's backdrop). */
 .ex-dialog {
-    width: 440px; max-width: calc(100vw - 32px);
+    width: 480px; max-width: calc(100vw - 32px);
     /* The scrim seats the dialog 12vh from the top, so its height must leave that offset plus a bottom
        gap — otherwise a long scan list runs the dialog (and its footer) off the bottom of the screen,
        out of reach, since the fixed scrim doesn't scroll. */
     max-height: calc(88vh - 24px); overflow-y: auto;
-    padding: 20px;
+    padding: 24px;
     background: var(--bg-panel);
     border: 1px solid var(--border-hi);
     border-radius: var(--radius-2);
     box-shadow: 0 20px 50px rgba(0, 0, 0, .55);
 }
-.ex-dialog-title { font-family: var(--display); font-size: 1.06rem; font-weight: 600; color: var(--text); margin-bottom: 10px; }
-.ex-dialog-body { font-size: 14px; line-height: 1.5; color: var(--text-muted); white-space: pre-wrap; margin-bottom: 14px; }
+.ex-dialog-title { font-family: var(--display); font-size: 19px; font-weight: 600; color: var(--text); margin-bottom: 12px; }
+.ex-dialog-body { font-size: 15px; line-height: 1.55; color: var(--text-muted); white-space: pre-wrap; margin-bottom: 16px; }
 .ex-dialog-body b, .ex-dialog-coord { font-family: var(--mono); color: var(--text); }
 /* The two host-key fingerprints in the Clear-pinned-key dialog. They are read character by character, so
    they take the dialog's full width with the label above rather than beside: the pane's 128px label column
    would squeeze a 50-character fingerprint into three arbitrary wraps, which is precisely what a
    comparison the operator is being asked to make cannot survive. Stacked, the two align for scanning. */
 .ex-dialog .ex-kv { grid-template-columns: minmax(0, 1fr); gap: 2px; margin-bottom: 16px; }
-.ex-dialog .ex-kv dt { font-size: 12px; }
+.ex-dialog .ex-kv dt { font-size: 13.5px; }
 .ex-dialog .ex-kv dd { font-size: 13px; margin-bottom: 8px; }
 .ex-dialog-input {
     width: 100%;
     margin-bottom: 18px;
-    padding: 8px 11px;
+    padding: 10px 13px;
     background: var(--bg);
     border: 1px solid var(--border-hi);
     border-radius: var(--radius-1);
@@ -1475,7 +1555,7 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .ex-disc-kind {
-    flex: none; font-family: var(--mono); font-size: 12px; color: var(--text);
+    flex: none; font-family: var(--mono); font-size: 13px; color: var(--text);
     padding: 1px 6px; border: 1px solid var(--border-hi); border-radius: var(--radius-1);
 }
 .ex-disc-meta {
@@ -1517,7 +1597,7 @@ button.ex-brepo-name:focus-visible { outline: 2px solid var(--accent); outline-o
 }
 .ex-choice-svg { width: 22px; height: 22px; }
 .ex-choice h4 { margin: 0; font-family: var(--display); font-size: 14px; font-weight: 600; color: var(--text); }
-.ex-choice p { margin: 0; font-size: 12.5px; color: var(--text-muted); line-height: 1.5; }
+.ex-choice p { margin: 0; font-size: 14px; color: var(--text-muted); line-height: 1.55; }
 @media (max-width: 560px) { .ex-choice-grid { grid-template-columns: 1fr; } }
 
 /* Discover: the last-scan line and the rescan control; then the site filters, said as "via <name>". */
@@ -1551,12 +1631,12 @@ button.ex-brepo-name:focus-visible { outline: 2px solid var(--accent); outline-o
 }
 .ex-detected-head {
     display: flex; align-items: center; gap: 7px; margin-bottom: 10px;
-    font-family: var(--display); font-size: .68rem; font-weight: 700; letter-spacing: .08em;
-    text-transform: uppercase; color: var(--green);
+    font-family: inherit; font-size: 14px; font-weight: 600;
+    color: var(--green);
 }
 .ex-detected-check {
     width: 15px; height: 15px; flex: none; border-radius: 50%; display: grid; place-items: center;
-    background: rgba(78, 201, 176, .15); color: var(--green); font-size: 10px;
+    background: rgba(78, 201, 176, .15); color: var(--green); font-size: 11.5px;
 }
 .ex-drow { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; font-size: 13px; }
 .ex-drow-k { color: var(--text-muted); }
@@ -1565,13 +1645,13 @@ button.ex-brepo-name:focus-visible { outline: 2px solid var(--accent); outline-o
 
 /* Adopt: the SSH test row inside the disclosure — the green check lands on an authenticated reply. */
 .ex-testrow { display: flex; align-items: center; gap: 12px; }
-.ex-testok { display: none; align-items: center; gap: 6px; font-size: 12.5px; color: var(--green); }
+.ex-testok { display: none; align-items: center; gap: 6px; font-size: 14px; color: var(--green); }
 .ex-testok.is-on { display: inline-flex; }
 
 /* The new-machine config, shown once: a wider dialog, the config as scrollable mono, the QR on white. */
 .ex-dialog.is-wide { width: 620px; }
 .ex-config {
-    font-family: var(--mono); font-size: 12px; line-height: 1.5;
+    font-family: var(--mono); font-size: 13px; line-height: 1.55;
     background: var(--bg); border: 1px solid var(--border-hi); border-radius: var(--radius-1);
     padding: 10px 12px; margin: 0 0 12px; max-height: 260px; overflow: auto; white-space: pre;
     color: var(--text-muted);
@@ -1587,28 +1667,28 @@ button.ex-brepo-name:focus-visible { outline: 2px solid var(--accent); outline-o
     counter-increment: ex-step; content: counter(ex-step);
     width: 23px; height: 23px; border-radius: 50%;
     background: rgba(217, 160, 91, .14); color: var(--accent);
-    font-family: var(--mono); font-size: 12px; font-weight: 600;
+    font-family: var(--mono); font-size: 13px; font-weight: 600;
     display: grid; place-items: center; margin-top: 1px;
 }
 .ex-recipe-t { font-size: 13.5px; color: var(--text); min-width: 0; line-height: 1.55; }
 .ex-recipe-t b { font-weight: 600; color: var(--text); }
 .ex-cmd {
     display: block; margin-top: 7px;
-    font-family: var(--mono); font-size: 12px; color: var(--accent);
+    font-family: var(--mono); font-size: 13px; color: var(--accent);
     background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-1);
     padding: 7px 9px; overflow-x: auto; white-space: nowrap;
 }
 .ex-nosudo {
     display: inline-flex; align-items: center; gap: 5px; vertical-align: middle;
-    margin-left: 9px; font-family: var(--display); font-size: 10.5px; font-weight: 600;
-    letter-spacing: .04em; color: var(--green);
+    margin-left: 9px; font-family: inherit; font-size: 12.5px; font-weight: 600;
+    color: var(--green);
     border: 1px solid rgba(78, 201, 176, .3); background: rgba(78, 201, 176, .08);
     padding: 1px 8px; border-radius: 9999px; text-transform: none;
 }
 /* Per-platform steps for the non-Ubuntu handoffs — plainer than the recipe, matching the shell's restraint. */
 .ex-instr { margin: 8px 0 12px; padding-left: 20px; display: grid; gap: 7px; }
 .ex-instr li { font-size: 13.5px; color: var(--text-muted); line-height: 1.55; padding-left: 4px; }
-.ex-waiting { display: flex; align-items: center; gap: 9px; margin-top: 12px; font-size: 12.5px; color: var(--text-muted); }
+.ex-waiting { display: flex; align-items: center; gap: 9px; margin-top: 12px; font-size: 14px; color: var(--text-muted); }
 /* The fleet map fills the inspector; Leaflet paints inside it. */
 .ex-map-body { padding: 0; }
 .ex-map { width: 100%; height: 72vh; min-height: 360px; border-radius: var(--radius-1); overflow: hidden; }
@@ -1681,7 +1761,7 @@ button.ex-brepo-name:focus-visible { outline: 2px solid var(--accent); outline-o
 .ex-form { display: flex; flex-direction: column; gap: 13px; margin-bottom: 16px; text-align: left; }
 .ex-field { display: flex; flex-direction: column; gap: 5px; }
 .ex-field > label { font-size: 13px; color: var(--text-muted); }
-.ex-hint { font-size: 12px; color: var(--text-dim); }
+.ex-hint { font-size: 13.5px; color: var(--text-dim); }
 .ex-input {
     width: 100%;
     padding: 8px 11px;
@@ -1714,7 +1794,7 @@ select.ex-input { cursor: pointer; }
     border: 1px solid var(--border);
     border-radius: var(--radius-1);
     color: var(--text);
-    font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
+    font-family: var(--mono); font-size: 13px; line-height: 1.55;
     overflow-wrap: anywhere; user-select: all;
 }
 .ex-pubkey-copy { flex: none; }
@@ -1753,6 +1833,19 @@ select.ex-input { cursor: pointer; }
    .ex-btn's outline at a smaller size, so it reads as "there is more here" rather than as a verb — the turning
    marker is what says which. */
 .ex-adv { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 12px; }
+/* The danger fold. Same shape, warning colour, and a glyph — because the thing an operator needs to know
+   before opening a fold is not how advanced it is but whether it can undo their work. */
+.ex-adv.is-danger > .ex-adv-sum {
+    border-color: rgba(244, 135, 113, .38);
+    background: rgba(244, 135, 113, .06);
+    color: var(--red);
+}
+.ex-adv.is-danger > .ex-adv-sum:hover {
+    border-color: var(--red);
+    background: rgba(244, 135, 113, .12);
+    color: var(--red);
+}
+.ex-adv.is-danger > .ex-adv-sum .ex-ico { width: 14px; height: 14px; flex: none; }
 .ex-adv > .ex-adv-sum {
     list-style: none; cursor: pointer; user-select: none;
     display: inline-flex; align-items: center; gap: 7px;
@@ -1851,13 +1944,12 @@ select.ex-input { cursor: pointer; }
     .ex-tree { display: none; }
 
     /* The address bar is now the thing every navigation back goes through, and its crumbs were 2px-padded
-       text. A taller bar, and crumbs a thumb can actually land on. */
-    .ex-addressbar { height: 34px; }
-    .ex-crumb, .ex-crumb-here { padding: 6px 5px; }
+       text. Crumbs a thumb can actually land on. */
+    .ex-crumb, .ex-crumb-here { padding: 7px 6px; }
 
     /* The pane's header wraps rather than shoving its actions off the edge, and reclaims a little side room. */
-    .ex-pane-head { flex-wrap: wrap; padding: 10px 12px; }
-    .ex-pane-body { padding: 14px 12px 40px; }
+    .ex-pane-head { flex-wrap: wrap; padding: 13px 14px; }
+    .ex-pane-body { padding: 18px 14px 48px; }
     /* --- the listing, as a phone file browser ---------------------------------------------------------
        Columns are a desktop idea. Three of them across 390px leave a filename about twelve characters of
        room, and the row's own controls had nowhere to go — which is how a single entry ended up wrapped
@@ -1923,7 +2015,7 @@ select.ex-input { cursor: pointer; }
         grid-area: acts; display: flex; justify-content: flex-start; margin-top: 6px;
     }
 
-    /* A 14px filename is a thumb-hostile target, so a folder's whole row opens it: the name button's hit area
+    /* A filename is a thumb-hostile target at any size, so a folder's whole row opens it: the name button's hit area
        is stretched over the row (it is the row that is positioned, so inset:0 resolves against it). The
        checkbox sits above that sheet and keeps doing its own job — the one thing inside the row that means
        something else. Files are a <span>, not a button, so they get neither the sheet nor the chevron. */
@@ -1943,8 +2035,8 @@ select.ex-input { cursor: pointer; }
     /* 16px keeps iOS from zooming the layout the instant a field takes focus — the search field, and every
        form input (Settings, Add machine, credentials). */
     .ex-pal input, .ex-input { font-size: 16px; }
-    /* Key/value detail stacks: a 128px label column starves a mono address on a phone, so the value gets its
-       own line under its label instead. */
+    /* Key/value detail stacks: a fixed label column starves a mono address on a phone, so the value gets
+       its own line under its label instead. */
     .ex-kv { grid-template-columns: minmax(0, 1fr); gap: 0; }
     .ex-kv dt { margin-top: 9px; }
     .ex-kv dt:first-child { margin-top: 0; }

@@ -102,16 +102,17 @@ class ExplorerShellTest {
     }
 
     @Test
-    void aMachinesSshAccessSection_opensTheShellInItsOwnWindow() throws IOException {
-        // The shell is no longer a tree entry — it opens from a machine's SSH-access section, beside the
-        // credential it uses (a terminal is the most direct thing SSH access is for). It opens in its own
+    void aMachinesShell_opensInItsOwnWindow_fromTheWaysIntoTheMachine() throws IOException {
+        // The shell is not a tree entry, and it is no longer filed under a heading named after its transport
+        // either. It is one of the ways INTO a machine — a card beside files, containers, disk and backups —
+        // because that is what an operator wants it for; SSH is only how it travels. It opens in its own
         // browser window; the Explorer has no bottom dock.
         String js = read("explorer-shell.js");
         assertThat(js).contains("function openShellWindow(");
         assertThat(js).contains("terminal.html?machine=");
         assertThat(js).doesNotContain("TerminalDock.open(");
-        // Opened from the SSH-access section's own button.
-        assertThat(js).contains("selVerb('shell', 'Open shell'");
+        // A door among the doors, in the same grid and greyed by the same two rules as files and disk.
+        assertThat(js).contains("card(svg('shell', 'ex-ico'), 'shell',");
         // The shell is not a navigable tree kind any more: no 'shell' child, no renderShell pane.
         assertThat(js).doesNotContain("kind: 'shell'");
         assertThat(js).doesNotContain("function renderShell(");
@@ -391,6 +392,7 @@ class ExplorerShellTest {
     void theRailAndRadiusTokens_areDefinedOnceAndUsedByTheNewAssets() throws IOException {
         String styles = read("styles.css");
         assertThat(styles).contains("--rail:");
+        assertThat(styles).contains("--radius-0:");
         assertThat(styles).contains("--radius-1:");
         assertThat(styles).contains("--radius-2:");
 
@@ -401,7 +403,7 @@ class ExplorerShellTest {
         while (m.find()) {
             String value = m.group(1).trim();
             assertThat(value).as("raw radius %s", value)
-                .matches("(var\\(--radius-[12]\\)|50%|9999px)");
+                .matches("(var\\(--radius-[012]\\)|50%|9999px)");
         }
     }
 
@@ -835,8 +837,7 @@ class ExplorerShellTest {
         assertThat(from).isPositive();
         String body = js.substring(from, js.indexOf("\n    // --- the tree", from));
 
-        assertThat(body).contains("svg('disk'");
-        assertThat(body).contains("DISK_MARK[");
+        assertThat(body).contains("mark(DISK_MARK[standing.level], 'disk'");
         assertThat(body).contains("standing.level");
         assertThat(body).contains("standing.mountPoint");
         assertThat(body).contains("standing.usedPercent");
@@ -919,7 +920,7 @@ class ExplorerShellTest {
         assertThat(from).isPositive();
         String body = js.substring(from, js.indexOf("\n    // --- the tree", from));
 
-        assertThat(body).contains("svg('claude'");
+        assertThat(body).contains("'claude',");
         assertThat(body).contains("claudeState(");
         // The browser looks the tone up; it never decides which states are a standing. That verdict travels
         // from the domain on the response, like DiskStandingLevel does.
@@ -983,10 +984,11 @@ class ExplorerShellTest {
 
         String css = read("explorer-shell.css");
         assertThat(css).contains(".ex-mark.is-claude { color: var(--claude); }");
-        assertThat(css).contains(".ex-mark.is-claude-out { color: var(--claude); opacity: .45; }");
-        // The hollow: same hue at a lighter stroke, so at 16px it reads as dormant rather than as a
-        // second colour saying something else.
-        assertThat(css).contains(".ex-mark.is-claude-out svg { stroke-width: 1.1; }");
+        assertThat(css).contains(".ex-mark.is-claude-out { color: var(--claude); }");
+        // The hollow: same hue at a lighter stroke and a lighter glyph, so it reads as dormant rather than as
+        // a second colour saying something else. The fade is on the GLYPH alone — the mark carries a word now,
+        // and fading the whole thing put that word at 2.8:1, on the one state an operator is meant to act on.
+        assertThat(css).contains(".ex-mark.is-claude-out svg { stroke-width: 1.1; opacity: .5; }");
     }
 
     // --- what a machine card says it is -----------------------------------------------------------------
@@ -1526,9 +1528,9 @@ class ExplorerShellTest {
     void backingUpAsRoot_isASettingTheOperatorCanSee_butNoLongerAQuestionAskedUpFront() throws IOException {
         // Colina 27 ran non-root over /home for months, skipping every file another user owned, because the
         // one setting that decides whether a backup of /home is real had no control anywhere in the shell.
-        // It has one — but as of #334 it sits under Advanced, because asked up front it is a question about
-        // file ownership inside container volumes and the security envelope of a sudoers rule, put to
-        // someone with no evidence either way. The evidence-backed version is the machine's nudge.
+        // It has one — but as of #334 it is folded, because asked up front it is a question about file
+        // ownership inside container volumes and the security envelope of a sudoers rule, put to someone
+        // with no evidence either way. The evidence-backed version is the machine's nudge.
         String js = read("explorer-shell.js");
         int from = js.indexOf("function renderOneJob(");
         assertThat(from).isPositive();
@@ -1538,9 +1540,15 @@ class ExplorerShellTest {
         assertThat(body).as("the shell's existing checkbox row, not a new widget").contains("checkRow(");
         assertThat(body).as("the consequence in the operator's words, not the mechanism")
             .contains("owned by other users");
+        // Retargeted, not weakened: the fold is the same kind of fold — the shell's plain disclosure, holding
+        // reference the operator is not asked for — but it is no longer called "Advanced", which said only
+        // that they were unlikely to want it and nothing about what was inside. It is named for what it holds,
+        // so this pins the new name AND pins the old one out, which the single `contains` never did.
         assertThat(body).as("folded away, using the shell's one disclosure idiom — reachable, not asked")
-            .contains("disclosure('Advanced')");
-        int fold = body.indexOf("disclosure('Advanced')");
+            .contains("disclosure('Backing up other users’ files')");
+        assertThat(body).as("named by what is inside it, never by how advanced it is")
+            .doesNotContain("disclosure('Advanced')");
+        int fold = body.indexOf("disclosure('Backing up other users’ files')");
         assertThat(body.indexOf("checkRow('Back up files owned by other users'")).as("inside the fold")
             .isGreaterThan(fold);
     }
@@ -1628,17 +1636,19 @@ class ExplorerShellTest {
     }
 
     @Test
-    void theEditFormFoldsTheHandTypedCidrUnderAdvanced() throws IOException {
+    void theEditFormFoldsTheHandTypedCidr_underAFoldThatNamesIt() throws IOException {
         // The CIDR field stays — a machine can front more than one subnet, and nothing detects that — but
         // it is no longer the way an operator is expected to answer. It is the escape hatch, so it lives
-        // where escape hatches live.
+        // where escape hatches live: folded, and behind a summary that says what is inside rather than
+        // "Advanced", which only ever said the operator was unlikely to want it.
         String js = read("explorer-shell.js");
         int from = js.indexOf("function editMachineForm(");
         String body = js.substring(from, js.indexOf("\n    }\n", from));
 
-        assertThat(body).contains("disclosure('Advanced')");
-        int fold = body.indexOf("disclosure('Advanced')");
-        assertThat(body.indexOf("lanCidr", fold)).as("the CIDR field sits inside the fold").isPositive();
+        String fold = "disclosure('The network behind this machine')";
+        assertThat(body).contains(fold);
+        assertThat(body.indexOf("lanCidr", body.indexOf(fold)))
+            .as("the CIDR field sits inside the fold").isPositive();
     }
 
     @Test
@@ -2046,10 +2056,20 @@ class ExplorerShellTest {
             .as("what it keeps comes first").isLessThan(body.indexOf("Server details"));
         assertThat(body.split("section\\('Backups kept here'\\)", -1).length - 1)
             .as("and it heads the list exactly once").isEqualTo(1);
-        assertThat(body).as("and the mechanism folds").contains("disclosure('Server details')");
+        assertThat(body).as("and the coordinates fold").contains("disclosure('Server details')");
+        // Retargeted: the operations still fold away as the fallback they are — that invariant is unchanged
+        // and still pinned below — but they no longer share the coordinates' fold. The row ends in Remove
+        // designation, which takes the fleet's backup server away, and a fold labelled "Server details" gave
+        // an operator no warning that opening it reached a verb like that. So the fold they live in is now
+        // the one coloured for consequence, and both facts are asserted: which fold, and that the destructive
+        // verb is inside it rather than loose on the surface.
+        assertThat(body).as("the operations get the fold that is coloured for consequence")
+            .contains("dangerFold('Provision, authorize or remove this backup server')");
+        int risky = body.indexOf("dangerFold(");
         assertThat(body.indexOf("'Provision'"))
-            .as("the operations live inside the fold, as the fallback they are")
-            .isGreaterThan(body.indexOf("disclosure('Server details')"));
+            .as("the operations live inside that fold, as the fallback they are").isGreaterThan(risky);
+        assertThat(body.indexOf("'Remove designation'"))
+            .as("and the verb that ends the fleet's backup server is inside it too").isGreaterThan(risky);
     }
 
     // --- back up is offered only when it can actually work -----------------------------------------------
@@ -2121,7 +2141,7 @@ class ExplorerShellTest {
         // cannot say it: the NAS wears `nas` because it is a NAS, and any machine can be designated the
         // server — so the role gets a glyph of its own beside relay and Docker.
         String js = read("explorer-shell.js");
-        int from = js.indexOf("function machineCaps(");
+        int from = js.indexOf("function capabilitiesOf(");
         assertThat(from).isPositive();
         String body = js.substring(from, js.indexOf("\n    }", from));
 
@@ -2135,7 +2155,7 @@ class ExplorerShellTest {
         // Reusing `nas` would say "storage appliance" on a machine that already says that, and reusing the
         // shield would say "this machine is backed up" — which is the opposite of what a store is.
         String js = read("explorer-shell.js");
-        int from = js.indexOf("function machineCaps(");
+        int from = js.indexOf("function capabilitiesOf(");
         String body = js.substring(from, js.indexOf("\n    }", from));
         assertThat(body).doesNotContain("'nas'");
         assertThat(body).doesNotContain("'shield'");
@@ -2565,7 +2585,8 @@ class ExplorerShellTest {
         // disabled until the operator types the machine's name — the thing only they can assert.
         String js = read("explorer-shell.js");
         assertThat(js).contains("or something is impersonating it");
-        assertThat(js).contains("[['Pinned', prints.pinned], ['Now offered', prints.presented]]");
+        // As coordinates, not prose: these are compared character by character, which is what mono is for.
+        assertThat(js).contains("[['Pinned', coord(prints.pinned)], ['Now offered', coord(prints.presented)]]");
         assertThat(js).contains("const armed = () => input.value === machineName;");
         // And the machine is never left unpinned — the dialog says what happens next.
         assertThat(js).contains("pins the ");
@@ -2942,14 +2963,20 @@ class ExplorerShellTest {
         // absence that will never change, on the narrowest screen in the product.
         String js = read("explorer-shell.js");
 
-        assertThat(js).contains("if (reachesInside(m) || inside.length) {");
-        int from = js.indexOf("Turn on SSH access below");
-        assertThat(from)
+        // The named rule is asked once and every SSH-pointing line hangs off the answer.
+        assertThat(js).contains("const reachable = reachesInside(m);");
+        assertThat(js).contains("const offerAccess = reachable && !m.sshAccess;");
+
+        int instruction = js.indexOf("Turn it on to give this machine an SSH credential");
+        assertThat(instruction)
             .as("the instruction still exists for machines that DO have the toggle")
             .isGreaterThan(0);
-        assertThat(js.lastIndexOf("if (reachesInside(m) || inside.length) {", from))
+        assertThat(js.lastIndexOf("if (offerAccess) {", instruction))
             .as("...and is only reachable from inside that guard")
             .isGreaterThan(0);
+        // The empty state stopped pointing at the control as well: it says what is missing, not where to go
+        // and fix it, so it reads correctly on a machine that has no toggle to be sent to.
+        assertThat(js).doesNotContain("Turn on SSH access below");
     }
 
     /**
@@ -3241,6 +3268,8 @@ class ExplorerShellTest {
 
         assertThat(css).doesNotContain(".ex-cap.is-relay {");
         assertThat(css).doesNotContain(".ex-cap.is-backupserver {");
+        assertThat(css).doesNotContain(".ex-mark.is-relay {");
+        assertThat(css).doesNotContain(".ex-mark.is-backupserver {");
     }
 
     // --- 23. the identity colours leave the fleet cards ----------------------------------------------------
@@ -3382,7 +3411,7 @@ class ExplorerShellTest {
         assertThat(css).contains(".ex-dot.is-down { background: var(--red); }");
         assertThat(css).contains(".ex-dot.is-degraded { background: var(--yellow); }");
         assertThat(css).as("the update mark is advisory, and advisory is amber")
-            .contains(".ex-mark.is-update { color: var(--yellow); }");
+            .contains(".ex-mark.is-degraded, .ex-mark.is-update { color: var(--yellow);");
         assertThat(css).as("the nudge glyph is uniformly accent by design")
             .contains(".ex-nudge-ico").contains("color: var(--accent); margin-top: 1px; }");
     }

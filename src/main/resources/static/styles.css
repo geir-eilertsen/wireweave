@@ -3,19 +3,22 @@
        navigations and auth redirects don't flash white before this stylesheet's body background
        applies. Pair with the html background below and a color-scheme meta tag in each page head. */
     color-scheme: dark;
-    /* Vaier's own "night-ops" palette — a cool blue-black, deliberately off the VS Code Dark+
-       defaults this used to borrow. Surfaces step up in luminance (bg → panel → card → hover)
-       so cards read as objects, and a single signature cyan carries brand + primary action. */
-    --bg:           #0e1116;
-    --bg-panel:     #141a22;
-    --bg-card:      #19212c;
-    --bg-hover:     #212b38;
-    --bg-input:     #222c39;
-    --border:       #263143;
-    --border-hi:    #35455c;
-    --text:         #dfe6ef;
-    --text-muted:   #8b98aa;
-    --text-dim:     #586576;
+    /* Vaier's palette — a warm neutral dark, off the cool blue-black it used to wear. The fleet is
+       somebody's house, not a rack. Surfaces step up in luminance (bg → panel → card → hover) so
+       cards read as objects, and a single signature cyan carries brand + primary action.
+       Every text tone clears 4.5:1 on --bg: muted 9.4:1, dim 5.9:1, and 5.0:1 on --bg-card.
+       Nothing dimmer than --text-dim exists — the old one sat at 3.6:1 and was the page's default
+       tone for descriptions, which is most of why the fleet read as unreadable. */
+    --bg:           #15171b;
+    --bg-panel:     #1b1e23;
+    --bg-card:      #22262d;
+    --bg-hover:     #2b3037;
+    --bg-input:     #262b32;
+    --border:       #333941;
+    --border-hi:    #454d58;
+    --text:         #e9eaec;
+    --text-muted:   #b7bdc6;
+    --text-dim:     #8f959e;
     --accent:       #4cc9e6;
     --accent-hover: #7fdcef;
     --brand-ai:     #4cc9e6;
@@ -33,12 +36,18 @@
     --disk:         #a78bfa;   /* a filesystem with room */
     /* Depth, drawn rather than counted: the hairline that runs down a level of the Explorer's tree. Dimmer
        than --border, because a guide is not an edge. */
-    --rail:         #1e2733;
-    /* Two corners, and only two: --radius-1 for controls and inputs, --radius-2 for surfaces that read as
-       objects (cards, dialogs, the palette). Vaier's older pages predate these and still carry seven raw
-       radius values between them; new work uses the tokens. */
-    --radius-1:     3px;
-    --radius-2:     6px;
+    --rail:         #2a2f37;
+    /* Three corners, and only three: --radius-0 for small controls that would otherwise read as circles
+       (at 8px a 17px checkbox is a radio button), --radius-1 for ordinary controls and inputs, --radius-2
+       for surfaces that read as objects — cards, dialogs, the palette. Every corner comes from one. */
+    --radius-0:     5px;
+    --radius-1:     8px;
+    --radius-2:     14px;
+    /* Depth by light, not by hairline. A card is lifted off the ground rather than fenced in with a border,
+       which is what let the borders drop to transparent and the surfaces do the separating. --shadow-2 is
+       the lift on hover and under anything that floats (dialogs, the palette, menus). */
+    --shadow-1:     0 1px 2px rgba(0, 0, 0, .32), 0 2px 8px rgba(0, 0, 0, .20);
+    --shadow-2:     0 4px 10px rgba(0, 0, 0, .34), 0 14px 34px rgba(0, 0, 0, .30);
     --mono:         'SF Mono', 'Cascadia Code', Consolas, 'Courier New', monospace;
     /* Display face — used with restraint on the wordmark, page chrome, and the launchpad hero.
        Self-hosted (no CDN) so it works offline and under a strict CSP. */
@@ -69,8 +78,8 @@ body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     background: var(--bg);
     color: var(--text);
-    font-size: 13px;
-    line-height: 1.5;
+    font-size: 15px;
+    line-height: 1.55;
 }
 
 .container {
@@ -109,10 +118,12 @@ body {
 }
 
 .topbar-brand:hover { text-decoration: none; color: var(--text); }
-.topbar-brand svg { flex-shrink: 0; color: var(--accent); filter: drop-shadow(0 0 5px rgba(76, 201, 230, 0.5)); }
+.topbar-brand svg { flex-shrink: 0; color: var(--accent); }
 
-/* The "ai" in V-ai-er, lifted out in the signature cyan with a soft glow — the mesh node made type. */
-.brand-ai { color: var(--brand-ai); text-shadow: 0 0 8px rgba(76, 201, 230, 0.45); }
+/* The "ai" in V-ai-er, lifted out in the signature cyan. The glow it used to wear (and the one on the mark
+   beside it) blurred an 18px glyph and 12px of type at the exact size neither could afford it — the colour
+   is the signature, and it says the same thing crisply. */
+.brand-ai { color: var(--brand-ai); }
 
 .topbar-nav {
     display: flex;
@@ -124,12 +135,12 @@ body {
     display: inline-flex;
     align-items: center;
     gap: 7px;
-    padding: 6px 12px;
-    height: 32px;
-    border-radius: 3px;
+    padding: 7px 13px;
+    height: 34px;
+    border-radius: var(--radius-1);
     color: var(--text-muted);
     text-decoration: none;
-    font-size: 0.82rem;
+    font-size: 0.9rem;
     border: 1px solid transparent;
     background: none;
     cursor: pointer;
@@ -162,14 +173,14 @@ body {
 .topbar-user .display-name {
     display: inline-flex;
     align-items: center;
-    font-size: 0.78rem;
+    font-size: 0.875rem;
     color: var(--text-muted);
     white-space: nowrap;
-    max-width: 160px;
+    max-width: 180px;
     overflow: hidden;
     text-overflow: ellipsis;
     padding: 6px 10px;
-    border-radius: 3px;
+    border-radius: var(--radius-1);
     border: 1px solid transparent;
     text-decoration: none;
     cursor: default;
@@ -208,11 +219,10 @@ body {
     align-items: center;
     gap: 0.5rem;
     font-family: var(--display);
-    font-size: 0.72rem;
+    font-size: 1.05rem;
     font-weight: 600;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
+    color: var(--text);
+    letter-spacing: -0.01em;
 }
 
 .page-title svg {
@@ -258,13 +268,13 @@ body {
     align-items: center;
     justify-content: center;
     gap: 6px;
-    padding: 4px 10px;
+    padding: 6px 13px;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 3px;
+    border-radius: var(--radius-1);
     cursor: pointer;
-    font-size: 0.78rem;
-    font-weight: 400;
+    font-size: 0.9rem;
+    font-weight: 500;
     font-family: inherit;
     line-height: 1.5;
     color: var(--text-muted);
@@ -315,10 +325,10 @@ body {
 }
 
 .btn-small {
-    padding: 2px 6px;
-    font-size: 0.72rem;
-    min-height: 22px;
-    min-width: 22px;
+    padding: 3px 9px;
+    font-size: 0.85rem;
+    min-height: 26px;
+    min-width: 26px;
 }
 
 .btn:disabled,
@@ -329,11 +339,14 @@ body {
 }
 
 /* Cards / Panels */
+/* Depth by light: a card is lifted off the ground rather than fenced in. The border stays as a
+   near-invisible seam for high-contrast modes, where a shadow says nothing. */
 .card {
     background: var(--bg-card);
-    border-radius: 2px;
+    border-radius: var(--radius-2);
     padding: 1.25rem;
     border: 1px solid var(--border);
+    box-shadow: var(--shadow-1);
 }
 
 .card-grid {
@@ -341,15 +354,16 @@ body {
     gap: 0.5rem;
 }
 
-/* Section label */
+/* Section label. It used to be 10.9px of tracked uppercase in the dimmest tone on the page — a
+   heading you had to lean in to read. A heading's job is to be found, so it is set at reading size,
+   in sentence case, at full strength. */
 .section-label {
     font-family: var(--display);
-    font-size: 0.68rem;
-    font-weight: 700;
-    color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    margin: 1.5rem 0 0.6rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -0.005em;
+    margin: 1.75rem 0 0.7rem;
 }
 
 /* Status badges */
@@ -357,10 +371,10 @@ body {
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
-    padding: 0.1rem 0.45rem;
-    border-radius: 2px;
-    font-size: 0.72rem;
-    font-family: var(--mono);
+    padding: 0.15rem 0.5rem;
+    border-radius: var(--radius-1);
+    font-size: 0.82rem;
+    font-family: inherit;
 }
 
 .status-ok {
@@ -403,11 +417,11 @@ body {
 .badge {
     display: inline-flex;
     align-items: center;
-    padding: 0 0.4rem;
-    height: 22px;
-    border-radius: 2px;
-    font-size: 0.7rem;
-    font-family: var(--mono);
+    padding: 0 0.5rem;
+    height: 24px;
+    border-radius: var(--radius-1);
+    font-size: 0.8rem;
+    font-family: inherit;
     white-space: nowrap;
 }
 
@@ -426,9 +440,9 @@ body {
 /* Messages */
 .error, .success, .warning {
     padding: 0.6rem 1rem;
-    border-radius: 2px;
+    border-radius: var(--radius-1);
     margin-bottom: 1rem;
-    font-size: 0.82rem;
+    font-size: 0.9rem;
     border-left: 3px solid;
 }
 
@@ -440,7 +454,7 @@ body {
     text-align: center;
     padding: 3rem;
     color: var(--text-muted);
-    font-size: 0.82rem;
+    font-size: 0.9rem;
 }
 
 /* Detail rows */
@@ -448,23 +462,21 @@ body {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    font-size: 0.8rem;
+    font-size: 0.9rem;
 }
 
 .detail-label {
-    font-size: 0.72rem;
+    font-size: 0.875rem;
     color: var(--text-muted);
-    min-width: 130px;
+    min-width: 148px;
     flex-shrink: 0;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
     padding-top: 0.05rem;
 }
 
 .detail-value {
     color: var(--text);
     font-family: var(--mono);
-    font-size: 0.78rem;
+    font-size: 0.85rem;
     word-break: break-all;
 }
 
@@ -503,7 +515,7 @@ body {
     align-items: center;
     gap: 0.5rem;
     margin-top: 0.5rem;
-    font-size: 0.82rem;
+    font-size: 0.9rem;
     color: var(--text-muted);
 }
 
@@ -527,11 +539,11 @@ body {
 .modal-content {
     background: var(--bg-card);
     border: 1px solid var(--border-hi);
-    border-radius: 3px;
-    padding: 1.5rem;
-    max-width: 500px;
+    border-radius: var(--radius-2);
+    padding: 1.75rem;
+    max-width: 520px;
     width: 90%;
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+    box-shadow: var(--shadow-2);
 }
 
 .modal-header {
@@ -557,12 +569,10 @@ body {
 
 .form-label {
     display: block;
-    font-size: 0.72rem;
-    font-weight: 600;
-    color: var(--text-muted);
-    margin-bottom: 0.35rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--text);
+    margin-bottom: 0.4rem;
 }
 
 /* Inline help affordance (#269): a small visible "?" carrying a one-line plain-language
@@ -571,13 +581,13 @@ body {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 14px;
-    height: 14px;
-    margin-left: 0.35rem;
+    width: 17px;
+    height: 17px;
+    margin-left: 0.4rem;
     border: 1px solid var(--text-dim);
     border-radius: 50%;
     color: var(--text-muted);
-    font-size: 0.65rem;
+    font-size: 0.75rem;
     font-weight: 700;
     line-height: 1;
     cursor: help;
@@ -590,10 +600,10 @@ body {
 
 .form-input {
     width: 100%;
-    padding: 0.4rem 0.6rem;
+    padding: 0.5rem 0.7rem;
     border: 1px solid var(--border-hi);
-    border-radius: 2px;
-    font-size: 0.82rem;
+    border-radius: var(--radius-1);
+    font-size: 0.9rem;
     background: var(--bg-input);
     color: var(--text);
     font-family: inherit;
@@ -637,11 +647,11 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
         gap: 0.3rem;
     }
 
-    .btn { padding: 6px 12px; font-size: 0.8rem; }
+    .btn { padding: 8px 14px; font-size: 0.9rem; }
 
     .btn-small {
         padding: 3px 8px;
-        font-size: 0.75rem;
+        font-size: 0.85rem;
         min-height: 26px;
         min-width: 26px;
     }

@@ -35,7 +35,7 @@ body.tw {
 .tw-name { flex: none; font-family: var(--mono); font-size: 14px; color: var(--text); }
 .tw-status {
     flex: 1 1 auto; min-width: 0;
-    font-size: 13px; color: var(--text-dim);
+    font-size: 13px; color: var(--text-muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .tw-status.error { color: var(--red); }
@@ -46,7 +46,8 @@ body.tw {
 
 .tw-actions { flex: none; display: flex; gap: 8px; }
 .tw-btn {
-    padding: 4px 11px;
+    padding: 6px 12px;
+    min-height: 34px;
     background: var(--bg);
     border: 1px solid var(--border-hi);
     border-radius: var(--radius-1);
@@ -86,7 +87,7 @@ body.tw {
     padding: 11px 4px;
     background: var(--bg-input);
     border: 1px solid var(--border-hi);
-    border-radius: 7px;
+    border-radius: var(--radius-1);
     color: var(--text);
     font-family: inherit;
     font-size: 0.95rem;
@@ -105,9 +106,9 @@ body.tw {
     .tw-keys { display: flex; }
     /* The top bar stays one line: smaller action buttons, the status truncates, and the buttons scroll
        sideways rather than wrapping the bar to a second row (which would eat terminal height). */
-    .tw-bar { gap: 6px; padding: 5px 8px; }
-    .tw-name { font-size: 12px; }
-    .tw-btn { padding: 2px 6px; font-size: 11px; white-space: nowrap; }
+    .tw-bar { gap: 6px; padding: 7px 8px; }
+    .tw-name { font-size: 13px; }
+    .tw-btn { padding: 4px 8px; min-height: 32px; font-size: 13px; white-space: nowrap; }
     .tw-actions { gap: 5px; overflow-x: auto; scrollbar-width: none; }
     .tw-actions::-webkit-scrollbar { display: none; }
 }
