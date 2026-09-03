@@ -237,8 +237,9 @@ public class ContainerService implements
      *
      * <p>The service decides nothing here either — it sequences four domain calls and passes the ports in.
      * {@link UpdateCheckFloor} rules whether the registries may be asked at all, {@link ImageUpdateSweep}
-     * judges the images, {@link ImageUpdateTracker} rules what the check may do to the alert state, and
-     * {@link UpdateCheckOutcome} decides what the operator is told and whether anything is worth pushing.
+     * judges the images, {@link ImageUpdateTracker} reports which of them just went stale — the check latches
+     * exactly as the daily sweep does, so the news is mailed by whichever path learned it and by no other —
+     * and {@link UpdateCheckOutcome} decides what the operator is told and whether anything is worth pushing.
      *
      * <p><b>The scrape comes first, and that ordering is the feature.</b> The local digest is whatever the 30s
      * container scrape last saw, and the operator clicks seconds after pulling — so sweeping the snapshot in
@@ -261,9 +262,10 @@ public class ContainerService implements
         Map<ScopedImage, UpdateAvailability> after =
             ImageUpdateSweep.sweepFresh(everyContainerVaierCanSee(), forResolvingRegistryDigest);
         snapshotStore.storeImageUpdateVerdicts(after);
-        imageUpdateTracker.clearUpToDate(after);
+        List<ScopedImage> newlyOutOfDate = imageUpdateTracker.update(after);
 
-        UpdateCheckOutcome outcome = UpdateCheckOutcome.checked(before, after, admission.lastCheckedAt());
+        UpdateCheckOutcome outcome =
+            UpdateCheckOutcome.checked(before, after, admission.lastCheckedAt(), newlyOutOfDate);
         if (outcome.worthPublishing()) {
             forPublishingEvents.publish(SSE_TOPIC, SSE_EVENT, SSE_DATA);
         }

@@ -3,6 +3,7 @@ package net.vaier.domain;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -64,6 +65,26 @@ class UpdateCheckOutcomeTest {
         assertThat(UpdateCheckOutcome.checked(same, same, AT).worthPublishing()).isFalse();
         assertThat(UpdateCheckOutcome.checked(
             same, Map.of(si("redis:7.2"), UpdateAvailability.UPDATE_AVAILABLE), AT).worthPublishing()).isTrue();
+    }
+
+    @Test
+    void aCheckCarriesTheImagesThatJustWentStale_soTheyAreMailedNowRatherThanOnTheNextSweep() {
+        // Vaier learned the image is stale the moment the operator clicked; telling them eight hours later,
+        // when the daily sweep next runs, is the same news arriving late. The outcome carries the edge so
+        // the driving side can mail it while the mark is being drawn.
+        Map<ScopedImage, UpdateAvailability> after =
+            Map.of(si("vaultwarden/server:latest"), UpdateAvailability.UPDATE_AVAILABLE);
+
+        UpdateCheckOutcome outcome = UpdateCheckOutcome.checked(Map.of(), after, AT,
+            List.of(si("vaultwarden/server:latest")));
+
+        assertThat(outcome.newlyOutOfDate()).containsExactly(si("vaultwarden/server:latest"));
+    }
+
+    @Test
+    void aCoalescedCheck_hasNoNews() {
+        // Nothing was asked, so nothing can have just gone stale.
+        assertThat(UpdateCheckOutcome.coalesced(AT).newlyOutOfDate()).isEmpty();
     }
 
     @Test

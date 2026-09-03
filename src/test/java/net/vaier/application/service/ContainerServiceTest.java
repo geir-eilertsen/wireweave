@@ -296,6 +296,38 @@ class ContainerServiceTest {
     }
 
     @Test
+    void checkForImageUpdates_reportsTheImageThatJustWentStale_soItIsMailedNowAndNotOnTheNextSweep() {
+        // The operator clicked, the mark went yellow, and the mail came eight hours later from the daily
+        // sweep — the same news, late. The check now folds its verdicts into the tracker exactly as the
+        // sweep does and hands the edge to the driving side to mail with the mark.
+        when(forGettingVpnClients.getClients()).thenReturn(List.of());
+        when(forGettingServerInfo.getServicesWithExposedPorts(any()))
+            .thenReturn(List.of(imaged("vaultwarden", "vaultwarden/server:latest", "sha256:old")));
+        when(forResolvingRegistryDigest.resolveDigestNow(any())).thenReturn(Optional.of("sha256:new"));
+
+        UpdateCheckOutcome outcome = service.checkForImageUpdates();
+
+        assertThat(outcome.newlyOutOfDate()).containsExactly(onVaierServer("vaultwarden/server:latest"));
+    }
+
+    @Test
+    void checkForImageUpdates_reportsNoNewsForAnImageTheSweepAlreadyMailed() {
+        // One verdict, one mail. The sweep latched it and mailed; a check the next morning must not mail
+        // it again.
+        when(forGettingVpnClients.getClients()).thenReturn(List.of());
+        when(forGettingServerInfo.getServicesWithExposedPorts(any()))
+            .thenReturn(List.of(imaged("vaultwarden", "vaultwarden/server:latest", "sha256:old")));
+        when(forResolvingRegistryDigest.resolveDigest(any())).thenReturn(Optional.of("sha256:new"));
+        when(forResolvingRegistryDigest.resolveDigestNow(any())).thenReturn(Optional.of("sha256:new"));
+        service.refresh();
+        tracker.update(service.sweepImageUpdates());        // the watcher's evening: latched and mailed
+
+        UpdateCheckOutcome outcome = service.checkForImageUpdates();
+
+        assertThat(outcome.newlyOutOfDate()).isEmpty();
+    }
+
+    @Test
     void checkForImageUpdates_stampsTheSnapshotSoAnOpenExplorerReadsTheNewVerdict() {
         when(forGettingVpnClients.getClients()).thenReturn(List.of());
         when(forGettingServerInfo.getServicesWithExposedPorts(any()))
@@ -413,7 +445,7 @@ class ContainerServiceTest {
         // The manual check must not permanently silence a future alert. Once the check has confirmed the pull,
         // the tracker must have forgotten the image — so if it goes stale again months later, the edge fires
         // and the operator IS mailed. (The tracker's own test proves the rule; this proves it is wired.)
-        tracker.update(java.util.Map.of(
+        tracker.update(Map.of(
             onVaierServer("vaultwarden/server:latest"), UpdateAvailability.UPDATE_AVAILABLE));
         when(forGettingVpnClients.getClients()).thenReturn(List.of());
         when(forGettingServerInfo.getServicesWithExposedPorts(any()))
@@ -422,17 +454,16 @@ class ContainerServiceTest {
 
         service.checkForImageUpdates();
 
-        assertThat(tracker.update(java.util.Map.of(
+        assertThat(tracker.update(Map.of(
             onVaierServer("vaultwarden/server:latest"), UpdateAvailability.UPDATE_AVAILABLE)))
             .as("stale again after a confirmed pull — that is news again")
             .containsExactly(onVaierServer("vaultwarden/server:latest"));
     }
 
     @Test
-    void checkForImageUpdates_doesNotEatTheRollupMailForAnImageItFindsNewlyStale() {
-        // A check is the operator confirming their own pull, not a stand-in for the mailer. If it recorded a
-        // newly stale image as "seen", the next daily sweep would find previous=true and stay silent — so
-        // pressing the button would have cost them the very email #57 exists to send.
+    void checkForImageUpdates_latchesWhatItFindsStale_soTheSweepThatFollowsDoesNotMailItAgain() {
+        // The check mails its own news now (newlyOutOfDate), so it must also latch it — or the evening's
+        // sweep would find the same image unlatched and mail the operator the same thing twice.
         when(forGettingVpnClients.getClients()).thenReturn(List.of());
         when(forGettingServerInfo.getServicesWithExposedPorts(any()))
             .thenReturn(List.of(imaged("vaultwarden", "vaultwarden/server:latest", "sha256:old")));
@@ -440,10 +471,10 @@ class ContainerServiceTest {
 
         service.checkForImageUpdates();
 
-        assertThat(tracker.update(java.util.Map.of(
+        assertThat(tracker.update(Map.of(
             onVaierServer("vaultwarden/server:latest"), UpdateAvailability.UPDATE_AVAILABLE)))
-            .as("the mail the check must not have swallowed")
-            .containsExactly(onVaierServer("vaultwarden/server:latest"));
+            .as("already told by the check — the sweep has nothing to add")
+            .isEmpty();
     }
 
     @Test

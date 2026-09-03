@@ -10,8 +10,9 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Per-image update-available state, so the watcher mails admins only when an image <b>becomes</b> out of date
- * — not every sweep, for as long as it stays out of date. The sibling of {@link RemoteDiskPressureTracker} and
+ * Per-image update-available state, so admins are mailed only when an image <b>becomes</b> out of date —
+ * not every sweep, for as long as it stays out of date. The daily sweep and the operator's own update check
+ * both fold their verdicts in through {@link #update}, so whichever of them learns the news mails it, once. The sibling of {@link RemoteDiskPressureTracker} and
  * {@link PeerConnectivityTracker}: it reports edge transitions and nothing else, and the watcher decides only
  * whom to tell. Its own state it reaches through {@link ForPersistingImageUpdateState}; the wiring hands the
  * port in and the decisions all stay here.
@@ -85,32 +86,5 @@ public class ImageUpdateTracker {
         // it is supplied when the alert is written, so it is not available to sort on.
         newlyOutOfDate.sort(Comparator.comparing(ScopedImage::machineId).thenComparing(ScopedImage::image));
         return newlyOutOfDate;
-    }
-
-    /**
-     * Fold an <b>update check</b>'s verdicts in — the check the operator asked for, rather than a sweep the
-     * mailer drove. It may <em>clear</em> an image's alert state and it may never <em>consume</em> one, and
-     * that asymmetry is the whole of the rule. Both halves are a real bug if dropped.
-     *
-     * <p><b>Clearing.</b> An image found up to date is forgotten, so if it ever goes stale again the operator
-     * IS told. Without this, confirming a pull would leave the tracker still believing the image is out of
-     * date, and the next genuine staleness would find it already latched and fire no edge — the operator's
-     * own diligence would have silently disarmed a future alarm. A signal you switched off by checking it is
-     * worse than no signal.
-     *
-     * <p><b>Not consuming.</b> An image found <em>stale</em> is deliberately not recorded, which is why this
-     * is not {@link #update}. Recording it would mark it "seen" without anyone having been told, and the next
-     * daily sweep would then find it already latched and stay quiet — so pressing the button would have cost
-     * the operator the very email this feature exists to send. Bad news stays the mailer's to break; a check
-     * may only ever clear good news.
-     *
-     * <p>{@link UpdateAvailability#UNKNOWN} clears nothing, for {@link #update}'s reason: a rate-limited
-     * registry is not evidence that anybody pulled anything.
-     */
-    public synchronized void clearUpToDate(Map<ScopedImage, UpdateAvailability> verdicts) {
-        Set<ScopedImage> known = new LinkedHashSet<>(knownOutOfDate.loadOutOfDate());
-        if (known.removeIf(scoped -> verdicts.get(scoped) == UpdateAvailability.UP_TO_DATE)) {
-            knownOutOfDate.saveOutOfDate(known);
-        }
     }
 }

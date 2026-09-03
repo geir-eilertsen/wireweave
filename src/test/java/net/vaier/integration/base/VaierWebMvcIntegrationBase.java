@@ -10,6 +10,7 @@ import net.vaier.domain.port.ForSubscribingToEvents;
 import net.vaier.domain.port.ForTrackingPeerConfigRetrieval;
 import net.vaier.domain.port.ForUpdatingPeerConfigurations;
 import net.vaier.domain.port.ForVendingSetupTokens;
+import net.vaier.rest.ImageUpdateAlerter;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -217,6 +218,9 @@ public abstract class VaierWebMvcIntegrationBase {
 
     @MockBean
     protected CheckForImageUpdatesUseCase checkForImageUpdatesUseCase;
+
+    @MockBean
+    protected ImageUpdateAlerter imageUpdateAlerter;
 
     @MockBean
     protected UpdateContainerImageUseCase updateContainerImageUseCase;

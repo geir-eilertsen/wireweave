@@ -45,23 +45,23 @@ class ImageUpdateTrackerTest {
         return map;
     }
 
-    // --- #57 slice 3: what an operator-driven check may do to the alert state -------------------------
+    // --- #57 slice 3: the operator's own check folds in exactly as the daily sweep does -----------------
     //
-    // The forced check is a partial-purpose observation: the operator is confirming their own pull, not
-    // standing in for the mailer. So it may CLEAR an image's alert state and may never CONSUME one. That
-    // asymmetry is the whole rule, and both halves of it are a real bug if dropped — see the two tests below.
+    // A check used to be allowed only to CLEAR an image's alert state, never to record one, so that the
+    // daily sweep would still find the edge and mail it. That left the operator looking at a fresh yellow
+    // mark with the mail eight hours away. The check now latches what it finds, because it mails what it
+    // finds — see UpdateCheckOutcome.newlyOutOfDate — and the sweep that follows must then stay quiet.
 
     @Test
-    void anImageFoundUpToDateByAForcedCheck_isAlertableAgainIfItGoesStaleLater() {
-        // The silencing bug. Without this, a manual check that confirms a pull leaves the tracker still
-        // believing the image is out of date — so when it genuinely goes stale again, the edge never fires
-        // and the operator is never told. A button that quietly disables a future alarm is worse than no
-        // button: they would trust a signal that had been switched off by their own diligence.
+    void anImageFoundUpToDateByACheck_isAlertableAgainIfItGoesStaleLater() {
+        // The silencing bug. A check that confirms a pull must forget the image, or the next genuine
+        // staleness finds it already latched and fires no edge — the operator's own diligence would have
+        // switched off a future alarm.
         ImageUpdateTracker tracker = tracker();
         assertThat(tracker.update(verdicts("vaultwarden/server:latest", UpdateAvailability.UPDATE_AVAILABLE)))
             .containsExactly(si("vaultwarden/server:latest"));        // reported once
 
-        tracker.clearUpToDate(verdicts("vaultwarden/server:latest", UpdateAvailability.UP_TO_DATE));
+        tracker.update(verdicts("vaultwarden/server:latest", UpdateAvailability.UP_TO_DATE));
 
         assertThat(tracker.update(verdicts("vaultwarden/server:latest", UpdateAvailability.UPDATE_AVAILABLE)))
             .as("it went stale again — that is news again")
@@ -69,55 +69,32 @@ class ImageUpdateTrackerTest {
     }
 
     @Test
-    void aForcedCheckFindingAnImageStale_doesNotConsumeTheAlertTheMailerOwes() {
-        // The swallowing bug, and the reason this is clearUpToDate rather than update(). If a forced check
-        // recorded a NEWLY stale image as "seen", the daily sweep would then find previous=true and stay
-        // silent — so clicking the button would have cost the operator the very email the feature exists to
-        // send. A check may only ever clear good news; bad news stays the mailer's to break.
+    void anImageFoundStaleByACheck_isNewsToTheCheck_andNotAgainToTheSweepThatFollows() {
+        // The check reports the edge, so it is the check's mail; the daily sweep then finds it latched and
+        // stays silent. One verdict, one mail, whichever path learned it.
         ImageUpdateTracker tracker = tracker();
 
-        tracker.clearUpToDate(verdicts("vaultwarden/server:latest", UpdateAvailability.UPDATE_AVAILABLE));
-
         assertThat(tracker.update(verdicts("vaultwarden/server:latest", UpdateAvailability.UPDATE_AVAILABLE)))
-            .as("the mail the forced check must not have eaten")
+            .as("the check's own mail")
             .containsExactly(si("vaultwarden/server:latest"));
-    }
-
-    @Test
-    void aForcedCheckDoesNotReMailAnImageAlreadyReported() {
-        // The duplicate-mail rule. Still stale, already told them: clearing touches nothing, and the next
-        // daily sweep still finds previous=true and stays quiet.
-        ImageUpdateTracker tracker = tracker();
-        tracker.update(verdicts("vaultwarden/server:latest", UpdateAvailability.UPDATE_AVAILABLE));
-
-        tracker.clearUpToDate(verdicts("vaultwarden/server:latest", UpdateAvailability.UPDATE_AVAILABLE));
 
         assertThat(tracker.update(verdicts("vaultwarden/server:latest", UpdateAvailability.UPDATE_AVAILABLE)))
+            .as("the sweep the same evening")
             .isEmpty();
     }
 
     @Test
-    void anUnknownVerdictFromAForcedCheckClearsNothing() {
-        // Same reasoning as update()'s: a rate-limited registry is not evidence the operator pulled. Reading
-        // it as such would re-arm the alert and re-mail them about an image they were already told about.
+    void anUnknownVerdictFromACheckClearsNothing() {
+        // A rate-limited registry is not evidence the operator pulled. Reading it as such would re-arm the
+        // alert and re-mail them about an image they were already told about.
         ImageUpdateTracker tracker = tracker();
         tracker.update(verdicts("vaultwarden/server:latest", UpdateAvailability.UPDATE_AVAILABLE));
 
-        tracker.clearUpToDate(verdicts("vaultwarden/server:latest", UpdateAvailability.UNKNOWN));
+        tracker.update(verdicts("vaultwarden/server:latest", UpdateAvailability.UNKNOWN));
 
         assertThat(tracker.update(verdicts("vaultwarden/server:latest", UpdateAvailability.UPDATE_AVAILABLE)))
             .as("nothing was learned, so nothing was cleared")
             .isEmpty();
-    }
-
-    @Test
-    void clearingIsSafeOnAnImageTheTrackerHasNeverSeen() {
-        ImageUpdateTracker tracker = tracker();
-
-        tracker.clearUpToDate(verdicts("redis:7.2", UpdateAvailability.UP_TO_DATE));
-
-        assertThat(tracker.update(verdicts("redis:7.2", UpdateAvailability.UPDATE_AVAILABLE)))
-            .containsExactly(si("redis:7.2"));
     }
 
     @Test
@@ -322,7 +299,7 @@ class ImageUpdateTrackerTest {
         // would still believe the image stale and swallow the next genuine edge.
         ImageUpdateTracker beforeRestart = trackerSurvivingRestart();
         beforeRestart.update(verdicts("redis:7.2", UpdateAvailability.UPDATE_AVAILABLE));
-        beforeRestart.clearUpToDate(verdicts("redis:7.2", UpdateAvailability.UP_TO_DATE));
+        beforeRestart.update(verdicts("redis:7.2", UpdateAvailability.UP_TO_DATE));
 
         assertThat(trackerSurvivingRestart().update(verdicts("redis:7.2", UpdateAvailability.UPDATE_AVAILABLE)))
             .containsExactly(si("redis:7.2"));

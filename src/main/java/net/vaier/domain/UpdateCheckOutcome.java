@@ -1,12 +1,13 @@
 package net.vaier.domain;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 /**
  * What came of an <b>update check</b> — the check the operator asked for (#57 slice 3).
  *
- * <p>Two facts, and the discipline is that both stay true. {@link #checked} is whether the registries were
+ * <p>Two facts and one piece of news. The facts: {@link #checked} is whether the registries were
  * actually asked <em>this time</em>, which {@link UpdateCheckFloor} may refuse. {@link #changed} is whether
  * any image's verdict moved as a result.
  *
@@ -18,8 +19,12 @@ import java.util.Map;
  * @param checked       whether the registries were really asked, rather than the check being coalesced away
  * @param changed       whether any verdict moved — the reason, and the only reason, to repaint
  * @param lastCheckedAt when Vaier last really looked: now for an admitted check, earlier for a coalesced one
+ * @param newlyOutOfDate the news: the images-on-a-machine this check found out of date that nobody has been
+ *                       told about yet, as {@link ImageUpdateTracker} reports them. The driving side mails
+ *                       these, so the mail leaves with the mark rather than with the next daily sweep.
  */
-public record UpdateCheckOutcome(boolean checked, boolean changed, Instant lastCheckedAt) {
+public record UpdateCheckOutcome(boolean checked, boolean changed, Instant lastCheckedAt,
+                                 List<ScopedImage> newlyOutOfDate) {
 
     /**
      * A check that really happened. It changed something iff the fleet's verdicts are not what they were —
@@ -27,8 +32,18 @@ public record UpdateCheckOutcome(boolean checked, boolean changed, Instant lastC
      */
     public static UpdateCheckOutcome checked(Map<ScopedImage, UpdateAvailability> before,
                                              Map<ScopedImage, UpdateAvailability> after,
+                                             Instant at, List<ScopedImage> newlyOutOfDate) {
+        return new UpdateCheckOutcome(true, !before.equals(after), at, List.copyOf(newlyOutOfDate));
+    }
+
+    /**
+     * The daily sweep's outcome, taken for its push decision alone: the sweep's news is reported to the
+     * watcher by the tracker directly, so it carries none here.
+     */
+    public static UpdateCheckOutcome checked(Map<ScopedImage, UpdateAvailability> before,
+                                             Map<ScopedImage, UpdateAvailability> after,
                                              Instant at) {
-        return new UpdateCheckOutcome(true, !before.equals(after), at);
+        return checked(before, after, at, List.of());
     }
 
     /**
@@ -36,7 +51,7 @@ public record UpdateCheckOutcome(boolean checked, boolean changed, Instant lastC
      * last really looked and lets the operator judge whether that is recent enough.
      */
     public static UpdateCheckOutcome coalesced(Instant lastCheckedAt) {
-        return new UpdateCheckOutcome(false, false, lastCheckedAt);
+        return new UpdateCheckOutcome(false, false, lastCheckedAt, List.of());
     }
 
     /**

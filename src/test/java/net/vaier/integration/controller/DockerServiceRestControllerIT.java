@@ -193,6 +193,23 @@ class DockerServiceRestControllerIT extends VaierWebMvcIntegrationBase {
     }
 
     @Test
+    void checkForImageUpdates_mailsWhatJustWentStale_soTheMailLeavesWithTheMark() throws Exception {
+        // The operator saw the mark go yellow and waited eight hours for the daily sweep to say the same
+        // thing by mail. The check learned it; the check tells them.
+        ScopedImage stale = new ScopedImage("Vaier server", "vaultwarden/server:latest");
+        when(checkForImageUpdatesUseCase.checkForImageUpdates())
+            .thenReturn(UpdateCheckOutcome.checked(
+                Map.of(stale, UpdateAvailability.UP_TO_DATE),
+                Map.of(stale, UpdateAvailability.UPDATE_AVAILABLE),
+                Instant.parse("2026-07-17T12:00:00Z"), List.of(stale)));
+
+        mockMvc.perform(post("/docker-services/image-updates/check"))
+               .andExpect(status().isOk());
+
+        verify(imageUpdateAlerter).alert(List.of(stale));
+    }
+
+    @Test
     void checkForImageUpdates_tellsTheBrowserWhenItDidNotActuallyCheck() throws Exception {
         // The rate-limit floor's honesty rule, all the way out to the wire. A coalesced check must not be
         // dressed up as a real one — the browser needs the difference to say something true.

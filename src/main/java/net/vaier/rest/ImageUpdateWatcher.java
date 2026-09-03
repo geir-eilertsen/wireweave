@@ -1,11 +1,7 @@
 package net.vaier.rest;
 
 import lombok.extern.slf4j.Slf4j;
-import net.vaier.application.NotifyAdminsOfUpdateAvailableUseCase;
-import net.vaier.application.GetMachinesUseCase;
 import net.vaier.application.SweepImageUpdatesUseCase;
-import net.vaier.domain.Machine;
-import net.vaier.domain.ImageUpdateRollup;
 import net.vaier.domain.ImageUpdateTracker;
 import net.vaier.domain.ScopedImage;
 import net.vaier.domain.UpdateAvailability;
@@ -14,7 +10,6 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 /**
  * Asks the registries once a day whether anything in the fleet has an <b>update available</b>, and mails admins
@@ -29,9 +24,10 @@ import java.util.stream.Collectors;
  * scrape stays on its 30s tick and never touches a registry.
  *
  * <p>The watcher decides nothing. {@link ImageUpdateTracker} — the domain — reports which images have
- * <em>just</em> become out of date, and this class only decides whom to tell: exactly the pattern of
+ * <em>just</em> become out of date, and {@link ImageUpdateAlerter} tells the admins: exactly the pattern of
  * {@link RemoteDiskWatcher} and {@link BackupServerWatcher}. Nothing changed means no mail, and one sweep
- * finding three stale images sends one rollup rather than three.
+ * finding three stale images sends one rollup rather than three. The operator's own update check latches
+ * through the same tracker and mails through the same alerter, so a sweep never repeats a check's news.
  *
  * <p><b>Vaier never pulls.</b> Detection is read-only, always; the operator's move is the operator's.
  */
@@ -47,28 +43,20 @@ public class ImageUpdateWatcher {
     private static final long INITIAL_DELAY_MS = 2 * 60 * 1000L;
 
     private final SweepImageUpdatesUseCase sweep;
-    private final NotifyAdminsOfUpdateAvailableUseCase notifier;
+    private final ImageUpdateAlerter alerter;
 
     /**
-     * Injected rather than owned since #57 slice 3: the operator's own update check clears an image's alert
-     * state once it confirms a pull, so the check and this watcher must share one memory. See
-     * {@code ImageUpdateConfig} for what two instances would cost.
+     * Injected rather than owned since #57 slice 3: the operator's own update check folds its verdicts into
+     * the same memory, so the check and this watcher must share one. See {@code ImageUpdateConfig} for what
+     * two instances would cost.
      */
     private final ImageUpdateTracker tracker;
 
-    /**
-     * What to call each machine in the alert, looked up when the alert is written. The verdicts are keyed by
-     * identity — a display name in that key would make a rename read as every image on the machine going
-     * stale at once — so the name is fetched here, at the one moment a person is going to read it.
-     */
-    private final GetMachinesUseCase machines;
-
-    public ImageUpdateWatcher(SweepImageUpdatesUseCase sweep, NotifyAdminsOfUpdateAvailableUseCase notifier,
-                              ImageUpdateTracker tracker, GetMachinesUseCase machines) {
+    public ImageUpdateWatcher(SweepImageUpdatesUseCase sweep, ImageUpdateTracker tracker,
+                              ImageUpdateAlerter alerter) {
         this.sweep = sweep;
-        this.notifier = notifier;
         this.tracker = tracker;
-        this.machines = machines;
+        this.alerter = alerter;
     }
 
     @Scheduled(fixedDelay = ONE_DAY_MS, initialDelay = INITIAL_DELAY_MS)
@@ -76,29 +64,10 @@ public class ImageUpdateWatcher {
         try {
             Map<ScopedImage, UpdateAvailability> verdicts = sweep.sweepImageUpdates();
             List<ScopedImage> newlyOutOfDate = tracker.update(verdicts);
-
-            ImageUpdateRollup rollup = new ImageUpdateRollup(newlyOutOfDate, machineNames());
-            if (rollup.worthSending()) {
-                notifier.notifyAdminsOfUpdateAvailable(rollup);
-            }
+            alerter.alert(newlyOutOfDate);
         } catch (Exception e) {
-            // A dead Docker host, a dead registry, a dead SMTP server: none of them may kill the schedule.
+            // A dead Docker host or a dead registry: neither may kill the schedule.
             log.debug("Update-available sweep failed: {}", e.getMessage());
-        }
-    }
-
-    /**
-     * Machine identity to display name. Guarded: reading the fleet is a lookup that can fail, and it only
-     * decorates the alert — an alert naming machines by their identities still tells the operator an image
-     * went stale, where no alert at all tells them nothing.
-     */
-    private Map<String, String> machineNames() {
-        try {
-            return machines.getAllMachines().stream()
-                .collect(Collectors.toMap(m -> m.id().value(), Machine::name, (a, b) -> a));
-        } catch (RuntimeException e) {
-            log.debug("Could not read machine names for the update-available alert: {}", e.getMessage());
-            return Map.of();
         }
     }
 }

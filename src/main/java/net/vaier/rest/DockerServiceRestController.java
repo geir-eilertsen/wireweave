@@ -32,19 +32,22 @@ public class DockerServiceRestController {
     private final GetLanServerScrapeUseCase getLanServerScrapeUseCase;
     private final CheckForImageUpdatesUseCase checkForImageUpdatesUseCase;
     private final UpdateContainerImageUseCase updateContainerImageUseCase;
+    private final ImageUpdateAlerter imageUpdateAlerter;
 
     public DockerServiceRestController(GetServerInfoUseCase getServerInfoUseCase,
                                        DiscoverPeerContainersUseCase discoverPeerContainersUseCase,
                                        DiscoverVaierServerContainersUseCase discoverVaierServerContainersUseCase,
                                        GetLanServerScrapeUseCase getLanServerScrapeUseCase,
                                        CheckForImageUpdatesUseCase checkForImageUpdatesUseCase,
-                                       UpdateContainerImageUseCase updateContainerImageUseCase) {
+                                       UpdateContainerImageUseCase updateContainerImageUseCase,
+                                       ImageUpdateAlerter imageUpdateAlerter) {
         this.getServerInfoUseCase = getServerInfoUseCase;
         this.discoverPeerContainersUseCase = discoverPeerContainersUseCase;
         this.discoverVaierServerContainersUseCase = discoverVaierServerContainersUseCase;
         this.getLanServerScrapeUseCase = getLanServerScrapeUseCase;
         this.checkForImageUpdatesUseCase = checkForImageUpdatesUseCase;
         this.updateContainerImageUseCase = updateContainerImageUseCase;
+        this.imageUpdateAlerter = imageUpdateAlerter;
     }
 
     @GetMapping
@@ -94,6 +97,8 @@ public class DockerServiceRestController {
     @PostMapping("/image-updates/check")
     public ResponseEntity<UpdateCheckResponse> checkForImageUpdates() {
         UpdateCheckOutcome outcome = checkForImageUpdatesUseCase.checkForImageUpdates();
+        // The check learned it, so the check tells them — not the daily sweep hours later.
+        imageUpdateAlerter.alert(outcome.newlyOutOfDate());
         return ResponseEntity.ok(new UpdateCheckResponse(
             outcome.checked(), outcome.changed(), outcome.lastCheckedAt().toString()));
     }
