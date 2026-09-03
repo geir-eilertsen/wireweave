@@ -118,6 +118,21 @@
     attachTouchScroll($('twTerm'), term);
 
     // --- the top bar's actions ------------------------------------------------------------------------
+
+    // The bar's own glyphs. A phone has room for five verbs or for five words, not both, and dropping a verb
+    // to fit is the wrong half to lose — so on a phone the labels go and the glyphs carry them, with the word
+    // still on aria-label and title. The drawings are the Explorer's, at the same weight, because a machine's
+    // Claude standing must not be one shape on its fleet card and another in its shell (there is a test).
+    const ICON = {
+        claude: '<path d="M8 1.7v12.6M1.7 8h12.6"/><path d="M5.2 5.2l5.6 5.6M10.8 5.2l-5.6 5.6"/>',
+        copy:   '<rect x="5.5" y="5.5" width="8" height="8.2" rx="1.2"/><path d="M3.4 10.5H3a1 1 0 0 1-1-1V3.2a1 1 0 0 1 1-1h6.3a1 1 0 0 1 1 1v.4"/>',
+        clip:   '<rect x="3" y="2.6" width="10" height="11.4" rx="1.2"/><path d="M5.8 2.6V2a.9.9 0 0 1 .9-.9h2.6a.9.9 0 0 1 .9.9v.6z"/><path d="M5.6 7.2h4.8M5.6 9.7h4.8M5.6 12.2h2.8"/>',
+        key:    '<circle cx="5.4" cy="10.6" r="2.9"/><path d="M7.5 8.5l5.7-5.7"/><path d="M11.1 4.9l1.5 1.5M12.3 3.7l1.5 1.5"/>',
+        cross:  '<path d="M4 4l8 8M12 4l-8 8"/>',
+    };
+    const glyph = (name) => '<svg class="tw-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" '
+        + 'stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' + ICON[name] + '</svg>';
+
     const PASSWORD_DISABLED_REASON = 'Available only while the remote is asking for a password';
     const PASTE_DISABLED_REASON = 'Available once the shell is connected';
     const PASTE_HELP = 'Press Ctrl+V (⌘V on a Mac) to paste.';
@@ -129,12 +144,11 @@
         window.open('terminal.html?machine=' + encodeURIComponent(machine)
             + '&id=' + encodeURIComponent(machineId) + '&pane=' + encodeURIComponent(pane),
             'vaier-shell-' + encodeURIComponent(pane), 'popup,width=1024,height=680');
-    });
-    btnDup.classList.add('tw-dup');   // wide screens only — see terminal-window.css
+    }, 'copy');
     btnDup.title = 'Open a second, separate shell on ' + machine;
-    const btnPaste = actionButton('Paste', pasteClipboard);
-    const btnPassword = actionButton('Send password', () => send({ type: 'send-password' }));
-    const btnEnd = actionButton('Exit shell', endShell);
+    const btnPaste = actionButton('Paste', pasteClipboard, 'clip');
+    const btnPassword = actionButton('Send password', () => send({ type: 'send-password' }), 'key');
+    const btnEnd = actionButton('Exit shell', endShell, 'cross');
     btnEnd.classList.add('tw-danger');
     // The one distinction people miss: closing the window keeps the shell alive to reattach; Exit stops it.
     btnEnd.title = 'Stop this shell for good on ' + machine + '. Just closing the window keeps it running — and '
@@ -142,7 +156,7 @@
     // Where this machine stands on Claude, and the way in. Hidden until something is known — and left hidden
     // where the server says a sign-in is impossible here, because a control explaining an impossibility is
     // worth less than no control.
-    const btnClaude = actionButton('Claude', toggleClaude);
+    const btnClaude = actionButton('Claude', toggleClaude, 'claude');
     // The three ways out of a modal, all of them expected: the ×, the ground around it, and Escape.
     $('twClaudeClose').onclick = () => setClaudePanel(false);
     $('twScrim').onclick = (e) => { if (e.target === $('twScrim')) setClaudePanel(false); };
@@ -155,9 +169,18 @@
     $('twActions').append(btnClaude, btnDup, btnPaste, btnPassword, btnEnd);
     refreshActions();
 
-    function actionButton(label, onClick) {
+    function actionButton(label, onClick, icon) {
         const b = document.createElement('button');
-        b.type = 'button'; b.className = 'tw-btn'; b.textContent = label; b.onclick = onClick;
+        b.type = 'button'; b.className = 'tw-btn'; b.onclick = onClick;
+        b.innerHTML = glyph(icon);
+        const lbl = document.createElement('span');
+        lbl.className = 'tw-btn-lbl';
+        lbl.textContent = label;
+        b.appendChild(lbl);
+        // The word survives losing its label: it is the button's accessible name either way, and the title is
+        // what a pointer gets. Both are set here so no caller can ship a glyph nobody can name.
+        b.setAttribute('aria-label', label);
+        b.title = label;
         return b;
     }
     function refreshActions() {

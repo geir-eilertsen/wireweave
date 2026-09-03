@@ -1243,6 +1243,35 @@ class ExplorerShellTest {
     }
 
     @Test
+    void theContainersCard_onTheMachinePage_wearsTheSameUpdatePillAsTheFleetCard() throws IOException {
+        // The fleet card says "One update" on its marks strip; open the machine and the containers card,
+        // the very door to that container, said nothing. One pill, one helper, both places — a second
+        // wording here would be a second place to disagree about how many.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function renderMachine(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    function", from));
+        assertThat(body).as("the containers door carries the count").contains("updateCountMark(");
+        assertThat(body).contains("ex-card-marks");
+        int fleet = js.indexOf("function machineMarks(");
+        assertThat(js.substring(fleet, js.indexOf("\n    }", fleet)))
+            .as("the fleet card draws the pill through the same helper").contains("updateCountMark(");
+    }
+
+    @Test
+    void theBackupCard_onAMachineThatIsBackedUp_doesNotClaimToBeTheBackupServer() throws IOException {
+        // Colina's backup card said "The fleet backs up here". Colina is backed up; the NAS is where the
+        // fleet backs up. The entry exists for both roles (childrenOf decides that), so its note has to be
+        // decided the same way, or every backed-up machine introduces itself as the server.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function renderMachine(");
+        String body = js.substring(from, js.indexOf("\n    function", from));
+        assertThat(body).contains("S.backupServer.machineId === m.id");
+        assertThat(body).as("the backed-up machine says where it goes").contains("'Backs up to '");
+        assertThat(body).contains("'The fleet backs up here'");
+    }
+
+    @Test
     void anUnknownVerdict_paintsNoMarkAtAll() throws IOException {
         // UNKNOWN is the resting state, not an exception: the registry is unreachable, there is no egress, or
         // no sweep has run yet. A grey smudge on every container row for the first 24 hours of a deployment is
@@ -3410,6 +3439,54 @@ class ExplorerShellTest {
      * that window's stylesheet. The tone NAMES are unchanged on purpose — they come off the one shared
      * state map, so the card and the shell window still cannot disagree about one machine.
      */
+    /**
+     * A shipped-broken shell, commemorated. {@code actionButton} is a hoisted function declaration and every
+     * one of its callers runs while the module body is still initialising — so when it grew a dependency on
+     * an icon table declared <em>below</em> those callers, the first call threw
+     * {@code ReferenceError: Cannot access 'glyph' before initialization}, the whole IIFE died, and the
+     * window rendered no terminal at all. Nothing caught it: the file parses, so {@code node --check} is
+     * silent, and a temporal dead zone is a runtime fault.
+     *
+     * <p>The rule is narrow on purpose — it pins the one ordering that broke rather than trying to be a
+     * JavaScript analyser.
+     */
+    @Test
+    void theShellWindowsIconTable_isDeclaredBeforeAnythingBuildsAButtonFromIt() throws IOException {
+        String js = read("terminal-window.js");
+
+        int icons = js.indexOf("const ICON = {");
+        int glyph = js.indexOf("const glyph = ");
+        assertThat(icons).as("the bar still has an icon table").isPositive();
+        assertThat(glyph).as("and a builder for it").isPositive();
+
+        int firstUse = js.indexOf("actionButton('");
+        assertThat(firstUse).as("something still builds a button").isPositive();
+        assertThat(icons).as("the icon table is initialised before the first button is built").isLessThan(firstUse);
+        assertThat(glyph).as("and so is the builder that reads it").isLessThan(firstUse);
+    }
+
+    /**
+     * The shell window's bar draws its verbs as glyphs on a phone, where five labelled buttons do not fit and
+     * dropping one of them would be the wrong half to lose. Its Claude glyph is the Explorer's, copied — the
+     * two files have no icon set in common and building one for five drawings would be more machinery than
+     * the feature earns — so the copy is guarded instead. A machine that wears one shape on its fleet card
+     * and a different one in its own shell is telling the operator they are two different things.
+     */
+    @Test
+    void theShellWindowsClaudeGlyph_isTheSameDrawingAsTheFleetCards() throws IOException {
+        String shell = read("explorer-shell.js");
+        String window = read("terminal-window.js");
+
+        Matcher m = Pattern.compile("claude:\\s*'([^']+)'").matcher(shell);
+        assertThat(m.find()).as("the Explorer still names a claude glyph").isTrue();
+        String drawing = m.group(1);
+
+        assertThat(window).as("and the shell window's bar draws exactly it").contains(drawing);
+        // Both at the same weight, or the same path reads as two different icons.
+        assertThat(shell).contains("stroke-width=\"1.5\"");
+        assertThat(window).contains("stroke-width=\"1.5\"");
+    }
+
     @Test
     void theClaudeStandingInTheShellWindow_wearsTheSameClayAsItsFleetCard() throws IOException {
         String js = read("claude-sign-in.js");

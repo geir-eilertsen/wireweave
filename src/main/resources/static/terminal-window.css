@@ -46,6 +46,9 @@ body.tw {
 
 .tw-actions { flex: none; display: flex; gap: 8px; }
 .tw-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
     padding: 6px 12px;
     min-height: 34px;
     background: var(--bg);
@@ -57,6 +60,7 @@ body.tw {
     cursor: pointer;
 }
 .tw-btn:hover { border-color: var(--accent); color: var(--accent); }
+.tw-ico { flex: none; width: 15px; height: 15px; }
 .tw-btn:disabled { opacity: .4; cursor: not-allowed; }
 .tw-btn:disabled:hover { border-color: var(--border-hi); color: var(--text-muted); }
 .tw-btn.tw-danger:hover { border-color: var(--red); color: var(--red); }
@@ -328,15 +332,20 @@ body.tw {
        left the terminal fitting itself to a box wider than the screen. */
     .tw-bar { gap: 6px; padding: 6px 8px; }
     .tw-name { font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-    .tw-btn { padding: 4px 9px; min-height: 30px; font-size: 12.5px; white-space: nowrap; }
+    /* The verbs lose their words and keep their glyphs. Five labelled buttons cannot fit a phone, and the
+       answer that fits is not to drop one of them — the word survives on aria-label and title, so nothing
+       is lost but the width. Square, and a thumb's width across. */
+    .tw-btn-lbl { display: none; }
+    .tw-btn { width: 38px; padding: 0; min-height: 38px; justify-content: center; }
+    .tw-ico { width: 17px; height: 17px; }
     .tw-actions { flex: 0 1 auto; min-width: 0; gap: 5px; overflow-x: auto; scrollbar-width: none; }
     .tw-actions::-webkit-scrollbar { display: none; }
     /* The status gives way before the verbs do: it is usually empty, and a verb you cannot reach is worse
        than a sentence you cannot finish. */
     .tw-status { flex: 0 1 auto; }
-    /* Duplicate opens a second shell in its own window, which is a wide-screen idea — a phone has no window
-       manager to arrange them with, and it is the one control here whose absence costs nothing. */
-    .tw-dup { display: none; }
+    /* The status's own button keeps its words: it appears one at a time, says something a glyph cannot
+       ("Clear the pinned key"), and is not part of the row that had to fit. */
+    .tw-status-btn { width: auto; padding: 4px 9px; min-height: 30px; font-size: 12.5px; }
     /* The panel is already most of a phone screen, so it drops its indent and its card stacks. */
     /* A phone gives the sheet nearly the whole screen: the code box and the approval button are the only
        things on it, and a centred card with a margin all round would leave neither room. Inset by a hair

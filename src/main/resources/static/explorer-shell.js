@@ -996,18 +996,24 @@
             marks.appendChild(c);
         }
 
-        // The registry verdict is about now, and an archive is about then — the same reason updateMark and the
-        // liveness dots stand down in the past.
+        const u = updateCountMark(machineId);
+        if (u) marks.appendChild(u);
+        return marks;
+    }
+
+    // How many of a machine's containers want a newer image, as one pill — on the fleet card and again on the
+    // machine's own containers card, which is the door to those containers and used to say nothing. One
+    // helper so the two can never count differently. The registry verdict is about now, and an archive is
+    // about then — the same reason updateMark and the liveness dots stand down in the past.
+    function updateCountMark(machineId) {
         const stale = S.at ? 0
             : containersOn(machineId).filter((c) => c.updateAvailable === 'UPDATE_AVAILABLE').length;
-        if (stale) {
-            const u = mark('is-update', 'arrowup', stale === 1 ? 'One update' : stale + ' updates');
-            u.title = stale === 1
-                ? 'One container here has a newer image available'
-                : stale + ' containers here have a newer image available';
-            marks.appendChild(u);
-        }
-        return marks;
+        if (!stale) return null;
+        const u = mark('is-update', 'arrowup', stale === 1 ? 'One update' : stale + ' updates');
+        u.title = stale === 1
+            ? 'One container here has a newer image available'
+            : stale + ' containers here have a newer image available';
+        return u;
     }
 
     // --- the tree ---------------------------------------------------------------------------------------
@@ -1953,12 +1959,16 @@
         // page an operator lands on most. What the machine IS is reference, and reference reads second.
         const inside = childrenOf(S.path);
         const grid = el('div', 'ex-grid');
+        // The backup entry reads both ways, exactly as childrenOf grows it: this machine is the one backup
+        // server, or a job backs it up. Colina once introduced itself as where the fleet backs up.
+        const isBackupServer = !!S.backupServer && S.backupServer.machineId === m.id;
         const NOTE = {
             files:      'Browse over SFTP',
             containers: containersOn(m.id).length + ' seen by Vaier',
             services:   servicesOn(m.id).length + ' published from here',
             disk:       'Its filesystems, and how full they are',
-            backup:     'The fleet backs up here',
+            backup:     isBackupServer ? 'The fleet backs up here'
+                : 'Backs up to ' + (S.backupServer ? S.backupServer.name : 'the backup server'),
         };
         // Files and disk both ride on SSH — a credential alone got them into the tree, but a machine whose
         // last check found no SSH server would just relocate the same dead end one click deeper. Grey them
@@ -1968,8 +1978,17 @@
         inside.forEach((kid) => {
             const disabledTitle = (noSshServer && SSH_ENTRY_KINDS.has(kid.kind))
                 ? 'No SSH server detected on last check' : null;
-            grid.appendChild(card(entryIco(kid.kind, kid.name), kid.name,
-                NOTE[kid.name], () => go(['fleet', m.id, kid.name]), null, disabledTitle));
+            const door = card(entryIco(kid.kind, kid.name), kid.name,
+                NOTE[kid.name], () => go(['fleet', m.id, kid.name]), null, disabledTitle);
+            // The containers door wears the fleet card's own "One update" pill: the operator who came here
+            // for that mark should not have to open the door to find it again.
+            const stale = kid.kind === 'containers' ? updateCountMark(m.id) : null;
+            if (stale) {
+                const marks = el('span', 'ex-card-marks');
+                marks.appendChild(stale);
+                door.appendChild(marks);
+            }
+            grid.appendChild(door);
         });
         // A shell is a way into this machine exactly as its files and its containers are. It was filed under
         // a heading called "SSH access" because SSH is how it travels — which is the machine's plumbing, not
