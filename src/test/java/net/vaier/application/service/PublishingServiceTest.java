@@ -129,6 +129,11 @@ class PublishingServiceTest {
         // relay-only tests behave as before. (Mockito would return Optional.empty() anyway — this is
         // just explicit.) Tests that exercise the server-LAN-CIDR path override it.
         lenient().when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.empty());
+        // Every publish activates on the common pool. A test that never stubs the route in would otherwise
+        // leave a 15 s poller behind, and enough of them starve the pool on a 4-core runner (CI went red
+        // with parallelism 3 while the 2-core dev box, which runs a thread per task, stayed green).
+        service.traefikActivationTimeoutMillis = 500;
+        service.traefikActivationRetryIntervalMillis = 10;
     }
 
     @Test
