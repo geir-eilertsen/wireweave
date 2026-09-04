@@ -70,6 +70,14 @@ public final class OperatorGlossary {
                 Concept.of("LAN service",
                     "A published service that runs on a LAN server rather than a VPN peer.",
                     "Same idea as any published service, just hosted on your local network."),
+                Concept.of("Stream",
+                    "A published service whose port is not a website — MQTT, a database — carried over "
+                    + "TLS on the same HTTPS port and passed through byte for byte.",
+                    "It cannot sit behind a login, so publish one only where the service's own "
+                    + "password is good enough."),
+                Concept.of("Connect address",
+                    "Where a client dials a stream: its name and the HTTPS port, like mqtt.example.com:443.",
+                    "A stream has no link to click, so this is the address you give the app."),
                 Concept.of("Subdomain",
                     "The host label a service answers on (e.g. the 'git' in git.example.com).",
                     "It's the address visitors type to reach a published service."),

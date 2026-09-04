@@ -31,6 +31,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 @Component
@@ -494,7 +495,12 @@ public class TraefikReverseProxyAdapter implements ForPersistingReverseProxyRout
 
                     if (address != null) {
                         AddressPort addressPort = parseAddress(address);
-                        routes.add(new ReverseProxyRoute(routerName, domainName, addressPort.address, addressPort.port, serviceName, authInfo));
+                        // Living in the tcp: section IS the marker — a route read back from there is a
+                        // stream, and no x-vaier-* sidecar has to agree with the section it came from.
+                        routes.add(ReverseProxyRoute.builder()
+                            .name(routerName).domainName(domainName).address(addressPort.address())
+                            .port(addressPort.port()).service(serviceName).authInfo(authInfo)
+                            .stream(true).build());
                     }
                 }
             }
@@ -517,7 +523,12 @@ public class TraefikReverseProxyAdapter implements ForPersistingReverseProxyRout
 
                     if (address != null) {
                         AddressPort addressPort = parseAddress(address);
-                        routes.add(new ReverseProxyRoute(routerName, domainName, addressPort.address, addressPort.port, serviceName, authInfo));
+                        // Living in the tcp: section IS the marker — a route read back from there is a
+                        // stream, and no x-vaier-* sidecar has to agree with the section it came from.
+                        routes.add(ReverseProxyRoute.builder()
+                            .name(routerName).domainName(domainName).address(addressPort.address())
+                            .port(addressPort.port()).service(serviceName).authInfo(authInfo)
+                            .stream(true).build());
                     }
                 }
             }
@@ -896,6 +907,52 @@ public class TraefikReverseProxyAdapter implements ForPersistingReverseProxyRout
     }
 
     /**
+     * Add a stream: a Traefik {@code tcp:} router matched by {@code HostSNI} on the TLS entrypoint,
+     * whose service forwards the decrypted bytes to {@code address:port}. Traefik issues the
+     * hostname's certificate through the same HTTP-01 resolver an HTTP router uses. Router and
+     * service keys follow the HTTP naming convention, so one FQDN means one route whichever section
+     * it lives in. A TCP router takes no middlewares — there is no request for one to act on.
+     */
+    @Override
+    public void addStreamRoute(String dnsName, String address, int port, boolean lanService) {
+        loadConfig();
+        if (config == null) config = new LinkedHashMap<>();
+
+        String routerName = generateRouterName(dnsName, null);
+        String serviceName = generateServiceName(dnsName, null);
+
+        Map<String, Object> tcp = getOrCreateNestedMap(config, "tcp");
+        Map<String, Object> routers = getOrCreateNestedMapOrdered(tcp, "routers");
+        Map<String, Object> services = getOrCreateNestedMapOrdered(tcp, "services");
+
+        Map<String, Object> routerConfig = new LinkedHashMap<>();
+        routerConfig.put("rule", "HostSNI(`" + dnsName + "`)");
+        List<String> entryPoints = new ArrayList<>();
+        entryPoints.add(ServiceNames.ENTRY_POINT_WEBSECURE);
+        routerConfig.put("entryPoints", entryPoints);
+        routerConfig.put("service", serviceName);
+        Map<String, Object> tlsMap = new LinkedHashMap<>();
+        tlsMap.put("certResolver", ServiceNames.CERT_RESOLVER);
+        routerConfig.put("tls", tlsMap);
+        routers.put(routerName, routerConfig);
+
+        Map<String, Object> serviceConfig = new LinkedHashMap<>();
+        Map<String, Object> loadBalancer = new LinkedHashMap<>();
+        List<Map<String, Object>> servers = new ArrayList<>();
+        Map<String, Object> server = new LinkedHashMap<>();
+        server.put("address", address + ":" + port);
+        servers.add(server);
+        loadBalancer.put("servers", servers);
+        serviceConfig.put("loadBalancer", loadBalancer);
+        services.put(serviceName, serviceConfig);
+
+        // Same marker the LAN HTTP flow writes, so reads attribute the stream to the machine it runs on.
+        if (lanService) addLanServiceMarker(dnsName, ReverseProxyRoute.STREAM_PROTOCOL);
+
+        saveConfig();
+    }
+
+    /**
      * Add a Traefik route that forwards to a LAN backend (no Docker container).
      * The backend URL uses the supplied protocol (http or https) and the LAN host:port
      * directly. Persists an {@code x-vaier-lan-service} marker so reads can identify
@@ -1134,14 +1191,12 @@ public class TraefikReverseProxyAdapter implements ForPersistingReverseProxyRout
         }
 
         Map<String, Object> http = getNestedMap(config, "http");
-        if (http == null) {
-            throw new RuntimeException("No HTTP configuration found");
-        }
-
-        Map<String, Object> routers = getNestedMap(http, "routers");
-        Map<String, Object> services = getNestedMap(http, "services");
+        Map<String, Object> routers = http == null ? null : getNestedMap(http, "routers");
+        Map<String, Object> services = http == null ? null : getNestedMap(http, "services");
 
         if (routers == null || !routers.containsKey(routeName)) {
+            // A stream lives in the tcp: section instead, under the same router name.
+            if (deleteStreamRoute(routeName)) return;
             throw new RuntimeException("Router not found: " + routeName);
         }
 
@@ -1187,6 +1242,34 @@ public class TraefikReverseProxyAdapter implements ForPersistingReverseProxyRout
         }
 
         saveConfig();
+    }
+
+    /**
+     * Remove a stream: its {@code tcp:} router, that router's service, and the router-keyed sidecar
+     * metadata every route may carry. The {@code tcp:} section itself goes when the last stream does,
+     * so an unpublished stream leaves nothing of itself in the file. False when no such router exists —
+     * the caller then reports it the same way a missing HTTP router is reported.
+     */
+    private boolean deleteStreamRoute(String routerName) {
+        Map<String, Object> tcp = getNestedMap(config, "tcp");
+        Map<String, Object> routers = tcp == null ? null : getNestedMap(tcp, "routers");
+        if (routers == null || !routers.containsKey(routerName)) return false;
+
+        Map<String, Object> routerConfig = castToMap(routers.get(routerName));
+        String serviceName = routerConfig == null ? null : (String) routerConfig.get("service");
+        String fqdn = routerConfig == null ? null : extractDomainFromRule(routerConfig);
+        routers.remove(routerName);
+
+        Map<String, Object> services = getNestedMap(tcp, "services");
+        if (serviceName != null && services != null) services.remove(serviceName);
+
+        if (routers.isEmpty() && (services == null || services.isEmpty())) config.remove("tcp");
+
+        removeRouterSidecarMetadata(routerName);
+        // A stream is always host-only, so its FQDN-keyed marker is its own and goes with it.
+        if (fqdn != null) removeLanServiceMarker(fqdn);
+        saveConfig();
+        return true;
     }
 
     /**
@@ -1820,12 +1903,7 @@ public class TraefikReverseProxyAdapter implements ForPersistingReverseProxyRout
 
     private ReverseProxyRoute applyDirectUrlDisabledFlag(ReverseProxyRoute r, boolean disabled) {
         if (r.isDirectUrlDisabled() == disabled) return r;
-        return new ReverseProxyRoute(
-            r.getName(), r.getDomainName(), r.getAddress(), r.getPort(), r.getService(),
-            r.getAuthInfo(), r.getEntryPoints(), r.getTlsConfig(), r.getMiddlewares(),
-            r.getRootRedirectPath(), disabled, r.isLanService(), r.getProtocol(), r.getPathPrefix(),
-            r.isHiddenFromLaunchpad(), r.getLaunchpadAlias(), r.getVersionEndpoint(), r.getVersionProperty()
-        );
+        return r.toBuilder().directUrlDisabled(disabled).build();
     }
 
     @Override
@@ -1861,12 +1939,7 @@ public class TraefikReverseProxyAdapter implements ForPersistingReverseProxyRout
 
     private ReverseProxyRoute applyHiddenFromLaunchpadFlag(ReverseProxyRoute r, boolean hidden) {
         if (r.isHiddenFromLaunchpad() == hidden) return r;
-        return new ReverseProxyRoute(
-            r.getName(), r.getDomainName(), r.getAddress(), r.getPort(), r.getService(),
-            r.getAuthInfo(), r.getEntryPoints(), r.getTlsConfig(), r.getMiddlewares(),
-            r.getRootRedirectPath(), r.isDirectUrlDisabled(), r.isLanService(), r.getProtocol(),
-            r.getPathPrefix(), hidden, r.getLaunchpadAlias(), r.getVersionEndpoint(), r.getVersionProperty()
-        );
+        return r.toBuilder().hiddenFromLaunchpad(hidden).build();
     }
 
     @Override
@@ -1908,13 +1981,8 @@ public class TraefikReverseProxyAdapter implements ForPersistingReverseProxyRout
     }
 
     private ReverseProxyRoute applyLaunchpadAlias(ReverseProxyRoute r, String alias) {
-        if (java.util.Objects.equals(r.getLaunchpadAlias(), alias)) return r;
-        return new ReverseProxyRoute(
-            r.getName(), r.getDomainName(), r.getAddress(), r.getPort(), r.getService(),
-            r.getAuthInfo(), r.getEntryPoints(), r.getTlsConfig(), r.getMiddlewares(),
-            r.getRootRedirectPath(), r.isDirectUrlDisabled(), r.isLanService(), r.getProtocol(),
-            r.getPathPrefix(), r.isHiddenFromLaunchpad(), alias, r.getVersionEndpoint(), r.getVersionProperty()
-        );
+        if (Objects.equals(r.getLaunchpadAlias(), alias)) return r;
+        return r.toBuilder().launchpadAlias(alias).build();
     }
 
     @Override
@@ -1968,21 +2036,11 @@ public class TraefikReverseProxyAdapter implements ForPersistingReverseProxyRout
     }
 
     private ReverseProxyRoute applyVersionEndpoint(ReverseProxyRoute r, String endpoint, String property) {
-        return new ReverseProxyRoute(
-            r.getName(), r.getDomainName(), r.getAddress(), r.getPort(), r.getService(),
-            r.getAuthInfo(), r.getEntryPoints(), r.getTlsConfig(), r.getMiddlewares(),
-            r.getRootRedirectPath(), r.isDirectUrlDisabled(), r.isLanService(), r.getProtocol(),
-            r.getPathPrefix(), r.isHiddenFromLaunchpad(), r.getLaunchpadAlias(), endpoint, property
-        );
+        return r.toBuilder().versionEndpoint(endpoint).versionProperty(property).build();
     }
 
     private ReverseProxyRoute applyLanServiceMarker(ReverseProxyRoute r, String protocol) {
-        return new ReverseProxyRoute(
-            r.getName(), r.getDomainName(), r.getAddress(), r.getPort(), r.getService(),
-            r.getAuthInfo(), r.getEntryPoints(), r.getTlsConfig(), r.getMiddlewares(),
-            r.getRootRedirectPath(), r.isDirectUrlDisabled(), true, protocol, r.getPathPrefix(),
-            r.isHiddenFromLaunchpad(), r.getLaunchpadAlias(), r.getVersionEndpoint(), r.getVersionProperty()
-        );
+        return r.toBuilder().isLanService(true).protocol(protocol).build();
     }
 
     @Override

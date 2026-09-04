@@ -667,9 +667,9 @@ class GetLaunchpadServicesTest {
 
     @Test
     void getLaunchpadServices_lanNativeServiceWithVersionEndpoint_carriesProbedVersion() {
-        ReverseProxyRoute lan = new ReverseProxyRoute("route", "app.example.com", "192.168.3.50", 9000,
-            "svc", null, null, null, null, null, false, true, "http", null, false, null,
-            "/sys/metrics?name[]=system_info", "display");
+        ReverseProxyRoute lan = ReverseProxyRoute.builder().name("route").domainName("app.example.com")
+            .address("192.168.3.50").port(9000).service("svc").isLanService(true).protocol("http")
+            .versionEndpoint("/sys/metrics?name[]=system_info").versionProperty("display").build();
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(lan));
         setupEmptyVpnClients();
         setupEmptyLocalServices();
@@ -687,9 +687,9 @@ class GetLaunchpadServicesTest {
 
     @Test
     void getLaunchpadServices_versionEndpointOverridesBackingContainerVersion() {
-        ReverseProxyRoute route = new ReverseProxyRoute("route", "app.example.com", "grafana", 3000,
-            "svc", null, null, null, null, null, false, false, null, null, false, null,
-            "/status", "build");
+        ReverseProxyRoute route = ReverseProxyRoute.builder().name("route").domainName("app.example.com")
+            .address("grafana").port(3000).service("svc")
+            .versionEndpoint("/status").versionProperty("build").build();
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(route));
         setupEmptyVpnClients();
         when(discoverVaierServerContainers.discover()).thenReturn(
@@ -731,8 +731,9 @@ class GetLaunchpadServicesTest {
     }
 
     private ReverseProxyRoute versionRoute() {
-        return new ReverseProxyRoute("route", "app.example.com", "192.168.3.50", 9000, "svc", null,
-            null, null, null, null, false, true, "http", null, false, null, "/sys/metrics", "display");
+        return ReverseProxyRoute.builder().name("route").domainName("app.example.com")
+            .address("192.168.3.50").port(9000).service("svc").isLanService(true).protocol("http")
+            .versionEndpoint("/sys/metrics").versionProperty("display").build();
     }
 
     private VpnClient vpnClient(String allowedIps, String endpointIp) {

@@ -15,6 +15,7 @@ import net.vaier.application.UnignorePublishableServiceUseCase;
 import net.vaier.application.UpdatePublishedServiceUseCase;
 import net.vaier.config.ConfigResolver;
 import net.vaier.domain.AccessEntry;
+import net.vaier.domain.AuthMode;
 import net.vaier.domain.VaierHostnames;
 import net.vaier.domain.DockerService;
 import net.vaier.domain.LanAnchor;
@@ -25,6 +26,7 @@ import net.vaier.domain.PublishableService;
 import net.vaier.domain.PublishableService.PublishableSource;
 import net.vaier.domain.Reachability;
 import net.vaier.domain.ReverseProxyRoute;
+import net.vaier.domain.ReverseProxyRoute.RouteSetting;
 import net.vaier.domain.Server;
 import net.vaier.domain.VpnClient;
 import net.vaier.domain.port.ForCheckingLanReachability;
@@ -49,6 +51,7 @@ import net.vaier.domain.port.ForResolvingVaierServerIdentity;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -313,7 +316,9 @@ public class PublishingService implements
             route.getVersionProperty(),
             backing == null ? null : backing.image(),
             probedVersion != null ? probedVersion : (backing == null ? null : backing.version()),
-            route.authMode().wireValue()
+            route.authMode().wireValue(),
+            route.isStream(),
+            route.connectAddress()
         );
     }
 
@@ -321,9 +326,17 @@ public class PublishingService implements
 
     @Override
     public void publishService(String address, int port, String subdomain, boolean requiresAuth,
-                               String rootRedirectPath, boolean directUrlDisabled, String pathPrefix) {
+                               String rootRedirectPath, boolean directUrlDisabled, String pathPrefix,
+                               boolean stream) {
+        ReverseProxyRoute.validateSubdomain(subdomain);
         String normalisedPath = ReverseProxyRoute.normalisePathPrefix(pathPrefix);
         ReverseProxyRoute.validatePathPrefix(normalisedPath);
+
+        if (stream) {
+            publishStream(subdomain, address, port, AuthMode.fromRequiresAuth(requiresAuth),
+                rootRedirectPath, normalisedPath);
+            return;
+        }
 
         // A LAN docker host's IP arrives here when the user clicks "+ Publish" on a discovered
         // LAN_SERVER service. Dispatch to the LAN flow so the route is marked isLanService=true
@@ -391,6 +404,7 @@ public class PublishingService implements
     private void publishLanRoute(String subdomain, String host, int port, String protocol,
                                  boolean requiresAuth, boolean directUrlDisabled, String rootRedirectPath,
                                  String pathPrefix) {
+        ReverseProxyRoute.validateSubdomain(subdomain);
         String normalisedPath = ReverseProxyRoute.normalisePathPrefix(pathPrefix);
         ReverseProxyRoute.validatePathPrefix(normalisedPath);
         ReverseProxyRoute.validateForPublication(subdomain + "." + configResolver.getDomain(), host, port);
@@ -498,6 +512,61 @@ public class PublishingService implements
         if (!waitForTraefikRoute(fqdn)) {
             log.warn("Traefik did not pick up route for {}; rolling back", fqdn);
             rollback(subdomain, fqdn, address, port, true, pathPrefix);
+            return;
+        }
+        pendingPublicationsService.untrack(address, port);
+        pendingPublishes.remove(subdomain);
+        invalidatePublishedServicesCache();
+        forPublishingEvents.publish("published-services", "publish-traefik-active", subdomain);
+        forPublishingEvents.publish("published-services", "service-updated", subdomain);
+    }
+
+    /**
+     * A stream: a non-HTTP port put on the internet as TLS-on-443-by-SNI. The domain says what a
+     * stream may carry — never a login, never a path, never a redirect — and refuses the rest before
+     * anything is written. Everything after that is the ordinary publish: track it as pending, write
+     * the route, wait for Traefik, roll back if it never arrives.
+     */
+    private void publishStream(String subdomain, String address, int port, AuthMode authMode,
+                               String rootRedirectPath, String pathPrefix) {
+        ReverseProxyRoute.validateStreamPublication(authMode, pathPrefix, rootRedirectPath);
+
+        String fqdn = subdomain + "." + configResolver.getDomain();
+        ReverseProxyRoute.validateForPublication(fqdn, address, port);
+
+        List<ReverseProxyRoute> existing = forPersistingReverseProxyRoutes.getReverseProxyRoutes();
+        if (ReverseProxyRoute.conflictsWithExisting(existing, fqdn, null)) {
+            throw new IllegalArgumentException("A route already exists on " + fqdn + " (host-only)");
+        }
+
+        // The address decides whose machine this is, exactly as it does for an HTTP publish — a stream
+        // written without the LAN verdict is attributed to the Vaier server and lands on the wrong pane.
+        boolean lanService = hostInsideAnyLanCidr(address);
+
+        log.info("Publishing stream: {} -> {}:{} (lanService: {})", fqdn, address, port, lanService);
+
+        pendingPublishes.put(subdomain, new PendingState(false));
+        pendingPublicationsService.track(address, port);
+
+        CompletableFuture.runAsync(() -> activateStream(subdomain, fqdn, address, port, lanService));
+    }
+
+    /**
+     * Writes the Traefik stream route and waits for Traefik to pick it up. The address is used exactly as
+     * discovery reported it: a stream may point at the Docker host gateway, which names no container.
+     */
+    void activateStream(String subdomain, String fqdn, String address, int port, boolean lanService) {
+        try {
+            forPersistingReverseProxyRoutes.addStreamRoute(fqdn, address, port, lanService);
+        } catch (Exception e) {
+            log.error("Failed to write Traefik stream route for {}: {}", fqdn, e.getMessage(), e);
+            rollback(subdomain, fqdn, address, port, false, null);
+            return;
+        }
+        log.info("Created Traefik stream route for {}", fqdn);
+        if (!waitForTraefikRoute(fqdn)) {
+            log.warn("Traefik did not pick up stream route for {}; rolling back", fqdn);
+            rollback(subdomain, fqdn, address, port, true, null);
             return;
         }
         pendingPublicationsService.untrack(address, port);
@@ -664,10 +733,16 @@ public class PublishingService implements
         }
         log.info("Updating {} ({}): {}", dnsName, normalisedPath, patch);
 
+        // The route itself says which of these it can carry, once and before anything is written — a
+        // half-applied edit is worse than a refused one.
+        ReverseProxyRoute.findByFqdnAndPath(
+                forPersistingReverseProxyRoutes.getReverseProxyRoutes(), dnsName, normalisedPath)
+            .ifPresent(route -> route.validateUpdate(settingsIn(patch)));
+
         // authMode supersedes the legacy requiresAuth toggle; either may be set, not both from the UI.
         if (patch.authMode() != null) {
             forPersistingReverseProxyRoutes.setRouteAuthMode(
-                dnsName, normalisedPath, net.vaier.domain.AuthMode.fromString(patch.authMode()));
+                dnsName, normalisedPath, AuthMode.fromString(patch.authMode()));
         } else if (patch.requiresAuth() != null) {
             forPersistingReverseProxyRoutes.setRouteAuthentication(dnsName, normalisedPath, patch.requiresAuth());
         }
@@ -693,6 +768,21 @@ public class PublishingService implements
             forPersistingReverseProxyRoutes.setRouteVersionEndpoint(dnsName, normalisedPath, endpoint, property);
         }
         invalidatePublishedServicesCache();
+    }
+
+    /** Which settings a patch actually touches — a mechanical read of the request, not a decision. */
+    private static Set<RouteSetting> settingsIn(PublishedServicePatch patch) {
+        Set<RouteSetting> settings = EnumSet.noneOf(RouteSetting.class);
+        if (patch.authMode() != null || patch.requiresAuth() != null) settings.add(RouteSetting.AUTH_MODE);
+        if (patch.directUrlDisabled() != null) settings.add(RouteSetting.DIRECT_URL);
+        if (patch.hiddenFromLaunchpad() != null || patch.launchpadAlias() != null) {
+            settings.add(RouteSetting.LAUNCHPAD);
+        }
+        if (patch.rootRedirectPath() != null) settings.add(RouteSetting.ROOT_REDIRECT);
+        if (patch.versionEndpoint() != null || patch.versionProperty() != null) {
+            settings.add(RouteSetting.VERSION_PROBE);
+        }
+        return settings;
     }
 
     private static String blankToNull(String s) {

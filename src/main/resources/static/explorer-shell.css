@@ -8,6 +8,11 @@
    container names, addresses), sans for anything human (prose, labels, empty states). In a namespace UI the
    address is the content. */
 
+/* Hidden means hidden. `el.hidden = true` rests on the browser's own `[hidden] { display: none }`, which
+   any display declaration in this sheet outranks — and several set one. A control put away in JS but still
+   painted is worse than one never hidden: the operator answers a question the request no longer carries. */
+[hidden] { display: none !important; }
+
 /* The past is a different light, not a different badge — scrubbing back re-lights the view from these
    tokens rather than pinning a badge on it. Scoped to the pane on purpose: what you are looking at is
    historical, but the chrome around it is not. The tree, the topbar and the address bar report the fleet as
@@ -1788,6 +1793,9 @@ select.ex-input { cursor: pointer; }
 /* A machine's job subheading, and its last-run status line — a dot and a phrase, the fleet's own four colours. */
 .ex-sub { font-family: var(--mono); font-size: 14px; color: var(--text); margin: 16px 0 6px; }
 .ex-runline { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text-muted); }
+/* What kind of route a listed service is, when it is not the ordinary one — a stream, say. Dim and
+   unshaped, because shapes and colour are reserved for trouble and a stream is not trouble. */
+.ex-lkind { margin-left: 7px; font-size: 12px; color: var(--text-dim); flex: none; }
 /* The backed-up mark in the file browser: a small shield riding just after the name. It says "this is backed
    up", which is backup identity and not Vaier's brand, so it wears the backup colour rather than the accent.
    The half-shield (a folder that only contains backed-up things) is the same hue faded — present, but lesser

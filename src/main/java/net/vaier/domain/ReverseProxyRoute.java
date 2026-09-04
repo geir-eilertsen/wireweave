@@ -1,6 +1,7 @@
 package net.vaier.domain;
 
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.ToString;
 
@@ -16,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 @Getter
@@ -25,7 +27,15 @@ public class ReverseProxyRoute {
     public static final int MIN_PORT = 1;
     public static final int MAX_PORT = 65535;
 
+    /** The port a stream is dialled on — the TLS entrypoint, where the HostSNI rule is read. */
+    public static final int STREAM_PORT = 443;
+    /** What a stream speaks, where a route records a protocol. Not http, so never fetched from. */
+    public static final String STREAM_PROTOCOL = "tcp";
+
     private static final Pattern PATH_PREFIX_PATTERN = Pattern.compile("^/[A-Za-z0-9._\\-]+(/[A-Za-z0-9._\\-]+)*/?$");
+    /** One DNS label: lowercase alphanumerics and inner hyphens, 1–63 characters (RFC 1035 §2.3.1). */
+    private static final Pattern SUBDOMAIN_LABEL_PATTERN =
+        Pattern.compile("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$");
 
     private final String name;
     private final String domainName;
@@ -45,13 +55,17 @@ public class ReverseProxyRoute {
     private final String launchpadAlias;
     private final String versionEndpoint;
     private final String versionProperty;
+    /** True when this is a TCP stream (a Traefik {@code tcp:} router matched by {@code HostSNI}). */
+    private final boolean stream;
 
+    /** Call sites use the builder: four consecutive booleans here are two silent swaps waiting to happen. */
+    @Builder(toBuilder = true)
     public ReverseProxyRoute(String name, String domainName, String address, int port, String service,
                              AuthInfo authInfo, List<String> entryPoints, TlsConfig tlsConfig,
                              List<String> middlewares, String rootRedirectPath, boolean directUrlDisabled,
                              boolean isLanService, String protocol, String pathPrefix,
                              boolean hiddenFromLaunchpad, String launchpadAlias,
-                             String versionEndpoint, String versionProperty) {
+                             String versionEndpoint, String versionProperty, boolean stream) {
         this.name = name;
         this.domainName = domainName;
         this.address = address;
@@ -70,6 +84,7 @@ public class ReverseProxyRoute {
         this.launchpadAlias = launchpadAlias;
         this.versionEndpoint = versionEndpoint;
         this.versionProperty = versionProperty;
+        this.stream = stream;
     }
 
     public ReverseProxyRoute(String name, String domainName, String address, int port, String service,
@@ -79,7 +94,7 @@ public class ReverseProxyRoute {
                              boolean hiddenFromLaunchpad, String launchpadAlias) {
         this(name, domainName, address, port, service, authInfo, entryPoints, tlsConfig, middlewares,
              rootRedirectPath, directUrlDisabled, isLanService, protocol, pathPrefix, hiddenFromLaunchpad,
-             launchpadAlias, null, null);
+             launchpadAlias, null, null, false);
     }
 
     public ReverseProxyRoute(String name, String domainName, String address, int port, String service,
@@ -128,6 +143,90 @@ public class ReverseProxyRoute {
         if (port < MIN_PORT || port > MAX_PORT) {
             throw new IllegalArgumentException(
                 "port must be between " + MIN_PORT + " and " + MAX_PORT + " (was " + port + ")");
+        }
+    }
+
+    /** What a stream publication may carry: no login, no path, no redirect. */
+    public static void validateStreamPublication(AuthMode authMode, String pathPrefix,
+                                                 String rootRedirectPath) {
+        validateStreamAuthMode(authMode);
+        // HostSNI matches the host and nothing else, and a stream has no URL to redirect.
+        if (pathPrefix != null && !pathPrefix.isBlank()) {
+            throw new IllegalArgumentException("A stream is matched by host name only — it cannot take a path prefix");
+        }
+        if (rootRedirectPath != null && !rootRedirectPath.isBlank()) {
+            throw new IllegalArgumentException("A stream is not a URL — it cannot take a root redirect");
+        }
+    }
+
+    /** A per-route setting the operator can change after publishing, named as the operator would say it. */
+    public enum RouteSetting {
+        AUTH_MODE("a login"),
+        ROOT_REDIRECT("a root redirect"),
+        DIRECT_URL("a direct LAN link"),
+        LAUNCHPAD("a launchpad tile"),
+        VERSION_PROBE("a version probe");
+
+        private final String description;
+
+        RouteSetting(String description) {
+            this.description = description;
+        }
+
+        public String description() {
+            return description;
+        }
+    }
+
+    /**
+     * Refuse the settings this route cannot carry. A stream carries none of them: every one is an HTTP
+     * idea — a login to redirect to, a URL to redirect from, a tile to link, a page to read a version off —
+     * and there is no HTTP inside a stream. Left unguarded these reached the adapter, which looks for the
+     * router among the HTTP ones and answers "Router not found" (a 500 for what is a bad request), or wrote
+     * a setting nothing would ever read.
+     */
+    public void validateUpdate(Set<RouteSetting> requested) {
+        if (!stream) return;
+        requested.stream().findFirst().ifPresent(setting -> {
+            throw new IllegalArgumentException(
+                "A stream cannot have " + setting.description() + ": nothing inside a TCP stream is an "
+                + "HTTP request. Its own credentials are its only gate, and it has no URL to configure.");
+        });
+    }
+
+    private static void validateStreamAuthMode(AuthMode requested) {
+        if (requested != null && requested.isSocial()) {
+            throw new IllegalArgumentException(
+                "A stream cannot require a login: nothing inside a TCP stream is an HTTP request, so "
+                + "oauth2-proxy has nothing to gate. The service's own password is its only gate.");
+        }
+    }
+
+    /**
+     * Where a client dials this stream — the published name on the TLS port. Null for an HTTP route,
+     * which is reached at a URL rather than at a host and port.
+     */
+    public String connectAddress() {
+        return stream ? domainName + ":" + STREAM_PORT : null;
+    }
+
+    /**
+     * The operator's subdomain, held to what a DNS label actually is. It is interpolated into a Traefik
+     * rule, and in a stream's {@code HostSNI(`...`)} a stray backtick does not break the rule — it WIDENS
+     * it: close the quote, add a matcher, and one TCP router on 443 answers for every name the box serves,
+     * the console included. May carry dots (a machine-qualified name like {@code printer.colina27}); each
+     * label between them is checked on its own.
+     */
+    public static void validateSubdomain(String subdomain) {
+        if (subdomain == null || subdomain.isBlank()) {
+            throw new IllegalArgumentException("subdomain must not be blank");
+        }
+        for (String label : subdomain.split("\\.", -1)) {
+            if (!SUBDOMAIN_LABEL_PATTERN.matcher(label).matches()) {
+                throw new IllegalArgumentException(
+                    "subdomain must be lowercase letters, digits and hyphens, in dot-separated labels that "
+                    + "neither start nor end with a hyphen (was: " + subdomain + ")");
+            }
         }
     }
 
@@ -390,6 +489,8 @@ public class ReverseProxyRoute {
      * from the moment the route is written (#331), so the host's reachability is the whole question.
      */
     public LaunchpadVisibility launchpadVisibility(Server.State hostState) {
+        // A stream has no URL, so a tile linking to it would link nowhere.
+        if (stream) return LaunchpadVisibility.NOT_VISIBLE;
         if (hiddenFromLaunchpad) return LaunchpadVisibility.NOT_VISIBLE;
         // Only a confirmed-unreachable host dims the tile and suppresses its link — UNKNOWN
         // means "we don't have a signal yet"; rendering it as inactive would lie to the

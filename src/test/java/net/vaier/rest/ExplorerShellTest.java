@@ -3645,4 +3645,106 @@ class ExplorerShellTest {
         assertThat(css).as("but the dot itself still paints, for the rail that has no card behind it")
             .contains(".ex-dot.is-down { background: var(--red); }");
     }
+    // --- a stream: the one intent question, and everything it takes off the page -----------------------
+    //
+    // Publishing a non-HTTP port is one extra answer, not a second flow: the operator says whether the port
+    // serves a website or raw TCP, and the form puts away what the answer makes meaningless. The refusals are
+    // the backend's — a stream cannot take a login and the domain says so — so the shell's job is only to stop
+    // offering controls whose every use would be refused.
+
+    @Test
+    void thePublishDialog_asksTheOneThingVaierCannotWorkOutForItself() throws IOException {
+        String js = read("explorer-shell.js");
+
+        int from = js.indexOf("function publishForm(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+
+        assertThat(body).as("the intent question").contains("What this port serves");
+        assertThat(body).as("and its two answers")
+            .contains("A website — HTTP or HTTPS")
+            .contains("Raw TCP");
+        assertThat(body).as("HTTP is the default — the option listed first, with nothing selecting the other")
+            .doesNotContain("kind.value = 'stream'");
+    }
+
+    @Test
+    void choosingAStream_putsAwayTheLoginAndSaysWhatGuardsItInstead() throws IOException {
+        String js = read("explorer-shell.js");
+
+        int from = js.indexOf("function publishForm(");
+        String body = js.substring(from, js.indexOf("\n    }", from));
+
+        assertThat(body).as("the auth toggle and the HTTP-only fold both go away")
+            .contains("authRow.hidden = isStream()")
+            .contains("advanced.adv.hidden = isStream()");
+        assertThat(body).as("and the operator is told what does guard it")
+            .contains("only gate on a stream")
+            .contains("CrowdSec");
+    }
+
+    @Test
+    void aStreamPublish_sendsNoneOfTheHttpAnswers() throws IOException {
+        // Sending a path or a redirect from controls the operator never saw would be a value nobody chose —
+        // and the backend refuses both on a stream anyway.
+        String js = read("explorer-shell.js");
+
+        int from = js.indexOf("function publishForm(");
+        String body = js.substring(from, js.indexOf("\n    }", from));
+
+        assertThat(body).contains("stream: true, requiresAuth: false");
+        assertThat(js).as("and the flag reaches the publish endpoint").contains("stream: body.stream");
+    }
+
+    @Test
+    void aPublishedStream_showsWhatToDialRatherThanANameToOpen() throws IOException {
+        String js = read("explorer-shell.js");
+
+        int from = js.indexOf("function renderServices(");
+        String body = js.substring(from, js.indexOf("\n    }", from));
+
+        assertThat(body).contains("s.stream ? s.connectAddress : s.dnsAddress");
+        assertThat(body).as("and it says which kind of route it is").contains("kindMark('stream')");
+    }
+
+    @Test
+    void aStreamsPane_offersNoControlItsOwnBackendWouldRefuse() throws IOException {
+        String js = read("explorer-shell.js");
+
+        int from = js.indexOf("function renderService(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+
+        assertThat(body).as("no sign-in picker on a stream").contains("if (s.stream) {");
+        assertThat(body).as("no launchpad tile settings either — a stream has no link")
+            .contains("if (!s.stream) {");
+        assertThat(body).as("the coordinates say where to dial").contains("['Connect at', coord(s.connectAddress)]");
+    }
+
+    @Test
+    void hidingAControl_actuallyHidesIt() throws IOException {
+        // `el.hidden = true` leans on the browser's own `[hidden] { display: none }`, which ANY display
+        // declaration outranks — and `.ex-check-row` sets `display: flex`. So the stream answer put the
+        // login toggle away in the JS while the operator went on seeing it, checked, over a request that
+        // sends requiresAuth:false. The stylesheet has to say that hidden wins, once, for everything.
+        String css = read("explorer-shell.css");
+
+        assertThat(css).as("hidden beats every display rule in this sheet")
+            .contains("[hidden] { display: none !important; }");
+
+        // and it is declared before the rules it has to beat, so nothing depends on source order
+        assertThat(css.indexOf("[hidden] { display: none !important; }"))
+            .as("declared with the reset, not after .ex-check-row")
+            .isLessThan(css.indexOf(".ex-check-row {"));
+    }
+
+    @Test
+    void theKindMark_isAWordAndNotAnotherColour() throws IOException {
+        // The shell reserves shape and colour for trouble. A stream is not trouble, so its mark is dim text.
+        String css = read("explorer-shell.css");
+
+        assertThat(css).contains(".ex-lkind");
+        assertThat(css).as("no ground, no border, no alarm colour")
+            .doesNotContain(".ex-lkind { margin-left: 7px; font-size: 12px; color: var(--red)");
+    }
 }

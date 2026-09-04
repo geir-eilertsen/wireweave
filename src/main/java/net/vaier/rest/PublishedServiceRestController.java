@@ -57,15 +57,16 @@ public class PublishedServiceRestController {
 
     @PostMapping("/publish")
     public ResponseEntity<Void> publishService(@RequestBody PublishRequest request) {
-        log.info("Publishing service: {}:{} as {}.* (auth={}, directUrlDisabled={}, pathPrefix={})",
+        log.info("Publishing service: {}:{} as {}.* (auth={}, directUrlDisabled={}, pathPrefix={}, stream={})",
             LogSafe.forLog(request.address()), request.port(), LogSafe.forLog(request.subdomain()),
-            request.requiresAuth(), request.directUrlDisabled(), LogSafe.forLog(request.pathPrefix()));
+            request.requiresAuth(), request.directUrlDisabled(), LogSafe.forLog(request.pathPrefix()),
+            request.stream());
         // Validation failures surface as IllegalArgumentException and are rendered as a
         // uniform 400 ApiError by GlobalExceptionHandler — no hand-rolled error body here.
         publishPeerServiceUseCase.publishService(
             request.address(), request.port(), request.subdomain(),
             request.requiresAuth(), request.rootRedirectPath(), request.directUrlDisabled(),
-            request.pathPrefix());
+            request.pathPrefix(), request.stream());
         return ResponseEntity.ok().build();
     }
 
@@ -129,8 +130,9 @@ public class PublishedServiceRestController {
         return ResponseEntity.ok().build();
     }
 
+    /** {@code stream} says the port serves raw TCP rather than a website — published by SNI on 443. */
     record PublishRequest(String address, int port, String subdomain, boolean requiresAuth, String rootRedirectPath,
-                          boolean directUrlDisabled, String pathPrefix) {}
+                          boolean directUrlDisabled, String pathPrefix, boolean stream) {}
     record PublishLanRequest(String subdomain, String machineId, int port, String protocol, boolean requireAuth,
                              boolean directUrlDisabled, String rootRedirectPath, String pathPrefix) {}
     record PublishStatusResponse(boolean traefikActive) {}

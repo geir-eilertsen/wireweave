@@ -25,7 +25,7 @@ class PublishedServiceControllerIT extends VaierWebMvcIntegrationBase {
     void publishService_validationFailure_returnsUniformApiError() throws Exception {
         doThrow(new IllegalArgumentException("A route already exists on app.example.com"))
                 .when(publishPeerServiceUseCase).publishService(
-                        any(), anyInt(), any(), anyBoolean(), any(), anyBoolean(), any());
+                        any(), anyInt(), any(), anyBoolean(), any(), anyBoolean(), any(), anyBoolean());
 
         mockMvc.perform(post("/published-services/publish")
                        .contentType(MediaType.APPLICATION_JSON)
@@ -95,7 +95,7 @@ class PublishedServiceControllerIT extends VaierWebMvcIntegrationBase {
                .andExpect(status().isOk());
 
         verify(publishPeerServiceUseCase).publishService(
-                "10.13.13.2", 8080, "app", true, "/dashboard", true, null);
+                "10.13.13.2", 8080, "app", true, "/dashboard", true, null, false);
     }
 
     @Test
@@ -113,7 +113,26 @@ class PublishedServiceControllerIT extends VaierWebMvcIntegrationBase {
                            """))
                .andExpect(status().isOk());
 
-        verify(publishPeerServiceUseCase).publishService("10.13.13.2", 8080, "app", false, null, false, null);
+        verify(publishPeerServiceUseCase).publishService("10.13.13.2", 8080, "app", false, null, false, null, false);
+    }
+
+    @Test
+    void publishService_streamIntent_reachesTheUseCaseOverTheWire() throws Exception {
+        mockMvc.perform(post("/published-services/publish")
+                       .contentType(MediaType.APPLICATION_JSON)
+                       .content("""
+                           {
+                             "address":"172.20.0.1",
+                             "port":1883,
+                             "subdomain":"mqtt",
+                             "requiresAuth":false,
+                             "stream":true
+                           }
+                           """))
+               .andExpect(status().isOk());
+
+        verify(publishPeerServiceUseCase).publishService(
+                "172.20.0.1", 1883, "mqtt", false, null, false, null, true);
     }
 
     @Test

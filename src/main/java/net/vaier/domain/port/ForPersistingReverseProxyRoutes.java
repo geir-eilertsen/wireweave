@@ -45,6 +45,20 @@ public interface ForPersistingReverseProxyRoutes {
             directUrlDisabled, rootRedirectPath, null);
     }
 
+    /**
+     * Add a stream — a non-HTTP backend published as a Traefik {@code tcp:} router matched by
+     * {@code HostSNI} on the TLS entrypoint. Traefik terminates TLS with a per-hostname certificate
+     * and forwards the bytes to {@code address:port} unchanged. A stream carries no auth mode, no
+     * path and no redirect; those are refused in the domain before this is ever reached.
+     * {@code lanService} marks a backend on a machine's LAN, so reads attribute it to that machine.
+     */
+    void addStreamRoute(String dnsName, String address, int port, boolean lanService);
+
+    /** Convenience overload for a stream that is not on any machine's LAN. */
+    default void addStreamRoute(String dnsName, String address, int port) {
+        addStreamRoute(dnsName, address, port, false);
+    }
+
     List<ReverseProxyRoute> getReverseProxyRoutes();
     void updateReverseProxyRoute(String routeName, ReverseProxyRoute updatedRoute);
     void deleteReverseProxyRoute(String routeName);

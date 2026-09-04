@@ -2,6 +2,7 @@ package net.vaier.domain;
 
 import net.vaier.config.ServiceNames;
 import net.vaier.domain.DockerService.PortMapping;
+import net.vaier.domain.ReverseProxyRoute.RouteSetting;
 import net.vaier.domain.Server.State;
 import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
 import net.vaier.domain.port.ForProbingServiceVersion;
@@ -15,6 +16,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -1007,13 +1009,15 @@ class ReverseProxyRouteTest {
     }
 
     private static ReverseProxyRoute versionRoute(String endpoint, String property) {
-        return new ReverseProxyRoute("r", "app.example.com", "192.168.3.50", 9000, "svc", null,
-            null, null, null, null, false, true, "http", null, false, null, endpoint, property);
+        return ReverseProxyRoute.builder().name("r").domainName("app.example.com")
+            .address("192.168.3.50").port(9000).service("svc").isLanService(true).protocol("http")
+            .versionEndpoint(endpoint).versionProperty(property).build();
     }
 
     private static ReverseProxyRoute pathVersionRoute(String pathPrefix, String endpoint, String property) {
-        return new ReverseProxyRoute("r", "app.example.com", "192.168.3.50", 9000, "svc", null,
-            null, null, null, null, false, true, "http", pathPrefix, false, null, endpoint, property);
+        return ReverseProxyRoute.builder().name("r").domainName("app.example.com")
+            .address("192.168.3.50").port(9000).service("svc").isLanService(true).protocol("http")
+            .pathPrefix(pathPrefix).versionEndpoint(endpoint).versionProperty(property).build();
     }
 
     // --- displayName ---
@@ -1438,5 +1442,143 @@ class ReverseProxyRouteTest {
         assertThat(ReverseProxyRoute.normaliseRootRedirectPath("/admin")).isEqualTo("/admin");
         assertThat(ReverseProxyRoute.normaliseRootRedirectPath("admin")).isEqualTo("/admin");
         assertThat(ReverseProxyRoute.normaliseRootRedirectPath(" /dashboard/ ")).isEqualTo("/dashboard/");
+    }
+    // --- a stream: a TCP service published by SNI on 443, with no HTTP for anything to look inside ---
+    //
+    // Traefik terminates TLS by HostSNI and forwards the bytes unchanged. Nothing downstream of the
+    // handshake is an HTTP request, so oauth2-proxy has no request to gate and the CrowdSec bouncer has
+    // no request to inspect — which is why the refusals below are the domain's and not the UI's.
+
+    private static ReverseProxyRoute streamRoute() {
+        return ReverseProxyRoute.builder()
+            .name("mqtt-example-com-router").domainName("mqtt.example.com").address("172.20.0.1")
+            .port(1883).service("mqtt-example-com-service").stream(true)
+            .entryPoints(List.of("websecure"))
+            .build();
+    }
+
+    @Test
+    void publishingAStream_refusesSocialLogin() {
+        assertThatThrownBy(() -> ReverseProxyRoute.validateStreamPublication(AuthMode.SOCIAL, null, null))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("stream");
+    }
+
+    @Test
+    void publishingAStream_refusesAPathPrefix_becauseHostSniMatchesTheHostAndNothingElse() {
+        assertThatThrownBy(() -> ReverseProxyRoute.validateStreamPublication(AuthMode.NONE, "/mqtt", null))
+            .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void publishingAStream_refusesARootRedirect_becauseThereIsNoUrlToRedirect() {
+        assertThatThrownBy(() -> ReverseProxyRoute.validateStreamPublication(AuthMode.NONE, null, "/dashboard"))
+            .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void publishingAPlainStream_isAllowed() {
+        assertThatCode(() -> ReverseProxyRoute.validateStreamPublication(AuthMode.NONE, null, null))
+            .doesNotThrowAnyException();
+    }
+
+    @Test
+    void aStream_isReachedAtItsNameOn443() {
+        // The whole point of the feature: the client dials the published name on the TLS port, and
+        // Traefik hands the decrypted bytes to the backend port unchanged.
+        assertThat(streamRoute().connectAddress()).isEqualTo("mqtt.example.com:443");
+    }
+
+    @Test
+    void anHttpRoute_hasNoConnectAddress_itHasAUrl() {
+        assertThat(routeWithMiddlewares(List.of("vaier-errors")).connectAddress()).isNull();
+    }
+
+    @Test
+    void aStream_isNeverALaunchpadTile_becauseThereIsNoUrlToOpen() {
+        assertThat(streamRoute().launchpadVisibility(State.OK))
+            .isEqualTo(LaunchpadVisibility.NOT_VISIBLE);
+    }
+    // --- what a route may carry after it is published --------------------------------------------------
+    //
+    // Every per-route setting Vaier offers is an HTTP one, so a stream can carry none of them. Before this
+    // rule the sign-in picker was guarded and the other five were not: a redirect or an auth toggle reached
+    // the adapter, which looks for the router in the http: section, does not find a stream there, and
+    // answers RuntimeException("Router not found") — a 500 for what is really a bad request. The launchpad
+    // and version-probe settings were worse: they wrote sidecars nothing would ever read.
+
+    @Test
+    void aStream_refusesEverySettingARouteCanCarry() {
+        for (RouteSetting setting : RouteSetting.values()) {
+            assertThatThrownBy(() -> streamRoute().validateUpdate(Set.of(setting)))
+                .as("a stream refusing %s", setting)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("stream");
+        }
+    }
+
+    @Test
+    void theRefusal_namesTheSettingItRefused() {
+        assertThatThrownBy(() -> streamRoute().validateUpdate(Set.of(RouteSetting.ROOT_REDIRECT)))
+            .hasMessageContaining("root redirect");
+        assertThatThrownBy(() -> streamRoute().validateUpdate(Set.of(RouteSetting.AUTH_MODE)))
+            .hasMessageContaining("login");
+    }
+
+    @Test
+    void aStream_acceptsAnUpdateThatChangesNothing() {
+        assertThatCode(() -> streamRoute().validateUpdate(Set.of())).doesNotThrowAnyException();
+    }
+
+    @Test
+    void anHttpRoute_carriesEverySetting() {
+        assertThatCode(() -> routeWithMiddlewares(List.of("vaier-errors"))
+            .validateUpdate(Set.of(RouteSetting.values()))).doesNotThrowAnyException();
+    }
+    // --- the subdomain is a DNS label, and now has to look like one ------------------------------------
+    //
+    // The operator's subdomain is interpolated straight into a Traefik rule. In an HTTP rule a stray
+    // backtick would break the route; in a stream's HostSNI rule it could WIDEN one — close the quote,
+    // append your own matcher, and a TCP router on 443 swallows every TLS connection the box takes,
+    // console included. "Not blank" was the only check standing between an operator's typo and that.
+
+    @ParameterizedTest
+    @ValueSource(strings = {"mqtt", "printer", "nut2", "portainer-nas", "printer.colina27",
+                            "netdata.nuc02", "a"})
+    void anOrdinarySubdomain_isAccepted(String subdomain) {
+        assertThatCode(() -> ReverseProxyRoute.validateSubdomain(subdomain)).doesNotThrowAnyException();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "mqtt`) || HostSNI(`",   // the one that matters: widen a TCP rule to catch everything on 443
+        "mqtt`",
+        "MQTT",                   // DNS labels are case-insensitive; two spellings of one name is a trap
+        "my_broker",
+        "-mqtt", "mqtt-",
+        "mqtt broker",
+        "mqtt..broker",
+        "mqtt/../vaier",
+        ".mqtt", "mqtt.",
+        "mqtt$",
+    })
+    void aSubdomainThatIsNotADnsLabel_isRefused(String subdomain) {
+        assertThatThrownBy(() -> ReverseProxyRoute.validateSubdomain(subdomain))
+            .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @ParameterizedTest
+    @NullAndEmptySource
+    void aMissingSubdomain_isRefused(String subdomain) {
+        assertThatThrownBy(() -> ReverseProxyRoute.validateSubdomain(subdomain))
+            .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void aLabelLongerThanDnsAllows_isRefused() {
+        assertThatThrownBy(() -> ReverseProxyRoute.validateSubdomain("a".repeat(64)))
+            .isInstanceOf(IllegalArgumentException.class);
+        assertThatCode(() -> ReverseProxyRoute.validateSubdomain("a".repeat(63)))
+            .doesNotThrowAnyException();
     }
 }

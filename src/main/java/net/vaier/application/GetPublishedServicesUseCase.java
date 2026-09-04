@@ -1,5 +1,6 @@
 package net.vaier.application;
 
+import net.vaier.domain.AuthMode;
 import net.vaier.domain.ReverseProxyRoute.ServiceLocation;
 import net.vaier.domain.Server.State;
 import java.util.List;
@@ -62,10 +63,17 @@ public interface GetPublishedServicesUseCase {
          * middleware chain so the UI auth-mode picker reflects the live gateway. {@code authenticated}
          * stays for callers that only need "is it gated at all".
          */
-        String authMode
+        String authMode,
+        /**
+         * True when this is a stream — a TCP service published by SNI on the HTTPS port. It has no
+         * URL to open, so the UI shows {@link #connectAddress} instead of a link.
+         */
+        boolean stream,
+        /** Where a client dials a stream ({@code <fqdn>:443}); null for an HTTP(S) service. */
+        String connectAddress
     ){
         private static String legacyAuthMode(boolean authenticated) {
-            return (authenticated ? net.vaier.domain.AuthMode.SOCIAL : net.vaier.domain.AuthMode.NONE).wireValue();
+            return (authenticated ? AuthMode.SOCIAL : AuthMode.NONE).wireValue();
         }
         public PublishedServiceUco(String name, String dnsAddress, String hostAddress,
                                    int hostPort, State state, boolean authenticated,
@@ -73,7 +81,7 @@ public interface GetPublishedServicesUseCase {
             this(name, name, null, "", null, ServiceLocation.VAIER_SERVER, state == State.OK,
                 dnsAddress, hostAddress, hostPort, state, authenticated,
                 rootRedirectPath, directUrlDisabled, false, null, false, null, null, null, null, null,
-                legacyAuthMode(authenticated));
+                legacyAuthMode(authenticated), false, null);
         }
         public PublishedServiceUco(String name, String dnsAddress, String hostAddress,
                                    int hostPort, State state, boolean authenticated,
@@ -83,7 +91,7 @@ public interface GetPublishedServicesUseCase {
                 state == State.OK,
                 dnsAddress, hostAddress, hostPort, state, authenticated,
                 rootRedirectPath, directUrlDisabled, isLanService, null, false, null, null, null, null, null,
-                legacyAuthMode(authenticated));
+                legacyAuthMode(authenticated), false, null);
         }
         public PublishedServiceUco(String name, String dnsAddress, String hostAddress,
                                    int hostPort, State state, boolean authenticated,
@@ -94,7 +102,7 @@ public interface GetPublishedServicesUseCase {
                 state == State.OK,
                 dnsAddress, hostAddress, hostPort, state, authenticated,
                 rootRedirectPath, directUrlDisabled, isLanService, pathPrefix, false, null, null, null, null, null,
-                legacyAuthMode(authenticated));
+                legacyAuthMode(authenticated), false, null);
         }
         public PublishedServiceUco(String name, String dnsAddress, String hostAddress,
                                    int hostPort, State state, boolean authenticated,
@@ -105,7 +113,7 @@ public interface GetPublishedServicesUseCase {
                 state == State.OK,
                 dnsAddress, hostAddress, hostPort, state, authenticated,
                 rootRedirectPath, directUrlDisabled, isLanService, pathPrefix, hiddenFromLaunchpad,
-                null, null, null, null, null, legacyAuthMode(authenticated));
+                null, null, null, null, null, legacyAuthMode(authenticated), false, null);
         }
         public PublishedServiceUco(String name, String dnsAddress, String hostAddress,
                                    int hostPort, State state, boolean authenticated,
@@ -116,7 +124,7 @@ public interface GetPublishedServicesUseCase {
                 state == State.OK,
                 dnsAddress, hostAddress, hostPort, state, authenticated,
                 rootRedirectPath, directUrlDisabled, isLanService, pathPrefix, hiddenFromLaunchpad,
-                launchpadAlias, null, null, null, null, legacyAuthMode(authenticated));
+                launchpadAlias, null, null, null, null, legacyAuthMode(authenticated), false, null);
         }
     }
 }

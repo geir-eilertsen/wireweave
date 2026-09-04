@@ -1383,4 +1383,139 @@ class TraefikReverseProxyAdapterTest {
         assertThat(Files.readString(tempDir.resolve("remote-apps.yml")))
             .doesNotContain("pihole-example-com-redirect");
     }
+    // --- streams: a non-HTTP port published as a Traefik tcp: router, matched by HostSNI on 443 ---
+    //
+    // Traefik terminates TLS with a per-hostname Let's Encrypt certificate (the same HTTP-01 resolver
+    // the HTTP routers use — it issues for a TCP router's HostSNI name just the same) and forwards the
+    // decrypted bytes to the backend port unchanged. The adapter only translates; every rule about what
+    // a stream may carry is the domain's.
+
+    @Test
+    void addStreamRoute_writesATcpRouterMatchedByHostSni() throws IOException {
+        adapter.addStreamRoute("mqtt.example.com", "172.20.0.1", 1883);
+
+        String content = Files.readString(tempDir.resolve("remote-apps.yml"));
+        assertThat(content).contains("tcp:");
+        assertThat(content).contains("HostSNI(`mqtt.example.com`)");
+        assertThat(content).contains(ServiceNames.ENTRY_POINT_WEBSECURE);
+        assertThat(content).contains(ServiceNames.CERT_RESOLVER);
+        assertThat(content).contains("address: 172.20.0.1:1883");
+    }
+
+    @Test
+    void addStreamRoute_namesTheRouterAndServiceTheSameWayAnHttpRouteIs() throws IOException {
+        adapter.addStreamRoute("mqtt.example.com", "172.20.0.1", 1883);
+
+        String content = Files.readString(tempDir.resolve("remote-apps.yml"));
+        assertThat(content).contains("mqtt-example-com-router");
+        assertThat(content).contains("mqtt-example-com-service");
+    }
+
+    @Test
+    void addStreamRoute_carriesNoMiddlewares_becauseATcpRouterCannotHaveThem() throws IOException {
+        adapter.addStreamRoute("mqtt.example.com", "172.20.0.1", 1883);
+
+        String content = Files.readString(tempDir.resolve("remote-apps.yml"));
+        assertThat(content).doesNotContain("middlewares");
+    }
+
+    @Test
+    void aStreamRoute_readsBackAsAStream() {
+        adapter.addStreamRoute("mqtt.example.com", "172.20.0.1", 1883);
+
+        List<ReverseProxyRoute> routes = adapter.getReverseProxyRoutes();
+
+        assertThat(routes).hasSize(1);
+        ReverseProxyRoute route = routes.getFirst();
+        assertThat(route.isStream()).isTrue();
+        assertThat(route.getDomainName()).isEqualTo("mqtt.example.com");
+        assertThat(route.getAddress()).isEqualTo("172.20.0.1");
+        assertThat(route.getPort()).isEqualTo(1883);
+    }
+
+    @Test
+    void anHttpRoute_readsBackAsNotAStream() {
+        adapter.addReverseProxyRoute("app.example.com", "10.13.13.2", 8080, false, null);
+
+        assertThat(adapter.getReverseProxyRoutes().getFirst().isStream()).isFalse();
+    }
+
+    @Test
+    void aStreamAndAnHttpRoute_coexistInTheOneFile() {
+        adapter.addReverseProxyRoute("app.example.com", "10.13.13.2", 8080, false, null);
+        adapter.addStreamRoute("mqtt.example.com", "172.20.0.1", 1883);
+
+        assertThat(adapter.getReverseProxyRoutes())
+            .extracting(ReverseProxyRoute::getDomainName)
+            .containsExactlyInAnyOrder("app.example.com", "mqtt.example.com");
+    }
+
+    @Test
+    void deletingAStreamByDnsName_removesItsTcpRouterAndService() throws IOException {
+        adapter.addStreamRoute("mqtt.example.com", "172.20.0.1", 1883);
+
+        adapter.deleteReverseProxyRouteByDnsName("mqtt.example.com");
+
+        assertThat(adapter.getReverseProxyRoutes()).isEmpty();
+        String content = Files.readString(tempDir.resolve("remote-apps.yml"));
+        assertThat(content).doesNotContain("mqtt-example-com-router");
+        assertThat(content).doesNotContain("mqtt-example-com-service");
+        assertThat(content).as("the last stream takes the tcp: section with it").doesNotContain("tcp:");
+    }
+
+    @Test
+    void aStreamWearingASidecar_isStillAStream() {
+        // Sidecars are re-applied on read by rebuilding the route. Rebuilding it positionally is how a
+        // flag gets dropped without anything failing — the route would come back as an HTTP one, lose its
+        // connect address and start being offered a login.
+        adapter.addStreamRoute("mqtt.example.com", "172.20.0.1", 1883);
+        adapter.setRouteDirectUrlDisabled("mqtt.example.com", null, true);
+
+        ReverseProxyRoute route = adapter.getReverseProxyRoutes().getFirst();
+
+        assertThat(route.isDirectUrlDisabled()).isTrue();
+        assertThat(route.isStream()).as("the sidecar must not cost it its kind").isTrue();
+        assertThat(route.connectAddress()).isEqualTo("mqtt.example.com:443");
+    }
+
+    @Test
+    void aStreamOnAMachinesLan_readsBackAsALanService() {
+        adapter.addStreamRoute("mqtt.example.com", "192.168.3.50", 1883, true);
+
+        ReverseProxyRoute route = adapter.getReverseProxyRoutes().getFirst();
+
+        assertThat(route.isLanService()).isTrue();
+        assertThat(route.isStream()).isTrue();
+        assertThat(route.getProtocol()).isEqualTo(ReverseProxyRoute.STREAM_PROTOCOL);
+    }
+
+    @Test
+    void unpublishingALanStream_takesItsLanMarkerWithIt() throws IOException {
+        adapter.addStreamRoute("mqtt.example.com", "192.168.3.50", 1883, true);
+
+        adapter.deleteReverseProxyRouteByDnsName("mqtt.example.com");
+
+        assertThat(Files.readString(tempDir.resolve("remote-apps.yml")))
+            .doesNotContain("x-vaier-lan-service");
+    }
+
+    @Test
+    void deletingAStream_leavesTheHttpRoutesAlone() {
+        adapter.addReverseProxyRoute("app.example.com", "10.13.13.2", 8080, false, null);
+        adapter.addStreamRoute("mqtt.example.com", "172.20.0.1", 1883);
+
+        adapter.deleteReverseProxyRoute("mqtt-example-com-router");
+
+        assertThat(adapter.getReverseProxyRoutes())
+            .extracting(ReverseProxyRoute::getDomainName)
+            .containsExactly("app.example.com");
+    }
+
+    @Test
+    void deletingAnUnknownStream_stillSaysTheRouterIsNotThere() {
+        adapter.addStreamRoute("mqtt.example.com", "172.20.0.1", 1883);
+
+        assertThatThrownBy(() -> adapter.deleteReverseProxyRoute("nope-router"))
+            .hasMessageContaining("Router not found");
+    }
 }

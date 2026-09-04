@@ -217,9 +217,9 @@ class PublishingServiceTest {
 
     @Test
     void getPublishedServices_routeWithVersionEndpoint_usesProbedVersionOverContainerVersion() {
-        ReverseProxyRoute route = new ReverseProxyRoute("route", "app.example.com", "my-container", 8080,
-            "svc", null, null, null, null, null, false, false, null, null, false, null,
-            "/api/health", "version");
+        ReverseProxyRoute route = ReverseProxyRoute.builder().name("route").domainName("app.example.com")
+            .address("my-container").port(8080).service("svc")
+            .versionEndpoint("/api/health").versionProperty("version").build();
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(route));
         setupEmptyVpnClients();
         setupEmptyVaierServerServices();
@@ -1499,5 +1499,226 @@ class PublishingServiceTest {
 
     private ReverseProxyRoute routeForPublishable(String address, int port) {
         return new ReverseProxyRoute("r", "svc.example.com", address, port, "svc", null);
+    }
+    // --- streams (a non-HTTP port published by SNI on 443) ---
+    //
+    // A stream rides the same pending/activate/rollback machinery every publish does, so the Explorer's
+    // Processing card and the publish-rolled-back event keep working without knowing what kind of route
+    // is being written. What differs is what gets written: a tcp: router, and never an auth chain.
+
+    @Test
+    void publishingAStream_writesAStreamRouteAndReportsItActive() {
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
+            .thenReturn(List.of(routeWithDomain("mqtt.example.com")));
+
+        service.activateStream("mqtt", "mqtt.example.com", "172.20.0.1", 1883, false);
+
+        verify(forPersistingReverseProxyRoutes).addStreamRoute("mqtt.example.com", "172.20.0.1", 1883, false);
+        verify(forPublishingEvents).publish("published-services", "publish-traefik-active", "mqtt");
+    }
+
+    @Test
+    void aStreamTraefikNeverPicksUp_rollsBackLikeAnyOtherPublish() {
+        service.traefikActivationTimeoutMillis = 50;
+        service.traefikActivationRetryIntervalMillis = 10;
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of());
+
+        service.activateStream("mqtt", "mqtt.example.com", "172.20.0.1", 1883, false);
+
+        verify(forPublishingEvents).publish("published-services", "publish-rolled-back", "mqtt");
+    }
+
+    @Test
+    void publishingAStream_goesThroughThePendingMachinery() {
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of());
+
+        service.publishService("172.20.0.1", 1883, "mqtt", false, null, false, null, true);
+
+        assertThat(service.getPendingPublications()).extracting(PendingPublication::subdomain)
+            .contains("mqtt");
+        verify(forPersistingReverseProxyRoutes, timeout(5_000)).addStreamRoute(
+            "mqtt.example.com", "172.20.0.1", 1883, false);
+        verify(forPersistingReverseProxyRoutes, never()).addReverseProxyRoute(
+            anyString(), anyString(), anyInt(), anyBoolean(), any(), any());
+    }
+
+    @Test
+    void publishingAStreamBehindALogin_isRefused() {
+        assertThrows(IllegalArgumentException.class, () ->
+            service.publishService("172.20.0.1", 1883, "mqtt", true, null, false, null, true));
+
+        verifyNoInteractions(forPersistingReverseProxyRoutes);
+    }
+
+    @Test
+    void publishingAStreamUnderAPath_isRefused() {
+        assertThrows(IllegalArgumentException.class, () ->
+            service.publishService("172.20.0.1", 1883, "mqtt", false, null, false, "/mqtt", true));
+    }
+
+    @Test
+    void puttingAStreamBehindSocialLogin_isRefused() {
+        ReverseProxyRoute stream = streamRoute("mqtt.example.com", "172.20.0.1", 1883);
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(stream));
+
+        assertThrows(IllegalArgumentException.class, () -> service.updateService("mqtt.example.com", null,
+            new PublishedServicePatch(null, null, null, null, null, null, null, "social")));
+
+        verify(forPersistingReverseProxyRoutes, never()).setRouteAuthMode(any(), any(), any());
+    }
+
+    @Test
+    void anHttpRoute_canStillBePutBehindSocialLogin() {
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
+            .thenReturn(List.of(routeWithDomain("app.example.com")));
+
+        service.updateService("app.example.com", null,
+            new PublishedServicePatch(null, null, null, null, null, null, null, "social"));
+
+        verify(forPersistingReverseProxyRoutes).setRouteAuthMode("app.example.com", null, AuthMode.SOCIAL);
+    }
+
+    @Test
+    void aPublishedStream_surfacesItselfAsAStreamWithTheAddressToDial() {
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
+            .thenReturn(List.of(streamRoute("mqtt.example.com", "172.20.0.1", 1883)));
+        setupEmptyVpnClients();
+        setupEmptyVaierServerServices();
+
+        PublishedServiceUco result = service.getPublishedServices().get(0);
+
+        assertThat(result.stream()).isTrue();
+        assertThat(result.connectAddress()).isEqualTo("mqtt.example.com:443");
+    }
+
+    @Test
+    void aPublishedHttpService_hasNoConnectAddress() {
+        setupOneRoute("app.example.com", "my-container", 8080);
+        setupEmptyVpnClients();
+        setupEmptyVaierServerServices();
+
+        PublishedServiceUco result = service.getPublishedServices().get(0);
+
+        assertThat(result.stream()).isFalse();
+        assertThat(result.connectAddress()).isNull();
+    }
+
+    @Test
+    void aStreamOnAMachinesLan_isWrittenAsALanService() {
+        // The address decides this, not the operator: an MQTT broker on a NAS is on somebody's LAN, and a
+        // route that does not say so is attributed to the Vaier server — wrong machine pane, wrong host
+        // state. The HTTP publish has always dispatched on the address; a stream must too.
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            new PeerConfiguration("apalveien5", "10.13.13.5", "",
+                MachineType.UBUNTU_SERVER, "192.168.3.0/24", "192.168.3.5")
+        ));
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of());
+
+        service.publishService("192.168.3.50", 1883, "mqtt", false, null, false, null, true);
+
+        verify(forPersistingReverseProxyRoutes, timeout(5_000))
+            .addStreamRoute("mqtt.example.com", "192.168.3.50", 1883, true);
+    }
+
+    @Test
+    void aStreamOnTheVaierServersOwnBridge_isNoLanService() {
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of());
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of());
+
+        service.publishService("172.20.0.1", 1883, "mqtt", false, null, false, null, true);
+
+        verify(forPersistingReverseProxyRoutes, timeout(5_000))
+            .addStreamRoute("mqtt.example.com", "172.20.0.1", 1883, false);
+    }
+
+    @Test
+    void aLanStream_readsBackUnderTheMachineItRunsOn() {
+        // The whole point of the marker: hostMachineId resolves a LAN route against the registered LAN
+        // servers. Without it the route falls back to the Vaier server's identity and lands on its pane.
+        LanServer nasBox = new LanServer("nas-box", "192.168.3.50", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nasBox));
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            new PeerConfiguration("apalveien5", "10.13.13.5", "",
+                MachineType.UBUNTU_SERVER, "192.168.3.0/24", "192.168.3.5")
+        ));
+        ReverseProxyRoute lanStream = ReverseProxyRoute.builder()
+            .name("mqtt-example-com-router").domainName("mqtt.example.com").address("192.168.3.50")
+            .port(1883).service("mqtt-example-com-service").stream(true)
+            .isLanService(true).protocol(ReverseProxyRoute.STREAM_PROTOCOL).build();
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(lanStream));
+        setupEmptyVpnClients();
+        setupEmptyVaierServerServices();
+
+        PublishedServiceUco result = service.getPublishedServices().get(0);
+
+        assertThat(result.isLanService()).isTrue();
+        assertThat(result.machineId()).isEqualTo(nasBox.machineId().value());
+        assertThat(result.stream()).isTrue();
+    }
+
+    @Test
+    void editingAnythingOnAStream_isRefusedBeforeAnythingIsWritten() {
+        // Not just the sign-in picker: a redirect, an alias, a version probe, the legacy requiresAuth
+        // toggle. The adapter cannot find a stream's router in the http: section, so an unguarded edit
+        // came back as a 500 or wrote a sidecar nothing reads.
+        ReverseProxyRoute stream = streamRoute("mqtt.example.com", "172.20.0.1", 1883);
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(stream));
+
+        List<PublishedServicePatch> refused = List.of(
+            new PublishedServicePatch(true, null, null, null, null, null, null),
+            new PublishedServicePatch(null, true, null, null, null, null, null),
+            new PublishedServicePatch(null, null, true, null, null, null, null),
+            new PublishedServicePatch(null, null, null, "/dashboard", null, null, null),
+            new PublishedServicePatch(null, null, null, null, "Broker", null, null),
+            new PublishedServicePatch(null, null, null, null, null, "/status", "build"));
+
+        refused.forEach(patch -> assertThrows(IllegalArgumentException.class,
+            () -> service.updateService("mqtt.example.com", null, patch)));
+
+        verify(forPersistingReverseProxyRoutes, never()).setRouteAuthMode(any(), any(), any());
+        verify(forPersistingReverseProxyRoutes, never()).setRouteRootRedirectPath(any(), any(), any());
+        verify(forPersistingReverseProxyRoutes, never()).setRouteDirectUrlDisabled(any(), any(), anyBoolean());
+        verify(forPersistingReverseProxyRoutes, never()).setRouteHiddenFromLaunchpad(any(), any(), anyBoolean());
+        verify(forPersistingReverseProxyRoutes, never()).setRouteLaunchpadAlias(any(), any(), any());
+        verify(forPersistingReverseProxyRoutes, never()).setRouteVersionEndpoint(any(), any(), any(), any());
+    }
+
+    @Test
+    void editingAnHttpService_isUntouchedByTheStreamGuard() {
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes())
+            .thenReturn(List.of(routeWithDomain("app.example.com")));
+
+        service.updateService("app.example.com", null,
+            new PublishedServicePatch(null, null, null, "/dashboard", null, null, null));
+
+        verify(forPersistingReverseProxyRoutes).setRouteRootRedirectPath("app.example.com", null, "/dashboard");
+    }
+
+    @Test
+    void aSubdomainThatCouldWidenATraefikRule_neverReachesTheRoutes() {
+        // Both doors: the HTTP publish and the stream publish take the same operator-typed label.
+        assertThrows(IllegalArgumentException.class, () ->
+            service.publishService("10.13.13.6", 8080, "app`) || HostSNI(`", false, null, false, null, false));
+        assertThrows(IllegalArgumentException.class, () ->
+            service.publishService("172.20.0.1", 1883, "mqtt`", false, null, false, null, true));
+
+        verifyNoInteractions(forPersistingReverseProxyRoutes);
+    }
+
+    @Test
+    void aHandPublishedLanService_isHeldToTheSameLabelRule() {
+        LanServer nasBox = new LanServer("nas-box", "192.168.3.50", false, null);
+        when(forPersistingLanServers.getAll()).thenReturn(List.of(nasBox));
+
+        assertThrows(IllegalArgumentException.class, () -> service.publishLanService(
+            "nas`) || Host(`", nasBox.machineId(), 5000, "https", false, false, null, null));
+
+        verifyNoInteractions(forPersistingReverseProxyRoutes);
+    }
+
+    private ReverseProxyRoute streamRoute(String domain, String address, int port) {
+        return ReverseProxyRoute.builder().name(ReverseProxyRoute.routerName(domain, null))
+            .domainName(domain).address(address).port(port)
+            .service(ReverseProxyRoute.serviceName(domain, null)).stream(true).build();
     }
 }

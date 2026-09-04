@@ -102,12 +102,36 @@ class PublishedServiceRestControllerTest {
     void publishService_useCaseThrowsIllegalArgument_propagatesToGlobalHandler() {
         doThrow(new IllegalArgumentException("A route already exists on app.example.com"))
             .when(publishPeerServiceUseCase).publishService(
-                "10.13.13.2", 8080, "app", false, null, false, null);
+                "10.13.13.2", 8080, "app", false, null, false, null, false);
         var request = new PublishedServiceRestController.PublishRequest(
-            "10.13.13.2", 8080, "app", false, null, false, null);
+            "10.13.13.2", 8080, "app", false, null, false, null, false);
 
         assertThatThrownBy(() -> controller.publishService(request))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessage("A route already exists on app.example.com");
+    }
+    @Test
+    void publishService_carriesTheStreamIntentThroughToTheUseCase() {
+        // The one intent question the operator answers in the dialog — website, or raw TCP — is a
+        // field on the request, not a second endpoint.
+        var request = new PublishedServiceRestController.PublishRequest(
+            "172.20.0.1", 1883, "mqtt", false, null, false, null, true);
+
+        ResponseEntity<?> response = controller.publishService(request);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        verify(publishPeerServiceUseCase).publishService(
+            "172.20.0.1", 1883, "mqtt", false, null, false, null, true);
+    }
+
+    @Test
+    void publishService_withoutTheStreamFlag_publishesAnHttpService() {
+        var request = new PublishedServiceRestController.PublishRequest(
+            "10.13.13.2", 8080, "app", false, null, false, null, false);
+
+        controller.publishService(request);
+
+        verify(publishPeerServiceUseCase).publishService(
+            "10.13.13.2", 8080, "app", false, null, false, null, false);
     }
 }

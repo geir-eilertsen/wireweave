@@ -3977,9 +3977,13 @@
         } else {
             const rows = el('div', 'ex-listing is-wide');
             rows.appendChild(listHead(['Published at', 'Backend', 'State']));
-            found.forEach((s) => rows.appendChild(listRow(entryIco('service'), s.dnsAddress || serviceName(s),
+            // A stream is not reached at a URL, so the row shows what a client actually dials — the name
+            // and the one TLS port — and says which kind of route it is in a word.
+            found.forEach((s) => rows.appendChild(listRow(entryIco('service'),
+                (s.stream ? s.connectAddress : s.dnsAddress) || serviceName(s),
                 () => go(['fleet', machineId, 'services', serviceName(s)]),
-                [(s.hostAddress || '') + (s.hostPort ? ':' + s.hostPort : ''), s.state || 'UNKNOWN'], s.state)));
+                [(s.hostAddress || '') + (s.hostPort ? ':' + s.hostPort : ''), s.state || 'UNKNOWN'],
+                s.state, s.stream ? kindMark('stream') : null)));
             body.appendChild(rows);
         }
 
@@ -4021,6 +4025,13 @@
         pane.appendChild(body);
     }
 
+    // What kind of route a row is, when it is not the ordinary one. A word: shapes and colour are trouble's.
+    function kindMark(word) {
+        const m = el('span', 'ex-lkind');
+        m.textContent = word;
+        return m;
+    }
+
     // A publishable container port: its container name and where it listens, then the actions for it.
     function candidateRow(machine, c, buttons) {
         const row = el('div', 'ex-brepo');
@@ -4049,7 +4060,7 @@
             saveJson('/published-services/publish', 'POST', {
                 address: c.address, port: c.port, subdomain: body.subdomain, requiresAuth: body.requiresAuth,
                 rootRedirectPath: body.rootRedirectPath, directUrlDisabled: body.directUrlDisabled,
-                pathPrefix: body.pathPrefix,
+                pathPrefix: body.pathPrefix, stream: body.stream,
             }, 'Publishing ' + body.subdomain + '…', () => reloadServices(machineId),
                'Could not publish that.');
         });
@@ -4072,7 +4083,7 @@
             redirect), directRow);
         if (prefillRedirect) adv.open = true;
         form.appendChild(adv);
-        return { pathPrefix, redirect, direct };
+        return { adv, pathPrefix, redirect, direct };
     }
 
     function ignoreCandidate(machineId, c) {
@@ -4120,12 +4131,36 @@
             const subIn = el('input', 'ex-input'); subIn.type = 'text'; subIn.value = c.suggestedSubdomain || '';
             subIn.autocomplete = 'off'; subIn.spellcheck = false;
             subF.append(subL, subIn);
+
+            // The one thing about a port Vaier cannot work out for itself, and the answer that decides what
+            // the rest of the form even means. A website is routed by name and can be put behind a login;
+            // raw TCP is forwarded byte for byte, so none of that applies and none of it is shown.
+            const kind = el('select', 'ex-input');
+            [['http', 'A website — HTTP or HTTPS'],
+             ['stream', 'Raw TCP — MQTT, a database, anything that is not a website']]
+                .forEach(([v, t]) => { const o = el('option'); o.value = v; o.textContent = t; kind.appendChild(o); });
+            const kindF = formField('What this port serves',
+                'A website gets a URL. Raw TCP gets the same name on the HTTPS port, with the bytes passed '
+                + 'straight through.', kind);
+
             const authRow = el('label', 'ex-check-row');
             const auth = el('input'); auth.type = 'checkbox'; auth.checked = true;
             const atxt = el('span'); atxt.textContent = 'Require a login to reach it';
             authRow.append(auth, atxt);
-            form.append(subF, authRow);
+
+            const streamNote = el('div', 'ex-hint');
+            streamNote.textContent = 'The service’s own password is the only gate on a stream, and CrowdSec '
+                + 'does not watch it.';
+            streamNote.hidden = true;
+
+            form.append(subF, kindF, authRow, streamNote);
             const advanced = publishAdvanced(form, c.rootRedirectPath);
+            const isStream = () => kind.value === 'stream';
+            kind.onchange = () => {
+                authRow.hidden = isStream();
+                advanced.adv.hidden = isStream();
+                streamNote.hidden = !isStream();
+            };
 
             const actions = el('div', 'ex-dialog-actions');
             const cancel = el('button', 'ex-btn'); cancel.textContent = 'Cancel';
@@ -4140,9 +4175,16 @@
             subIn.oninput = sync;
             scrim.onclick = (e) => { if (e.target === scrim) close(null); };
             cancel.onclick = () => close(null);
-            ok.onclick = () => { if (subIn.value.trim()) close({ subdomain: subIn.value.trim(),
-                requiresAuth: auth.checked, pathPrefix: advanced.pathPrefix.value.trim(),
-                rootRedirectPath: advanced.redirect.value.trim(), directUrlDisabled: !advanced.direct.checked }); };
+            // A stream carries none of the HTTP answers, so it sends none of them rather than sending
+            // values from controls the operator was never shown.
+            ok.onclick = () => { if (!subIn.value.trim()) return;
+                close(isStream()
+                    ? { subdomain: subIn.value.trim(), stream: true, requiresAuth: false,
+                        pathPrefix: '', rootRedirectPath: '', directUrlDisabled: false }
+                    : { subdomain: subIn.value.trim(), stream: false, requiresAuth: auth.checked,
+                        pathPrefix: advanced.pathPrefix.value.trim(),
+                        rootRedirectPath: advanced.redirect.value.trim(),
+                        directUrlDisabled: !advanced.direct.checked }); };
             document.addEventListener('keydown', onKey);
             sync(); subIn.focus();
         });
@@ -4352,29 +4394,46 @@
         // they are genuinely about different things.
         body.appendChild(section('Access'));
         const authMode = s.authMode || (s.authenticated ? 'social' : 'none');
-        const authSel = el('select', 'ex-input');
-        [['none', 'Public — no sign-in'], ['social', 'Social login (Google)']].forEach(([v, t]) => {
-            const o = el('option'); o.value = v; o.textContent = t; if (v === authMode) o.selected = true;
-            authSel.appendChild(o);
-        });
-        authSel.onchange = () => patchService(s, { authMode: authSel.value },
-            'Could not update the sign-in requirement.');
-        body.appendChild(formField('Sign-in', 'Which login a visitor must pass to reach this service.', authSel));
-        if (authMode === 'social') body.appendChild(allowedGroupsEditor(s));
+        if (s.stream) {
+            // No picker, because there is nothing to pick: the backend refuses a login on a stream, and a
+            // control that can only be refused is worse than none. Say why instead.
+            body.appendChild(hint('Nothing inside a stream is a web request, so Vaier cannot put a login in '
+                + 'front of it and CrowdSec cannot watch it. The service’s own password is the only gate.'));
+        } else {
+            const authSel = el('select', 'ex-input');
+            [['none', 'Public — no sign-in'], ['social', 'Social login (Google)']].forEach(([v, t]) => {
+                const o = el('option'); o.value = v; o.textContent = t; if (v === authMode) o.selected = true;
+                authSel.appendChild(o);
+            });
+            authSel.onchange = () => patchService(s, { authMode: authSel.value },
+                'Could not update the sign-in requirement.');
+            body.appendChild(formField('Sign-in', 'Which login a visitor must pass to reach this service.', authSel));
+            if (authMode === 'social') body.appendChild(allowedGroupsEditor(s));
+        }
 
-        body.appendChild(section('Launchpad'));
-        body.appendChild(formField('Display name', 'The name on its launchpad tile — defaults to the subdomain.',
-            blurInput(s.launchpadAlias || '', '(default)',
-                (val) => patchService(s, { launchpadAlias: val }, 'Could not save the display name.'))));
-        body.appendChild(checkRow('Show a tile for this service on the launchpad', !s.hiddenFromLaunchpad,
-            (checked) => patchService(s, { hiddenFromLaunchpad: !checked },
-                'Could not update the launchpad visibility.')));
+        // The launchpad is a wall of links, and a stream has no link — so it has no tile and no name for one.
+        if (!s.stream) {
+            body.appendChild(section('Launchpad'));
+            body.appendChild(formField('Display name', 'The name on its launchpad tile — defaults to the subdomain.',
+                blurInput(s.launchpadAlias || '', '(default)',
+                    (val) => patchService(s, { launchpadAlias: val }, 'Could not save the display name.'))));
+            body.appendChild(checkRow('Show a tile for this service on the launchpad', !s.hiddenFromLaunchpad,
+                (checked) => patchService(s, { hiddenFromLaunchpad: !checked },
+                    'Could not update the launchpad visibility.')));
+        }
 
         // --- know: what the service is, and the reference behind it -----------------------------------
         //
         // The coordinates — the read-only truth about the route, the name it answers on and its backend.
         body.appendChild(section('About this service'));
-        body.appendChild(kv([
+        body.appendChild(kv(s.stream ? [
+            ['Connect at', coord(s.connectAddress)],
+            ['Route', s.state],
+            ['Backend', coord((s.hostAddress || '') + (s.hostPort ? ':' + s.hostPort : ''))],
+            ['Kind', 'Stream (TCP)'],
+            ['Container image', coord(s.image)],
+            ['Version', coord(s.version)],
+        ] : [
             ['Address', coord(s.dnsAddress)],
             ['Route', s.state],
             ['Backend', coord((s.hostAddress || '') + (s.hostPort ? ':' + s.hostPort : ''))],
@@ -4384,7 +4443,9 @@
         ]));
 
         // Rarely wanted, so folded — but named by what is inside it. "Advanced" said only that the operator
-        // was unlikely to want it, which is not enough to decide whether to open it.
+        // was unlikely to want it, which is not enough to decide whether to open it. Every knob in it is an
+        // HTTP one — a redirect, a URL to probe, a URL to swap — so a stream is not offered the fold at all.
+        if (!s.stream) {
         const adv = disclosure('Root redirect, version probe and the direct LAN link');
         adv.appendChild(formField('Root redirect', 'Send the bare address straight on to a sub-path.',
             blurInput(s.rootRedirectPath || '', 'e.g. /dashboard',
@@ -4412,12 +4473,16 @@
             (checked) => patchService(s, { directUrlDisabled: !checked },
                 'Could not update the direct LAN URL setting.')));
         body.appendChild(adv);
+        }
 
         // The point of the single namespace, said plainly. These three are not three things that happen to
         // share a name — they are one service, and when one of them is wrong the service is down.
         body.appendChild(note('A published service is one thing with three homes: a container on '
             + machineName + ', a route through Traefik, and the name it answers on — '
-            + (s.dnsAddress || 'its name') + '. Unpublishing removes the route; the name goes on resolving '
+            + (s.dnsAddress || 'its name') + '. '
+            + (s.stream ? 'Traefik answers that name on 443, proves it with a Let’s Encrypt certificate, '
+                + 'and hands the bytes to the backend port unchanged. ' : '')
+            + 'Unpublishing removes the route; the name goes on resolving '
             + 'under your wildcard record, which is yours and Vaier never touches. The container keeps '
             + 'running — the machine that hosts it does not notice.', false));
 

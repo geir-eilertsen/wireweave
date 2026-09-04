@@ -502,7 +502,7 @@
                     <path d="M12 2v6M12 16v6M2 12h6M16 12h6M5 5l4 4M19 5l-4 4M5 19l4-4M19 19l-4-4"/>
                 </svg>
                 <h3>One-click service publishing</h3>
-                <p>Any container on any peer becomes a public HTTPS subdomain in one click — no DNS step, since the name already resolves under your wildcard record — with automatic rollback if the route fails.</p>
+                <p>Any container on any peer becomes a public HTTPS subdomain in one click — no DNS step, since the name already resolves under your wildcard record — with automatic rollback if the route fails. A port that isn&rsquo;t a website, like an MQTT broker, is published as a stream on the same name and the same HTTPS port: Traefik terminates TLS and passes the bytes straight through.</p>
             </div>
             <div class="feature">
                 <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -640,7 +640,8 @@
                 Every published service resolves under your one wildcard DNS record to the single Vaier
                 server, terminates TLS at Traefik, optionally passes social-login authorization (Google or
                 GitHub via oauth2-proxy, then Vaier's own access check), and is proxied over WireGuard to
-                the container running on a peer. The peers never need a public IP.
+                the container running on a peer. A stream takes the same path as far as TLS and then
+                forwards raw bytes. The peers never need a public IP.
             </p>
         </div>
     </section>

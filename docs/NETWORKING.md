@@ -117,13 +117,17 @@ Siblings on one host are independent: each is published and unpublished on its o
 
 For publishing services from non-peer LAN machines (NAS, printers, extra Docker hosts), see [`docs/ADVANCED.md`](ADVANCED.md).
 
-### Services Vaier can't publish
+### Publishing a port that is not a website
 
-Publishing routes **HTTP(S) only**. The port you enter is the *backend* port — the port Traefik connects to on the machine — and never the port clients connect on: every published route is bound to the `websecure` entrypoint, so visitors always arrive on 443. A service speaking its own protocol on its own port (Synology Drive's sync agent on 6690, SMB, a database, a game server) therefore cannot be published. Nothing stops you typing its port into the publish form, since the only check is that the number is in range — but the result is a route that answers on 443 with HTTP, speaks HTTP at a backend that doesn't understand it, and sits on the launchpad looking exactly like a working service.
+When you publish, you say whether the port serves a **website** or **raw TCP**. Either way the port you enter is the *backend* port — the port Traefik connects to on the machine — and never the port clients connect on: every published route is bound to the `websecure` entrypoint, so visitors always arrive on 443.
 
-Reach those over the VPN instead, at the machine's LAN address and its real port. A LAN server behind a relay peer is reachable from every connected peer, so `192.168.x.y:6690` works from anywhere on the fleet — no route to publish, no port exposed to the internet, and the transport is already encrypted by WireGuard, so the service's own TLS can usually be turned off. Publish the HTTP half as normal: a NAS's web UI on its own subdomain, its sync agent over the tunnel.
+A raw-TCP port is published as a **stream**. Vaier writes a Traefik TCP router matched by `HostSNI(...)` on that same 443 entrypoint, with the same Let's Encrypt resolver — Traefik issues the hostname's certificate through the HTTP-01 challenge on port 80 exactly as it does for an HTTP router. It terminates TLS, then forwards the decrypted bytes to the backend port unchanged. Clients connect to `mqtt.example.com:443` over TLS and speak MQTT, or Postgres, or whatever the service speaks. Many streams share the one entrypoint, because `HostSNI` reads the name out of the TLS handshake — so a stream is the same hot file write every other publish is: no compose edit, no new host port, no Traefik restart, no firewall rule.
 
-Traefik can route raw TCP, but not on the terms publishing runs on. A TCP router needs its own entrypoint, and entrypoints are *static* config — a compose edit, a republished host port, a Traefik restart and a firewall rule per service, where every published service today is a hot file write with no downtime. It would also arrive without the things publishing means: no social login, no CrowdSec bouncer, no security headers, none of which exist below HTTP. And `HostSNI` gives one service per port, so the subdomain stops being the service's identity and per-service port bookkeeping comes back — the exact thing the wildcard record was meant to end.
+**A stream cannot be put behind a login, and CrowdSec does not watch it.** Nothing inside a TCP stream is an HTTP request, so there is no request for oauth2-proxy to redirect to Google and none for the CrowdSec bouncer to inspect — both are Traefik HTTP middlewares, and a TCP router takes no middlewares at all. Vaier refuses social login on a stream rather than showing a padlock over an open door. The service's own credentials are the only gate, so publish a stream only for a service whose own authentication you trust, and give it a real password.
+
+A stream also has no URL: it takes no path prefix (`HostSNI` matches the host and nothing else), no root redirect, and it never gets a launchpad tile. Its pane shows the address to dial instead.
+
+If the client cannot speak TLS, the VPN is still the answer. Reach the service over the tunnel at the machine's LAN address and its real port: a LAN server behind a relay peer is reachable from every connected peer, so `192.168.x.y:6690` works from anywhere on the fleet — no port exposed to the internet, and the transport is already encrypted by WireGuard, so the service's own TLS can usually be turned off.
 
 ---
 
