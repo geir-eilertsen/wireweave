@@ -221,15 +221,15 @@ public class ContainerService implements
      * is worth repainting. Without it the alert mail arrives while every open Explorer still shows no mark.
      */
     @Override
-    public Map<ScopedImage, UpdateAvailability> sweepImageUpdates() {
+    public ImageUpdateSweep.Result sweepImageUpdates() {
         Map<ScopedImage, UpdateAvailability> before = snapshotStore.imageUpdateVerdicts();
-        Map<ScopedImage, UpdateAvailability> verdicts =
-            ImageUpdateSweep.sweep(everyContainerVaierCanSee(), forResolvingRegistryDigest);
-        snapshotStore.storeImageUpdateVerdicts(verdicts);
-        if (UpdateCheckOutcome.checked(before, verdicts, clock.instant()).worthPublishing()) {
+        ImageUpdateSweep.Result result =
+            ImageUpdateSweep.sweep(everyContainerVaierCanSee(), forResolvingRegistryDigest, clock.instant());
+        snapshotStore.storeImageUpdateVerdicts(result.verdicts());
+        if (UpdateCheckOutcome.checked(before, result.verdicts(), clock.instant()).worthPublishing()) {
             forPublishingEvents.publish(SSE_TOPIC, SSE_EVENT, SSE_DATA);
         }
-        return verdicts;
+        return result;
     }
 
     /**
@@ -259,13 +259,14 @@ public class ContainerService implements
 
         refresh();
         Map<ScopedImage, UpdateAvailability> before = snapshotStore.imageUpdateVerdicts();
-        Map<ScopedImage, UpdateAvailability> after =
-            ImageUpdateSweep.sweepFresh(everyContainerVaierCanSee(), forResolvingRegistryDigest);
-        snapshotStore.storeImageUpdateVerdicts(after);
+        ImageUpdateSweep.Result after =
+            ImageUpdateSweep.sweepFresh(everyContainerVaierCanSee(), forResolvingRegistryDigest,
+                clock.instant());
+        snapshotStore.storeImageUpdateVerdicts(after.verdicts());
         List<ScopedImage> newlyOutOfDate = imageUpdateTracker.update(after);
 
         UpdateCheckOutcome outcome =
-            UpdateCheckOutcome.checked(before, after, admission.lastCheckedAt(), newlyOutOfDate);
+            UpdateCheckOutcome.checked(before, after.verdicts(), admission.lastCheckedAt(), newlyOutOfDate);
         if (outcome.worthPublishing()) {
             forPublishingEvents.publish(SSE_TOPIC, SSE_EVENT, SSE_DATA);
         }
@@ -444,6 +445,12 @@ public class ContainerService implements
         if (settlement.outcome().updated()) {
             log.info("Update of container {} on machine {} settled {}{}", update.containerName(),
                 update.machineId().value(), settlement.outcome(), reason);
+            // The replaced image is still on the host. Not a failed update — housekeeping that did not
+            // happen — so it is said here and never in what the operator is shown.
+            if (settlement.replacedImageDiagnostic() != null) {
+                log.info("Kept {} on machine {}: {}", update.replacedImageReference().orElse(update.image()),
+                    update.machineId().value(), settlement.replacedImageDiagnostic());
+            }
         } else {
             log.warn("Update of container {} on machine {} settled {}{}", update.containerName(),
                 update.machineId().value(), settlement.outcome(), reason);

@@ -2,10 +2,12 @@ package net.vaier.domain;
 
 import net.vaier.domain.port.ForResolvingRegistryDigest;
 
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -37,6 +39,33 @@ public final class ImageUpdateSweep {
     public record MachineContainers(String machineId, List<DockerService> containers) {}
 
     /**
+     * What one sweep learned, and when.
+     *
+     * @param verdicts        what Vaier decided about each container's image, keyed by machine and image
+     * @param registryDigests the digest the registry served, keyed by image STRING — a registry answers
+     *                        about a tag, not about a host
+     * @param sweptAt         when this sweep ran, since the <b>moving tag</b> rule is about when a digest
+     *                        changed rather than about how many sweeps saw it
+     */
+    public record Result(Map<ScopedImage, UpdateAvailability> verdicts,
+                         Map<String, String> registryDigests, Instant sweptAt) {
+
+        /** Copied, so what a sweep built cannot be edited through what it handed out. */
+        public Result {
+            verdicts = verdicts == null ? Map.of() : Map.copyOf(verdicts);
+            registryDigests = registryDigests == null ? Map.of() : Map.copyOf(registryDigests);
+            Objects.requireNonNull(sweptAt, "sweptAt");
+        }
+
+        /** Every image STRING the sweep looked at, answered for or not. */
+        public Set<String> sweptImages() {
+            Set<String> images = new LinkedHashSet<>();
+            verdicts.keySet().forEach(scoped -> images.add(scoped.image()));
+            return images;
+        }
+    }
+
+    /**
      * Judge every container's image, keyed by the {@link ScopedImage} it is — image <b>and</b> the machine it
      * runs on, so the same tag on two hosts is two verdicts rather than one last-wins collapse.
      *
@@ -45,9 +74,9 @@ public final class ImageUpdateSweep {
      * digest, built locally, an unparseable name — are reported {@link UpdateAvailability#UNKNOWN} without the
      * registry ever being asked.
      */
-    public static Map<ScopedImage, UpdateAvailability> sweep(List<MachineContainers> machines,
-                                                             ForResolvingRegistryDigest registry) {
-        return sweep(machines, registry, false);
+    public static Result sweep(List<MachineContainers> machines, ForResolvingRegistryDigest registry,
+                               Instant sweptAt) {
+        return sweep(machines, registry, sweptAt, false);
     }
 
     /**
@@ -63,17 +92,16 @@ public final class ImageUpdateSweep {
      * matters more here, not less, since nothing else stands between an impatient click and the rate limit),
      * nothing asked about an image that cannot drift, and a failure ruled unknown rather than outdated.
      */
-    public static Map<ScopedImage, UpdateAvailability> sweepFresh(List<MachineContainers> machines,
-                                                                  ForResolvingRegistryDigest registry) {
-        return sweep(machines, registry, true);
+    public static Result sweepFresh(List<MachineContainers> machines, ForResolvingRegistryDigest registry,
+                                    Instant sweptAt) {
+        return sweep(machines, registry, sweptAt, true);
     }
 
-    private static Map<ScopedImage, UpdateAvailability> sweep(List<MachineContainers> machines,
-                                                              ForResolvingRegistryDigest registry,
-                                                              boolean fresh) {
+    private static Result sweep(List<MachineContainers> machines, ForResolvingRegistryDigest registry,
+                                Instant sweptAt, boolean fresh) {
         Map<ScopedImage, UpdateAvailability> verdicts = new LinkedHashMap<>();
         if (machines == null || machines.isEmpty()) {
-            return verdicts;
+            return new Result(verdicts, Map.of(), sweptAt);
         }
 
         // One question per distinct image STRING, never per (machine, image): the same tag resolves to the
@@ -102,7 +130,7 @@ public final class ImageUpdateSweep {
                     UpdateAvailability.compare(container.imageDigest(), registryDigests.get(image)));
             }
         }
-        return verdicts;
+        return new Result(verdicts, registryDigests, sweptAt);
     }
 
     /**

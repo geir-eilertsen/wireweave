@@ -4,12 +4,10 @@ import lombok.extern.slf4j.Slf4j;
 import net.vaier.application.SweepImageUpdatesUseCase;
 import net.vaier.domain.ImageUpdateTracker;
 import net.vaier.domain.ScopedImage;
-import net.vaier.domain.UpdateAvailability;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
-import java.util.Map;
 
 /**
  * Asks the registries once a day whether anything in the fleet has an <b>update available</b>, and mails admins
@@ -62,8 +60,7 @@ public class ImageUpdateWatcher {
     @Scheduled(fixedDelay = ONE_DAY_MS, initialDelay = INITIAL_DELAY_MS)
     public void checkForImageUpdates() {
         try {
-            Map<ScopedImage, UpdateAvailability> verdicts = sweep.sweepImageUpdates();
-            List<ScopedImage> newlyOutOfDate = tracker.update(verdicts);
+            List<ScopedImage> newlyOutOfDate = tracker.update(sweep.sweepImageUpdates());
             alerter.alert(newlyOutOfDate);
         } catch (Exception e) {
             // A dead Docker host or a dead registry: neither may kill the schedule.

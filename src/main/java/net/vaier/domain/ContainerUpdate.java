@@ -19,6 +19,10 @@ import java.util.Optional;
  * a failed pull from a failed recreate. A recreate that fails leaves the old container running, which is the
  * good outcome of a bad update, and Vaier says so instead of reporting a generic error.
  *
+ * <p><b>And a third run that cannot fail the update:</b> once the container really is on the newer image,
+ * the image it replaced is removed — see {@link #removeReplacedImageCommand}. It is reached on no other
+ * outcome, and a removal Docker refuses leaves the update <b>updated</b>.
+ *
  * <p><b>Over SSH, never through the Docker API.</b> Recreating a container through the daemon would mean
  * granting create and remove on the socket proxy whose whole job is to be narrow, and rebuilding a container
  * from its {@code inspect} output means re-deriving networks, volumes, env, labels, restart policy and
@@ -31,7 +35,7 @@ import java.util.Optional;
  * can only mean coordinates built without that validation — is refused outright rather than emitted.
  */
 public record ContainerUpdate(MachineId machineId, String containerName, String image,
-                              ComposeCoordinates coordinates) {
+                              String replacedImageDigest, ComposeCoordinates coordinates) {
 
     /**
      * How long a {@code compose pull} may take. Minutes, not seconds: an image is hundreds of megabytes and
@@ -42,6 +46,9 @@ public record ContainerUpdate(MachineId machineId, String containerName, String 
 
     /** How long a {@code compose up -d} may take — a stop, a create and a start, not a download. */
     public static final Duration RECREATE_TIMEOUT = Duration.ofMinutes(5);
+
+    /** How long removing the replaced image may take. A metadata delete, not a download. */
+    public static final Duration REMOVE_TIMEOUT = Duration.ofMinutes(2);
 
     /**
      * Where a settled update is announced: the fleet stream the Explorer already holds open for peer
@@ -78,7 +85,7 @@ public record ContainerUpdate(MachineId machineId, String containerName, String 
         // it is the key half of the ScopedImage whose verdict an update retires, and a re-derived one
         // that spelled the tag differently would retire nothing while looking as if it had.
         return new ContainerUpdate(machineId, containerName, container.image(),
-            container.composeCoordinates());
+            container.imageDigest(), container.composeCoordinates());
     }
 
     /**
@@ -104,6 +111,72 @@ public record ContainerUpdate(MachineId machineId, String containerName, String 
     /** {@code docker compose … up -d <service>} — recreate the service on the image just pulled. */
     public String recreateCommand() {
         return composeCommand("up -d");
+    }
+
+    /**
+     * {@code docker image rm <repository>@<digest>} — the image this container ran <b>before</b> the update,
+     * or empty when Vaier cannot name it.
+     *
+     * <p><b>Why at all.</b> An update pulls a new image and leaves the old one behind, untagged and unused.
+     * On a nightly channel that is one abandoned image per update: Colina 27 had accumulated 16 dangling
+     * images and 11.4 GiB, almost all superseded netdata nightlies, on a machine whose disk Vaier itself
+     * raises alerts about. What an update replaces, an update clears up.
+     *
+     * <p><b>Named by digest, never by tag.</b> After the pull the tag points at the NEW image — removing by
+     * tag would delete exactly what the container was just recreated on. The digest is the one the scrape
+     * read from the running container's {@code RepoDigests} before any of this began.
+     *
+     * <p><b>Exactly one image, and no force.</b> No {@code prune}, no {@code -a}, no {@code --force}: Docker
+     * refuses to remove an image another container still runs, and that refusal is a feature here — it is
+     * what makes an over-eager cleanup impossible on somebody else's machine. Its refusal is not the only
+     * guard, though: see {@link #replacedImageStillRunningCommand} for the case it answers with an untag
+     * rather than a refusal.
+     */
+    public Optional<String> removeReplacedImageCommand() {
+        return replacedImageReference()
+            .map(reference -> "docker image rm " + quoted(reference));
+    }
+
+    /**
+     * {@code docker ps -q --filter ancestor=…} — the question asked before the removal: does anything on
+     * this host still run the digest Vaier is about to delete?
+     *
+     * <p><b>Without it an update that changed nothing blinds Vaier about that container.</b> The operator
+     * pulls by hand, then clicks Update to clear the mark: the pull finds nothing newer, {@code up -d} exits
+     * 0, and the 30-second scrape has already moved the container's <b>image digest</b> on — so the image
+     * "replaced" is the one still running. Docker's answer to {@code rm} on a canonical reference of a
+     * still-tagged image is not a refusal but an <b>untag</b>, quiet and exit 0, which strips the
+     * {@code RepoDigests} every later sweep reads. The container then reports no digest, its verdict is
+     * {@link UpdateAvailability#UNKNOWN} forever, and the mark is gone for good.
+     *
+     * <p>Read-only, and it decides nothing on the host: it asks, and the domain rules what the answer means.
+     */
+    public Optional<String> replacedImageStillRunningCommand() {
+        return replacedImageReference()
+            .map(reference -> "docker ps -q --filter ancestor=" + quoted(reference));
+    }
+
+    /**
+     * The replaced image as {@code <repository>@<digest>}, or empty when Vaier cannot name it — no readable
+     * digest (built locally, or an inspect that failed), or an image already pinned by digest, in which case
+     * the pull replaced nothing. Guessing at a name would be guessing at what to delete.
+     */
+    public Optional<String> replacedImageReference() {
+        if (replacedImageDigest == null || replacedImageDigest.isBlank() || image.contains("@")) {
+            return Optional.empty();
+        }
+        return Optional.of(repositoryOf(image) + "@" + replacedImageDigest);
+    }
+
+    /**
+     * The image string without its tag, as the host spells it — {@code netdata/netdata:latest} becomes
+     * {@code netdata/netdata}. Deliberately not {@link ImageReference}'s repository, which normalises
+     * {@code redis} to {@code library/redis} for the benefit of a registry API; this name has to be one
+     * the machine's own Docker will recognise.
+     */
+    private static String repositoryOf(String image) {
+        int tagColon = image.lastIndexOf(':');
+        return tagColon > image.lastIndexOf('/') ? image.substring(0, tagColon) : image;
     }
 
     /**
@@ -176,8 +249,24 @@ public record ContainerUpdate(MachineId machineId, String containerName, String 
      * @param diagnostic why it ended that way, in the host's words — or null when there is nothing to
      *                   explain (an update that worked) or nothing was said (a command that failed
      *                   silently). Already reduced to one bounded line: see {@link #summarise}.
+     * @param replacedImageDiagnostic why the image this update replaced could not be removed, in the
+     *                   host's words — or null when it was removed, or when there was none to remove.
+     *                   Kept apart from {@code diagnostic} on purpose: a removal Docker refused is
+     *                   housekeeping that did not happen, not an update that failed, so it reaches the
+     *                   log and never the operator's sentence.
      */
-    public record Settlement(ContainerUpdateOutcome outcome, String diagnostic) {
+    public record Settlement(ContainerUpdateOutcome outcome, String diagnostic,
+                             String replacedImageDiagnostic) {
+
+        /** A settlement with nothing to say about the image it replaced — removed, or none to remove. */
+        public Settlement(ContainerUpdateOutcome outcome, String diagnostic) {
+            this(outcome, diagnostic, null);
+        }
+
+        /** This settlement, plus why the replaced image is still on the host. The outcome is untouched. */
+        Settlement withReplacedImageDiagnostic(String reason) {
+            return new Settlement(outcome, diagnostic, reason);
+        }
 
         /**
          * How much of the host's words the operator is shown. A toast is not a log viewer, and the captured
@@ -280,7 +369,58 @@ public record ContainerUpdate(MachineId machineId, String containerName, String 
             return Settlement.of(pullFailure.get(), pull);
         }
         CommandResult recreate = ssh.run(target, recreateCommand(), RECREATE_TIMEOUT);
-        return Settlement.of(ContainerUpdateOutcome.ofRecreate(recreate), recreate);
+        Settlement settlement = Settlement.of(ContainerUpdateOutcome.ofRecreate(recreate), recreate);
+        return settlement.outcome().updated() ? removeReplacedImage(target, ssh, settlement) : settlement;
+    }
+
+    /**
+     * Remove the image this update replaced, and <b>never let it change how the update ended</b>.
+     *
+     * <p>Only ever reached on {@link ContainerUpdateOutcome#UPDATED}. After a failed pull, a failed recreate
+     * or a timeout the old image is still what is running, and removing it would turn the survivable
+     * failure — the one this domain goes out of its way to report as survivable — into an outage.
+     *
+     * <p>A refusal is expected and is not a fault: Docker will not remove an image another container runs.
+     * The reason is carried out as data so the log can say what is still on the host, and the operator is
+     * told their container was updated, because it was.
+     */
+    private Settlement removeReplacedImage(SshTarget target, ForRunningSshCommands ssh,
+                                           Settlement settlement) {
+        try {
+            // Rendering is inside the try too: a command that cannot be built must not escape past a
+            // recreate that worked and be classified as never having reached the host.
+            Optional<String> command = removeReplacedImageCommand();
+            if (command.isEmpty()) {
+                return settlement;
+            }
+            CommandResult running =
+                ssh.run(target, replacedImageStillRunningCommand().orElseThrow(), REMOVE_TIMEOUT);
+            if (!provesNothingRunsIt(running)) {
+                return settlement.withReplacedImageDiagnostic(
+                    "Something on the host still runs that image, or Vaier could not rule it out");
+            }
+            CommandResult removed = ssh.run(target, command.get(), REMOVE_TIMEOUT);
+            if (!removed.timedOut() && removed.exitCode() == 0) {
+                return settlement;
+            }
+            String reason = Settlement.summarise(removed);
+            return settlement.withReplacedImageDiagnostic(
+                reason == null ? "removal exited " + removed.exitCode() : reason);
+        } catch (Exception e) {
+            String message = e.getMessage();
+            return settlement.withReplacedImageDiagnostic(e.getClass().getSimpleName()
+                + (message == null ? "" : ": " + message));
+        }
+    }
+
+    /**
+     * Whether the ancestor question came back a clean "nothing". Only a run that <b>succeeded</b> and named
+     * no container clears the removal: a check Vaier could not read is not a no, and the cost of guessing
+     * wrong is that container's verdict going unknowable for good.
+     */
+    private static boolean provesNothingRunsIt(CommandResult running) {
+        return !running.timedOut() && running.exitCode() == 0
+            && (running.stdout() == null || running.stdout().isBlank());
     }
 
     /**

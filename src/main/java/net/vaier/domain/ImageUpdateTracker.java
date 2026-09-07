@@ -1,6 +1,7 @@
 package net.vaier.domain;
 
 import net.vaier.domain.port.ForPersistingImageUpdateState;
+import net.vaier.domain.port.ForStoringContainerSnapshots;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -50,23 +51,45 @@ public class ImageUpdateTracker {
      */
     private final ForPersistingImageUpdateState knownOutOfDate;
 
-    public ImageUpdateTracker(ForPersistingImageUpdateState knownOutOfDate) {
+    /**
+     * Where the <b>moving tags</b> this tracker works out are written, so the containers the Explorer reads
+     * carry the same fact. The tracker is the one place that holds the digest history, so it is the one
+     * place that can say which tags are channels — and a domain operation that needs infrastructure is
+     * handed the driven port and calls it.
+     */
+    private final ForStoringContainerSnapshots snapshots;
+
+    public ImageUpdateTracker(ForPersistingImageUpdateState knownOutOfDate,
+                              ForStoringContainerSnapshots snapshots) {
         this.knownOutOfDate = knownOutOfDate;
+        this.snapshots = snapshots;
     }
 
     /**
      * Record a sweep's verdicts and report the images-on-a-machine that have <b>just</b> become out of date,
      * ordered by their rendered label so a rollup email reads the same way twice.
      *
-     * <p>Entries absent from {@code verdicts} are forgotten: the container is gone, and if that image ever
+     * <p>Entries absent from {@code sweep} are forgotten: the container is gone, and if that image ever
      * comes back stale on that machine it is news again rather than a silence.
+     *
+     * <p><b>A moving tag earns the mark and never the mail.</b> {@code netdata/netdata:latest} is Docker
+     * Hub's {@code :edge} — a nightly — so every morning's sweep truthfully finds it out of date and the
+     * operator was mailed about it every morning. The verdict is right; the alert is not, because a tag that
+     * moves every night is a channel rather than trouble. So the sweep's registry answers advance a
+     * {@link RegistryDigestHistory}, and an image whose tag has shown that rhythm is latched without being
+     * reported.
      */
-    public synchronized List<ScopedImage> update(Map<ScopedImage, UpdateAvailability> verdicts) {
+    public synchronized List<ScopedImage> update(ImageUpdateSweep.Result sweep) {
         Set<ScopedImage> known = knownOutOfDate.loadOutOfDate();
         Set<ScopedImage> stillOutOfDate = new LinkedHashSet<>();
         List<ScopedImage> newlyOutOfDate = new ArrayList<>();
 
-        for (Map.Entry<ScopedImage, UpdateAvailability> entry : verdicts.entrySet()) {
+        RegistryDigestHistory history = knownOutOfDate.loadRegistryDigestHistory()
+            .after(sweep.sweptImages(), sweep.registryDigests(), sweep.sweptAt());
+        knownOutOfDate.saveRegistryDigestHistory(history);
+        snapshots.storeMovingTags(history.movingImages(sweep.sweptAt()));
+
+        for (Map.Entry<ScopedImage, UpdateAvailability> entry : sweep.verdicts().entrySet()) {
             ScopedImage scoped = entry.getKey();
             UpdateAvailability verdict = entry.getValue();
             if (verdict == null || verdict == UpdateAvailability.UNKNOWN) {
@@ -75,8 +98,13 @@ public class ImageUpdateTracker {
                 continue;
             }
             if (verdict.isUpdateAvailable()) {
+                // Latched either way — including for a moving tag. Recording the change is what stops the
+                // silence ending in a backlog: when the tag finally settles, the operator is told about its
+                // NEXT change rather than about one from days ago that nothing was ever going to be done to.
                 stillOutOfDate.add(scoped);
-                if (!known.contains(scoped)) newlyOutOfDate.add(scoped);
+                if (!known.contains(scoped) && !history.isMoving(scoped.image(), sweep.sweptAt())) {
+                    newlyOutOfDate.add(scoped);
+                }
             }
         }
 

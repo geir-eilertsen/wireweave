@@ -7,6 +7,7 @@ import net.vaier.domain.port.ForDiscoveringPeerContainers.PeerContainers;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Driven port for the write/owner side of the cached container snapshots. The peer- and
@@ -27,6 +28,13 @@ public interface ForStoringContainerSnapshots {
 
     /** Replace the last image-update sweep's verdicts (image → verdict). */
     void storeImageUpdateVerdicts(Map<ScopedImage, UpdateAvailability> verdicts);
+
+    /**
+     * Replace the set of image strings that are <b>moving tags</b>, so the Explorer can say why an image
+     * wears the <b>update available</b> mark and yet raises no alert. By image STRING: a registry answers
+     * about a tag, not about a host.
+     */
+    void storeMovingTags(Set<String> images);
 
     /**
      * Forget the remembered verdict for one {@link ScopedImage}, so it reads

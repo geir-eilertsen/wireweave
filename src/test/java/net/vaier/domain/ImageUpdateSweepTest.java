@@ -4,12 +4,15 @@ import net.vaier.domain.ImageUpdateSweep.MachineContainers;
 import net.vaier.domain.port.ForResolvingRegistryDigest;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNullPointerException;
+import static org.assertj.core.api.Assertions.entry;
 
 class ImageUpdateSweepTest {
 
@@ -51,12 +54,26 @@ class ImageUpdateSweepTest {
         return List.of(new MachineContainers(machine, List.of(containers)));
     }
 
+    private static final Instant SWEPT_AT = Instant.parse("2026-09-01T01:40:00Z");
+
+    /** A daily sweep's verdicts alone — most tests here are about the verdict and not the answers. */
+    private static Map<ScopedImage, UpdateAvailability> sweptVerdicts(List<MachineContainers> machines,
+                                                                      ForResolvingRegistryDigest registry) {
+        return ImageUpdateSweep.sweep(machines, registry, SWEPT_AT).verdicts();
+    }
+
+    /** An operator update check's verdicts alone. */
+    private static Map<ScopedImage, UpdateAvailability> freshVerdicts(List<MachineContainers> machines,
+                                                                      ForResolvingRegistryDigest registry) {
+        return ImageUpdateSweep.sweepFresh(machines, registry, SWEPT_AT).verdicts();
+    }
+
     @Test
     void flagsAContainerWhoseRegistryServesANewerDigestForItsTag() {
         FakeRegistry registry = new FakeRegistry(
             Map.of("registry-1.docker.io/vaultwarden/server:latest", "sha256:new"));
 
-        Map<ScopedImage, UpdateAvailability> verdicts = ImageUpdateSweep.sweep(
+        Map<ScopedImage, UpdateAvailability> verdicts = sweptVerdicts(
             on(HOST, container("vaultwarden", "vaultwarden/server:latest", "sha256:old")), registry);
 
         assertThat(verdicts).containsEntry(
@@ -68,7 +85,7 @@ class ImageUpdateSweepTest {
         FakeRegistry registry = new FakeRegistry(
             Map.of("registry-1.docker.io/vaultwarden/server:latest", "sha256:same"));
 
-        Map<ScopedImage, UpdateAvailability> verdicts = ImageUpdateSweep.sweep(
+        Map<ScopedImage, UpdateAvailability> verdicts = sweptVerdicts(
             on(HOST, container("vaultwarden", "vaultwarden/server:latest", "sha256:same")), registry);
 
         assertThat(verdicts).containsEntry(
@@ -81,7 +98,7 @@ class ImageUpdateSweepTest {
         FakeRegistry registry = new FakeRegistry(Map.of());
         registry.blowUp = new RuntimeException("connection refused");
 
-        Map<ScopedImage, UpdateAvailability> verdicts = ImageUpdateSweep.sweep(
+        Map<ScopedImage, UpdateAvailability> verdicts = sweptVerdicts(
             on(HOST, container("vaultwarden", "vaultwarden/server:latest", "sha256:old")), registry);
 
         assertThat(verdicts).containsEntry(
@@ -101,7 +118,7 @@ class ImageUpdateSweepTest {
             }
         };
 
-        Map<ScopedImage, UpdateAvailability> verdicts = ImageUpdateSweep.sweep(on(HOST,
+        Map<ScopedImage, UpdateAvailability> verdicts = sweptVerdicts(on(HOST,
             container("vaultwarden", "vaultwarden/server:latest", "sha256:old"),
             container("redis", "redis:7.2", "sha256:old")), registry);
 
@@ -113,7 +130,7 @@ class ImageUpdateSweepTest {
 
     @Test
     void aTagTheRegistryDoesNotServeIsUnknown() {
-        Map<ScopedImage, UpdateAvailability> verdicts = ImageUpdateSweep.sweep(
+        Map<ScopedImage, UpdateAvailability> verdicts = sweptVerdicts(
             on(HOST, container("app", "vaultwarden/server:latest", "sha256:old")), new FakeRegistry(Map.of()));
 
         assertThat(verdicts).containsEntry(
@@ -124,7 +141,7 @@ class ImageUpdateSweepTest {
     void aLocallyBuiltImageIsUnknownAndTheRegistryIsNeverAsked() {
         FakeRegistry registry = new FakeRegistry(Map.of());
 
-        Map<ScopedImage, UpdateAvailability> verdicts = ImageUpdateSweep.sweep(
+        Map<ScopedImage, UpdateAvailability> verdicts = sweptVerdicts(
             on(HOST, container("built", "my-local-build:latest", null)), registry);
 
         assertThat(verdicts).containsEntry(
@@ -136,7 +153,7 @@ class ImageUpdateSweepTest {
     void aDigestPinnedImageIsUnknownAndTheRegistryIsNeverAsked() {
         FakeRegistry registry = new FakeRegistry(Map.of());
 
-        Map<ScopedImage, UpdateAvailability> verdicts = ImageUpdateSweep.sweep(
+        Map<ScopedImage, UpdateAvailability> verdicts = sweptVerdicts(
             on(HOST, container("pinned", "vaultwarden/server@sha256:abc", "sha256:abc")), registry);
 
         assertThat(verdicts).containsEntry(
@@ -150,7 +167,7 @@ class ImageUpdateSweepTest {
         FakeRegistry registry = new FakeRegistry(
             Map.of("registry-1.docker.io/library/redis:7.2", "sha256:new"));
 
-        ImageUpdateSweep.sweep(on(HOST,
+        sweptVerdicts(on(HOST,
             container("redis-a", "redis:7.2", "sha256:old"),
             container("redis-b", "redis:7.2", "sha256:old"),
             container("redis-c", "redis:7.2", "sha256:old")), registry);
@@ -164,7 +181,7 @@ class ImageUpdateSweepTest {
         FakeRegistry registry = new FakeRegistry(
             Map.of("registry-1.docker.io/library/redis:7.2", "sha256:new"));
 
-        Map<ScopedImage, UpdateAvailability> verdicts = ImageUpdateSweep.sweep(on(HOST,
+        Map<ScopedImage, UpdateAvailability> verdicts = sweptVerdicts(on(HOST,
             new DockerService("id", "redis", "redis:7.2", "v", List.of(), List.of("bridge"), "exited",
                 "sha256:old", UpdateAvailability.UNKNOWN)), registry);
 
@@ -176,7 +193,7 @@ class ImageUpdateSweepTest {
     void anEmptyScrapeAsksNothingAndDecidesNothing() {
         FakeRegistry registry = new FakeRegistry(Map.of());
 
-        assertThat(ImageUpdateSweep.sweep(List.of(), registry)).isEmpty();
+        assertThat(sweptVerdicts(List.of(), registry)).isEmpty();
         assertThat(registry.asked).isEmpty();
     }
 
@@ -191,7 +208,7 @@ class ImageUpdateSweepTest {
         FakeRegistry registry = new FakeRegistry(
             Map.of("registry-1.docker.io/vaultwarden/server:latest", "sha256:new"));
 
-        Map<ScopedImage, UpdateAvailability> verdicts = ImageUpdateSweep.sweep(List.of(
+        Map<ScopedImage, UpdateAvailability> verdicts = sweptVerdicts(List.of(
             new MachineContainers("Apalveien 5",
                 List.of(container("vw-a", "vaultwarden/server:latest", "sha256:old"))),
             new MachineContainers("Colina 27",
@@ -211,7 +228,7 @@ class ImageUpdateSweepTest {
         FakeRegistry registry = new FakeRegistry(
             Map.of("registry-1.docker.io/vaultwarden/server:latest", "sha256:new"));
 
-        ImageUpdateSweep.sweep(List.of(
+        sweptVerdicts(List.of(
             new MachineContainers("Apalveien 5",
                 List.of(container("vw-a", "vaultwarden/server:latest", "sha256:old"))),
             new MachineContainers("Colina 27",
@@ -230,7 +247,7 @@ class ImageUpdateSweepTest {
         FakeRegistry registry = new FakeRegistry(
             Map.of("registry-1.docker.io/vaultwarden/server:latest", "sha256:same"));
 
-        ImageUpdateSweep.sweepFresh(
+        freshVerdicts(
             on(HOST, container("vaultwarden", "vaultwarden/server:latest", "sha256:same")), registry);
 
         assertThat(registry.askedNow).containsExactly("registry-1.docker.io/vaultwarden/server:latest");
@@ -244,7 +261,7 @@ class ImageUpdateSweepTest {
         FakeRegistry registry = new FakeRegistry(
             Map.of("registry-1.docker.io/vaultwarden/server:latest", "sha256:Y"));
 
-        Map<ScopedImage, UpdateAvailability> verdicts = ImageUpdateSweep.sweepFresh(
+        Map<ScopedImage, UpdateAvailability> verdicts = freshVerdicts(
             on(HOST, container("vaultwarden", "vaultwarden/server:latest", "sha256:Y")), registry);
 
         assertThat(verdicts).containsEntry(
@@ -257,7 +274,7 @@ class ImageUpdateSweepTest {
         FakeRegistry registry = new FakeRegistry(Map.of());
         registry.blowUp = new RuntimeException("rate limited");
 
-        Map<ScopedImage, UpdateAvailability> verdicts = ImageUpdateSweep.sweepFresh(
+        Map<ScopedImage, UpdateAvailability> verdicts = freshVerdicts(
             on(HOST, container("vaultwarden", "vaultwarden/server:latest", "sha256:old")), registry);
 
         assertThat(verdicts).containsEntry(
@@ -271,7 +288,7 @@ class ImageUpdateSweepTest {
         FakeRegistry registry = new FakeRegistry(
             Map.of("registry-1.docker.io/library/redis:7.2", "sha256:new"));
 
-        ImageUpdateSweep.sweepFresh(on(HOST,
+        freshVerdicts(on(HOST,
             container("redis-a", "redis:7.2", "sha256:old"),
             container("redis-b", "redis:7.2", "sha256:old"),
             container("redis-c", "redis:7.2", "sha256:old")), registry);
@@ -285,7 +302,7 @@ class ImageUpdateSweepTest {
         // spend the rate limit on a question with no answer.
         FakeRegistry registry = new FakeRegistry(Map.of());
 
-        Map<ScopedImage, UpdateAvailability> verdicts = ImageUpdateSweep.sweepFresh(on(HOST,
+        Map<ScopedImage, UpdateAvailability> verdicts = freshVerdicts(on(HOST,
             container("built", "my-local-build:latest", null),
             container("pinned", "vaultwarden/server@sha256:abc", "sha256:abc")), registry);
 
@@ -295,5 +312,82 @@ class ImageUpdateSweepTest {
             new ScopedImage(HOST, "vaultwarden/server@sha256:abc"), UpdateAvailability.UNKNOWN);
         assertThat(registry.askedNow).isEmpty();
         assertThat(registry.asked).isEmpty();
+    }
+
+    // --- the registry answers the sweep resolved, so a moving tag can be told from a settled one ---------
+
+    @Test
+    void theSweepReportsTheRegistryDigestItResolved_keyedByImageStringRatherThanByMachine() {
+        // The registry answers about a TAG, not about a host — the same tag resolves to the same digest
+        // everywhere — so the answers come back per image string, which is what a digest history is kept by.
+        FakeRegistry registry = new FakeRegistry(
+            Map.of("registry-1.docker.io/vaultwarden/server:latest", "sha256:new"));
+
+        ImageUpdateSweep.Result result = ImageUpdateSweep.sweep(List.of(
+            new MachineContainers("apalveien5",
+                List.of(container("vaultwarden", "vaultwarden/server:latest", "sha256:old"))),
+            new MachineContainers("colina27",
+                List.of(container("vaultwarden", "vaultwarden/server:latest", "sha256:old")))),
+            registry, SWEPT_AT);
+
+        assertThat(result.registryDigests())
+            .containsExactly(entry("vaultwarden/server:latest", "sha256:new"));
+    }
+
+    @Test
+    void anImageTheRegistryCouldNotAnswerForCarriesNoDigest_soItReadsAsSilenceAndNotAsAChange() {
+        FakeRegistry registry = new FakeRegistry(Map.of());
+        registry.blowUp = new RuntimeException("429 Too Many Requests");
+
+        ImageUpdateSweep.Result result = ImageUpdateSweep.sweep(
+            on(HOST, container("vaultwarden", "vaultwarden/server:latest", "sha256:old")), registry, SWEPT_AT);
+
+        assertThat(result.registryDigests()).isEmpty();
+        assertThat(result.sweptImages()).containsExactly("vaultwarden/server:latest");
+    }
+
+    @Test
+    void sweptImages_namesEveryImageTheSweepLookedAt_soAnImageNoLongerRunningCanBeForgotten() {
+        FakeRegistry registry = new FakeRegistry(
+            Map.of("registry-1.docker.io/vaultwarden/server:latest", "sha256:new"));
+
+        ImageUpdateSweep.Result result = ImageUpdateSweep.sweep(on(HOST,
+            container("vaultwarden", "vaultwarden/server:latest", "sha256:old"),
+            container("built", "my-own-image", null)), registry, SWEPT_AT);
+
+        assertThat(result.sweptImages()).containsExactlyInAnyOrder("vaultwarden/server:latest", "my-own-image");
+    }
+
+    @Test
+    void anUpdateCheckReportsItsRegistryAnswersToo_becauseAnUnchangedOneRecordsNothingAnyway() {
+        // A check used to be excluded from the digest history, on the grounds that it lands minutes after a
+        // sweep and would answer the same digest. That exclusion is gone: the history only records a digest
+        // that DIFFERS from the last one, so a repeat answer is already inert — and excluding the check meant
+        // a genuinely new digest the operator found first went unrecorded.
+        FakeRegistry registry = new FakeRegistry(
+            Map.of("registry-1.docker.io/vaultwarden/server:latest", "sha256:new"));
+
+        ImageUpdateSweep.Result result = ImageUpdateSweep.sweepFresh(
+            on(HOST, container("vaultwarden", "vaultwarden/server:latest", "sha256:old")), registry, SWEPT_AT);
+
+        assertThat(result.verdicts()).containsEntry(
+            new ScopedImage(HOST, "vaultwarden/server:latest"), UpdateAvailability.UPDATE_AVAILABLE);
+        assertThat(result.registryDigests())
+            .containsExactly(entry("vaultwarden/server:latest", "sha256:new"));
+    }
+
+    @Test
+    void theSweepCarriesWhenItRan_becauseTheMovingTagRuleIsAboutWhenADigestChanged() {
+        FakeRegistry registry = new FakeRegistry(Map.of());
+
+        assertThat(ImageUpdateSweep.sweep(List.of(), registry, SWEPT_AT).sweptAt()).isEqualTo(SWEPT_AT);
+    }
+
+    @Test
+    void aResultWithoutASweepTime_isRefusedLoudly() {
+        // sweptAt feeds the digest history's arithmetic. A null would surface deep inside it and be swallowed
+        // by the watcher's catch, silently costing that day's sweep.
+        assertThatNullPointerException()
+            .isThrownBy(() -> new ImageUpdateSweep.Result(Map.of(), Map.of(), null));
     }
 }

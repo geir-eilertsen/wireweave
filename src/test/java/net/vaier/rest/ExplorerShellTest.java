@@ -1362,6 +1362,46 @@ class ExplorerShellTest {
         assertThat(updateMarkBody(read("explorer-shell.js"))).contains("S.at");
     }
 
+    @Test
+    void aMovingTagIsNamedOnTheMark_soASilentAlertDoesNotReadAsAMissedOne() throws IOException {
+        // netdata:latest IS Docker Hub's :edge, so that row lights up most mornings and no mail ever comes.
+        // Without a word for it the operator reads the silence as Vaier having missed it. The word is the
+        // glossary's own — "moving tag" — and not a cadence like "nightly", which would promise a rhythm
+        // the rule does not measure. The shell decides nothing here either: whether a tag moves is the
+        // domain's reading, shipped as a flag like the verdict beside it.
+        String body = updateMarkBody(read("explorer-shell.js"));
+        assertThat(body).as("the backend's reading, not the browser's").contains("movingTag");
+        assertThat(body).contains("'moving'");
+        assertThat(body).as("no cadence the rule never measures").doesNotContain("nightly");
+        assertThat(body).as("and the tooltip says what the word costs — no mail")
+            .contains("never mails about it");
+    }
+
+    @Test
+    void theMovingWord_isDimAndUnshaped_becauseATagThatMovesIsNotTrouble() throws IOException {
+        // Same rule the stream kind follows on a route row: colour and shape are reserved for trouble, and
+        // a tag that moves on its own is not trouble. It must not borrow the mark's yellow.
+        String css = read("explorer-shell.css");
+        int from = css.indexOf(".ex-update .ex-moving");
+        assertThat(from).as("the moving word's own rule").isPositive();
+        String block = css.substring(from, css.indexOf("}", from));
+        assertThat(block).contains("var(--text-dim)");
+        assertThat(block).doesNotContain("var(--yellow)").doesNotContain("var(--red)");
+        assertThat(block).as("no shape — no border, no background, no radius")
+            .doesNotContain("border").doesNotContain("background").doesNotContain("radius");
+    }
+
+    @Test
+    void theInspector_explainsWhyAMovingTagRaisesNoMail() throws IOException {
+        // The rail has room for one word; this is the surface with room for the reason.
+        String js = read("explorer-shell.js");
+        int says = js.indexOf("function updateSays(");
+        assertThat(says).isPositive();
+        String body = js.substring(says, js.indexOf("\n    }", says));
+        assertThat(body).contains("movingTag");
+        assertThat(body).contains("a moving tag");
+    }
+
     // --- 16. #57 slice 3: checking the registries on demand --------------------------------------------
     //
     // Slice 2 put the mark on the page but left it up to 24h behind the operator. They read the rollup mail,

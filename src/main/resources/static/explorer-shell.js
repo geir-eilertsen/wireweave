@@ -4763,9 +4763,21 @@
         if (S.at || !container || container.updateAvailable !== 'UPDATE_AVAILABLE') return null;
         const mark = el('span', 'ex-update');
         mark.innerHTML = svg('arrowup', 'ex-ico');
-        mark.title = container.updateEligibility === 'UPDATABLE'
-            ? 'Update available — open this container to update it'
-            : 'Update available — pull this image on the machine yourself';
+        const act = container.updateEligibility === 'UPDATABLE'
+            ? 'open this container to update it'
+            : 'pull this image on the machine yourself';
+        // A moving tag serves a new image every day or so, so this row lights up most mornings and no mail
+        // ever comes. One word says which kind of tag it is; the tooltip says what that costs the operator.
+        // Whether the tag moves is the backend's reading, exactly as the verdict is — see movingTag.
+        if (container.movingTag) {
+            const kind = el('span', 'ex-moving');
+            kind.textContent = 'moving';
+            mark.appendChild(kind);
+            mark.title = 'Update available on a moving tag — this tag has been serving a new image every '
+                + 'day or so, so Vaier marks it here and never mails about it. To take it, ' + act + '.';
+            return mark;
+        }
+        mark.title = 'Update available — ' + act;
         return mark;
     }
 
@@ -4783,9 +4795,13 @@
      * a rule. Say the rule instead. Every other container still gets the domain's verdict, unaltered.
      */
     function updateSays(c) {
-        return c.updateEligibility === 'VAIER_OWN_STACK'
-            ? 'Moves with Vaier — update from Settings'
-            : (UPDATE_SAYS[c.updateAvailable] || UPDATE_SAYS.UNKNOWN);
+        if (c.updateEligibility === 'VAIER_OWN_STACK') return 'Moves with Vaier — update from Settings';
+        const said = UPDATE_SAYS[c.updateAvailable] || UPDATE_SAYS.UNKNOWN;
+        // The one surface with room for the reason, so it is where the silence is explained rather than
+        // left to look like Vaier having missed something.
+        return c.movingTag && c.updateAvailable === 'UPDATE_AVAILABLE'
+            ? said + ' — a moving tag, so Vaier marks it and never mails about it'
+            : said;
     }
 
     // --- the Update action (#352) ----------------------------------------------------------------------

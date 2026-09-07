@@ -57,6 +57,12 @@ class ContainerUpdateTest {
             .build();
     }
 
+    /** A container whose running image Vaier knows the registry digest of — what an update replaces. */
+    private static DockerService imaged(String name, String imageDigest) {
+        return container(name, coordinates(), ContainerUpdateEligibility.UPDATABLE)
+            .toBuilder().imageDigest(imageDigest).build();
+    }
+
     private static ComposeCoordinates coordinates() {
         return new ComposeCoordinates("vaultwarden", "vaultwarden",
             List.of("/home/ubuntu/vaultwarden/docker-compose.yml"), "/home/ubuntu/vaultwarden");
@@ -588,5 +594,215 @@ class ContainerUpdateTest {
         assertThat(data.getValue())
             .contains("\"outcome\":\"RECREATE_FAILED\"")
             .contains(ContainerUpdateOutcome.RECREATE_FAILED.sentence("vaultwarden"));
+    }
+
+    // --- an update removes the image it replaced (11.4 GiB of superseded netdata nightlies) -------------
+
+    @Test
+    void theUpdateRendersTheRemovalOfTheImageItReplaced_addressedByItsOwnDigest() {
+        // Named by digest and never by tag: after the pull the tag points at the NEW image, so removing by
+        // tag would delete exactly the image the container was just recreated on.
+        ContainerUpdate update = ContainerUpdate.of(MACHINE, "vaultwarden",
+            List.of(imaged("vaultwarden", "sha256:old")));
+
+        assertThat(update.removeReplacedImageCommand())
+            .contains("docker image rm 'vaultwarden/server@sha256:old'");
+    }
+
+    @Test
+    void theReplacedImageIsNamedAsTheHostWouldName_it_repositoryAtDigest() {
+        // What the log says was kept must be the reference the removal actually addressed — tag stripped,
+        // digest appended — or an operator retyping it reproduces a different command than the one that failed.
+        ContainerUpdate update = ContainerUpdate.of(MACHINE, "vaultwarden",
+            List.of(imaged("vaultwarden", "sha256:old")));
+
+        assertThat(update.replacedImageReference()).contains("vaultwarden/server@sha256:old");
+    }
+
+    @Test
+    void aContainerWhoseRunningImageHasNoDigestRemovesNothing_becauseVaierCannotNameWhatItReplaced() {
+        // A locally-built image, or one whose inspect failed. Guessing at a name here would be guessing at
+        // what to delete on somebody else's machine.
+        ContainerUpdate update = ContainerUpdate.of(MACHINE, "vaultwarden", List.of(
+            container("vaultwarden", coordinates(), ContainerUpdateEligibility.UPDATABLE)));
+
+        assertThat(update.removeReplacedImageCommand()).isEmpty();
+    }
+
+    @Test
+    void theCommandChainEndsWithTheRemoval_afterThePullTheRecreateAndTheCheckThatNothingRunsIt() {
+        ContainerUpdate update = ContainerUpdate.of(MACHINE, "vaultwarden",
+            List.of(imaged("vaultwarden", "sha256:old")));
+        when(ssh.run(any(), anyString(), any())).thenReturn(ok());
+
+        update.carryOut(TARGET, ssh, hostKeys);
+
+        var order = inOrder(ssh);
+        order.verify(ssh).run(TARGET, update.pullCommand(), ContainerUpdate.PULL_TIMEOUT);
+        order.verify(ssh).run(TARGET, update.recreateCommand(), ContainerUpdate.RECREATE_TIMEOUT);
+        order.verify(ssh).run(TARGET, update.replacedImageStillRunningCommand().orElseThrow(),
+            ContainerUpdate.REMOVE_TIMEOUT);
+        order.verify(ssh).run(TARGET, update.removeReplacedImageCommand().orElseThrow(),
+            ContainerUpdate.REMOVE_TIMEOUT);
+    }
+
+    @Test
+    void aNoOpUpdateRemovesNothing_becauseTheDigestItWouldDeleteIsWhatStillRuns() {
+        // THE blinding bug. The operator pulled by hand, then clicked Update to clear the mark: the pull
+        // finds nothing newer, `up -d` exits 0, and the 30s scrape has ALREADY moved imageDigest on to the
+        // new digest — so the "replaced" image IS the running one. Docker's answer to `rm` on a canonical
+        // reference of a still-tagged image is to UNTAG it, quietly and with exit 0, which strips the
+        // RepoDigests every later sweep reads. The container then reports no digest at all, every verdict
+        // goes UNKNOWN, and the mark disappears for good. Asking first is the whole fix.
+        ContainerUpdate update = ContainerUpdate.of(MACHINE, "vaultwarden",
+            List.of(imaged("vaultwarden", "sha256:same")));
+        when(ssh.run(eq(TARGET), eq(update.pullCommand()), any())).thenReturn(ok());
+        when(ssh.run(eq(TARGET), eq(update.recreateCommand()), any())).thenReturn(ok());
+        when(ssh.run(eq(TARGET), eq(update.replacedImageStillRunningCommand().orElseThrow()), any()))
+            .thenReturn(new CommandResult(0, "9f2c1a4b7e10\n", "", false, "SHA256:pinned"));
+
+        ContainerUpdate.Settlement settlement = update.carryOut(TARGET, ssh, hostKeys);
+
+        verify(ssh, never()).run(any(), eq(update.removeReplacedImageCommand().orElseThrow()), any());
+        assertThat(settlement.outcome()).isEqualTo(ContainerUpdateOutcome.UPDATED);
+        assertThat(settlement.replacedImageDiagnostic()).contains("still");
+    }
+
+    @Test
+    void anUnreadableAncestorCheckRemovesNothing_becauseVaierWillNotDeleteWhatItCannotRuleOut() {
+        // Conservative on purpose: the cost of a skipped removal is a leftover image, and the cost of a
+        // wrong one is Vaier blinded about that container forever.
+        ContainerUpdate update = ContainerUpdate.of(MACHINE, "vaultwarden",
+            List.of(imaged("vaultwarden", "sha256:old")));
+        when(ssh.run(eq(TARGET), eq(update.pullCommand()), any())).thenReturn(ok());
+        when(ssh.run(eq(TARGET), eq(update.recreateCommand()), any())).thenReturn(ok());
+        when(ssh.run(eq(TARGET), eq(update.replacedImageStillRunningCommand().orElseThrow()), any()))
+            .thenReturn(new CommandResult(1, "", "permission denied", false, "SHA256:pinned"));
+
+        ContainerUpdate.Settlement settlement = update.carryOut(TARGET, ssh, hostKeys);
+
+        verify(ssh, never()).run(any(), eq(update.removeReplacedImageCommand().orElseThrow()), any());
+        assertThat(settlement.outcome()).isEqualTo(ContainerUpdateOutcome.UPDATED);
+    }
+
+    @Test
+    void theAncestorCheckReadsNothingAndChangesNothing() {
+        // It runs on somebody else's machine after their container was recreated. It must be a question.
+        ContainerUpdate update = ContainerUpdate.of(MACHINE, "vaultwarden",
+            List.of(imaged("vaultwarden", "sha256:old")));
+
+        assertThat(update.replacedImageStillRunningCommand().orElseThrow())
+            .isEqualTo("docker ps -q --filter ancestor='vaultwarden/server@sha256:old'");
+    }
+
+    @Test
+    void anUnrenderableRemovalStillLeavesTheUpdateUpdated_ratherThanReportingItUnreachable() {
+        // A command that cannot be built is caught where the removal is, not outside it. Before, the throw
+        // escaped past the recreate and the operator was told Vaier never reached the host — about a
+        // container that had just been updated successfully.
+        DockerService quoted = container("vaultwarden", coordinates(), ContainerUpdateEligibility.UPDATABLE)
+            .toBuilder().image("repo'x:latest").imageDigest("sha256:old").build();
+        ContainerUpdate update = ContainerUpdate.of(MACHINE, "vaultwarden", List.of(quoted));
+        when(ssh.run(any(), anyString(), any())).thenReturn(ok());
+
+        ContainerUpdate.Settlement settlement = update.carryOut(TARGET, ssh, hostKeys);
+
+        assertThat(settlement.outcome()).isEqualTo(ContainerUpdateOutcome.UPDATED);
+        assertThat(settlement.replacedImageDiagnostic()).isNotNull();
+    }
+
+    @Test
+    void aFailedRemovalStillLeavesTheUpdateUpdated_andKeepsTheReasonAsDiagnostic() {
+        // Docker refuses to remove an image another container still runs. That is the removal being SAFE,
+        // not the update failing — the container is up on the newer image, which is all "updated" claims.
+        ContainerUpdate update = ContainerUpdate.of(MACHINE, "vaultwarden",
+            List.of(imaged("vaultwarden", "sha256:old")));
+        when(ssh.run(eq(TARGET), eq(update.pullCommand()), any())).thenReturn(ok());
+        when(ssh.run(eq(TARGET), eq(update.recreateCommand()), any())).thenReturn(ok());
+        when(ssh.run(eq(TARGET), eq(update.replacedImageStillRunningCommand().orElseThrow()), any()))
+            .thenReturn(ok());
+        when(ssh.run(eq(TARGET), eq(update.removeReplacedImageCommand().orElseThrow()), any()))
+            .thenReturn(new CommandResult(1, "",
+                "Error response from daemon: conflict: unable to delete 0a1b2c3 (must be forced)",
+                false, "SHA256:pinned"));
+
+        ContainerUpdate.Settlement settlement = update.carryOut(TARGET, ssh, hostKeys);
+
+        assertThat(settlement.outcome()).isEqualTo(ContainerUpdateOutcome.UPDATED);
+        assertThat(settlement.replacedImageDiagnostic()).contains("unable to delete");
+    }
+
+    @Test
+    void aRemovalThatThrowsIsNotAFailedUpdateEither() {
+        ContainerUpdate update = ContainerUpdate.of(MACHINE, "vaultwarden",
+            List.of(imaged("vaultwarden", "sha256:old")));
+        when(ssh.run(eq(TARGET), eq(update.pullCommand()), any())).thenReturn(ok());
+        when(ssh.run(eq(TARGET), eq(update.recreateCommand()), any())).thenReturn(ok());
+        when(ssh.run(eq(TARGET), eq(update.replacedImageStillRunningCommand().orElseThrow()), any()))
+            .thenReturn(ok());
+        when(ssh.run(eq(TARGET), eq(update.removeReplacedImageCommand().orElseThrow()), any()))
+            .thenThrow(new RuntimeException("connection reset"));
+
+        ContainerUpdate.Settlement settlement = update.carryOut(TARGET, ssh, hostKeys);
+
+        assertThat(settlement.outcome()).isEqualTo(ContainerUpdateOutcome.UPDATED);
+        assertThat(settlement.replacedImageDiagnostic()).contains("connection reset");
+    }
+
+    @Test
+    void theOperatorsSentenceSaysNothingAboutTheRemoval_becauseTheUpdateWorked() {
+        // The removal is housekeeping. Bolting its failure onto a success sentence would read to the
+        // operator as a broken update, which is precisely what it is not.
+        ContainerUpdate update = ContainerUpdate.of(MACHINE, "vaultwarden",
+            List.of(imaged("vaultwarden", "sha256:old")));
+        when(ssh.run(eq(TARGET), eq(update.pullCommand()), any())).thenReturn(ok());
+        when(ssh.run(eq(TARGET), eq(update.recreateCommand()), any())).thenReturn(ok());
+        when(ssh.run(eq(TARGET), eq(update.replacedImageStillRunningCommand().orElseThrow()), any()))
+            .thenReturn(ok());
+        when(ssh.run(eq(TARGET), eq(update.removeReplacedImageCommand().orElseThrow()), any()))
+            .thenReturn(new CommandResult(1, "", "conflict: image is in use", false, "SHA256:pinned"));
+
+        ContainerUpdate.Settlement settlement = update.carryOut(TARGET, ssh, hostKeys);
+
+        assertThat(settlement.sentenceFor("vaultwarden"))
+            .isEqualTo(ContainerUpdateOutcome.UPDATED.sentence("vaultwarden"));
+    }
+
+    @Test
+    void aFailedPullNeverRemovesAnything_becauseTheOldImageIsStillWhatIsRunning() {
+        ContainerUpdate update = ContainerUpdate.of(MACHINE, "vaultwarden",
+            List.of(imaged("vaultwarden", "sha256:old")));
+        when(ssh.run(eq(TARGET), eq(update.pullCommand()), any()))
+            .thenReturn(new CommandResult(1, "", "manifest unknown", false, "SHA256:pinned"));
+
+        update.carryOut(TARGET, ssh, hostKeys);
+
+        verify(ssh, never()).run(any(), eq(update.removeReplacedImageCommand().orElseThrow()), any());
+    }
+
+    @Test
+    void aFailedRecreateNeverRemovesAnythingEither_becauseTheOldContainerIsStillOnTheOldImage() {
+        // The good ending of a bad update. Removing the old image here would take the running container's
+        // image out from under it — the one way this feature could turn a survivable failure into an outage.
+        ContainerUpdate update = ContainerUpdate.of(MACHINE, "vaultwarden",
+            List.of(imaged("vaultwarden", "sha256:old")));
+        when(ssh.run(eq(TARGET), eq(update.pullCommand()), any())).thenReturn(ok());
+        when(ssh.run(eq(TARGET), eq(update.recreateCommand()), any()))
+            .thenReturn(new CommandResult(1, "", "port is already allocated", false, "SHA256:pinned"));
+
+        update.carryOut(TARGET, ssh, hostKeys);
+
+        verify(ssh, never()).run(any(), eq(update.removeReplacedImageCommand().orElseThrow()), any());
+    }
+
+    @Test
+    void nothingIsSweptOrForced_onlyTheOneImageTheUpdateReplaced() {
+        // Never `docker image prune`, never -a, never --force: this deletes exactly what it replaced, on
+        // somebody else's machine, and anything wider is not Vaier's to decide.
+        ContainerUpdate update = ContainerUpdate.of(MACHINE, "vaultwarden",
+            List.of(imaged("vaultwarden", "sha256:old")));
+
+        assertThat(update.removeReplacedImageCommand().orElseThrow())
+            .doesNotContain("prune").doesNotContain(" -a").doesNotContain("--force").doesNotContain(" -f");
     }
 }

@@ -23,6 +23,11 @@ import java.util.Optional;
  *                        may not. Null on a container nobody has judged yet: the verdict needs to know which
  *                        machine the container runs on, which only the scrape of that machine knows. Null is
  *                        read as "no action offered" — never as permission.
+ * @param movingTag       whether this container's image tag is a <b>moving tag</b> — a nightly or edge
+ *                        channel that the last two sweeps each found on a different digest. It still earns
+ *                        the <b>update available</b> mark; it raises no <b>update-available alert</b>. False
+ *                        on a container no sweep has judged, which is the honest reading: nothing has shown
+ *                        a rhythm yet.
  */
 @Builder(toBuilder = true)
 public record DockerService(
@@ -36,7 +41,8 @@ public record DockerService(
         String imageDigest,
         UpdateAvailability updateAvailable,
         ComposeCoordinates composeCoordinates,
-        ContainerUpdateEligibility updateEligibility
+        ContainerUpdateEligibility updateEligibility,
+        boolean movingTag
 ) {
 
     /**
@@ -47,7 +53,7 @@ public record DockerService(
     public DockerService(String containerId, String containerName, String image, String version,
                          List<PortMapping> ports, List<String> networks, String state) {
         this(containerId, containerName, image, version, ports, networks, state, null,
-            UpdateAvailability.UNKNOWN, null, null);
+            UpdateAvailability.UNKNOWN, null, null, false);
     }
 
     /** A container known down to its update verdict, but not yet to how it was started or judged. */
@@ -55,7 +61,7 @@ public record DockerService(
                          List<PortMapping> ports, List<String> networks, String state,
                          String imageDigest, UpdateAvailability updateAvailable) {
         this(containerId, containerName, image, version, ports, networks, state, imageDigest,
-            updateAvailable, null, null);
+            updateAvailable, null, null, false);
     }
 
     /** Null-safe: a record built with no verdict still reads as {@link UpdateAvailability#UNKNOWN}. */
@@ -74,6 +80,11 @@ public record DockerService(
      */
     public DockerService withUpdateEligibility(ContainerUpdateEligibility eligibility) {
         return toBuilder().updateEligibility(eligibility).build();
+    }
+
+    /** This container carrying whether its image tag is a <b>moving tag</b>. Everything else stays. */
+    public DockerService withMovingTag(boolean movingTag) {
+        return toBuilder().movingTag(movingTag).build();
     }
 
     /**

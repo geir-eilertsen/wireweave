@@ -2,14 +2,21 @@ package net.vaier.domain;
 
 import net.vaier.adapter.driven.ImageUpdateStateFileAdapter;
 import net.vaier.adapter.driven.InMemoryImageUpdateStateAdapter;
+import net.vaier.domain.port.ForStoringContainerSnapshots;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 class ImageUpdateTrackerTest {
 
@@ -25,7 +32,8 @@ class ImageUpdateTrackerTest {
 
     /** A tracker whose memory dies with it — every test that is not about a restart wants this one. */
     private static ImageUpdateTracker tracker() {
-        return new ImageUpdateTracker(new InMemoryImageUpdateStateAdapter());
+        return new ImageUpdateTracker(new InMemoryImageUpdateStateAdapter(),
+            mock(ForStoringContainerSnapshots.class));
     }
 
     /**
@@ -33,16 +41,39 @@ class ImageUpdateTrackerTest {
      * Vaier over the same config directory — which is the only way to write a test about a restart.
      */
     private ImageUpdateTracker trackerSurvivingRestart() {
-        return new ImageUpdateTracker(new ImageUpdateStateFileAdapter(configDir.toString()));
+        return new ImageUpdateTracker(new ImageUpdateStateFileAdapter(configDir.toString()),
+            mock(ForStoringContainerSnapshots.class));
     }
 
-    private static Map<ScopedImage, UpdateAvailability> verdicts(Object... pairs) {
+    /** A sweep that judged containers but resolved no registry answer — most tests here are about the latch. */
+    private static ImageUpdateSweep.Result verdicts(Object... pairs) {
         Map<ScopedImage, UpdateAvailability> map = new LinkedHashMap<>();
         for (int i = 0; i < pairs.length; i += 2) {
             ScopedImage key = pairs[i] instanceof ScopedImage s ? s : si((String) pairs[i]);
             map.put(key, (UpdateAvailability) pairs[i + 1]);
         }
-        return map;
+        return new ImageUpdateSweep.Result(map, Map.of(), DAY_ONE);
+    }
+
+    /** A sweep of already-built verdicts, with no registry answers — as {@link #verdicts} but keyed. */
+    private static ImageUpdateSweep.Result judged(Object... pairs) {
+        Map<ScopedImage, UpdateAvailability> map = new LinkedHashMap<>();
+        for (int i = 0; i < pairs.length; i += 2) {
+            map.put((ScopedImage) pairs[i], (UpdateAvailability) pairs[i + 1]);
+        }
+        return new ImageUpdateSweep.Result(map, Map.of(), DAY_ONE);
+    }
+
+    private static final Instant DAY_ONE = Instant.parse("2026-09-01T01:40:00Z");
+
+    private static Instant days(double n) {
+        return DAY_ONE.plusSeconds((long) (n * 86400));
+    }
+
+    /** One sweep of a single image at {@code at}: what Vaier decided, and the digest the registry served. */
+    private static ImageUpdateSweep.Result sweep(String image, UpdateAvailability verdict, String digest,
+                                                 Instant at) {
+        return new ImageUpdateSweep.Result(Map.of(si(image), verdict), Map.of(image, digest), at);
     }
 
     // --- #57 slice 3: the operator's own check folds in exactly as the daily sweep does -----------------
@@ -200,12 +231,12 @@ class ImageUpdateTrackerTest {
         ScopedImage onColina = new ScopedImage("Colina 27", "vaultwarden/server:latest");
         ImageUpdateTracker tracker = tracker();
 
-        assertThat(tracker.update(Map.of(
+        assertThat(tracker.update(judged(
             onApalveien, UpdateAvailability.UPDATE_AVAILABLE,
             onColina, UpdateAvailability.UP_TO_DATE)))
             .containsExactly(onApalveien);
 
-        assertThat(tracker.update(Map.of(
+        assertThat(tracker.update(judged(
             onApalveien, UpdateAvailability.UPDATE_AVAILABLE,
             onColina, UpdateAvailability.UPDATE_AVAILABLE)))
             .as("Colina 27 is newly out of date even though Apalveien 5 already was")
@@ -222,16 +253,16 @@ class ImageUpdateTrackerTest {
         // left to repeat about an image nobody is judging any more.
         ScopedImage traefik = new ScopedImage("machine-1", "traefik:v3.6.14");
         ScopedImage pihole = new ScopedImage("machine-1", "pihole/pihole:latest");
-        assertThat(tracker.update(Map.of(
+        assertThat(tracker.update(judged(
             traefik, UpdateAvailability.UPDATE_AVAILABLE,
             pihole, UpdateAvailability.UP_TO_DATE)))
             .containsExactly(traefik);
 
         // The next sweep no longer carries Vaier's own stack at all.
-        assertThat(tracker.update(Map.of(pihole, UpdateAvailability.UP_TO_DATE))).isEmpty();
+        assertThat(tracker.update(judged(pihole, UpdateAvailability.UP_TO_DATE))).isEmpty();
 
         // And it stays silent — the mail this issue is about is not sent again by the sweep after it.
-        assertThat(tracker.update(Map.of(pihole, UpdateAvailability.UP_TO_DATE))).isEmpty();
+        assertThat(tracker.update(judged(pihole, UpdateAvailability.UP_TO_DATE))).isEmpty();
     }
 
     @Test
@@ -241,10 +272,10 @@ class ImageUpdateTrackerTest {
         // moved to a peer — is a genuinely new situation, and a tracker still holding the old latch would
         // swallow the one alert that mattered.
         ScopedImage image = new ScopedImage("machine-1", "traefik:v3.6.14");
-        tracker.update(Map.of(image, UpdateAvailability.UPDATE_AVAILABLE));
-        tracker.update(Map.of());
+        tracker.update(judged(image, UpdateAvailability.UPDATE_AVAILABLE));
+        tracker.update(judged());
 
-        assertThat(tracker.update(Map.of(image, UpdateAvailability.UPDATE_AVAILABLE)))
+        assertThat(tracker.update(judged(image, UpdateAvailability.UPDATE_AVAILABLE)))
             .containsExactly(image);
     }
 
@@ -328,5 +359,153 @@ class ImageUpdateTrackerTest {
         assertThat(afterRestart.update(verdicts("vaultwarden/server:latest", UpdateAvailability.UPDATE_AVAILABLE)))
             .as("the registry came back and said what was already known")
             .isEmpty();
+    }
+
+    // --- the moving tag: a channel is not trouble, so it earns the mark and never the mail ---------------
+    //
+    // The rule is about WHEN the digest changed, not how many sweeps ran. Counting sweeps was defeated by
+    // this project's own habits: every boot sweeps two minutes in and the registry cache dies with the
+    // process, so an afternoon redeploy re-asked, got the morning's digest, and that read as the tag
+    // settling. NETDATA is the case throughout — netdata:latest IS Docker Hub's :edge, a nightly.
+
+    private static final String NETDATA = "netdata/netdata:latest";
+
+    @Test
+    void aTagThatMovesEveryNightIsMailedOnceAndThenNeverAgainWhileItKeepsMoving() {
+        // The live incident, replayed with everything that really happens between two daily sweeps: an
+        // afternoon redeploy (which sweeps two minutes into every boot) and the operator's own check after
+        // they update. Exactly one mail — the first change, when nothing yet says the tag moves — and then
+        // silence for as long as it keeps moving.
+        ImageUpdateTracker tracker = tracker();
+        List<ScopedImage> mails = new ArrayList<>();
+
+        // Day 0: the operator is running the current nightly, and the day's noise says nothing new.
+        mails.addAll(tracker.update(sweep(NETDATA, UpdateAvailability.UP_TO_DATE, "sha256:n1", days(0))));
+        tracker.update(sweep(NETDATA, UpdateAvailability.UP_TO_DATE, "sha256:n1", days(0.2)));   // redeploy
+        tracker.update(sweep(NETDATA, UpdateAvailability.UP_TO_DATE, "sha256:n1", days(0.3)));   // check
+
+        // Day 1: a new nightly. One change — the tag might simply have cut a release, so it is mailed.
+        mails.addAll(tracker.update(
+            sweep(NETDATA, UpdateAvailability.UPDATE_AVAILABLE, "sha256:n2", days(1))));
+        tracker.update(sweep(NETDATA, UpdateAvailability.UP_TO_DATE, "sha256:n2", days(1.3)));   // updated
+
+        // Day 2 and day 3: it moved again, and again. A channel. The mark stays; the mail stops.
+        mails.addAll(tracker.update(
+            sweep(NETDATA, UpdateAvailability.UPDATE_AVAILABLE, "sha256:n3", days(2))));
+        tracker.update(sweep(NETDATA, UpdateAvailability.UP_TO_DATE, "sha256:n3", days(2.2)));   // redeploy
+        tracker.update(sweep(NETDATA, UpdateAvailability.UP_TO_DATE, "sha256:n3", days(2.3)));   // updated
+        mails.addAll(tracker.update(
+            sweep(NETDATA, UpdateAvailability.UPDATE_AVAILABLE, "sha256:n4", days(3))));
+
+        assertThat(mails).containsExactly(si(NETDATA));
+    }
+
+    @Test
+    void anUnchangedAnswerLeavesAMovingTagMoving_soARedeployCannotUnsuppressAChannel() {
+        // The regression in one test. Two more sweeps on the same digest — a redeploy's boot sweep and an
+        // operator's check, minutes apart — must not make a channel look settled.
+        ImageUpdateTracker tracker = movingSince(days(2));
+
+        tracker.update(sweep(NETDATA, UpdateAvailability.UP_TO_DATE, "sha256:n3", days(2.1)));
+        tracker.update(sweep(NETDATA, UpdateAvailability.UP_TO_DATE, "sha256:n3", days(2.2)));
+
+        assertThat(tracker.update(
+            sweep(NETDATA, UpdateAvailability.UPDATE_AVAILABLE, "sha256:n4", days(2.5)))).isEmpty();
+    }
+
+    @Test
+    void aSettledTagThatChangesOnceIsStillMailed_becauseThatIsTheWholeFeature() {
+        // vaultwarden's latest sat on the same digest for weeks and then cut a release. One change on a tag
+        // that has not moved is exactly the #57 incident, and it must still arrive.
+        ImageUpdateTracker tracker = tracker();
+        String vaultwarden = "vaultwarden/server:latest";
+
+        tracker.update(sweep(vaultwarden, UpdateAvailability.UP_TO_DATE, "sha256:v1", days(0)));
+        tracker.update(sweep(vaultwarden, UpdateAvailability.UP_TO_DATE, "sha256:v1", days(1)));
+
+        assertThat(tracker.update(
+            sweep(vaultwarden, UpdateAvailability.UPDATE_AVAILABLE, "sha256:v2", days(2))))
+            .containsExactly(si(vaultwarden));
+    }
+
+    @Test
+    void aTagThatChangedThreeTimesInThreeMonthsIsMailedEveryTime() {
+        // An ordinary quarterly release cadence. Counting changes alone would call this a channel and
+        // swallow the one alert a quarter the operator actually wants.
+        ImageUpdateTracker tracker = tracker();
+        String traefik = "traefik:v3";
+
+        tracker.update(sweep(traefik, UpdateAvailability.UP_TO_DATE, "sha256:t1", days(0)));
+        assertThat(tracker.update(sweep(traefik, UpdateAvailability.UPDATE_AVAILABLE, "sha256:t2", days(30))))
+            .containsExactly(si(traefik));
+        tracker.update(sweep(traefik, UpdateAvailability.UP_TO_DATE, "sha256:t2", days(31)));
+
+        assertThat(tracker.update(sweep(traefik, UpdateAvailability.UPDATE_AVAILABLE, "sha256:t3", days(60))))
+            .as("three changes, but months apart — a release cadence, not a channel")
+            .containsExactly(si(traefik));
+    }
+
+    @Test
+    void aMovingTagIsStillLatched_soItIsNotMailedRetroactivelyOnceItSettles() {
+        // The suppressed change must still be RECORDED as known out of date. If it were not, the first sweep
+        // after the tag stopped moving would find an unlatched out-of-date image and mail the operator about
+        // a change from days ago — the silence would end with a backlog rather than with the next real news.
+        ImageUpdateTracker tracker = movingSince(days(2));
+        assertThat(tracker.update(
+            sweep(NETDATA, UpdateAvailability.UPDATE_AVAILABLE, "sha256:n4", days(3)))).isEmpty();
+
+        assertThat(tracker.update(
+            sweep(NETDATA, UpdateAvailability.UPDATE_AVAILABLE, "sha256:n4", days(4)))).isEmpty();
+    }
+
+    @Test
+    void aChannelThatWentQuietIsMailedOnItsNextChange() {
+        // Upstream stopped building nightlies. Nothing records that — an unchanged answer records nothing —
+        // so only the clock can end the suppression, and it does.
+        ImageUpdateTracker tracker = movingSince(days(2));
+
+        assertThat(tracker.update(
+            sweep(NETDATA, UpdateAvailability.UPDATE_AVAILABLE, "sha256:n4", days(9))))
+            .containsExactly(si(NETDATA));
+    }
+
+    @Test
+    void theDigestHistorySurvivesARestart_soAChannelIsNotRelearnedEveryDeploy() {
+        // This project rebuilds and redeploys several times a day. A history that died with the process
+        // would never reach three distinct digests, and the suppression would never engage at all.
+        ImageUpdateTracker before = trackerSurvivingRestart();
+        before.update(sweep(NETDATA, UpdateAvailability.UP_TO_DATE, "sha256:n1", days(0)));
+        before.update(sweep(NETDATA, UpdateAvailability.UP_TO_DATE, "sha256:n2", days(1)));
+
+        ImageUpdateTracker after = trackerSurvivingRestart();
+
+        assertThat(after.update(sweep(NETDATA, UpdateAvailability.UPDATE_AVAILABLE, "sha256:n3", days(2))))
+            .isEmpty();
+    }
+
+    @Test
+    void theMovingTagsArePublishedToTheContainerSnapshots_soTheExplorerCanSayWhyTheMailStopped() {
+        // The mark stays; only the mail goes. A silently suppressed alert would read as Vaier having missed
+        // it, so the Explorer says the tag is a channel — which it can only do if it is told which are.
+        ForStoringContainerSnapshots snapshots = mock(ForStoringContainerSnapshots.class);
+        ImageUpdateTracker tracker =
+            new ImageUpdateTracker(new InMemoryImageUpdateStateAdapter(), snapshots);
+
+        tracker.update(sweep(NETDATA, UpdateAvailability.UP_TO_DATE, "sha256:n1", days(0)));
+        tracker.update(sweep(NETDATA, UpdateAvailability.UP_TO_DATE, "sha256:n2", days(1)));
+        tracker.update(sweep(NETDATA, UpdateAvailability.UP_TO_DATE, "sha256:n3", days(2)));
+
+        verify(snapshots).storeMovingTags(Set.of(NETDATA));
+    }
+
+    /** A tracker that has watched {@link #NETDATA} change on three consecutive days, ending at {@code at}. */
+    private static ImageUpdateTracker movingSince(Instant at) {
+        ImageUpdateTracker tracker = tracker();
+        tracker.update(sweep(NETDATA, UpdateAvailability.UP_TO_DATE, "sha256:n1",
+            at.minusSeconds(2 * 86400)));
+        tracker.update(sweep(NETDATA, UpdateAvailability.UP_TO_DATE, "sha256:n2",
+            at.minusSeconds(86400)));
+        tracker.update(sweep(NETDATA, UpdateAvailability.UP_TO_DATE, "sha256:n3", at));
+        return tracker;
     }
 }

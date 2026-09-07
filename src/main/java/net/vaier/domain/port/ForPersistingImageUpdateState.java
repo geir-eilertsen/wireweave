@@ -1,5 +1,6 @@
 package net.vaier.domain.port;
 
+import net.vaier.domain.RegistryDigestHistory;
 import net.vaier.domain.ScopedImage;
 
 import java.util.Set;
@@ -28,4 +29,18 @@ public interface ForPersistingImageUpdateState {
 
     /** Replace what is remembered with {@code images} — the complete set, not an addition to it. */
     void saveOutOfDate(Set<ScopedImage> images);
+
+    /**
+     * The last few digests each registry served per image string — what tells a <b>moving tag</b> from a
+     * tag that has settled. Kept here rather than in a store of its own because it is the same question
+     * this port already answers: what Vaier must remember between sweeps so an alert fires once.
+     *
+     * <p>Tolerant like {@link #loadOutOfDate}: a missing or unreadable store is
+     * {@link RegistryDigestHistory#empty()}, never a failure. The cost of forgetting is that a channel is
+     * relearned over the next three sweeps; the cost of throwing is a sweep that dies.
+     */
+    RegistryDigestHistory loadRegistryDigestHistory();
+
+    /** Replace the remembered registry answers with {@code history} — the complete history, not an addition. */
+    void saveRegistryDigestHistory(RegistryDigestHistory history);
 }

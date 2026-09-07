@@ -7,13 +7,16 @@ import net.vaier.application.GetMachinesUseCase;
 import net.vaier.application.NotifyAdminsOfUpdateAvailableUseCase;
 import net.vaier.application.SweepImageUpdatesUseCase;
 import net.vaier.domain.ImageUpdateRollup;
+import net.vaier.domain.ImageUpdateSweep;
 import net.vaier.domain.ImageUpdateTracker;
 import net.vaier.domain.ScopedImage;
 import net.vaier.domain.UpdateAvailability;
+import net.vaier.domain.port.ForStoringContainerSnapshots;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -42,7 +45,8 @@ class ImageUpdateWatcherTest {
         machines = mock(GetMachinesUseCase.class);
         lenient().when(machines.getAllMachines()).thenReturn(List.of());
         watcher = new ImageUpdateWatcher(sweep,
-            new ImageUpdateTracker(new InMemoryImageUpdateStateAdapter()),
+            new ImageUpdateTracker(new InMemoryImageUpdateStateAdapter(),
+                mock(ForStoringContainerSnapshots.class)),
             new ImageUpdateAlerter(notifier, machines));
     }
 
@@ -52,12 +56,13 @@ class ImageUpdateWatcherTest {
         return new ScopedImage(HOST, image);
     }
 
-    private static Map<ScopedImage, UpdateAvailability> verdicts(Object... pairs) {
+    /** A sweep that judged containers but resolved no registry answer — this test is about the mail. */
+    private static ImageUpdateSweep.Result verdicts(Object... pairs) {
         Map<ScopedImage, UpdateAvailability> map = new LinkedHashMap<>();
         for (int i = 0; i < pairs.length; i += 2) {
             map.put(si((String) pairs[i]), (UpdateAvailability) pairs[i + 1]);
         }
-        return map;
+        return new ImageUpdateSweep.Result(map, Map.of(), Instant.parse("2026-09-01T01:40:00Z"));
     }
 
     @Test

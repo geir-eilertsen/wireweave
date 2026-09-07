@@ -23,6 +23,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * In-memory store for the cached container scrapes. Owns the peer- and Vaier-server snapshots and the
@@ -44,6 +45,8 @@ public class InMemoryContainerSnapshotStore implements
     private volatile List<PeerContainers> peerContainersSnapshot = List.of();
     private volatile List<DockerService> vaierServerContainersSnapshot = List.of();
     private volatile Map<ScopedImage, UpdateAvailability> imageUpdateVerdicts = Map.of();
+    /** Image strings the last sweep judged to be moving tags — a nightly channel rather than a release. */
+    private volatile Set<String> movingTags = Set.of();
 
     private final String vaierNetworkName;
     private final String dockerGatewayIp;
@@ -130,11 +133,13 @@ public class InMemoryContainerSnapshotStore implements
      */
     private List<DockerService> withUpdateVerdicts(String machineId, List<DockerService> containers) {
         Map<ScopedImage, UpdateAvailability> verdicts = imageUpdateVerdicts;
-        if (verdicts.isEmpty()) {
+        Set<String> moving = movingTags;
+        if (verdicts.isEmpty() && moving.isEmpty()) {
             return containers;
         }
         return containers.stream()
-            .map(c -> c.withUpdateAvailability(verdicts.get(new ScopedImage(machineId, c.image()))))
+            .map(c -> c.withUpdateAvailability(verdicts.get(new ScopedImage(machineId, c.image())))
+                .withMovingTag(moving.contains(c.image())))
             .toList();
     }
 
@@ -153,6 +158,11 @@ public class InMemoryContainerSnapshotStore implements
     @Override
     public synchronized void storeImageUpdateVerdicts(Map<ScopedImage, UpdateAvailability> verdicts) {
         this.imageUpdateVerdicts = verdicts;
+    }
+
+    @Override
+    public void storeMovingTags(Set<String> images) {
+        this.movingTags = Set.copyOf(images);
     }
 
     /**

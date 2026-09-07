@@ -46,6 +46,7 @@ import net.vaier.domain.port.ForGettingVpnClients;
 import net.vaier.domain.port.ForResolvingPeerIds;
 import net.vaier.domain.port.ForPublishingEvents;
 import net.vaier.domain.port.ForResolvingRegistryDigest;
+import net.vaier.domain.ImageUpdateSweep;
 import net.vaier.domain.ImageUpdateTracker;
 import net.vaier.domain.ScopedImage;
 import net.vaier.domain.ComposeCoordinates;
@@ -144,7 +145,6 @@ class ContainerServiceTest {
 
     @BeforeEach
     void setUp() {
-        tracker = new ImageUpdateTracker(new InMemoryImageUpdateStateAdapter());
         clock = new MutableClock();
         // The cached snapshots + sweep verdicts live in the store adapter, and the live LAN-server
         // scrape in its own adapter — both real infrastructure fed by the same mocks, so the end-to-end
@@ -152,6 +152,9 @@ class ContainerServiceTest {
         // read ports.
         snapshotStore = new InMemoryContainerSnapshotStore(
             VAIER_NETWORK, GATEWAY_IP, () -> TestMachineIds.of("Vaier server"));
+        // Built after the store, because the tracker publishes the moving tags it works out into it — the
+        // same one the containers the Explorer reads are decorated from.
+        tracker = new ImageUpdateTracker(new InMemoryImageUpdateStateAdapter(), snapshotStore);
         dockerAccessCache = new InMemoryDockerCommandAccessCache();
         var lanServerDiscovery =
             new LanServerContainerDiscoveryAdapter(forGettingLanServers, forGettingServerInfo, dockerAccessCache);
@@ -173,6 +176,12 @@ class ContainerServiceTest {
             localDigest, UpdateAvailability.UNKNOWN);
     }
 
+    /** A sweep that ruled {@code image} update available and resolved no registry answer. */
+    private ImageUpdateSweep.Result judged(ScopedImage image) {
+        return new ImageUpdateSweep.Result(Map.of(image, UpdateAvailability.UPDATE_AVAILABLE),
+            Map.of(), clock.instant());
+    }
+
     /** An image on the Vaier server — the machine the local-container scrape reports under. */
     private static ScopedImage onVaierServer(String image) {
         return new ScopedImage(TestMachineIds.of("Vaier server").value(), image);
@@ -186,7 +195,7 @@ class ContainerServiceTest {
         when(forResolvingRegistryDigest.resolveDigest(any())).thenReturn(Optional.of("sha256:new"));
         service.refresh();
 
-        assertThat(service.sweepImageUpdates())
+        assertThat(service.sweepImageUpdates().verdicts())
             .containsEntry(onVaierServer("vaultwarden/server:latest"), UpdateAvailability.UPDATE_AVAILABLE);
     }
 
@@ -215,7 +224,7 @@ class ContainerServiceTest {
         when(forResolvingRegistryDigest.resolveDigest(any())).thenReturn(Optional.of("sha256:new"));
         service.refresh();
 
-        assertThat(service.sweepImageUpdates())
+        assertThat(service.sweepImageUpdates().verdicts())
             .containsKey(onVaierServer("vaultwarden/server:latest"));
         assertThat(service.discover()).singleElement()
             .extracting(DockerService::updateAvailable).isEqualTo(UpdateAvailability.UPDATE_AVAILABLE);
@@ -249,10 +258,34 @@ class ContainerServiceTest {
         when(forResolvingRegistryDigest.resolveDigest(any())).thenReturn(Optional.of("sha256:new"));
         service.refresh();
 
-        assertThat(service.sweepImageUpdates())
+        assertThat(service.sweepImageUpdates().verdicts())
             .containsEntry(new ScopedImage(TestMachineIds.of("Apalveien 5").value(),
                     "vaultwarden/server:latest"),
                 UpdateAvailability.UPDATE_AVAILABLE);
+    }
+
+    @Test
+    void threeDailySweepsOnANightlyMarkTheContainerAsAMovingTag_andMailNoSecondTime() {
+        // The wiring, end to end on the daily path: the sweep resolves the digests, the tracker (as the
+        // watcher folds it) works out the rhythm and publishes it, and the container the Explorer reads
+        // carries the word. Colina's netdata is the case — a new nightly every night, mailed every morning.
+        when(forGettingVpnClients.getClients()).thenReturn(List.of());
+        when(forGettingServerInfo.getServicesWithExposedPorts(any()))
+            .thenReturn(List.of(imaged("netdata", "netdata/netdata:latest", "sha256:n0")));
+        when(forResolvingRegistryDigest.resolveDigest(any()))
+            .thenReturn(Optional.of("sha256:n1"), Optional.of("sha256:n2"), Optional.of("sha256:n3"));
+
+        service.refresh();
+        assertThat(tracker.update(service.sweepImageUpdates())).as("the first change is news").hasSize(1);
+        tracker.update(service.sweepImageUpdates());
+        assertThat(tracker.update(service.sweepImageUpdates()))
+            .as("a channel by now — the mark stays, the mail stops").isEmpty();
+
+        assertThat(service.discover()).singleElement()
+            .satisfies(c -> {
+                assertThat(c.updateAvailable()).isEqualTo(UpdateAvailability.UPDATE_AVAILABLE);
+                assertThat(c.movingTag()).isTrue();
+            });
     }
 
     // --- #57 slice 3: the check the operator asked for ---
@@ -445,8 +478,7 @@ class ContainerServiceTest {
         // The manual check must not permanently silence a future alert. Once the check has confirmed the pull,
         // the tracker must have forgotten the image — so if it goes stale again months later, the edge fires
         // and the operator IS mailed. (The tracker's own test proves the rule; this proves it is wired.)
-        tracker.update(Map.of(
-            onVaierServer("vaultwarden/server:latest"), UpdateAvailability.UPDATE_AVAILABLE));
+        tracker.update(judged(onVaierServer("vaultwarden/server:latest")));
         when(forGettingVpnClients.getClients()).thenReturn(List.of());
         when(forGettingServerInfo.getServicesWithExposedPorts(any()))
             .thenReturn(List.of(imaged("vaultwarden", "vaultwarden/server:latest", "sha256:same")));
@@ -454,8 +486,7 @@ class ContainerServiceTest {
 
         service.checkForImageUpdates();
 
-        assertThat(tracker.update(Map.of(
-            onVaierServer("vaultwarden/server:latest"), UpdateAvailability.UPDATE_AVAILABLE)))
+        assertThat(tracker.update(judged(onVaierServer("vaultwarden/server:latest"))))
             .as("stale again after a confirmed pull — that is news again")
             .containsExactly(onVaierServer("vaultwarden/server:latest"));
     }
@@ -471,8 +502,7 @@ class ContainerServiceTest {
 
         service.checkForImageUpdates();
 
-        assertThat(tracker.update(Map.of(
-            onVaierServer("vaultwarden/server:latest"), UpdateAvailability.UPDATE_AVAILABLE)))
+        assertThat(tracker.update(judged(onVaierServer("vaultwarden/server:latest"))))
             .as("already told by the check — the sweep has nothing to add")
             .isEmpty();
     }
@@ -503,7 +533,7 @@ class ContainerServiceTest {
             .thenThrow(new RuntimeException("no egress"));
         service.refresh();
 
-        assertThat(service.sweepImageUpdates())
+        assertThat(service.sweepImageUpdates().verdicts())
             .containsEntry(onVaierServer("vaultwarden/server:latest"), UpdateAvailability.UNKNOWN);
     }
 
@@ -1296,7 +1326,7 @@ class ContainerServiceTest {
         when(forResolvingRegistryDigest.resolveDigest(any())).thenReturn(Optional.of("sha256:newer"));
         service.refresh();
 
-        assertThat(service.sweepImageUpdates())
+        assertThat(service.sweepImageUpdates().verdicts())
             .containsOnlyKeys(onVaierServer("pihole/pihole:latest"));
         verify(forResolvingRegistryDigest, never())
             .resolveDigest(argThat(reference -> reference.toString().contains("traefik")));
@@ -1309,7 +1339,7 @@ class ContainerServiceTest {
         when(forGettingVpnClients.getClients()).thenReturn(List.of());
         service.refresh();
 
-        assertThat(service.sweepImageUpdates()).isEmpty();
+        assertThat(service.sweepImageUpdates().verdicts()).isEmpty();
         verify(forResolvingRegistryDigest, never()).resolveDigest(any());
     }
 
@@ -1349,7 +1379,7 @@ class ContainerServiceTest {
         when(forResolvingRegistryDigest.resolveDigest(any())).thenReturn(Optional.of("sha256:newer"));
         service.refresh();
 
-        assertThat(service.sweepImageUpdates()).containsEntry(
+        assertThat(service.sweepImageUpdates().verdicts()).containsEntry(
             new ScopedImage(TestMachineIds.of("alice").value(), "traefik:v3.6.14"),
             UpdateAvailability.UPDATE_AVAILABLE);
     }

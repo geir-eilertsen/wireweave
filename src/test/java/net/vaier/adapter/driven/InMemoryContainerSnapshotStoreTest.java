@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.entry;
@@ -127,5 +128,35 @@ class InMemoryContainerSnapshotStoreTest {
 
         assertThat(store.imageUpdateVerdicts())
             .containsExactly(entry(held, UpdateAvailability.UPDATE_AVAILABLE));
+    }
+
+    // --- the moving-tag mark, so the Explorer can say why a nightly never mails -------------------------
+
+    @Test
+    void aContainerOnAMovingTagIsMarkedAsOne_soTheExplorerCanSayWhyNoMailComes() {
+        store.storeVaierServerContainers(List.of(imaged("netdata", "netdata/netdata:latest")));
+        store.storeMovingTags(Set.of("netdata/netdata:latest"));
+
+        assertThat(store.discover()).singleElement()
+            .extracting(DockerService::movingTag).isEqualTo(true);
+    }
+
+    @Test
+    void aContainerOnASettledTagIsNotMarked_soTheWordAppearsWhereItMeansSomething() {
+        store.storeVaierServerContainers(List.of(imaged("vaultwarden", "vaultwarden/server:latest")));
+        store.storeMovingTags(Set.of("netdata/netdata:latest"));
+
+        assertThat(store.discover()).singleElement()
+            .extracting(DockerService::movingTag).isEqualTo(false);
+    }
+
+    @Test
+    void aPeersContainersCarryTheMarkToo_becauseATagIsAChannelOnEveryMachineThatRunsIt() {
+        store.storePeerContainers(List.of(new PeerContainers("m-1", "Colina 27", "10.13.13.3", "OK",
+            List.of(imaged("netdata", "netdata/netdata:latest")), false, "linuxserver/wireguard:latest")));
+        store.storeMovingTags(Set.of("netdata/netdata:latest"));
+
+        assertThat(store.discoverAll()).singleElement()
+            .extracting(p -> p.containers().get(0).movingTag()).isEqualTo(true);
     }
 }

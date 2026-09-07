@@ -2,6 +2,7 @@ package net.vaier.config;
 
 import net.vaier.domain.ImageUpdateTracker;
 import net.vaier.domain.port.ForPersistingImageUpdateState;
+import net.vaier.domain.port.ForStoringContainerSnapshots;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -23,12 +24,17 @@ import org.springframework.context.annotation.Configuration;
  * one re-announced every image that was still out of date. Handing the tracker a
  * {@link ForPersistingImageUpdateState} is what makes "already told them" a statement about the fleet rather
  * than about the current JVM. Same shape as {@code RemoteDiskWatcher} handing the disk tracker its port.
+ *
+ * <p>The second port is where the <b>moving tags</b> the tracker works out are written: it is the one place
+ * holding the registry-digest history, so it is the one place that can say which tags are channels, and the
+ * containers the Explorer reads must carry the same fact the alert was suppressed on.
  */
 @Configuration
 public class ImageUpdateConfig {
 
     @Bean
-    public ImageUpdateTracker imageUpdateTracker(ForPersistingImageUpdateState imageUpdateState) {
-        return new ImageUpdateTracker(imageUpdateState);
+    public ImageUpdateTracker imageUpdateTracker(ForPersistingImageUpdateState imageUpdateState,
+                                                ForStoringContainerSnapshots snapshots) {
+        return new ImageUpdateTracker(imageUpdateState, snapshots);
     }
 }

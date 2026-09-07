@@ -1,5 +1,6 @@
 package net.vaier.adapter.driven;
 
+import net.vaier.domain.RegistryDigestHistory;
 import net.vaier.domain.ScopedImage;
 import net.vaier.domain.port.ForPersistingImageUpdateState;
 
@@ -16,6 +17,7 @@ import java.util.Set;
 public class InMemoryImageUpdateStateAdapter implements ForPersistingImageUpdateState {
 
     private Set<ScopedImage> outOfDate = new LinkedHashSet<>();
+    private RegistryDigestHistory history = RegistryDigestHistory.empty();
 
     @Override
     public synchronized Set<ScopedImage> loadOutOfDate() {
@@ -25,5 +27,15 @@ public class InMemoryImageUpdateStateAdapter implements ForPersistingImageUpdate
     @Override
     public synchronized void saveOutOfDate(Set<ScopedImage> images) {
         outOfDate = new LinkedHashSet<>(images);
+    }
+
+    @Override
+    public synchronized RegistryDigestHistory loadRegistryDigestHistory() {
+        return history;
+    }
+
+    @Override
+    public synchronized void saveRegistryDigestHistory(RegistryDigestHistory history) {
+        this.history = history;
     }
 }
