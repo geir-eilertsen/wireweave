@@ -1913,7 +1913,10 @@
         if (!isVaierServer) {
             const acts = el('div', 'ex-pane-actions');
             acts.appendChild(selVerb('gear', 'Edit details', 'ex-btn', () => editMachine(m)));
-            if (m.type === 'LAN_SERVER') {
+            // Whether a setup script can be run on the machine is the server's reading of it — an
+            // appliance has no shell for one, however it is anchored — so the verb is not offered
+            // where a click could only end in a toast.
+            if (m.acceptsSetupScript) {
                 acts.appendChild(selVerb('shell', 'Setup command', 'ex-btn', () => lanSetupScript(m.id)));
             }
             head.appendChild(acts);

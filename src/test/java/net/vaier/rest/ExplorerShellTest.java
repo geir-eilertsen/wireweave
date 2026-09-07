@@ -1123,6 +1123,9 @@ class ExplorerShellTest {
         assertThat(js).contains("function toggleSshAccess");     // SSH access, distinct from the credential
         assertThat(js).contains("function regenerateMachine");   // keypair rotation (#202)
         assertThat(js).contains("function lanSetupScript");      // the LAN host setup script
+        // Offered only where the server says the machine can run one — never re-derived from its category.
+        assertThat(js).contains("m.acceptsSetupScript");
+        assertThat(js).doesNotContain("m.type === 'LAN_SERVER') {\n                acts.appendChild(selVerb('shell'");
         assertThat(js).contains("function createLanServer");     // add a LAN server by hand
         assertThat(js).contains("function allowedGroupsEditor"); // per-service access groups
         assertThat(js).contains("function publishAdvanced");     // path prefix / redirect / direct-URL

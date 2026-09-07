@@ -125,6 +125,44 @@ class MachineTest {
     }
 
     @Test
+    void acceptsSetupScript_lanServerAppliance_false() {
+        LanServer pool = new LanServer("Pool controller", "192.168.1.113", false, null, "Opensprinkler",
+            DeviceCategory.IOT);
+
+        assertThat(Machine.fromLanServer(pool, "192.168.1.0/24").acceptsSetupScript()).isFalse();
+    }
+
+    @Test
+    void acceptsSetupScript_lanServerNas_true() {
+        LanServer nas = new LanServer("NAS", "192.168.3.3", true, 2375, null, DeviceCategory.NAS);
+
+        assertThat(Machine.fromLanServer(nas, "192.168.3.0/24").acceptsSetupScript()).isTrue();
+    }
+
+    @Test
+    void acceptsSetupScript_applianceCategoryThatRunsDocker_true_itIsAComputerWhateverItIsCalled() {
+        // A Roon server is an Ubuntu NUC filed under MEDIA. Docker on it is the whole reason for the script.
+        LanServer roon = new LanServer("Roon server", "192.168.3.118", true, 2375, "Ubuntu on Intel NUC",
+            DeviceCategory.MEDIA);
+
+        assertThat(Machine.fromLanServer(roon, "192.168.3.0/24").acceptsSetupScript()).isTrue();
+    }
+
+    @Test
+    void acceptsSetupScript_applianceCategoryVaierMaySshInto_true() {
+        LanServer box = new LanServer("Roon server", "192.168.3.118", false, null, null,
+            DeviceCategory.MEDIA, true, MachineId.generate());
+
+        assertThat(Machine.fromLanServer(box, "192.168.3.0/24").acceptsSetupScript()).isTrue();
+    }
+
+    @Test
+    void acceptsSetupScript_vpnPeer_false_itsScriptComesWithItsConfig() {
+        assertThat(Machine.fromPeer(new PeerConfiguration("nuc", "10.13.13.2", "",
+            MachineType.UBUNTU_SERVER, "192.168.3.0/24", "192.168.3.50"), null).acceptsSetupScript()).isFalse();
+    }
+
+    @Test
     void defaultSshAccess_lanServerPrinter_false_applianceVetoesServerType() {
         assertThat(Machine.defaultSshAccess(DeviceCategory.PRINTER, MachineType.LAN_SERVER)).isFalse();
     }

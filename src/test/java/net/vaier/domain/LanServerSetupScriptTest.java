@@ -201,6 +201,17 @@ class LanServerSetupScriptTest {
     }
 
     @Test
+    void forHost_applianceBehindARelay_empty_becauseItHasNoShellToRunItIn() {
+        // A sprinkler controller on Colina's LAN qualifies as relay-anchored, so the routes rule alone would
+        // hand the operator a curl | sudo bash for a device that cannot run one. An appliance runs no script.
+        LanServer pool = new LanServer("Pool controller", "192.168.1.113", false, null, "Opensprinkler",
+            DeviceCategory.IOT);
+        List<PeerConfiguration> peers = List.of(relayWithAddr("colina-27", "192.168.1.0/24", "192.168.1.10"));
+
+        assertThat(LanServerSetupScript.forHost(pool, peers, "172.31.16.0/20", "10.13.13.0/24")).isEmpty();
+    }
+
+    @Test
     void forHost_vaierAnchoredNoDocker_empty() {
         LanServer server = new LanServer("nas", "172.31.20.5", false, null, null);
 

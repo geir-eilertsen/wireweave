@@ -35,11 +35,13 @@ public final class LanServerSetupScript {
      *   <li>installs routes via the relay peer when the server is anchored at one (not at the Vaier
      *       server, which is already on its own subnet) — see {@link #routedDestinations}.</li>
      * </ul>
-     * Returns empty when there is nothing to set up (no Docker and not relay-anchored). Throws
-     * {@link ConflictException} when the relay peer has no LAN address to route via.
+     * Returns empty when there is nothing to set up (no Docker and not relay-anchored), or nothing to run
+     * it on ({@link LanServer#acceptsSetupScript}). Throws {@link ConflictException} when the relay peer
+     * has no LAN address to route via.
      */
     public static Optional<String> forHost(LanServer server, List<PeerConfiguration> allPeers,
                                            String serverLanCidr, String vpnSubnet) {
+        if (!server.acceptsSetupScript()) return Optional.empty();
         Integer dockerPort = server.runsDocker()
             ? (server.dockerPort() != null ? server.dockerPort() : DEFAULT_DOCKER_PORT)
             : null;

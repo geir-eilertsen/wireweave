@@ -65,6 +65,24 @@ public record Machine(
     }
 
     /**
+     * Whether the <b>LAN setup script</b> is offered for this machine. Only a LAN server is set up by
+     * running a script on it — a peer's comes with its config — and only one with a shell to run it in.
+     * An {@link DeviceCategory#isAppliance() appliance} has none unless something says otherwise: it runs
+     * Docker, or the operator let Vaier SSH into it. A sprinkler controller does neither, and being
+     * relay-anchored does not give it a shell.
+     */
+    public boolean acceptsSetupScript() {
+        return type == MachineType.LAN_SERVER
+            && acceptsSetupScript(runsDocker, effectiveSshAccess(), deviceCategory);
+    }
+
+    /** The one spelling of the rule, shared with {@link LanServer#acceptsSetupScript} as {@link #defaultSshAccess} is. */
+    public static boolean acceptsSetupScript(boolean runsDocker, boolean effectiveSshAccess,
+                                             DeviceCategory effectiveDeviceCategory) {
+        return runsDocker || effectiveSshAccess || !effectiveDeviceCategory.isAppliance();
+    }
+
+    /**
      * Whether Vaier offers SSH for this machine: the operator's {@link #sshAccessOverride() override}
      * when one is set, otherwise the {@link #defaultSshAccess() smart default}. The override — not the
      * device category — is authoritative; the category only seeds the default.

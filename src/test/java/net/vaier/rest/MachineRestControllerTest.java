@@ -190,6 +190,23 @@ class MachineRestControllerTest {
     }
 
     @Test
+    void list_carriesTheDomainsAnswerToWhetherAMachineAcceptsASetupScript() {
+        // The Explorer used to offer "Setup command" to every LAN server and let a 204 say "nothing to set
+        // up" after the click — and for an appliance behind a relay not even that: the routes rule handed
+        // out a script for a sprinkler controller. The domain answers up front; the browser only renders.
+        Machine nas = new Machine(mid("nas"), "NAS", MachineType.LAN_SERVER, null, null, null,
+            null, null, null, null, "192.168.3.0/24", "192.168.3.3", true, 2375, DeviceCategory.NAS, null);
+        Machine pool = new Machine(mid("pool"), "Pool controller", MachineType.LAN_SERVER, null, null, null,
+            null, null, null, null, "192.168.1.0/24", "192.168.1.113", false, null, DeviceCategory.IOT, null);
+        when(getMachinesUseCase.getAllMachines()).thenReturn(List.of(nas, pool));
+
+        var response = controller.list();
+
+        assertThat(response).extracting("name", "acceptsSetupScript")
+            .containsExactly(tuple("NAS", true), tuple("Pool controller", false));
+    }
+
+    @Test
     void list_reportsHasCredentialPerMachine() {
         // The Explorer tree gates a machine's Files/Disk entries on Vaier actually holding an SSH
         // credential for it, not merely the ssh-access toggle — so GET /machines carries hasCredential

@@ -123,6 +123,11 @@ public record LanServer(String name, String lanAddress, boolean runsDocker, Inte
             : Machine.defaultSshAccess(effectiveDeviceCategory(), MachineType.LAN_SERVER);
     }
 
+    /** Whether a <b>LAN setup script</b> can be run on this server at all — see {@link Machine#acceptsSetupScript}. */
+    public boolean acceptsSetupScript() {
+        return Machine.acceptsSetupScript(runsDocker, effectiveSshAccess(), effectiveDeviceCategory());
+    }
+
     /**
      * The category Vaier shows for this LAN server: the operator's {@link #deviceCategory() override}
      * when one is pinned, otherwise the category auto-detected from the name. A LAN server persists no

@@ -448,7 +448,8 @@ public class MachineRestController {
         SshServerPresence sshServerPresence,
         String effectiveUsername,
         boolean effectiveUserPrivileged,
-        boolean canRelayALan
+        boolean canRelayALan,
+        boolean acceptsSetupScript
     ) {
         static MachineResponse from(Machine m, boolean hasCredential) {
             return from(m, hasCredential, false, SshServerPresence.UNKNOWN);
@@ -491,7 +492,8 @@ public class MachineRestController {
                 // #333: whether this machine could carry a whole network into the fleet. The browser used
                 // to decide this itself, from a type set that included LAN_SERVER — a machine with no
                 // tunnel to route into. The domain owns the rule; the answer travels as a boolean.
-                m.canRelayALan()
+                m.canRelayALan(),
+                m.acceptsSetupScript()
             );
         }
     }
