@@ -112,28 +112,6 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 .ex-kbd-ico { display: none; }
 .ex-kbd-chip { color: var(--text-dim); }
 
-/* Folds the tree away and back. Wide screens only — a phone has no tree to fold (see the width query
-   below), and a control for something that does not exist is worse than no control. The glyph is the panel
-   itself with its rail drawn in, so what the button acts on is legible before it is pressed. */
-.ex-treetoggle {
-    display: inline-flex;
-    flex: none;
-    align-items: center; justify-content: center;
-    width: 32px; height: 32px;
-    margin-right: 2px;
-    background: none;
-    border: 1px solid transparent;
-    border-radius: var(--radius-1);
-    color: var(--text-dim);
-    cursor: pointer;
-    transition: color .12s, border-color .12s;
-}
-.ex-treetoggle:hover { color: var(--text); border-color: var(--border-hi); }
-.ex-treetoggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-/* Folded away, the button dims to match every other resting glyph in the chrome — the rail in the icon is
-   what carries the state, so the button does not also need to shout it. */
-.ex-app.tree-hidden .ex-treetoggle svg line { opacity: .25; }
-
 /* --- the Vaier menu -------------------------------------------------------------------------------- */
 /* Settings, Users, Security, Concepts: Vaier's own, siblings of the fleet rather than things inside it, so
    they live in the chrome and are one reach from any depth on any screen. */
@@ -203,160 +181,57 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 
 /* --- main ------------------------------------------------------------------------------------------ */
 
+/* One column, at every width. The fleet rail that used to stand here drew a second view of what the
+   Inspector already lists, and a phone never had it at all — so the exception became the whole rule. */
 .ex-main {
     display: grid;
-    grid-template-columns: 276px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     min-height: 0;
 }
-/* The tree is optional and the choice is remembered (localStorage), so the pane simply takes the whole
-   width. Nothing is lost by folding it: the fleet pane lists every machine with the same marks the rail
-   carried, and the crumb bar and ⌘K do the moving. */
-.ex-app.tree-hidden .ex-main { grid-template-columns: minmax(0, 1fr); }
-.ex-app.tree-hidden .ex-tree { display: none; }
-
-/* --- the tree -------------------------------------------------------------------------------------- */
-
-.ex-tree {
-    background: var(--bg-panel);
-    border-right: 1px solid var(--rail);
-    overflow-y: auto;
-    padding: 8px 0 20px;
-    transition: background .5s ease, border-color .5s ease;
-}
-.ex-tree::-webkit-scrollbar { width: 9px; }
-.ex-tree::-webkit-scrollbar-thumb {
-    background: var(--border);
-    border-radius: 9999px;
-    border: 3px solid var(--bg-panel);
-}
-
-/* Sentence case at reading size, not 10.9px of tracked uppercase in the dimmest tone on the page.
-   A label that has to be deciphered is doing the opposite of labelling. */
-.ex-col-label {
-    padding: 10px 16px 8px;
-    font-family: var(--display);
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-muted);
-}
-
-.ex-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    min-height: 32px;
-    padding: 5px 10px 5px 0;
-    background: none;
-    border: 0;
-    text-align: left;
-    color: var(--text-muted);
-    position: relative;
-    cursor: pointer;
-}
-.ex-row:hover { background: var(--bg-hover); color: var(--text); }
-.ex-row.is-sel { background: var(--bg-card); color: var(--text); }
-/* A tree entry Vaier cannot open right now (no SSH server on last check) — greyed and inert, never
-   removed: the entry still names what is there, and the state is transient and self-healing. */
-.ex-row:disabled { opacity: .4; cursor: not-allowed; }
-.ex-row:disabled:hover { background: none; color: var(--text-muted); }
-.ex-row.is-sel::before {
-    content: '';
-    position: absolute;
-    left: 0; top: 0; bottom: 0;
-    width: 2px;
-    background: var(--accent);
-    transition: background .5s ease;
-}
-.ex-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-
-.ex-twist {
-    flex: none;
-    width: 12px; height: 12px;
-    color: var(--text-dim);
-    transition: transform .12s ease;
-}
-.ex-twist.is-open { transform: rotate(90deg); }
-.ex-twist.is-leaf { visibility: hidden; }
 
 .ex-ico { flex: none; width: 16px; height: 16px; }
 /* An entry's glyph says WHAT it is about, in the same colours the fleet cards' marks wear — and the class is
    chosen by the entry's KIND, never by its glyph, because a backup repository and a container both draw the
-   `box`. Trouble still outranks identity: the failed-directory rule below is more specific and wins. */
+   `box`. */
 .ex-ico.is-disk { color: var(--disk); }
 .ex-ico.is-backup { color: var(--backup); }
 .ex-ico.is-docker { color: var(--docker); }
 
-/* Depth is read, not counted: one hairline runs down each level of the tree. Only its offset is set per
-   level, by the script that knows the depth. */
-.ex-guide {
-    position: absolute;
-    top: 0; bottom: 0;
-    width: 1px;
-    background: var(--rail);
-    pointer-events: none;
-    transition: background .5s ease;
-}
-
-.ex-lbl {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-/* One font for the whole rail. The tree is navigation, not a terminal: an address and a word sit side by
-   side as siblings under a machine (files, shell, containers, disk), so they read as one list rather than
-   two typefaces. Identifiers keep their mono home in the Inspector title, where a path IS the content. */
-.ex-lbl { font-size: 15px; }
-
-/* The domain's four-state MachineStatus, in four colours — the same four the fleet page uses. UNKNOWN is
-   grey on purpose: it means no probe has run, and a green dot there would be a claim Vaier cannot make. */
-/* A machine's capability glyphs (Docker, relay), riding just before its liveness dot. Dim by default so they
-   read as quiet metadata, not controls; they lift to full colour with the row on hover/selection. */
-.ex-caps { flex: none; display: inline-flex; align-items: center; gap: 6px; }
-.ex-cap { display: inline-flex; color: var(--text-dim); }
+/* The glyph inside a fleet card's mark. */
 .ex-cap-ico { width: 15px; height: 15px; }
-.ex-row:hover .ex-cap, .ex-row.is-sel .ex-cap { color: var(--text-muted); }
-/* Docker is a borrowed identity exactly as Claude is, so its glyph wears its own blue — and keeps it where
-   the rest of the strip lifts from dim to muted, since that hover rule outranks a bare class. The other
-   capabilities stay quiet on purpose: they say what a machine IS, and colouring them would put them in
-   competition with the marks that carry a verdict. */
-.ex-cap.is-docker,
-.ex-row:hover .ex-cap.is-docker,
-.ex-row.is-sel .ex-cap.is-docker { color: var(--docker); }
 
 /* The dot paints only trouble, and takes space only when it paints. A blank 6px held open on every healthy
    machine is the same noise a green dot was, just invisible — so the layout shifts when something goes
-   amber or red, which is the one moment a row has earned the right to draw the eye. */
+   amber or red, which is the one moment it has earned the right to draw the eye. */
 .ex-dot { display: none; flex: none; width: 8px; height: 8px; border-radius: 50%; }
 .ex-dot.is-degraded, .ex-dot.is-down { display: block; }
 /* There is deliberately no `is-up` rule: a machine that is fine is not news, and a green dot on every
-   healthy machine made the one that had fallen over compete with a dozen that hadn't. The element still
-   takes its 6px so names line up, and what IS news moved to the card behind it (.ex-card.is-down). */
+   healthy machine made the one that had fallen over compete with a dozen that hadn't. What IS news is worn
+   by the card behind it (.ex-card.is-down). */
 .ex-dot.is-degraded { background: var(--yellow); }   /* on the network, but its Docker scrape is failing */
 .ex-dot.is-down { background: var(--red); }
-/* No `is-idle` rule either: a sleeping phone is not news, and neither is a machine nothing has probed.
-   Amber and red are the whole vocabulary — the fleet page paints trouble and stays silent otherwise.
-   The cost, stated where someone would look for the rule: an unprobed machine now reads the same as a
-   healthy one, and the listing's "N online" count is where that gap still shows. */
-/* An archived view has no liveness to report, so the pane drops its dots. The tree keeps its own: it stands
-   in the present regardless of which archive the pane is showing, and blanking it implied the whole fleet
-   had gone dark. */
+/* No `is-idle` rule either: a machine nothing has probed is not news. Amber and red are the whole
+   trouble vocabulary — the fleet page paints trouble and stays silent otherwise. The cost, stated where
+   someone would look for the rule: an unprobed machine reads the same as a healthy one, and the listing's
+   "N online" count is where that gap still shows. */
+/* Presence is the one thing that is neither trouble nor silence. A phone or PC that is off is not a
+   server that fell over, so it never earned red — but painting nothing either way meant on and off looked
+   the same. It is said by the machine itself, not by a dot: its name reads normally while it is on the VPN
+   and dims while it is away, in the text's own greys and no trouble colour. The dot stays blank in
+   both states (`is-present` and `is-away` have no rule here on purpose). */
+.ex-card.is-away .ex-card-name,
+.ex-card.is-away .ex-badge { color: var(--text-dim); }
+.ex-pane-title.is-away { color: var(--text-dim); }
+/* Trouble is worn the same way: by the machine's own name, wherever that name is drawn. The liveness dot is
+   never painted — it stays only as the anchor the stream repaints from (`[data-ex-dot]`; a run's own dots
+   carry no anchor and keep their light). */
+.ex-card.is-down .ex-card-name,
+.ex-pane-title.is-down { color: var(--red); }
+.ex-card.is-degraded .ex-card-name,
+.ex-pane-title.is-degraded { color: var(--yellow); }
+.ex-dot[data-ex-dot] { display: none; }
+/* An archived view has no liveness to report, so the pane drops its dots. */
 [data-past='1'] .ex-pane .ex-dot { display: none; }
-
-/* A directory whose read failed. It does not pretend to be empty, and it does not spin forever — it says so,
-   and the reason (the server's own sentence) is on the row's title and in full in the Inspector. */
-.ex-row.is-failed .ex-lbl,
-.ex-row.is-failed .ex-ico { color: var(--red); }
-
-/* A directory being read. The fleet is behind a VPN and a sleeping machine can take seconds to answer, so the
-   twist breathes rather than sitting there looking like a leaf. It always resolves: open, leaf, or failed. */
-.ex-twist.is-busy { animation: ex-breathe 1s ease-in-out infinite; }
-@keyframes ex-breathe { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) {
-    .ex-twist.is-busy { animation: none; opacity: .5; }
-}
 
 /* --- inspector ------------------------------------------------------------------------------------- */
 
@@ -1828,16 +1703,6 @@ select.ex-input { cursor: pointer; }
     .ex-kbd { padding: 0 9px; }
     .ex-vmenu-lbl { display: none; }
     .ex-vmenu-btn { width: 32px; height: 32px; padding: 0; justify-content: center; }
-
-    /* No tree on a phone, and no control for one. It was a drawer over the pane, and every row in it named
-       something the pane behind it already listed with room for a thumb — the fleet's machines, a machine's
-       entries, a folder's folders. What the drawer alone used to carry (a machine's capabilities, its last
-       backup's outcome, containers wanting a pull) is on the fleet pane's cards now, so this deletes a
-       surface rather than the information on it. Drilling in is the pane; getting back is the crumb bar;
-       going sideways is ⌘K, which finally matches on names. */
-    .ex-treetoggle { display: none; }
-    .ex-main { grid-template-columns: minmax(0, 1fr); }
-    .ex-tree { display: none; }
 
     /* The address bar is now the thing every navigation back goes through, and its crumbs were 2px-padded
        text. Crumbs a thumb can actually land on. */

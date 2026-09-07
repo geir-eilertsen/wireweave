@@ -12,10 +12,10 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The Explorer shell (#323 slice A): the fleet as one tree, at a page of its own.
+ * The Explorer shell (#323 slice A): the fleet as one address space, at a page of its own.
  *
  * <p>The shell is the first Vaier page that is not a section inside {@code admin.html}'s iframe — it carries
- * its own topbar, its own tree, and the terminal dock itself. That inversion is the point of the epic (the
+ * its own topbar, its own address bar, and the terminal dock itself. That inversion is the point of the epic (the
  * iframe existed only to keep live SSH sessions alive across tab switches), so the invariants that make it a
  * shell rather than another section are worth pinning: the dock is really in the page, the old pages really do
  * still work, nothing polls, and no endpoint was opened to make it possible.
@@ -103,7 +103,7 @@ class ExplorerShellTest {
 
     @Test
     void aMachinesShell_opensInItsOwnWindow_fromTheWaysIntoTheMachine() throws IOException {
-        // The shell is not a tree entry, and it is no longer filed under a heading named after its transport
+        // The shell is not an entry, and it is no longer filed under a heading named after its transport
         // either. It is one of the ways INTO a machine — a card beside files, containers, disk and backups —
         // because that is what an operator wants it for; SSH is only how it travels. It opens in its own
         // browser window; the Explorer has no bottom dock.
@@ -113,7 +113,7 @@ class ExplorerShellTest {
         assertThat(js).doesNotContain("TerminalDock.open(");
         // A door among the doors, in the same grid and greyed by the same two rules as files and disk.
         assertThat(js).contains("card(svg('shell', 'ex-ico'), 'shell',");
-        // The shell is not a navigable tree kind any more: no 'shell' child, no renderShell pane.
+        // The shell is not a navigable kind any more: no 'shell' child, no renderShell pane.
         assertThat(js).doesNotContain("kind: 'shell'");
         assertThat(js).doesNotContain("function renderShell(");
         // The primary shell window always reattaches to the machine's one stable session (deterministic, never
@@ -163,11 +163,11 @@ class ExplorerShellTest {
         // The shell is a new front for the API Vaier already has. Slice A opened nothing; slice C opened
         // exactly one endpoint (GET /machines/{machine}/disk); slice 2 (Move) opens the transfers side —
         // GET/POST /transfers — because a cross-machine copy is a genuinely new operation Vaier could not do
-        // before. The backup-server designation moving into the tree adds the two backup endpoints it needs —
+        // before. The backup-server designation moving into the shell adds the two backup endpoints it needs —
         // /backup-servers (list, PUT to designate/edit, DELETE to remove) and /backup-repositories (read-only,
         // to show what lives on the server) — both already there for the Backups page. Everything else here was
         // already reachable, and a fetch to anything outside this list would mean an endpoint was invented to
-        // make the tree look finished. (The download is an <a href>, not a fetch, so it does not appear here.)
+        // make the shell look finished. (The download is an <a href>, not a fetch, so it does not appear here.)
         // /survival-kit joins it with the Settings section that writes the fleet's kits: the endpoint is the
         // one the API already had, and the section is a front for it rather than a reason for it to exist.
         // /security is #329 Slice 3's addition, and it is the same shape of justification: CrowdSec has been
@@ -177,7 +177,7 @@ class ExplorerShellTest {
         // /fleet-credentials is the one entry here with the opposite justification, and it is stated rather
         // than smuggled in: the endpoint did not pre-date its view. A fleet credential is a genuinely new
         // capability, and its REST surface and its Credentials view shipped together — so this list now
-        // means "no endpoint was invented to make the tree look finished", which is the rule that was
+        // means "no endpoint was invented to make the shell look finished", which is the rule that was
         // always meant, rather than the stricter "nothing here is new" that happened to hold until now.
         // Claude sign-in adds no entry at all — and it no longer fetches from this file either: the UI
         // moved into the pop-out shell window (claude-sign-in.js), so what the shell keeps is the machine
@@ -204,8 +204,8 @@ class ExplorerShellTest {
     }
 
     /**
-     * The tree stands on machine IDENTITIES, not names (§6.22 step 2c). This is the guard that keeps it that
-     * way, because the failure is silent in both directions: a name where an id belongs 404s (it did, for
+     * The address space stands on machine IDENTITIES, not names (§6.22 step 2c). This is the guard that keeps
+     * it that way, because the failure is silent in both directions: a name where an id belongs 404s (it did, for
      * folder selection, for weeks), and an id where a name belongs renders a UUID at a person.
      *
      * <p>What is checked is the crossing, not every call site: there is exactly one function that turns an
@@ -213,7 +213,7 @@ class ExplorerShellTest {
      * the moment a machine is created, where the name is all the create response gives back.
      */
     @Test
-    void theTree_addressesMachinesByIdentity_andCrossesToANameOnlyToShowOne() throws IOException {
+    void theShell_addressesMachinesByIdentity_andCrossesToANameOnlyToShowOne() throws IOException {
         String js = read("explorer-shell.js");
 
         // The lookup this refactor exists to delete — now gone in every form. The last one to go was
@@ -223,7 +223,7 @@ class ExplorerShellTest {
         assertThat(js).doesNotContain("window.vaierMachineIdOf");
         assertThat(js).doesNotContain("function justCreated(");
 
-        // The tree's own entries: the segment is the identity, the label is the name.
+        // The fleet's own entries: the segment is the identity, the label is the name.
         assertThat(js).contains("{ name: m.id, kind: 'machine', label: m.name }");
         assertThat(js).as("machines are never navigated to by name")
             .doesNotContain("go(['fleet', m.name");
@@ -257,7 +257,7 @@ class ExplorerShellTest {
 
     @Test
     void theShell_saysMachineAndEntry_neverNode() throws IOException {
-        // UBIQUITOUS_LANGUAGE.md §11 bans "node": a thing in the fleet is a machine, and a thing in the tree
+        // UBIQUITOUS_LANGUAGE.md §11 bans "node": a thing in the fleet is a machine, and a thing at a path
         // is an entry.
         Pattern node = Pattern.compile("\\bnodes?\\b", Pattern.CASE_INSENSITIVE);
         // claude-sign-in.js is Explorer-adjacent shipped prose — the Explorer loads it for the machine
@@ -354,10 +354,35 @@ class ExplorerShellTest {
         }
     }
 
+    /**
+     * The fleet rail is gone. It drew a second view of what the Inspector already lists — every machine, every
+     * entry inside one, every folder read so far — and a phone never had it at all, so the layout it was the
+     * exception to is now the only one. What it alone used to carry (a machine's capabilities, its last
+     * backup's outcome, containers wanting a pull) had already moved onto the fleet pane's cards. Drilling in
+     * is the pane, getting back is the crumb bar, going sideways is ⌘K.
+     */
+    @Test
+    void theShell_hasNoFleetRail_andThePaneTakesTheWholeWidth() throws IOException {
+        for (String asset : List.of("explorer.html", "explorer-shell.js", "explorer-shell.css")) {
+            assertThat(read(asset)).as("the rail's markup and script in %s", asset)
+                .doesNotContain("ex-tree").doesNotContain("exTree").doesNotContain("tree-hidden")
+                .doesNotContain("ex-row").doesNotContain("ex-twist").doesNotContain("ex-guide");
+        }
+        // No remembered preference for a column that cannot be folded away any more.
+        assertThat(read("explorer-shell.js")).doesNotContain("vaier.explorer.tree");
+
+        // One column, at every width — not a wide-screen two-column grid with a phone exception.
+        String css = read("explorer-shell.css");
+        int main = css.indexOf(".ex-main {");
+        assertThat(main).isPositive();
+        assertThat(css.substring(main, css.indexOf('}', main)))
+            .contains("grid-template-columns: minmax(0, 1fr)");
+    }
+
     // --- 8. the bridge is temporary, and says so --------------------------------------------------------
 
     @Test
-    void theSectionsNotYetPorted_areBridgedIntoTheTreeAndMarkedTransitional() throws IOException {
+    void theSectionsNotYetPorted_areBridgedIntoTheShellAndMarkedTransitional() throws IOException {
         String js = read("explorer-shell.js");
         // Only two Vaier-wide globals are still framed: Users and Concepts. Settings is native (no settings.html),
         // Infrastructure is native (no vpn-peers.html), and Backups is native now too — the last fleet-level
@@ -458,8 +483,8 @@ class ExplorerShellTest {
 
     @Test
     void theVaierServer_isUpBecauseItIsServingThePage_andIsNeverProbed() throws IOException {
-        // The third case. The Vaier server is the machine rendering this tree: if the operator can see the
-        // rail at all, it is up. Probing it would be asking a question we are standing inside the answer to.
+        // The third case. The Vaier server is the machine rendering this page: if the operator can see the
+        // shell at all, it is up. Probing it would be asking a question we are standing inside the answer to.
         String js = read("explorer-shell.js");
 
         int from = js.indexOf("function livenessOf(");
@@ -470,6 +495,69 @@ class ExplorerShellTest {
         // an identity's job, so renaming the host made Vaier stop recognising itself.
         assertThat(body).contains("isVaierServerMachine(machineId)").contains("is-up");
         assertThat(js).contains("(S.machines.find((m) => m.vaierServer) || {}).id");
+    }
+
+    @Test
+    void aPersonalDevice_showsPresence_inItsOwnNameAndIcon_notInADot() throws IOException {
+        // A phone or PC that is off is not news, so it never earned red — but painting nothing either way
+        // meant the operator could not tell on from off at all. Presence is a third register, and it is
+        // said by the machine's own name and icon: normal while it is on the VPN, dimmed while it is away.
+        // No dot, and no colour the trouble vocabulary uses. Servers keep the rule that fine paints nothing.
+        String js = read("explorer-shell.js");
+        int from = js.indexOf("function livenessOf(");
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).contains("is-present").contains("is-away");
+        assertThat(body).as("a client peer is no longer painted as 'no idea'")
+            .doesNotContain("? 'is-idle' : 'is-down'");
+
+        // The painter hands the answer to the card or pane title around the dot, as it already does for down.
+        int paint = js.indexOf("function paintLiveness(");
+        String painter = js.substring(paint, js.indexOf("\n    }", paint));
+        assertThat(painter).contains("classList.toggle('is-away'");
+
+        String css = read("explorer-shell.css");
+        assertThat(css).as("presence is not a dot").doesNotContain(".ex-dot.is-present").doesNotContain(".ex-dot.is-away");
+        for (String host : List.of(".ex-card.is-away .ex-card-name", ".ex-pane-title.is-away")) {
+            int at = css.indexOf(host);
+            assertThat(at).as(host + " dims while away").isPositive();
+            String rule = css.substring(at, css.indexOf("}", at));
+            assertThat(rule).contains("var(--text-dim)");
+            assertThat(rule).as("presence borrows no trouble colour")
+                .doesNotContain("--red").doesNotContain("--yellow").doesNotContain("--green");
+        }
+
+        // The fleet's "N online" count already counted a connected phone; it must not lose it to the rename.
+        int count = js.indexOf("const online = ");
+        assertThat(js.substring(count, js.indexOf("\n", count))).contains("is-present");
+    }
+
+    @Test
+    void aMachinesLiveness_isWornByItsNameAndIcon_theDotIsOnlyTheAnchor() throws IOException {
+        // The card already turned red and hid its dot; the same machine's name elsewhere kept a red dot beside
+        // it in the ordinary colour, so one answer was drawn two ways. Down is red and degraded is amber on
+        // the machine itself — its name — everywhere it appears, and the liveness dot is never painted: it
+        // stays only as the anchor the stream repaints from. A run's own dots carry no anchor and keep theirs.
+        String js = read("explorer-shell.js");
+        int paint = js.indexOf("function paintLiveness(");
+        String painter = js.substring(paint, js.indexOf("\n    }", paint));
+        assertThat(painter).contains("classList.toggle('is-down'").contains("classList.toggle('is-degraded'");
+
+        String css = read("explorer-shell.css");
+        int hidden = css.indexOf(".ex-dot[data-ex-dot] {");
+        assertThat(hidden).as("the machine dot is never painted").isPositive();
+        assertThat(css.substring(hidden, css.indexOf("}", hidden))).contains("display: none");
+        assertThat(hidden).as("after the trouble rules, so it wins").isGreaterThan(css.indexOf(".ex-dot.is-down {"));
+
+        for (String host : List.of(".ex-card.is-down .ex-card-name", ".ex-pane-title.is-down")) {
+            int at = css.indexOf(host);
+            assertThat(at).as(host + " is red").isPositive();
+            assertThat(css.substring(at, css.indexOf("}", at))).contains("var(--red)");
+        }
+        for (String host : List.of(".ex-card.is-degraded .ex-card-name", ".ex-pane-title.is-degraded")) {
+            int at = css.indexOf(host);
+            assertThat(at).as(host + " is amber").isPositive();
+            assertThat(css.substring(at, css.indexOf("}", at))).contains("var(--yellow)");
+        }
     }
 
     @Test
@@ -493,9 +581,9 @@ class ExplorerShellTest {
     // --- 12. slice B: directories are entries -----------------------------------------------------------
 
     @Test
-    void aDirectory_isReadLazilyWhenExpanded_neverEagerlyAndNeverRecursively() throws IOException {
-        // The fleet is on the far side of a VPN. A tree that walks it eagerly is a tree that hangs, so the
-        // rail's children come from a cache that only an expand fills — childrenOf() reads, it never fetches.
+    void aDirectory_isReadLazilyWhenOpened_neverEagerlyAndNeverRecursively() throws IOException {
+        // The fleet is on the far side of a VPN. Walking it eagerly is how a shell hangs, so a path's children
+        // come from a cache that only opening one fills — childrenOf() reads, it never fetches.
         String js = read("explorer-shell.js");
         // one directory per expand, read on demand
         assertThat(js).contains("async function readDir(");
@@ -503,17 +591,17 @@ class ExplorerShellTest {
         int from = js.indexOf("function childrenOf(");
         assertThat(from).isPositive();
         String body = js.substring(from, js.indexOf("\n    }", from));
-        // the rail's children are whatever the cache already holds — reading it can never start a read,
-        // so no repaint of the tree can trigger an SFTP walk of the fleet
+        // a path's children are whatever the cache already holds — reading them can never start a read,
+        // so no repaint and no ⌘K index can trigger an SFTP walk of the fleet
         assertThat(body).contains("S.dirs");
         assertThat(body).as("childrenOf must never reach for the network").doesNotContain("fetch(")
             .doesNotContain("readDir(").doesNotContain("await");
     }
 
     @Test
-    void onlyDirectories_becomeEntriesInTheRail() throws IOException {
-        // The rail carries structure; the Inspector lists the contents. Duplicating every file into the rail
-        // would drown the structure the rail exists to show.
+    void onlyDirectories_becomeEntriesInTheAddressSpace() throws IOException {
+        // A directory is a place you can stand; a file is contents the Inspector lists. Growing an entry for
+        // every file would make ⌘K a list of the fleet's files rather than of the places in it.
         String js = read("explorer-shell.js");
         assertThat(js).contains(".filter((e) => e.directory)");
     }
@@ -533,7 +621,7 @@ class ExplorerShellTest {
     @Test
     void aMachineLeavingTheFleet_doesNotStrandItsCachedDirectories() throws IOException {
         // A fleet reshape (peers-updated) that dropped a machine while its directories stayed in the cache
-        // would leave the rail holding entries for a machine that no longer exists.
+        // would leave ⌘K offering paths into a machine that no longer exists.
         String js = read("explorer-shell.js");
         assertThat(js).contains("function pruneDirs(");
     }
@@ -541,14 +629,17 @@ class ExplorerShellTest {
     @Test
     void aDirectoryThatCannotBeRead_failsVisiblyAndLocally() throws IOException {
         // ExplorerService already surfaces the real reason verbatim ("Not allowed to read /root as geir.").
-        // The row must wear the failure — not pretend to be empty, and not spin forever — and the message
-        // itself reuses the .ex-note.is-error affordance that is already in the stylesheet.
+        // The Inspector must wear the failure — not pretend to be an empty folder, and not spin forever — and
+        // the message itself reuses the .ex-note.is-error affordance that is already in the stylesheet.
         String js = read("explorer-shell.js");
         assertThat(js).contains("'error'");
-        assertThat(js).contains("is-failed");
+        int from = js.indexOf("function renderDirectory(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    function", from));
+        assertThat(body).as("a directory that failed says so where the operator is standing")
+            .contains("entry.state === 'error'").contains("failureNote(");
 
         String css = read("explorer-shell.css");
-        assertThat(css).contains(".ex-row.is-failed");
         assertThat(css).contains(".ex-note.is-error");   // the existing affordance, reused, not reinvented
     }
 
@@ -586,12 +677,12 @@ class ExplorerShellTest {
 
     @Test
     void aMachineGrowsOnlyTheEntriesVaierCanActuallyReach() throws IOException {
-        // The tree must be honest about a machine rather than uniform. Files and disk ride on a held SSH
+        // A machine must be honest about itself rather than uniform. Files and disk ride on a held SSH
         // credential, so a machine with none grows neither — showing them off the SSH-access toggle alone
         // would open onto a red "no login" wall until a refresh. A machine that runs no Docker must not grow an
         // empty `containers` entry that opens onto nothing. /machines carries both facts (hasCredential,
-        // runsDocker) — the tree asks them, it does not guess.
-        // (The shell is not a tree entry — it opens from the machine's SSH-access section — so it is absent here.)
+        // runsDocker) — childrenOf asks them, it does not guess.
+        // (The shell is not an entry — it opens from the machine's SSH-access section — so it is absent here.)
         String js = read("explorer-shell.js");
         int from = js.indexOf("if (kind === 'machine') {");
         assertThat(from).isPositive();
@@ -846,7 +937,7 @@ class ExplorerShellTest {
         String js = read("explorer-shell.js");
         int from = js.indexOf("function machineMarks(");
         assertThat(from).isPositive();
-        String body = js.substring(from, js.indexOf("\n    // --- the tree", from));
+        String body = js.substring(from, js.indexOf("\n    // --- the address bar", from));
 
         assertThat(body).contains("mark(DISK_MARK[standing.level], 'disk'");
         assertThat(body).contains("standing.level");
@@ -866,7 +957,7 @@ class ExplorerShellTest {
         // with no credential — none of them may draw a green disk. They draw nothing.
         String js = read("explorer-shell.js");
         int from = js.indexOf("function machineMarks(");
-        String body = js.substring(from, js.indexOf("\n    // --- the tree", from));
+        String body = js.substring(from, js.indexOf("\n    // --- the address bar", from));
 
         assertThat(body).contains("if (!S.at && standing)");
         // No default, no fallback level, nothing that could turn "not read" into "clear".
@@ -929,7 +1020,7 @@ class ExplorerShellTest {
         String js = read("explorer-shell.js");
         int from = js.indexOf("function machineMarks(");
         assertThat(from).isPositive();
-        String body = js.substring(from, js.indexOf("\n    // --- the tree", from));
+        String body = js.substring(from, js.indexOf("\n    // --- the address bar", from));
 
         assertThat(body).contains("'claude',");
         assertThat(body).contains("claudeWords(");
@@ -968,7 +1059,7 @@ class ExplorerShellTest {
         // NOT_INSTALLED, SKIPPED, UNREACHABLE and UNKNOWN carry no card tone, so they draw nothing either.
         String js = read("explorer-shell.js");
         int from = js.indexOf("function machineMarks(");
-        String body = js.substring(from, js.indexOf("\n    // --- the tree", from));
+        String body = js.substring(from, js.indexOf("\n    // --- the address bar", from));
 
         assertThat(body).contains("claude.saysWhereTheSignInStands");
         // No fallback tone anywhere: nothing that could turn "not read" into a mark.
@@ -1089,11 +1180,11 @@ class ExplorerShellTest {
     @Test
     void aPeersContainers_areFiledUnderTheMachinesIdentity() throws IOException {
         // The three-way identity split that used to bite here: /docker-services/peers keyed its containers
-        // by the peer's *id* — the WireGuard directory name ("apalveien5") — while the tree and /machines
+        // by the peer's *id* — the WireGuard directory name ("apalveien5") — while the shell and /machines
         // used the canonical machine name ("Apalveien 5"), so filing containers under either meant a
         // crossing, and one character of disagreement showed a machine with no containers while Vaier could
         // see them perfectly well. The scrape carries the machine's identity now, so there is no crossing
-        // left to get wrong: the cache is keyed by the same thing the tree stands on.
+        // left to get wrong: the cache is keyed by the same thing the address stands on.
         String js = read("explorer-shell.js");
         int from = js.indexOf("async function loadContainers(");
         assertThat(from).isPositive();
@@ -1110,7 +1201,7 @@ class ExplorerShellTest {
         // Parity is real: everything vpn-peers.html owned — machine creation and editing, the LAN scan, the
         // world map, SSH credentials and access, setup scripts, config reissue and regeneration, publishing
         // with its advanced fields, the published-service editor and allowed groups, and discovered candidates
-        // — is a native entry in the tree now. So the page and its assets are gone, and the bridge with them.
+        // — is a native entry now. So the page and its assets are gone, and the bridge with them.
         assertThat(Files.exists(STATIC.resolve("vpn-peers.html"))).isFalse();
         assertThat(Files.exists(STATIC.resolve("vpn-peers.js"))).isFalse();
         assertThat(Files.exists(STATIC.resolve("vpn-peers-map.js"))).isFalse();
@@ -1234,18 +1325,6 @@ class ExplorerShellTest {
     }
 
     @Test
-    void aContainerWithAnUpdateAvailable_wearsAMarkInTheRail() throws IOException {
-        // Container rows are first-class entries, so the rail is where an operator scanning the fleet sees it
-        // without opening anything. Until now the machine's liveness dot was the only per-row mark.
-        String js = read("explorer-shell.js");
-        int from = js.indexOf("function branch(");
-        assertThat(from).isPositive();
-        String body = js.substring(from, js.indexOf("\n    function", from));
-        assertThat(body).as("the rail's container rows carry the mark").contains("'container'");
-        assertThat(body).contains("updateMark(");
-    }
-
-    @Test
     void theContainersCard_onTheMachinePage_wearsTheSameUpdatePillAsTheFleetCard() throws IOException {
         // The fleet card says "One update" on its marks strip; open the machine and the containers card,
         // the very door to that container, said nothing. One pill, one helper, both places — a second
@@ -1320,7 +1399,7 @@ class ExplorerShellTest {
 
     @Test
     void theSingleContainer_saysWhichOfTheThreeVerdictsItIs_includingCannotTell() throws IOException {
-        // Absence of a mark in the rail must never be read as a promise that the image is current. The rail
+        // Absence of a mark on the list must never be read as a promise that the image is current. A list row
         // has no room to say so; the Inspector does, so this is where UNKNOWN is spoken aloud rather than
         // silently collapsed into "up to date" — which is precisely the lie #57 was filed about.
         String js = read("explorer-shell.js");
@@ -1342,18 +1421,18 @@ class ExplorerShellTest {
     }
 
     @Test
-    void theContainerList_carriesTheSameMarkAsTheRail_fromTheSameHelper() throws IOException {
-        // One verdict, one helper, two places it is drawn. A second copy of "when do we draw this" is a second
-        // place it can drift from the domain.
+    void theContainerList_carriesTheUpdateMark_fromTheOneHelper() throws IOException {
+        // One verdict, one helper, one place it is drawn. A second copy of "when do we draw this" would be a
+        // second place it can drift from the domain.
         String js = read("explorer-shell.js");
         int from = js.indexOf("function renderContainers(");
         assertThat(from).isPositive();
         String body = js.substring(from, js.indexOf("\n    function renderContainer(", from));
         assertThat(body).contains("updateMark(");
 
-        // drawn in exactly the two places, off the one helper
+        // drawn in exactly the one place, off the one helper
         assertThat(js.split("updateMark\\(", -1).length - 1)
-            .as("the helper, and its two call sites").isEqualTo(3);
+            .as("the helper, and its one call site").isEqualTo(2);
     }
 
     @Test
@@ -1396,7 +1475,7 @@ class ExplorerShellTest {
 
     @Test
     void theInspector_explainsWhyAMovingTagRaisesNoMail() throws IOException {
-        // The rail has room for one word; this is the surface with room for the reason.
+        // A list row has room for one word; this is the surface with room for the reason.
         String js = read("explorer-shell.js");
         int says = js.indexOf("function updateSays(");
         assertThat(says).isPositive();
@@ -1882,7 +1961,7 @@ class ExplorerShellTest {
     @Test
     void theShell_isNeverWiderThanTheScreen() throws IOException {
         // An implicit grid column is max-content sized, so the shell was as wide as its widest row — and the
-        // topbar's crumb trail grows with the path. Standing deep in a tree on a phone made the whole page
+        // topbar's crumb trail grows with the path. Standing deep in the fleet on a phone made the whole page
         // wider than the screen and every surface under it scrolled sideways.
         String css = read("explorer-shell.css");
         int from = css.indexOf(".ex-app {");
@@ -2029,40 +2108,41 @@ class ExplorerShellTest {
         assertThat(block).as("and the checkbox stays above it").contains(".ex-lrow .ex-check");
     }
 
-    // --- trouble is visible from the tree ----------------------------------------------------------------
+    // --- trouble is visible from the fleet ---------------------------------------------------------------
 
     @Test
-    void aMachinesBackupEntry_wearsItsLastOutcomeInTheTree() throws IOException {
-        // The point of a tree is that you do not have to walk it. A failed run that is only visible once an
-        // operator opens that machine's Backup pane is a failure nobody sees, so the entry carries the dot.
+    void aMachineCard_wearsItsLastBackupOutcome_soAFailedRunIsSeenFromTheFleet() throws IOException {
+        // The point of the fleet pane is that you do not have to open anything. A failed run that is only
+        // visible once an operator opens that machine's Backup pane is a failure nobody sees, so the card
+        // carries the mark.
         String js = read("explorer-shell.js");
-        int from = js.indexOf("function backupDot(");
-        assertThat(from).as("the tree has a dot for a machine's backup").isPositive();
-        String body = js.substring(from, js.indexOf("\n    }", from));
+        int from = js.indexOf("function machineMarks(");
+        assertThat(from).as("the fleet card has a mark for a machine's backup").isPositive();
+        String body = js.substring(from, js.indexOf("\n    // --- the address bar", from));
 
         assertThat(body).as("coloured by the job's last outcome").contains("lastRunStatus");
         assertThat(body).as("through the one map the job pane already uses, so the two cannot disagree")
-            .contains("RUN_DOT[");
+            .contains("RUN_MARK[");
     }
 
     @Test
-    void aJobThatHasNeverRun_getsTheIdleDot_notTheGreenOne() throws IOException {
-        // "Not yet" is not success. Colouring an unrun job green would make the tree promise data is safe
-        // before a single archive exists.
+    void aJobThatHasNeverRun_getsTheIdleMark_notTheGreenOne() throws IOException {
+        // "Not yet" is not success. Colouring an unrun job green would promise data is safe before a single
+        // archive exists.
         String js = read("explorer-shell.js");
-        int from = js.indexOf("function backupDot(");
-        String body = js.substring(from, js.indexOf("\n    }", from));
-        assertThat(body).contains("is-idle");
-        assertThat(body).doesNotContain("is-up");
+        int from = js.indexOf("function machineMarks(");
+        String body = js.substring(from, js.indexOf("\n    // --- the address bar", from));
+        assertThat(body).contains("|| 'is-idle'");
+        assertThat(body).doesNotContain("'is-up'");
     }
 
     @Test
-    void theBackupEntryDot_isReadFromTheJobListAlreadyLoaded_notANewRead() throws IOException {
-        // Painting the tree must not fire a request per machine. The job list lands once at boot and now
-        // carries the outcome, so the dot costs nothing to draw.
+    void theBackupMark_isReadFromTheJobListAlreadyLoaded_notANewRead() throws IOException {
+        // Painting the fleet must not fire a request per machine. The job list lands once at boot and carries
+        // the outcome, so the mark costs nothing to draw.
         String js = read("explorer-shell.js");
-        int from = js.indexOf("function backupDot(");
-        String body = js.substring(from, js.indexOf("\n    }", from));
+        int from = js.indexOf("function machineMarks(");
+        String body = js.substring(from, js.indexOf("\n    // --- the address bar", from));
         assertThat(body).as("read off the loaded jobs").contains("jobsOn(");
         assertThat(body).as("and never fetched").doesNotContain("fetch(");
     }
@@ -3160,7 +3240,7 @@ class ExplorerShellTest {
     // --- 20. the Credentials view actually draws ---------------------------------------------------------
     //
     // The bug these exist for: `renderPane` dispatched the `credentials` kind to a `renderCredentials` that
-    // was never written. Everything around it had landed — the tree entry, the state slot, the whole CSS
+    // was never written. Everything around it had landed — the entry, the state slot, the whole CSS
     // block for the coverage strip, the REST surface, this file's own allowlist entry — so every test passed
     // and the entry opened onto an empty pane, throwing a ReferenceError nobody saw. A view is not shipped
     // when the things around it are; it is shipped when something draws it.
@@ -3170,7 +3250,7 @@ class ExplorerShellTest {
      * exactly this way every time, and the dispatch table is the one place all of them are named.
      */
     @Test
-    void everyPaneTheTreeCanOpen_hasAFunctionThatDrawsIt() throws IOException {
+    void everyPaneTheShellCanOpen_hasAFunctionThatDrawsIt() throws IOException {
         String js = read("explorer-shell.js");
         Matcher m = Pattern.compile("kind === '[a-z]+'\\) return (render[A-Za-z]+)\\(pane\\)").matcher(js);
         int found = 0;
@@ -3288,18 +3368,6 @@ class ExplorerShellTest {
             .contains("key(S.path) + '@'");
     }
 
-    /**
-     * The rail loses the operator's place the same way on the same renders, and needs no assignment to do it:
-     * emptying it collapses its height, which drops its own scroll to the top. A folded-open fleet is long
-     * enough for that to be just as disorienting as the pane.
-     */
-    @Test
-    void theRailIsRebuiltInPlace_notScrolledBackToItsTop() throws IOException {
-        String js = read("explorer-shell.js");
-
-        assertThat(js).contains("tree.scrollTop = resume;");
-    }
-
     // --- 22. a mark says WHAT it is; only trouble recolours it ---------------------------------------------
     //
     // The Claude mark set the rule when it took Claude's clay: colour identifies the thing, and state is
@@ -3370,16 +3438,14 @@ class ExplorerShellTest {
     }
 
     /**
-     * Docker is a borrowed identity exactly as Claude is, so its capability glyph wears its own blue. It has
-     * to keep it while the row is hovered or selected, where the rest of the strip lifts from dim to muted —
-     * the hover rule is more specific than a bare class and would otherwise win.
+     * Docker is a borrowed identity exactly as Claude is, so its mark wears its own blue on the fleet card —
+     * the one surface a machine's capabilities are drawn on now.
      */
     @Test
-    void theDockerGlyph_keepsItsBlueOnHoverAndSelection() throws IOException {
+    void theDockerMark_wearsItsOwnBlue() throws IOException {
         String css = read("explorer-shell.css");
 
-        assertThat(css).contains(".ex-row:hover .ex-cap.is-docker");
-        assertThat(css).contains(".ex-row.is-sel .ex-cap.is-docker");
+        assertThat(css).contains(".ex-mark.is-docker { color: var(--docker); }");
     }
 
     /**
@@ -3399,15 +3465,15 @@ class ExplorerShellTest {
     // --- 23. the identity colours leave the fleet cards ----------------------------------------------------
     //
     // §22 gave each marked concept a hue of its own. It stopped at the fleet cards, so the same disk was
-    // violet on its card and plain grey two clicks away in the tree, and the same machine's Claude standing
+    // violet on its card and plain grey two clicks away in the pane, and the same machine's Claude standing
     // was clay on its card and GREEN on its pane. These carry the four colours out to the entry glyphs, the
     // Claude standing and the backed-up shield — and pin the boundary that makes the scheme readable at all:
     // amber and red are still spent on nothing but trouble, and a status dot is never given an identity hue.
 
     /**
-     * An entry's glyph says WHAT it is about. The map exists so the rule is written once and the three
-     * surfaces that draw an entry — the tree row, the "Inside this machine" grid, the ⌘K palette — cannot
-     * drift into three vocabularies.
+     * An entry's glyph says WHAT it is about. The map exists so the rule is written once and the two
+     * surfaces that draw an entry — the "Inside this machine" grid and the ⌘K palette — cannot drift into
+     * two vocabularies.
      */
     @Test
     void anEntrysGlyph_wearsTheColourOfWhatItIsAbout() throws IOException {
@@ -3443,14 +3509,13 @@ class ExplorerShellTest {
     }
 
     /**
-     * One rule, applied at the three call sites that draw an entry, rather than three copies of a
-     * conditional — so a fourth surface gets the colours by construction and none can be forgotten.
+     * One rule, applied at both call sites that draw an entry, rather than two copies of a conditional — so a
+     * third surface gets the colours by construction and none can be forgotten.
      */
     @Test
-    void allThreeEntrySurfaces_drawTheirGlyphThroughTheOneTintedSeam() throws IOException {
+    void bothEntrySurfaces_drawTheirGlyphThroughTheOneTintedSeam() throws IOException {
         String js = read("explorer-shell.js");
 
-        assertThat(js).as("the tree row").contains("+ entryIco(kind, path[path.length - 1]);");
         assertThat(js).as("the Inside-this-machine card").contains("card(entryIco(kid.kind, kid.name),");
         assertThat(js).as("the palette result")
             .contains("item.innerHTML = entryIco(entry.kind, entry.path[entry.path.length - 1]);");
@@ -3459,7 +3524,7 @@ class ExplorerShellTest {
     }
 
     /**
-     * The Containers pane lists the same things the tree does, so its rows go through the same seam and its
+     * The Containers pane lists entries too, so its rows go through the same seam and its
      * glyphs come out Docker-blue. A published service is not a borrowed identity and keeps the inherited
      * colour — it rides along only because it is the other listing of entries.
      */
@@ -3677,15 +3742,15 @@ class ExplorerShellTest {
 
     /**
      * Once the card is red the dot inside it is the same word twice, so it stands down there — and only
-     * there. The rail has no card to redden, so a machine's row keeps the red dot as its only way of saying
-     * the machine has fallen over.
+     * there. The rule stays specific to the card, because a run's own dots have no card behind them and red
+     * is the only way they have of saying a backup failed.
      */
     @Test
     void aReddenedCard_dropsTheDotThatWouldRepeatIt() throws IOException {
         String css = read("explorer-shell.css");
 
         assertThat(css).contains(".ex-card.is-down .ex-dot.is-down");
-        assertThat(css).as("but the dot itself still paints, for the rail that has no card behind it")
+        assertThat(css).as("but the dot itself still paints, for the run dots that have no card behind them")
             .contains(".ex-dot.is-down { background: var(--red); }");
     }
     // --- a stream: the one intent question, and everything it takes off the page -----------------------

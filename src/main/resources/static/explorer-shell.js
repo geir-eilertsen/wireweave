@@ -1,9 +1,10 @@
-// The Explorer shell — the fleet as one tree (#323, slice A).
+// The Explorer shell — the fleet as one address space (#323, slice A).
 //
 // Vaier's domain is already a namespace: a file has a coordinate (machine, path, point in time), and so does a
 // container, a published service, an archive. Vaier sits at the VPN hub and is the only machine with SSH to
-// every other, so it is the only place a tree spanning the fleet can exist. This is that tree, and the pane
-// beside it is a renderer chosen by what the selected entry *is*. Nothing else is navigation.
+// every other, so it is the only place one address space spanning the fleet can exist. This is that space:
+// the address bar says where you are, ⌘K moves you sideways, and the pane is a renderer chosen by what the
+// entry at that address *is*. Nothing else is navigation.
 //
 // Slice A builds the shell and moves the terminal dock into it. Machines, files, shells and backups are real
 // entries now; only two Vaier-wide globals (Users, Concepts) are still framed whole (see renderGlobalBridge),
@@ -57,7 +58,7 @@
         // A GPS crosshair — "find me" in every map app, so it is the one glyph that reads as "report where I
         // am" without borrowing the fleet's own map-pin icon (which already means something else: a place).
         locate:  '<circle cx="8" cy="8" r="3.1"/><circle cx="8" cy="8" r=".6" fill="currentColor" stroke="none"/><path d="M8 1.3v2.2M8 12.5v2.2M1.3 8h2.2M12.5 8h2.2"/>',
-        // Capability glyphs — a machine's powers, riding just after its name in the rail. Line-art in the same
+        // Capability glyphs — a machine's powers, worn as marks on its fleet card. Line-art in the same
         // weight as everything else here, cropped small: stacked containers over a whale's waterline for Docker,
         // a hub fanning out to two dots for a relay.
         docker:  '<rect x="2.9" y="6.8" width="2.4" height="2.4"/><rect x="5.8" y="6.8" width="2.4" height="2.4"/><rect x="8.7" y="6.8" width="2.4" height="2.4"/><rect x="5.8" y="4.1" width="2.4" height="2.4"/><path d="M1.8 10.4c1 1.7 2.9 2.4 5.4 2.4 3.3 0 5.4-1.5 6.2-2.9"/>',
@@ -70,7 +71,7 @@
         backupserver: '<rect x="2.2" y="3" width="11.6" height="10" rx="1.2"/><circle cx="7.2" cy="8" r="2.5"/>'
             + '<circle cx="7.2" cy="8" r=".55" fill="currentColor" stroke="none"/><path d="M11.4 6.6v2.8"/>',
         // Device forms, matched to the machine icons the Infrastructure page used, so a machine
-        // wears the same shape in the tree as on its card — just smaller. Keyed by device category, lowercased.
+        // wears the same shape everywhere it is drawn — just smaller. Keyed by device category, lowercased.
         server:  '<rect x="2.5" y="2.5" width="11" height="4" rx=".8"/><rect x="2.5" y="9" width="11" height="4" rx=".8"/><circle cx="4.6" cy="4.5" r=".55" fill="currentColor" stroke="none"/><circle cx="4.6" cy="11" r=".55" fill="currentColor" stroke="none"/><line x1="9.5" y1="4.5" x2="11.8" y2="4.5"/><line x1="9.5" y1="11" x2="11.8" y2="11"/>',
         nas:     '<rect x="4" y="1.5" width="8" height="13" rx="1"/><line x1="6.2" y1="3.5" x2="6.2" y2="10.5"/><line x1="8" y1="3.5" x2="8" y2="10.5"/><line x1="9.8" y1="3.5" x2="9.8" y2="10.5"/><circle cx="8" cy="12.5" r=".55" fill="currentColor" stroke="none"/>',
         printer: '<polyline points="4.5 5.5 4.5 2.5 11.5 2.5 11.5 5.5"/><rect x="2.5" y="5.5" width="11" height="5" rx=".8"/><rect x="4.5" y="9.5" width="7" height="4"/><circle cx="11.5" cy="7.5" r=".5" fill="currentColor" stroke="none"/>',
@@ -94,9 +95,9 @@
     }
 
     // Vaier-wide entries that are NOT of the fleet — they belong to Vaier, not to any machine — so they sit at
-    // the top level of the tree, outside `fleet`. Settings is native now; Users and Concepts still bridge their
-    // pages (framed whole, via renderGlobalBridge) until they are ported. This is why the tree is a forest, not
-    // one root. Fleet-level bridges are all gone: Infrastructure and Backups are native entries now (#323).
+    // the top level of the address space, outside `fleet`. Settings is native now; Users and Concepts still
+    // bridge their pages (framed whole, via renderGlobalBridge) until they are ported. They are reached from
+    // the topbar's Vaier menu, never from inside the fleet. Fleet-level bridges are all gone: Infrastructure and Backups are native entries now (#323).
     // Each carries the group it belongs to, because five flat siblings said nothing about what any of them
     // was for — an operator asking "who can reach my things?" needs Users and Security, which sat apart with
     // three unrelated entries between them, while Credentials (a secret placed on every machine) read as a
@@ -121,7 +122,7 @@
     };
 
     // The device shapes an operator can pin a machine to — the same set the Infrastructure page offered, and the
-    // same keys the tree's icons are drawn from (see ICON). The empty value is "let Vaier choose from what it
+    // same keys the entry icons are drawn from (see ICON). The empty value is "let Vaier choose from what it
     // sees" (clears the override); everything else pins the icon and the map marker.
     const DEVICE_CATEGORIES = [
         ['', 'Auto-detect'], ['PHONE', 'Phone'], ['LAPTOP', 'Laptop'], ['DESKTOP', 'Desktop'],
@@ -143,7 +144,6 @@
 
     const S = {
         path: ['fleet'],                 // the selected entry, as its path
-        open: new Set(['/fleet']),
         machines: [],                    // GET /machines
         peers: new Map(),                // machine id -> its live WireGuard peer (tunnel address, liveness)
         peersById: new Map(),            // WireGuard peer id -> the same peer (the SSE keys stats that way)
@@ -220,37 +220,6 @@
 
     const app = document.querySelector('.ex-app');
 
-    // The tree is a second view of what the fleet pane already lists — every machine, every entry inside one,
-    // every folder read so far — so it is optional, and folding it away is remembered across visits. It is a
-    // wide-screen thing only: on a phone it was a drawer nobody opened twice, when the pane behind it said the
-    // same and said it with room for a thumb.
-    //
-    // What the tree carries and the pane does not is ambience: the marks on machines you are NOT looking at.
-    // Those moved onto the fleet pane's machine cards (see renderFleet), which is why folding this away now
-    // costs nothing but the outline.
-    const TREE_PREF = 'vaier.explorer.tree';
-
-    function setTree(shown) {
-        app.classList.toggle('tree-hidden', !shown);
-        const btn = $('exTreeToggle');
-        btn.setAttribute('aria-expanded', shown ? 'true' : 'false');
-        btn.setAttribute('aria-label', shown ? 'Hide the fleet tree' : 'Show the fleet tree');
-        // A private preference, not fleet state — localStorage, never the address. A link you send someone
-        // says where to stand, not how you like your own window arranged.
-        try { localStorage.setItem(TREE_PREF, shown ? 'shown' : 'hidden'); } catch (e) { /* private mode */ }
-    }
-
-    function restoreTreePref() {
-        let pref = null;
-        try { pref = localStorage.getItem(TREE_PREF); } catch (e) { /* private mode */ }
-        // Shown is the default: an operator who has never touched the toggle gets the outline, and the ones
-        // who folded it away are the only ones who kept a choice.
-        app.classList.toggle('tree-hidden', pref === 'hidden');
-        const btn = $('exTreeToggle');
-        btn.setAttribute('aria-expanded', pref === 'hidden' ? 'false' : 'true');
-        btn.setAttribute('aria-label', pref === 'hidden' ? 'Show the fleet tree' : 'Hide the fleet tree');
-    }
-
     // --- what an entry IS, read off its own path -------------------------------------------------------
     //
     // The path is the whole model. A tree that also kept a parallel object graph would be two truths about
@@ -324,7 +293,7 @@
     // --- which machine a published service lives on ----------------------------------------------------
     //
     // A published service is one thing with three homes: a container on a machine, a Traefik route, and the
-    // name it answers on. The tree files it under the machine, and it decides which machine by the rule the Infrastructure page
+    // name it answers on. The shell files it under the machine, and it decides which machine by the rule the Infrastructure page
     // already uses — a LAN service by its LAN server (falling back to the relay peer when no registered LAN
     // server matches its address), the hub's own routes on the Vaier server, everything else by its host. A
     // second rule here would put the same service under two different machines in two different pages.
@@ -380,7 +349,7 @@
         const kind = kindOf(path);
         if (kind === 'fleet') {
             return [{ name: 'map', kind: 'map', label: 'Map' }]
-                // The segment is the identity and the label is the name: the tree addresses a machine by
+                // The segment is the identity and the label is the name: the shell addresses a machine by
                 // what cannot change and shows what a person recognises.
                 .concat(sortedMachines().map((m) => ({ name: m.id, kind: 'machine', label: m.name })));
         }
@@ -391,10 +360,10 @@
             // and disk ride on a held SSH credential, so they appear only once one is stored — not merely
             // because the SSH-access toggle is on, which would grow an entry that opens onto a red "no login"
             // wall until the operator refreshes. A machine that runs no Docker must not grow an empty
-            // `containers` entry that opens onto nothing. /machines carries both facts — the tree asks them
+            // `containers` entry that opens onto nothing. /machines carries both facts — childrenOf asks them
             // rather than assuming every machine is the same machine.
             const kids = [];
-            if (m.hasCredential) kids.push({ name: 'files', kind: 'files' });   // the shell is opened from the machine’s SSH-access section, not a tree entry
+            if (m.hasCredential) kids.push({ name: 'files', kind: 'files' });   // the shell is opened from the machine’s SSH-access section, not an entry
             if (m.runsDocker) kids.push({ name: 'containers', kind: 'containers' });
             // A machine grows a `services` entry when it publishes something, has a container port that could be
             // published, or is a server (so a non-container service on it — a printer's page, a LAN app — can
@@ -430,12 +399,12 @@
         }
         if (kind === 'files' || kind === 'dir') {
             // Whatever the cache already holds, and nothing more. This function is called on every repaint,
-            // so it must never be able to start a read — otherwise a tree that merely redraws would walk the
+            // so it must never be able to start a read — otherwise a repaint on its own would walk the
             // fleet over SFTP, and the fleet is on the far side of a VPN.
             const entry = S.dirs.get(dirKey(path[1], remotePath(path), S.at));
             if (!entry || entry.state !== 'ready') return [];
-            // Only directories become entries in the rail. The rail carries structure; the Inspector lists the
-            // contents. Duplicating every file into the rail would drown the structure the rail exists to show.
+            // Only directories become entries: a directory is a place you can stand, a file is contents the
+            // Inspector lists. An entry per file would make ⌘K a list of the fleet's files, not of its places.
             return entry.entries.filter((e) => e.directory).map((e) => ({ name: e.name, kind: 'dir' }));
         }
         return [];   // a shell, a bridge — leaves
@@ -461,7 +430,6 @@
         return entry ? entry.state : 'unread';
     };
 
-    const isDirKind = (kind) => kind === 'files' || kind === 'dir';
 
     async function readDir(machine, rpath, at) {
         const k = dirKey(machine, rpath, at);
@@ -520,7 +488,7 @@
     //   containers — a fleet-wide Docker scrape. Read once at start (so ⌘K can find a container without the
     //                operator having gone looking for it first) and re-read only when the backend says a
     //                container changed state, on the stream it already publishes that on.
-    //   services   — the published routes. Read at start because the tree cannot be honest without them: the
+    //   services   — the published routes. Read at start because a machine cannot be honest without them: the
     //                `services` entry exists only on a machine that actually has some.
     //   disk       — one machine, read when its disk entry is looked at. A fleet-wide df on page load would
     //                wake every sleeping machine to answer a question nobody asked.
@@ -529,10 +497,10 @@
     // exist — this is the Infrastructure page's own data, re-filed under the machines it belongs to.
     //
     // The filing used to be the whole difficulty: a peer's containers arrived keyed by the peer's *id* (the
-    // WireGuard directory, "apalveien5") while the tree spoke the display name ("Apalveien 5"), so either
+    // WireGuard directory, "apalveien5") while the shell spoke the display name ("Apalveien 5"), so either
     // choice needed a crossing, and one character of disagreement showed a machine with no containers while
     // Vaier could see them perfectly well. Every scrape carries the machine's identity now, so there is no
-    // crossing left to get wrong — the cache is keyed by the same thing the tree stands on.
+    // crossing left to get wrong — the cache is keyed by the same thing the address stands on.
     async function loadContainers() {
         const next = new Map();
         try {
@@ -682,8 +650,8 @@
     }
 
     // The fleet's one backup server, and the repositories that live on it. Loaded before the first paint, like
-    // the services are, because the tree cannot be honest without it: a machine grows a `backup` entry only if
-    // it is the designated backup server, and a tree that grew one a moment later would have been lying for that
+    // the services are, because a machine cannot be honest without it: it grows a `backup` entry only if
+    // it is the designated backup server, and an entry that grew a moment later would have been lying for that
     // moment. Never polled — a server is designated by an operator, not by a schedule, so a reload is the right
     // time to learn a new one. The fleet has at most one, so the list is read as its single head.
     async function loadBackup() {
@@ -749,9 +717,9 @@
     const TINT_FOR = { disk: 'is-disk', backup: 'is-backup', repo: 'is-backup',
                        containers: 'is-docker', container: 'is-docker' };
 
-    // The one place an entry's glyph is built. Every surface that draws an entry — the tree row, the machine
-    // pane's grid, the palette, the listing rows — goes through here, so the colours cannot drift into four
-    // vocabularies and a fifth surface gets them for free.
+    // The one place an entry's glyph is built. Every surface that draws an entry — the machine pane's grid,
+    // the palette, the listing rows — goes through here, so the colours cannot drift into three vocabularies
+    // and a fourth surface gets them for free.
     const entryIco = (kind, segment) =>
         svg(iconFor(kind, segment), 'ex-ico' + (TINT_FOR[kind] ? ' ' + TINT_FOR[kind] : ''));
 
@@ -788,12 +756,14 @@
 
         const peer = S.peers.get(machineId);
         if (peer) {
-            if (peer.connected) return 'is-up';
-            // A pure client (phone / Mac / Linux / Windows PC) being offline is routine, not an error —
-            // it's grey, not red. Only a server-type peer down is notable, the same SERVER_TYPES split the
-            // up/down alert policy uses (a laptop that's asleep should never look like a server that fell over).
+            // A personal device (phone / Mac / Linux / Windows PC) is a different question from a server.
+            // A server that is fine is not news and a server that is down is trouble; a phone is neither —
+            // it is either here or away, and the operator wants to see which. So it gets presence: a quiet
+            // mark either way, never the red a fallen server earns. The same SERVER_TYPES split the up/down
+            // alert policy uses.
             const m = machineById(machineId);
-            return m && !SERVER_TYPES.has(m.type) ? 'is-idle' : 'is-down';
+            if (m && !SERVER_TYPES.has(m.type)) return peer.connected ? 'is-present' : 'is-away';
+            return peer.connected ? 'is-up' : 'is-down';
         }
 
         const server = S.lan.get(machineId);
@@ -808,8 +778,15 @@
     function paintLiveness(el) {
         const state = livenessOf(el.getAttribute('data-ex-dot'));
         el.className = 'ex-dot ' + state;
-        const card = el.closest('.ex-card');
-        if (card) card.classList.toggle('is-down', state === 'is-down');
+        // The answer is worn by the machine itself — its name, on the card or the pane title around the
+        // dot — and the dot is only the anchor this repaint finds. Red for down, amber for degraded, dimmed
+        // while a personal device is away, and the ordinary colour otherwise.
+        const host = el.closest('.ex-card, .ex-pane-title');
+        if (host) {
+            host.classList.toggle('is-down', state === 'is-down');
+            host.classList.toggle('is-degraded', state === 'is-degraded');
+            host.classList.toggle('is-away', state === 'is-away');
+        }
     }
 
     function paintDots() {
@@ -823,15 +800,10 @@
         return el;
     }
 
-    // A machine's capabilities, as small glyphs riding just before its liveness dot — what the operator scans
-    // the fleet for. Relay (it routes a LAN behind it, so other machines are reachable only through it) reads
-    // off its peer; Docker (it hosts containers) reads off the machine; backup server (it holds the fleet's
-    // archives) reads off the one designated server. They run in that order because it is a progression from
-    // how a machine is reached, through what it runs, to what it keeps. A machine with none gets an empty
-    // strip, so names still line up. Icon-only; the capability rides along as the glyph's hover title.
-    // What a machine IS, in the order an operator scans for it: reached → runs → keeps. One list, because the
-    // rail and the fleet card draw the same three facts and had been saying them in two places. The rail gets
-    // the glyph alone (a row there has no width for words); the card gets the word too.
+    // What a machine IS, in the order an operator scans for it: reached → runs → keeps. Relay (it routes a
+    // LAN behind it, so other machines are reachable only through it) reads off its peer; Docker (it hosts
+    // containers) reads off the machine; backup server (it holds the fleet's archives) reads off the one
+    // designated server. The fleet card draws them as marks — a glyph and its word.
     function capabilitiesOf(machineId) {
         const m = machineById(machineId);
         const peer = S.peers.get(machineId);
@@ -848,15 +820,8 @@
         return caps;
     }
 
-    function machineCaps(machineId) {
-        const caps = document.createElement('span');
-        caps.className = 'ex-caps';
-        capabilitiesOf(machineId).forEach((c) => caps.appendChild(capIcon(c.kind, c.title)));
-        return caps;
-    }
-
-    // How a run's outcome is said to a person, for the tree's hover. The pane spells the same fact out at
-    // length; here it has one line, so each word has to carry the consequence rather than the status name.
+    // How a run's outcome is said to a person, on the fleet card's hover. The pane spells the same fact out
+    // at length; here it has one line, so each word has to carry the consequence rather than the status name.
     const RUN_WORD = {
         SUCCESS:    'Backed up',
         WARNING:    'Backed up, with a complaint',
@@ -877,39 +842,16 @@
         UNKNOWN:    'Backup unknown',
     };
 
-    // The dot on a machine's backup entry: its job's last outcome, read straight off the job list Vaier
-    // already loaded at boot — no request per row, and no traversal to find out. The colour comes from the
-    // same RUN_DOT map the job pane uses, so the tree and the pane can never disagree about a run. A machine
-    // with no job (the backup server's own entry — it is the store, not a thing that is stored) grows no dot,
-    // and a job that has never run gets the idle one: "not yet" is neither trouble nor success.
-    function backupDot(machineId) {
-        const job = jobsOn(machineId)[0];
-        if (!job) return null;
-        const d = el('span', 'ex-dot ' + (RUN_DOT[job.lastRunStatus] || 'is-idle'));
-        d.title = RUN_WORD[job.lastRunStatus] || 'No backup has run yet';
-        return d;
-    }
-
-    function capIcon(kind, title) {
-        const s = document.createElement('span');
-        // The kind rides on the class so a borrowed identity can wear its own colour (Docker's blue). The
-        // rest have no rule and stay dim — that is the strip doing its job, not an omission.
-        s.className = 'ex-cap is-' + kind;
-        s.title = title;
-        s.innerHTML = svg(kind, 'ex-cap-ico');
-        return s;
-    }
-
     /**
      * What a machine is telling you without being opened — its capabilities, how its last backup went, and
-     * whether anything on it wants a newer image. This is the ambience the tree used to carry on rows for
-     * machines you were not looking at, and it is the whole reason the tree could be made optional: fold the
-     * outline away and the fleet pane still shows you the machine that is in trouble.
+     * whether anything on it wants a newer image. This is the fleet pane's whole job: the machine in trouble
+     * is visible from the one place that lists every machine, without opening any of them.
      *
-     * Deliberately not a second liveness dot. The tree could hang a bare coloured dot off a machine's `backup`
-     * child row because that row said "backup" beside it; on a card the same dot would sit next to the
-     * liveness dot with nothing to tell them apart, and a green dot that might mean either is worse than no
-     * dot at all. So the backup outcome is the archive glyph, tinted, and the words are on its title.
+     * Deliberately not a second liveness dot. On a card a bare coloured dot would sit next to the liveness
+     * dot with nothing to tell them apart, and a green dot that might mean either is worse than no dot at
+     * all. So the backup outcome is the archive glyph, tinted, and the words are on its title. Its colours
+     * come from the same RUN_MARK map the job pane uses, so the two can never disagree about a run — and a
+     * job that has never run gets the idle one: "not yet" is neither trouble nor success.
      */
     // How a machine's disks stand, tinted. The level is the server's own DiskStandingLevel — the browser is
     // never a second place deciding when a disk is in trouble, exactly as it never recomputes a filesystem's
@@ -1014,127 +956,6 @@
             ? 'One container here has a newer image available'
             : stale + ' containers here have a newer image available';
         return u;
-    }
-
-    // --- the tree ---------------------------------------------------------------------------------------
-
-    function renderTree() {
-        const tree = $('exTree');
-        // The rail is emptied and rebuilt on every one of those same repaints, and it needs no assignment to
-        // lose the operator's place: emptying it collapses its height, which drops its scroll to the top by
-        // itself. Unconditional here, unlike the pane — the rail is always showing the one same thing, the
-        // fleet, however far into it you have walked.
-        const resume = tree.scrollTop;
-        tree.textContent = '';
-
-        const label = document.createElement('div');
-        label.className = 'ex-col-label';
-        label.textContent = 'Fleet';
-        tree.appendChild(label);
-        tree.appendChild(branch(['fleet'], 'fleet', 'fleet', 0));
-        tree.scrollTop = resume;
-
-        // Vaier's own entries used to hang here as a second root, which made this a forest. They are in the
-        // topbar menu now — the one surface that survives the tree being folded away or absent — and a second
-        // home for them here would be two roads to one place. So the rail is exactly what it is labelled: the
-        // fleet, and nothing else.
-    }
-
-    function branch(path, kind, label, depth) {
-        const frag = document.createDocumentFragment();
-        const k = key(path);
-        const kids = childrenOf(path);
-        const isOpen = S.open.has(k);
-        const here = key(S.path);
-        // Directories are real entries now, so the rail shows exactly where you are — no ancestor stands in
-        // for you any more.
-        const selected = here === k;
-
-        // A directory nobody has read yet is expandable on faith: what it holds is only known once it is read,
-        // and refusing to offer the twist until then would make an unread directory look like a leaf. One that
-        // was read and holds no directories really is a leaf; one that failed is not expandable, it is broken.
-        const state = isDirKind(kind) ? dirStateOf(path) : null;
-        const busy = state === 'loading';
-        const failed = state === 'error';
-        const expandable = kids.length > 0 || state === 'unread' || busy;
-
-        const row = document.createElement('button');
-        row.className = 'ex-row' + (selected ? ' is-sel' : '') + (failed ? ' is-failed' : '');
-        row.style.paddingLeft = (8 + depth * 13) + 'px';
-        row.innerHTML = svg('chev', 'ex-twist' + (expandable ? (isOpen ? ' is-open' : '') : ' is-leaf')
-                + (busy ? ' is-busy' : ''))
-            + entryIco(kind, path[path.length - 1]);
-
-        const name = document.createElement('span');
-        name.className = 'ex-lbl';
-        name.textContent = label;
-        row.appendChild(name);
-
-        // A directory that could not be read wears its failure in the rail, and says why on hover. The reason
-        // itself is the server's own sentence ("Not allowed to read /root as geir.") — selecting the row shows
-        // it in full, in the Inspector.
-        if (failed) {
-            const entry = S.dirs.get(dirKey(path[1], remotePath(path), S.at));
-            row.title = (entry && entry.error) || 'This directory could not be read.';
-        }
-
-        // Files and disk both ride on SSH — greyed rather than removed when Vaier's last check found no
-        // server on the owning machine, so the entry still names what is there and the greying lifts on its
-        // own the moment a later sweep reaches the machine again.
-        if (kind === 'files' || kind === 'disk') {
-            const owner = machineById(path[1]);
-            if (owner && owner.sshServerPresence === 'ABSENT') {
-                row.disabled = true;
-                row.title = 'No SSH server detected on last check';
-            }
-        }
-
-        if (kind === 'machine') {
-            row.appendChild(machineCaps(path[1]));
-            row.appendChild(dot(path[1]));
-        }
-        // A machine's backup entry wears its last outcome, so a failed run is seen from the tree instead of
-        // only by whoever thinks to open that machine. Same colours as the liveness dots beside it — one
-        // vocabulary of light for the whole rail: green is fine, amber is grumbling, red is trouble.
-        if (kind === 'backup') {
-            const d = backupDot(path[1]);
-            if (d) row.appendChild(d);
-        }
-        // A container row wears its update mark in the rail, so an operator scanning the fleet sees the one
-        // that needs them without opening anything. The verdict is the backend's; updateMark decides nothing
-        // but whether there is something worth drawing.
-        if (kind === 'container') {
-            const mark = updateMark(containersOn(path[1]).find((c) => c.containerName === path[3]));
-            if (mark) row.appendChild(mark);
-        }
-
-        row.onclick = () => {
-            if (expandable) {
-                // Clicking the entry you are already standing on folds it away; clicking a new one opens it.
-                if (selected && isOpen) S.open.delete(k); else S.open.add(k);
-            }
-            // Expanding a directory also selects it, so the Inspector follows — and selecting it is what
-            // starts the read (see renderDirectory), so the rail and the Inspector are filled by one SFTP
-            // round trip rather than two. Collapsing selects it too, which is to say it does not navigate
-            // away from where you already are.
-            go(path);
-        };
-        frag.appendChild(row);
-
-        if (isOpen && kids.length) {
-            const box = document.createElement('div');
-            box.style.position = 'relative';
-            kids.forEach((kid) => {
-                box.appendChild(branch(path.concat([kid.name]), kid.kind, kid.label || kid.name, depth + 1));
-            });
-            // One hairline per level (styled in explorer-shell.css); only where it falls is known here.
-            const guide = document.createElement('span');
-            guide.className = 'ex-guide';
-            guide.style.left = (14 + depth * 13) + 'px';
-            box.appendChild(guide);
-            frag.appendChild(box);
-        }
-        return frag;
     }
 
     // --- the address bar --------------------------------------------------------------------------------
@@ -1371,7 +1192,7 @@
     }
 
     function renderFleet(pane) {
-        const online = S.machines.filter((m) => livenessOf(m.id) === 'is-up').length;
+        const online = S.machines.filter((m) => ['is-up', 'is-present'].includes(livenessOf(m.id))).length;
         pane.appendChild(paneHead('Fleet', false,
             S.machines.length + (S.machines.length === 1 ? ' machine · ' : ' machines · ') + online
             + ' online'));
@@ -1396,12 +1217,12 @@
                 const purpose = machineDescription(m);
                 const c = card(svg(machineIcon(m.id), 'ex-ico'), m.name,
                     MACHINE_TYPE[m.type] + (purpose ? ' · ' + purpose : ''),
-                    () => { S.open.add(key(['fleet', m.id])); go(['fleet', m.id]); }, m.id);
+                    () => go(['fleet', m.id]), m.id);
                 // Everything the machine says without being opened, on one strip in one vocabulary: what it is
                 // (Docker, Backup server) and how it is doing (its last backup, its disks, Claude, containers
                 // wanting a newer image), each a glyph and its word. Splitting these across two places put two
-                // rows of small things on a card that only ever had one thing to say. This is the tree's
-                // ambience, rehomed: it is what made folding the outline away cost nothing.
+                // rows of small things on a card that only ever had one thing to say. This is what makes the
+                // fleet pane worth looking at without opening anything on it.
                 const marks = machineMarks(m.id);
                 if (marks.childNodes.length) c.appendChild(marks);
                 // A long description is clamped to two lines so one card cannot stand taller than its
@@ -1413,7 +1234,7 @@
         }
 
         // The fleet seen as one picture rather than a list — a child of the fleet exactly as each machine is,
-        // and until now reachable only from the tree. Its own section: it is a different way of looking at the
+        // and reached from here. Its own section: it is a different way of looking at the
         // same machines, not another machine, and dropping it into the grid above would have said it was one.
         body.appendChild(section('The fleet, seen whole'));
         const views = el('div', 'ex-grid');
@@ -1973,7 +1794,7 @@
             backup:     isBackupServer ? 'The fleet backs up here'
                 : 'Backs up to ' + (S.backupServer ? S.backupServer.name : 'the backup server'),
         };
-        // Files and disk both ride on SSH — a credential alone got them into the tree, but a machine whose
+        // Files and disk both ride on SSH — a credential alone grew the entries, but a machine whose
         // last check found no SSH server would just relocate the same dead end one click deeper. Grey them
         // out rather than remove them: the entry still names what is there, and the next sweep (or an SSH
         // server put back) lifts the greying on its own.
@@ -2397,9 +2218,8 @@
         await loadFleet();
         await loadServices();   // a rename shifts the host key services hang under
         if (ok) toast(m.name + ' updated.');
-        // Renaming no longer moves the machine's coordinate — its identity is what the tree stands on, so
+        // Renaming no longer moves the machine's coordinate — its identity is what the address stands on, so
         // the pane simply re-labels itself where it is.
-        S.open.add(key(['fleet', m.id]));
         go(['fleet', m.id]);
     }
 
@@ -2434,7 +2254,7 @@
             if (isServerPeer) {
                 form.append(field('LAN address', 'Where this server answers on its own network.', lanAddr));
             }
-            form.append(field('Device category', 'Its shape in the tree and on the map. Auto-detect lets Vaier '
+            form.append(field('Device category', 'Its shape in the fleet and on the map. Auto-detect lets Vaier '
                 + 'choose from what it sees.', cat));
             if (isServerPeer) {
                 // Vaier reads the network off the machine and offers it on the machine's own pane, so this
@@ -3028,7 +2848,7 @@
             const done = el('button', 'ex-btn is-accent'); done.textContent = 'Done';
             done.onclick = () => {
                 close();
-                S.open.add(key(['fleet', a.machineId])); go(['fleet', a.machineId]);
+                go(['fleet', a.machineId]);
             };
             actions.appendChild(done);
             content.appendChild(actions);
@@ -3070,7 +2890,7 @@
             form.append(field('Name', null, name),
                 field('LAN address', 'Where this machine answers on its network.', lanAddr),
                 detectMsg, dockerRow, dockerPortField,
-                field('Device category', 'Its shape in the tree and on the map. Optional.', cat),
+                field('Device category', 'Its shape in the fleet and on the map. Optional.', cat),
                 field('Description', 'Optional.', desc));
             content.appendChild(form);
 
@@ -3357,7 +3177,7 @@
             const done = el('button', 'ex-btn is-accent'); done.textContent = 'Done';
             done.onclick = () => {
                 close();
-                S.open.add(key(['fleet', p.machineId])); go(['fleet', p.machineId]);
+                go(['fleet', p.machineId]);
             };
             actions.appendChild(done);
             content.appendChild(actions);
@@ -3546,7 +3366,6 @@
             await loadFleet();
             toast(body.name + ' added.' + credNote);
             const added = resp.machineId;
-            S.open.add(key(['fleet', added]));
             go(['fleet', added]);
             return true;
         } catch (e) {
@@ -3937,9 +3756,9 @@
 
         // --- know: what the container is ------------------------------------------------------------
         //
-        // The Inspector is where the verdict is spoken in words, all three of them. No mark in the rail does
+        // The Inspector is where the verdict is spoken in words, all three of them. No mark on the list does
         // NOT mean the image is current — it means either "current" or "Vaier cannot tell", and those are very
-        // different facts to an operator. The rail has no room for the difference; this row does, and #57 was
+        // different facts to an operator. A list row has no room for the difference; this row does, and #57 was
         // filed precisely because "cannot tell" had been quietly rendered as "fine".
         body.appendChild(kv([
             ['Image', coord(c.image)],
@@ -4701,7 +4520,7 @@
     }
 
     // `mark` is an optional badge riding just after the name — the same shape the file browser's shield takes.
-    // `ico` arrives already built, so a listed container is tinted by the same seam the tree's rows use.
+    // `ico` arrives already built, so a listed container is tinted by the same seam every entry uses.
     function listRow(ico, name, onClick, meta, state, mark) {
         const row = document.createElement('div');
         row.className = 'ex-lrow';
@@ -5003,7 +4822,7 @@
     // repositories that live on it shown read-only. The operations that stand a server up or trust a client
     // (provision, authorize) poll for their outcome, and the shell never polls, so those stay on the Backups
     // page; this entry links there. Editing the coordinates and removing the designation are single calls, and
-    // they live here, because designating the backup server is now a thing you do to a machine in the tree.
+    // they live here, because designating the backup server is now a thing you do to a machine.
 
     // Where a borg server is reached on the machine's own network — its LAN address, the CIDR's host part, or,
     // failing both, its tunnel address. A guess to prefill the field, never the last word: the operator edits it.
@@ -5787,7 +5606,7 @@
                 const row = el('div', 'ex-brepo');
                 const nm = el('button', 'ex-brepo-name is-link');
                 nm.textContent = sp;
-                nm.onclick = () => openTo(['fleet', machineId, 'files'].concat(sp.split('/').filter(Boolean)));
+                nm.onclick = () => go(['fleet', machineId, 'files'].concat(sp.split('/').filter(Boolean)));
                 row.appendChild(nm);
                 list.appendChild(row);
             });
@@ -5805,7 +5624,7 @@
                 const row = el('div', 'ex-brepo');
                 const nm = el('button', 'ex-brepo-name is-link');
                 nm.textContent = ex;
-                nm.onclick = () => openTo(['fleet', machineId, 'files'].concat(ex.split('/').filter(Boolean)));
+                nm.onclick = () => go(['fleet', machineId, 'files'].concat(ex.split('/').filter(Boolean)));
                 row.appendChild(nm);
                 holes.appendChild(row);
             });
@@ -5941,16 +5760,9 @@
         body.appendChild(risky);
     }
 
-    // Open the tree to a path and select it — used by the protected-path links, which jump you into the file
-    // browser where the backup set is actually edited.
-    function openTo(path) {
-        for (let i = 1; i < path.length; i++) S.open.add(key(path.slice(0, i + 1)));
-        go(path);
-    }
-
-    // The tree's backup dot reads the outcome off the job list, which is loaded once at boot — so anything
-    // that learns a newer outcome has to write it back there, or the tree would keep showing last night's
-    // result all day. This is that write-back: one line, called wherever a run's outcome becomes known.
+    // The fleet card's backup mark reads the outcome off the job list, which is loaded once at boot — so
+    // anything that learns a newer outcome has to write it back there, or the card would keep showing last
+    // night's result all day. This is that write-back: one line, called wherever a run's outcome becomes known.
     function noteRunStatus(machineId, status) {
         const job = S.backupJobs.find((j) => j.machineId === machineId);
         if (job) job.lastRunStatus = status;
@@ -5995,7 +5807,7 @@
             }
             const started = await res.json();                                     // RUNNING
             S.jobRuns.set(job.machineId, { state: 'ready', run: started });
-            noteRunStatus(job.machineId, started.status);   // the tree goes amber-idle while it runs, from here
+            noteRunStatus(job.machineId, started.status);   // the card goes amber-idle while it runs, from here
             toast('Backing up ' + job.machineName + '…');
             render();
         } catch (e) {
@@ -6169,7 +5981,7 @@
         });
     }
 
-    // The terminal itself is in the dock, not in the pane: the tree, the address bar and the shell are all on
+    // The terminal itself is in the dock, not in the pane: the address bar and the shell are all on
     // screen at once, which is the whole point of moving the dock in here.
     // A machine's shell opens in its own browser window — the default now, because a window is bigger, resizes
     // freely, and you can have several across a wide screen, none of which the bottom dock could give. One
@@ -7303,7 +7115,7 @@
         // list is fetched while the directory is already on screen, so a rail that appears when it arrives
         // drops a whole bar into the page and shoves the rows down while the operator is reading them.
         // "Is a rail coming?" is answered by a cheaper question Vaier can settle immediately — does a job
-        // back this machine up? The job list is loaded at boot, before the first tree paint, so the answer
+        // back this machine up? The job list is loaded at boot, before the first paint, so the answer
         // costs nothing and is in hand in time. The stops then fill into a track that is already there.
         if (ready ? !held.list.length : !jobsOn(machineId).length) return document.createDocumentFragment();
         const archives = ready ? held.list : [];
@@ -8714,7 +8526,7 @@
     // exactly one segment — a machine is addressed by identity and read by name — and that one segment was the
     // whole bug. The index used to keep only the address, so the palette matched (and displayed)
     // /fleet/7a6d0e35-25d9-420c-b7bc-1815ce7e0dc1/files, and typing a machine's name found nothing at all.
-    // Nobody noticed while the tree was there to carry you; with the tree optional this is the way across.
+    // Nobody noticed while a rail was there to carry you; ⌘K and the crumb bar are the way across now.
     function index() {
         const out = [];
         (function walk(path, words) {
@@ -8723,7 +8535,7 @@
                 walk(path.concat([kid.name]), words.concat([kid.label || kid.name])));
         })(['fleet'], ['fleet']);
         // Vaier's own entries are not of the fleet, so the walk above cannot reach them — and they are now
-        // behind a menu rather than standing in the tree, which makes finding them here matter more, not less.
+        // behind a menu rather than standing in the fleet, which makes finding them here matter more, not less.
         GLOBALS.forEach((g) => out.push({ path: [g.name], kind: kindOf([g.name]), label: '/' + g.label }));
         return out;
     }
@@ -8751,7 +8563,7 @@
         found.forEach((entry, i) => {
             const item = document.createElement('button');
             item.className = 'ex-pal-item' + (i === S.palSel ? ' is-on' : '');
-            // The last segment, exactly as the tree's rows do it — a machine's icon reads off its identity and
+            // The last segment, exactly as every entry surface does it — a machine's icon reads off its identity and
             // a global's off its own name, and both of those are the tail of the path. Reading path[1] instead
             // gave every Vaier entry the fallback file glyph.
             item.innerHTML = entryIco(entry.kind, entry.path[entry.path.length - 1]);
@@ -8795,7 +8607,6 @@
     const closePalette = () => $('exScrim').classList.remove('is-on');
 
     function jump(path) {
-        for (let i = 1; i < path.length; i++) S.open.add(key(path.slice(0, i + 1)));
         closePalette();
         go(path);
     }
@@ -8852,7 +8663,7 @@
 
     function navigate(path, at) {
         const href = hrefFor(path, at);
-        // The same address again is not a move — it is the tree folding a branch, or a card for the entry you
+        // The same address again is not a move — it is a card for the entry you
         // are already standing on. Repaint, and leave the history alone: a Back that walks through the same
         // folder five times is a Back that is broken.
         if (href === _route) return render();
@@ -8886,7 +8697,7 @@
         S.at = at || null;
         // Scrubbing the rail — including arriving on a link that already names an archive. Setting the time
         // re-reads exactly the directory you are standing on and every directory above it at that archive, so
-        // the pane and any open tree branches relight together instead of flashing empty. A bounded walk down
+        // the pane and every crumb above it relight together instead of flashing empty. A bounded walk down
         // one path, never a crawl across the fleet.
         if (timeChanged && S.path.length > 1) readPathChain(S.path[1]);
         render();
@@ -8918,7 +8729,6 @@
         // the very listing you are picking from, so the shell says when one exists and the pane keeps room
         // under itself. Nothing on a wide screen reads this class.
         app.classList.toggle('has-sel', S.sel.length > 0);
-        renderTree();
         renderCrumbs();
         renderPane();
         renderClip();
@@ -8926,7 +8736,7 @@
 
     // --- the fleet, and the stream that keeps it honest ---------------------------------------------------
 
-    // The tree carries identities, so the listing reader and the terminal dock are handed one directly and
+    // The address carries identities, so the listing reader and the terminal dock are handed one directly and
     // have no name to convert on the way. What they need from this scope is the other direction: what to
     // CALL a machine they are already addressing correctly.
     window.vaierMachineName = nameOf;
@@ -9105,7 +8915,7 @@
     }
 
     // Resolve a scan's relay anchor (a WireGuard identity like "apalveien5") back to the machine's display
-    // name ("Apalveien 5") when we know it, so the readout reads the way the tree does.
+    // name ("Apalveien 5") when we know it, so the readout reads the way the shell does.
     // A scanned host is tagged with the anchor it was reached through: a relay peer's WireGuard id, or the
     // literal server-LAN name. The peer id is stable across a rename, so it resolves to the machine directly
     // — this used to fuzzy-match the anchor against every machine's NAME, which found the wrong machine the
@@ -9176,7 +8986,7 @@
             }
             opened = true;
         };
-        // A peer was added, renamed or removed — the tree's own shape changed.
+        // A peer was added, renamed or removed — the fleet's own shape changed.
         events.addEventListener('peers-updated', () => loadFleet().then(render));
         // Liveness. The backend polls WireGuard and pushes what it sees; the browser only ever listens, and
         // repaints the dots where they stand rather than re-rendering the pane under the operator.
@@ -9204,7 +9014,7 @@
         // RemoteDiskWatcher's existing 5-minute sweep found (or stopped finding) an SSH server on a machine —
         // published only on the crossing, never every sweep. sshServerPresence rides on /machines, so a full
         // reload picks it up; re-rendering greys or lifts the SSH-access checkbox, Open shell, and the
-        // Files/Disk tree entries without the operator needing to reload the page.
+        // Files/Disk entries without the operator needing to reload the page.
         events.addEventListener('ssh-server-presence-changed', () => loadFleet().then(render));
         // A machine's disk standing moved on that same 5-minute sweep — published only on the change, with an
         // empty body, so this re-reads the one memory-backed endpoint and repaints the marks. A machine that
@@ -9302,7 +9112,6 @@
 
     $('exPalBtn').onclick = openPalette;
 
-    $('exTreeToggle').onclick = () => setTree(app.classList.contains('tree-hidden'));
     $('exScrim').onclick = (e) => { if (e.target === $('exScrim')) closePalette(); };
 
     // --- the Vaier menu ---------------------------------------------------------------------------------
@@ -9332,7 +9141,7 @@
         menu.textContent = '';
         // Everything that is not a machine, grouped by the job it belongs to rather than listed flat. Fleet
         // has to be here: a global's crumb bar is one segment long ("Settings" is not inside anything), so
-        // without this, standing on Settings with the tree folded away left no way back to the fleet at all.
+        // without this, standing on Settings left no way back to the fleet at all.
         // It heads its own group, with the fleet-wide acts under it.
         let group = null;
         GLOBALS.forEach((g) => {
@@ -9395,7 +9204,6 @@
     }
 
     async function init() {
-        restoreTreePref();
         renderVMenu();
         // Where the address says we are, before anything is fetched — so a reload or a pasted link paints the
         // right place on the first frame rather than landing on the fleet and jumping.
@@ -9403,16 +9211,12 @@
         _route = hrefFor(start.path, start.at);
         S.path = start.path;
         S.at = start.at;
-        // Arriving deep — a bookmark, a pasted link, a reload three folders down — opens the branches above
-        // you, so the tree shows where you are standing instead of a collapsed root that disagrees with the
-        // pane. Exactly what ⌘K's jump does when it lands you somewhere you never walked to.
-        for (let i = 1; i < S.path.length; i++) S.open.add(key(S.path.slice(0, i + 1)));
         // The address is normalised into the bar even when the visitor arrived with none, so the very first
         // thing in history is a real location and the first Back is not a step out of the app.
         location.replace(location.pathname + location.search + _route);
 
-        // The services are awaited because the tree cannot be honest without them: a `services` entry exists
-        // only on a machine that actually publishes something, and a tree that grew one a moment later would
+        // The services are awaited because a machine cannot be honest without them: a `services` entry exists
+        // only on a machine that actually publishes something, and an entry that grew a moment later would
         // have been lying for that moment.
         await Promise.all([loadFleet(), loadServices(), loadBackup(), loadMyDevice()]);
         // A link into a folder needs the chain above it read before remotePath can resolve where the machine's

@@ -14,22 +14,13 @@
     <link rel="stylesheet" href="explorer-shell.css">
 </head>
 <body>
-    <!-- The Explorer shell (#323 slice A): one tree spanning the fleet, and the renderer for whatever is
-         selected in it. Unlike every page before it this is not a section inside admin.html's iframe. A
+    <!-- The Explorer shell (#323 slice A): one address space spanning the fleet, and the renderer for
+         whatever it is pointed at. Unlike every page before it this is not a section inside admin.html's iframe. A
          machine's shell opens in its own pop-out window (terminal-window.js), reattaching to one persistent
          tmux session per machine — the single shell model, no embedded dock. -->
     <div class="ex-app" data-past="0">
 
         <header class="topbar">
-            <!-- The tree is an optional second view of what the fleet pane already lists, so it folds away and
-                 stays folded (the choice is remembered). Wide screens only: on a phone there is no tree at all,
-                 and a control for a thing that does not exist is worse than no control. -->
-            <button class="ex-treetoggle" id="exTreeToggle" aria-label="Hide the fleet tree" aria-expanded="true" aria-controls="exTree">
-                <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="2" y="3" width="12" height="10" rx="1.2"/>
-                    <line x1="6.4" y1="3" x2="6.4" y2="13"/>
-                </svg>
-            </button>
             <a href="/launchpad.html" class="topbar-brand" aria-label="Vaier">
                 <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
                     <circle cx="8" cy="8" r="2.2" fill="currentColor" stroke="none"/>
@@ -56,7 +47,7 @@
             <!-- Settings, Users, Security and Concepts belong to Vaier, not to any machine — they are siblings
                  of the fleet, not things inside it. So they live in the chrome rather than in the fleet pane,
                  which would be a claim that Vaier's own settings are part of the fleet. Reachable from any
-                 depth, on any screen: this is the one home they have now the tree is optional. -->
+                 depth, on any screen: this is the one home they have. -->
             <div class="ex-vmenu-wrap">
                 <button class="ex-vmenu-btn" id="exVMenuBtn" aria-label="Vaier" aria-expanded="false" aria-haspopup="true" aria-controls="exVMenu">
                     <svg class="ex-vmenu-ico" width="15" height="15" viewBox="0 0 16 16" fill="currentColor" stroke="none">
@@ -73,7 +64,6 @@
         </header>
 
         <div class="ex-main">
-            <nav class="ex-tree" id="exTree" aria-label="Fleet"></nav>
             <main class="ex-pane" id="exPane"></main>
         </div>
         <!-- A machine's shell opens in its own pop-out window (terminal-window.js), the single shell model here:
@@ -81,11 +71,11 @@
     </div>
 
     <!-- App-level overlay layer — what the iframe never allowed. The Clipboard tray (held coordinates + live
-         Transfers) and a toast slot, docked above the dock, out of the tree's way until there's something to say. -->
+         Transfers) and a toast slot, docked above the dock, out of the pane's way until there's something to say. -->
     <aside class="ex-clip" id="exClip" aria-label="Clipboard and transfers"></aside>
     <div class="ex-toast" id="exToast" role="status" aria-live="polite"></div>
 
-    <!-- One namespace, one search: every entry in the tree, by its path. -->
+    <!-- One namespace, one search: every entry in the fleet, by its path. -->
     <div class="ex-scrim" id="exScrim">
         <div class="ex-pal" role="dialog" aria-label="Search the fleet">
             <input id="exPalInput" placeholder="Go to a path — machine, files, shell…"
