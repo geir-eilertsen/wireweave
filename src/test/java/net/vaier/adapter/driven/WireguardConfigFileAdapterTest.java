@@ -1,5 +1,9 @@
 package net.vaier.adapter.driven;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -9,7 +13,9 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Optional;
+import org.slf4j.LoggerFactory;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -659,6 +665,37 @@ class WireguardConfigFileAdapterTest {
         Files.createDirectories(configDir.resolve(".hidden"));
 
         assertThat(adapter.getAllPeerConfigs()).hasSize(1);
+    }
+
+    @Test
+    void getAllPeerConfigs_passesTheImagesOwnDirectoriesInSilence() throws IOException {
+        // The WireGuard image keeps coredns/, server/ and templates/ beside the peers. None holds a
+        // <name>/<name>.conf, which is the one thing that makes a directory a peer — so they are not
+        // peers, and not worth a warning on every request either: 1500 an hour buried the real ones.
+        createPeerConf("laptop", "10.13.13.2");
+        for (String own : List.of("coredns", "server", "templates")) {
+            Files.createDirectories(configDir.resolve(own));
+        }
+        Files.writeString(configDir.resolve("server").resolve("privatekey-server"), "k");
+
+        List<ILoggingEvent> warnings = whileCapturingWarnings(() ->
+            assertThat(adapter.getAllPeerConfigs()).extracting(PeerConfiguration::name)
+                .containsExactly("laptop"));
+
+        assertThat(warnings).isEmpty();
+    }
+
+    private static List<ILoggingEvent> whileCapturingWarnings(Runnable work) {
+        Logger adapterLog = (Logger) LoggerFactory.getLogger(WireguardConfigFileAdapter.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        adapterLog.addAppender(appender);
+        try {
+            work.run();
+            return appender.list.stream().filter(e -> e.getLevel().isGreaterOrEqual(Level.WARN)).toList();
+        } finally {
+            adapterLog.detachAppender(appender);
+        }
     }
 
     @Test

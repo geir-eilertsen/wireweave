@@ -74,6 +74,14 @@ public class WireguardConfigFileAdapter implements ForGettingPeerConfigurations,
         return (meta.name() != null && !meta.name().isBlank()) ? meta.name() : PeerId.display(id);
     }
 
+    /**
+     * A peer directory is one holding its own {@code <name>/<name>.conf}. The image keeps coredns/, server/,
+     * templates/ and wg_confs/ beside the peers, and none of those does.
+     */
+    private static boolean isPeerDirectory(Path dir) {
+        return Files.isDirectory(dir) && Files.isRegularFile(dir.resolve(dir.getFileName() + ".conf"));
+    }
+
     @Override
     public Optional<PeerConfiguration> getPeerConfigByName(String peerId) {
         try {
@@ -118,9 +126,7 @@ public class WireguardConfigFileAdapter implements ForGettingPeerConfigurations,
 
             try (var stream = Files.list(configDir)) {
                 Optional<Path> foundPeerDir = stream
-                    .filter(Files::isDirectory)
-                    .filter(dir -> !dir.getFileName().toString().equals("wg_confs"))
-                    .filter(dir -> !dir.getFileName().toString().startsWith("."))
+                    .filter(WireguardConfigFileAdapter::isPeerDirectory)
                     .filter(dir -> matchesIpAddress(dir, ipAddress))
                     .findFirst();
 
@@ -160,9 +166,7 @@ public class WireguardConfigFileAdapter implements ForGettingPeerConfigurations,
         }
 
         try (var stream = Files.list(configDir)) {
-            stream.filter(Files::isDirectory)
-                    .filter(dir -> !dir.getFileName().toString().equals("wg_confs"))
-                    .filter(dir -> !dir.getFileName().toString().startsWith("."))
+            stream.filter(WireguardConfigFileAdapter::isPeerDirectory)
                     .forEach(dir -> {
                         String peerId = dir.getFileName().toString();
                         getPeerConfigByName(peerId).ifPresent(configs::add);
@@ -187,9 +191,7 @@ public class WireguardConfigFileAdapter implements ForGettingPeerConfigurations,
 
             try (var stream = Files.list(configDir)) {
                 return stream
-                    .filter(Files::isDirectory)
-                    .filter(dir -> !dir.getFileName().toString().equals("wg_confs"))
-                    .filter(dir -> !dir.getFileName().toString().startsWith("."))
+                    .filter(WireguardConfigFileAdapter::isPeerDirectory)
                     .filter(dir -> matchesIpAddress(dir, ipAddress))
                     .map(path -> path.getFileName().toString())
                     .findFirst()
