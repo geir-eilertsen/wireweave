@@ -1200,6 +1200,52 @@ class ReverseProxyRouteTest {
         assertThat(route.directUrl(null, List.of(), List.of())).isNull();
     }
 
+    // --- callerOnHostLan: the fact behind the direct URL, kept even when no direct URL is handed out ---
+
+    @Test
+    void callerOnHostLan_callerIsPeerEndpoint_true() {
+        ReverseProxyRoute route = fullRoute("app.example.com", "10.13.13.2", 8080, false);
+        PeerConfiguration peer = new PeerConfiguration("s", "10.13.13.2", "", MachineType.UBUNTU_SERVER, "192.168.1.0/24", "192.168.1.10");
+        VpnClient peerClient = connectedPeerWithEndpoint("10.13.13.2/32", "203.0.113.5");
+
+        assertThat(route.callerOnHostLan("203.0.113.5", List.of(peer), List.of(peerClient))).isTrue();
+    }
+
+    @Test
+    void callerOnHostLan_callerElsewhere_false() {
+        ReverseProxyRoute route = fullRoute("app.example.com", "10.13.13.2", 8080, false);
+        PeerConfiguration peer = new PeerConfiguration("s", "10.13.13.2", "", MachineType.UBUNTU_SERVER, "192.168.1.0/24", "192.168.1.10");
+        VpnClient peerClient = connectedPeerWithEndpoint("10.13.13.2/32", "203.0.113.5");
+
+        assertThat(route.callerOnHostLan("198.51.100.1", List.of(peer), List.of(peerClient))).isFalse();
+        assertThat(route.callerOnHostLan(null, List.of(peer), List.of(peerClient))).isFalse();
+    }
+
+    @Test
+    void callerOnHostLan_directUrlDisabledOrNoLanAddress_stillTrue() {
+        // Being in the same house is a fact about the caller; whether a LAN shortcut is handed out is a
+        // separate per-route choice, and a peer without a LAN address is still a peer the caller sits beside.
+        ReverseProxyRoute disabled = fullRoute("app.example.com", "10.13.13.2", 8080, true);
+        PeerConfiguration peer = new PeerConfiguration("s", "10.13.13.2", "", MachineType.UBUNTU_SERVER, "192.168.1.0/24", "192.168.1.10");
+        PeerConfiguration noLan = new PeerConfiguration("s", "10.13.13.2", "");
+        VpnClient peerClient = connectedPeerWithEndpoint("10.13.13.2/32", "203.0.113.5");
+
+        assertThat(disabled.callerOnHostLan("203.0.113.5", List.of(peer), List.of(peerClient))).isTrue();
+        assertThat(disabled.callerOnHostLan("203.0.113.5", List.of(noLan), List.of(peerClient))).isTrue();
+    }
+
+    @Test
+    void callerOnHostLan_lanService_isJudgedByItsRelayPeer() {
+        ReverseProxyRoute route = ReverseProxyRoute.lanRoute(
+            "nas-router", "nas.example.com", "192.168.3.50", 5000, "https", "nas-service");
+        PeerConfiguration relay = new PeerConfiguration("apalveien5", "10.13.13.5", "",
+            MachineType.UBUNTU_SERVER, "192.168.3.0/24", "192.168.3.5");
+        VpnClient relayClient = connectedPeerWithEndpoint("10.13.13.5/32", "203.0.113.5");
+
+        assertThat(route.callerOnHostLan("203.0.113.5", List.of(relay), List.of(relayClient))).isTrue();
+        assertThat(route.callerOnHostLan("198.51.100.1", List.of(relay), List.of(relayClient))).isFalse();
+    }
+
     // --- LAN service routes (#175) ---
 
     @Test

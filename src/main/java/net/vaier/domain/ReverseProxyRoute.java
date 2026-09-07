@@ -876,22 +876,8 @@ public class ReverseProxyRoute {
 
     public String directUrl(String callerIp, List<PeerConfiguration> peers, List<VpnClient> vpnClients) {
         if (directUrlDisabled) return null;
-        if (callerIp == null || callerIp.isBlank()) return null;
-
-        PeerConfiguration peer = isLanService
-            ? findRelayWhoseLanContains(peers, address)
-            : peers.stream()
-                .filter(p -> p.ipAddress() != null && p.ipAddress().equals(address))
-                .findFirst().orElse(null);
+        PeerConfiguration peer = hostPeerBesideCaller(callerIp, peers, vpnClients);
         if (peer == null) return null;
-
-        String peerEndpointIp = vpnClients.stream()
-            .filter(c -> c.containsAddress(peer.ipAddress()))
-            .map(VpnClient::endpointIp)
-            .filter(ip -> ip != null && !ip.isBlank())
-            .findFirst().orElse(null);
-        if (peerEndpointIp == null) return null;
-        if (!peerEndpointIp.equals(callerIp)) return null;
 
         // Path-based routes pass the prefix through to the backend (no StripPrefix middleware
         // on the Traefik side), so the direct LAN bypass URL must include it too — otherwise
@@ -906,6 +892,32 @@ public class ReverseProxyRoute {
         String lanAddress = peer.lanAddress();
         if (lanAddress == null || lanAddress.isBlank()) return null;
         return "http://" + lanAddress + ":" + port + suffix;
+    }
+
+    /**
+     * Whether the caller is browsing from the same LAN as the machine hosting this route: the caller's
+     * public IP is the tunnel endpoint of the hosting peer (the relay peer, for a LAN service). The fact
+     * behind {@link #directUrl}, kept even where no direct URL is handed out, so the launchpad can put
+     * the machine the caller is with ahead of the rest.
+     */
+    public boolean callerOnHostLan(String callerIp, List<PeerConfiguration> peers, List<VpnClient> vpnClients) {
+        return hostPeerBesideCaller(callerIp, peers, vpnClients) != null;
+    }
+
+    private PeerConfiguration hostPeerBesideCaller(String callerIp, List<PeerConfiguration> peers,
+                                                   List<VpnClient> vpnClients) {
+        if (callerIp == null || callerIp.isBlank()) return null;
+        PeerConfiguration peer = isLanService
+            ? findRelayWhoseLanContains(peers, address)
+            : peers.stream()
+                .filter(p -> p.ipAddress() != null && p.ipAddress().equals(address))
+                .findFirst().orElse(null);
+        if (peer == null) return null;
+
+        return vpnClients.stream()
+            .filter(c -> c.containsAddress(peer.ipAddress()))
+            .map(VpnClient::endpointIp)
+            .anyMatch(callerIp::equals) ? peer : null;
     }
 
     private static PeerConfiguration findRelayWhoseLanContains(List<PeerConfiguration> peers, String ip) {

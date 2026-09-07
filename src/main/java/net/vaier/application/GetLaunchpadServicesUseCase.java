@@ -46,6 +46,9 @@ public interface GetLaunchpadServicesUseCase {
      *   <li>{@code peerName} — the display name of the machine hosting the service: a VPN peer's
      *       editable name, the relay peer's name for a LAN service, or "Vaier server". The
      *       launchpad groups and labels tiles by this; it never re-derives the host from DNS.</li>
+     *   <li>{@code callerOnHostLan} — the caller is browsing from the LAN of the machine hosting
+     *       the service. The launchpad lists that machine's section first; it never re-derives
+     *       this from the URL, which stays {@code https://} when the direct URL is disabled.</li>
      *   <li>{@code image} / {@code version} — the Docker image reference and resolved version of
      *       the container backing this service (issue #210). Both are null when no container
      *       backs the route — e.g. a service published as a bare LAN host:port.</li>
@@ -56,7 +59,7 @@ public interface GetLaunchpadServicesUseCase {
     record LaunchpadServiceUco(String dnsAddress, String pathPrefix, String hostAddress,
                                LaunchpadVisibility visibility, LaunchpadLiveness liveness, String url,
                                String displayName, String subdomain, String iconQuery, String peerName,
-                               String image, String version) {
+                               String image, String version, boolean callerOnHostLan) {
 
         /**
          * Convenience constructor for a tile with no backing container — a service published as
@@ -66,7 +69,7 @@ public interface GetLaunchpadServicesUseCase {
                                    LaunchpadVisibility visibility, LaunchpadLiveness liveness, String url,
                                    String displayName, String subdomain, String iconQuery, String peerName) {
             this(dnsAddress, pathPrefix, hostAddress, visibility, liveness, url, displayName, subdomain,
-                iconQuery, peerName, null, null);
+                iconQuery, peerName, null, null, false);
         }
     }
 }

@@ -216,7 +216,8 @@ public class PublishingService implements
                         r.hostDisplayName(vpnClients, forResolvingPeerIds, peers),
                         backing == null ? null : backing.image(),
                         probedVersion != null ? probedVersion
-                            : (backing == null ? null : backing.version()));
+                            : (backing == null ? null : backing.version()),
+                        r.callerOnHostLan(callerIp, peers, vpnClients));
                 })
                 .filter(java.util.Objects::nonNull)
                 .stream())

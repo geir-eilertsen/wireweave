@@ -291,6 +291,29 @@ class GetLaunchpadServicesTest {
     }
 
     @Test
+    void getLaunchpadServices_callerIpMatchesPeerEndpoint_tileSaysCallerIsOnHostLan() {
+        // Direct URL disabled on purpose: the tile still knows the caller is beside the host, so the
+        // launchpad can put that machine's section first regardless of which URL the tile carries.
+        ReverseProxyRoute route = ReverseProxyRoute.builder().name("route").domainName("app.example.com")
+            .address("10.13.13.6").port(6875).service("svc").directUrlDisabled(true).build();
+        when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(route));
+        when(forGettingVpnClients.getClients()).thenReturn(List.of(
+            vpnClient("10.13.13.6/32", "51.175.8.217")
+        ));
+        setupEmptyLocalServices();
+        when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
+            new PeerConfiguration("apalveien5", "10.13.13.6", "", MachineType.UBUNTU_SERVER, null, "192.168.3.121")
+        ));
+
+        List<LaunchpadServiceUco> here = service.getLaunchpadServices("51.175.8.217");
+        List<LaunchpadServiceUco> away = service.getLaunchpadServices("198.51.100.1");
+
+        assertThat(here.get(0).callerOnHostLan()).isTrue();
+        assertThat(here.get(0).url()).isEqualTo("https://app.example.com");
+        assertThat(away.get(0).callerOnHostLan()).isFalse();
+    }
+
+    @Test
     void getLaunchpadServices_callerIpDoesNotMatchAnyPeerEndpoint_noDirectUrl() {
         setupOneRoute("app.example.com", "10.13.13.6", 6875);
         when(forGettingVpnClients.getClients()).thenReturn(List.of(

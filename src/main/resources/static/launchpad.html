@@ -619,7 +619,11 @@
                     byPeer.get(s.peerName).push(s);
                 }
 
-                const sortedPeers = [...byPeer.keys()].sort((a, b) => a.localeCompare(b));
+                // The machine the caller is sitting beside comes first — the server says which
+                // (callerOnHostLan); the rest keep their alphabetical order.
+                const isHere = (peer) => byPeer.get(peer).some(s => s.callerOnHostLan);
+                const sortedPeers = [...byPeer.keys()].sort((a, b) =>
+                    (isHere(b) - isHere(a)) || a.localeCompare(b));
 
                 for (const peer of sortedPeers) {
                     const peerServices = byPeer.get(peer).sort((a, b) =>
