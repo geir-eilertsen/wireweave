@@ -16,6 +16,11 @@ public interface ReissuePeerConfigUseCase {
     /**
      * The outcome of a reissue. Mirrors {@code CreatedPeerUco} minus the private key (which is
      * already inside {@code clientConfigFile}), so the web layer can render the same success modal.
+     *
+     * @param deviceHeldKey whether this peer's private key was minted on the device — carried so the web
+     *                      layer can ask {@code PeerArtifact.forPeer} the whole question instead of
+     *                      assuming the answer. A reissue is the one path that reaches the shared
+     *                      config-delivery response with such a peer.
      */
     record ReissuedPeerUco(
         String id,
@@ -24,6 +29,7 @@ public interface ReissuePeerConfigUseCase {
         String ipAddress,
         String publicKey,
         String clientConfigFile,
-        MachineType peerType
+        MachineType peerType,
+        boolean deviceHeldKey
     ) {}
 }

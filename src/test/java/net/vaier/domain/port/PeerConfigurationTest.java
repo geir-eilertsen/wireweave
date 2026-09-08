@@ -69,7 +69,7 @@ class PeerConfigurationTest {
 
     private static PeerConfiguration peerFor(String name) {
         return new PeerConfiguration(name, name, "10.13.13.2", "", MachineType.UBUNTU_SERVER,
-            null, null, null, null, null, TestMachineIds.of(name));
+            null, null, null, null, null, TestMachineIds.of(name), null);
     }
 
     // --- device category (override + effective) ---

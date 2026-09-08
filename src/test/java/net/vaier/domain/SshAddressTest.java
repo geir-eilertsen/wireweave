@@ -36,7 +36,7 @@ class SshAddressTest {
 
     private static PeerConfiguration peer(String name, String ip) {
         return new PeerConfiguration(name, name, ip, "", MachineType.UBUNTU_SERVER, null, null, null,
-            null, null, TestMachineIds.of(name));
+            null, null, TestMachineIds.of(name), null);
     }
 
     @Test

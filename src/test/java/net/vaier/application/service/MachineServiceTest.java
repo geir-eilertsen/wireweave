@@ -319,7 +319,7 @@ class MachineServiceTest {
         lenient().when(forPersistingLanServers.getAll()).thenReturn(List.of());
         lenient().when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
             new PeerConfiguration("alice-id", "alice", "10.13.13.2", "", MachineType.UBUNTU_SERVER,
-                null, null, null, null, null, mid("alice"))
+                null, null, null, null, null, mid("alice"), null)
         ));
 
         boolean effective = service.setMachineSshAccess(mid("alice"), true);
@@ -426,7 +426,7 @@ class MachineServiceTest {
     private void fleetHas(String name, String ip) {
         lenient().when(forGettingPeerConfigurations.getAllPeerConfigs()).thenReturn(List.of(
             new PeerConfiguration(name.toLowerCase().replace(' ', '-'), name, ip, "",
-                MachineType.UBUNTU_SERVER, null, null, null, null, null, mid(name))));
+                MachineType.UBUNTU_SERVER, null, null, null, null, null, mid(name), null)));
     }
 
     @Test

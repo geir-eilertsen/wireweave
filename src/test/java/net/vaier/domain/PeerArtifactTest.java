@@ -48,4 +48,30 @@ class PeerArtifactTest {
     void nullType_returnsEmptySet() {
         assertThat(PeerArtifact.forPeerType(null)).isEmpty();
     }
+
+    // --- a device-held key: nothing to download (#359) ---
+
+    @Test
+    void aPeerWhoseKeyWasBornOnTheDevice_hasNothingToDownload() {
+        // The private key was minted on the phone and has never existed in Vaier, so there is no
+        // installable config to hand out, no QR to photograph, and nothing to leak.
+        assertThat(PeerArtifact.forPeer(MachineType.MOBILE_CLIENT, true)).isEmpty();
+    }
+
+    @Test
+    void aPeerWhoseKeyVaierMinted_getsWhatItsTypeAlwaysGot() {
+        assertThat(PeerArtifact.forPeer(MachineType.MOBILE_CLIENT, false))
+            .containsExactlyInAnyOrder(PeerArtifact.WG_CONFIG, PeerArtifact.QR_CODE);
+        assertThat(PeerArtifact.forPeer(MachineType.UBUNTU_SERVER, false))
+            .containsExactlyInAnyOrder(PeerArtifact.WG_CONFIG, PeerArtifact.DOCKER_COMPOSE,
+                PeerArtifact.SETUP_SCRIPT);
+    }
+
+    @Test
+    void aDeviceHeldKeyOverridesEveryPeerType() {
+        for (MachineType type : MachineType.values()) {
+            assertThat(PeerArtifact.forPeer(type, true))
+                .as("%s with a device-held key", type).isEmpty();
+        }
+    }
 }

@@ -417,6 +417,7 @@ body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: non
 }
 .ex-btn.is-accent:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: #0d1418; }
 .ex-btn .ex-ico { width: 16px; height: 16px; }
+a.ex-btn { text-decoration: none; }
 .ex-btn:disabled { opacity: .4; cursor: not-allowed; }
 .ex-btn:disabled:hover { color: var(--text); border-color: var(--border-hi); background: var(--bg-card); }
 

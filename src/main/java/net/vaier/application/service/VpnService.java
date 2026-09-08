@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import net.vaier.application.CreatePeerUseCase;
 import net.vaier.application.DeletePeerUseCase;
 import net.vaier.application.DeletePublishedServiceUseCase;
+import net.vaier.application.EnrolDeviceUseCase;
 import net.vaier.application.GenerateDockerComposeUseCase;
 import net.vaier.application.GeneratePeerSetupScriptUseCase;
 import net.vaier.application.GetPeerConfigUseCase;
@@ -29,6 +30,7 @@ import net.vaier.domain.GeoLocation;
 import net.vaier.domain.LanServer;
 import net.vaier.domain.Machine;
 import net.vaier.domain.MachineId;
+import net.vaier.domain.MachineIntent;
 import net.vaier.domain.LastServicesReached;
 import net.vaier.domain.MachinePositions;
 import net.vaier.domain.MachineType;
@@ -46,6 +48,7 @@ import net.vaier.domain.TunnelCaller;
 import net.vaier.domain.VaierHostnames;
 import net.vaier.domain.VpnClient;
 import net.vaier.domain.VpnSubnet;
+import net.vaier.domain.WireGuardKey;
 import net.vaier.domain.WireGuardPeerConfig;
 import net.vaier.domain.port.ForDeletingVpnPeers;
 import net.vaier.domain.port.ForExecutingInContainer;
@@ -85,6 +88,7 @@ import java.util.stream.Stream;
 @Slf4j
 public class VpnService implements
     CreatePeerUseCase,
+    EnrolDeviceUseCase,
     DeletePeerUseCase,
     GetVpnClientsUseCase,
     GetVpnPeersUseCase,
@@ -245,7 +249,7 @@ public class VpnService implements
         // one filesystem scan/parse per peer per refresh, not two.
         Optional<GetPeerConfigUseCase.PeerConfigResult> cfg = rawCfg
             .map(c -> new GetPeerConfigUseCase.PeerConfigResult(c.id(), c.name(), c.ipAddress(),
-                c.configContent(), c.peerType(), c.lanCidr(), c.lanAddress(), c.description()));
+                c.configContent(), c.peerType(), c.lanCidr(), c.lanAddress(), c.description(), c.deviceHeldKey()));
         MachineType peerType = cfg.map(GetPeerConfigUseCase.PeerConfigResult::peerType)
             .orElse(MachineType.defaultType());
         String name = cfg.map(GetPeerConfigUseCase.PeerConfigResult::name)
@@ -293,7 +297,9 @@ public class VpnService implements
             .latestHandshake(client.latestHandshake()).connected(client.isConnected())
             .transferRx(client.transferRx()).transferTx(client.transferTx())
             .peerType(peerType).isServer(isServer).isClient(isClient).isRelay(isRelay)
-            .availableArtifacts(PeerArtifact.forPeerType(peerType))
+            // Empty for a peer with a Device-held key: there is nothing Vaier could hand over.
+            .availableArtifacts(PeerArtifact.forPeer(peerType, rawCfg
+                .map(ForGettingPeerConfigurations.PeerConfiguration::deviceHeldKey).orElse(false)))
             .lanCidr(lanCidr).lanAddress(lanAddress).description(description)
             .geoLocation(geo).configOutOfDate(configOutOfDate)
             .deviceCategory(deviceCategory).deviceCategoryOverridden(deviceCategoryOverridden)
@@ -427,13 +433,13 @@ public class VpnService implements
             config = peerConfigProvider.getPeerConfigByName(peerIdentifier);
         }
 
-        return config.map(c -> new PeerConfigResult(c.id(), c.name(), c.ipAddress(), c.configContent(), c.peerType(), c.lanCidr(), c.lanAddress(), c.description()));
+        return config.map(c -> new PeerConfigResult(c.id(), c.name(), c.ipAddress(), c.configContent(), c.peerType(), c.lanCidr(), c.lanAddress(), c.description(), c.deviceHeldKey()));
     }
 
     @Override
     public Optional<PeerConfigResult> getPeerConfigByIp(String ipAddress) {
         return peerConfigProvider.getPeerConfigByIp(ipAddress)
-                .map(c -> new PeerConfigResult(c.id(), c.name(), c.ipAddress(), c.configContent(), c.peerType(), c.lanCidr(), c.lanAddress(), c.description()));
+                .map(c -> new PeerConfigResult(c.id(), c.name(), c.ipAddress(), c.configContent(), c.peerType(), c.lanCidr(), c.lanAddress(), c.description(), c.deviceHeldKey()));
     }
 
     // --- GenerateDockerComposeUseCase ---
@@ -594,44 +600,106 @@ public class VpnService implements
                 .executeWithInput(wireguardContainerName, privateKey, "wg", "pubkey").trim();
             log.info("Generated public key for peer {}: {}", id, publicKey);
 
-            String presharedKey = forExecutingInContainer.execute(wireguardContainerName, "wg", "genpsk").trim();
-            log.info("Generated preshared key for peer {}", id);
+            PeerSlot slot = openPeerSlot(id);
 
-            String ipAddress = findNextAvailableIp();
-            log.info("Assigned IP address {} to peer {}", ipAddress, id);
-
-            String serverPublicKey = getServerPublicKey(wireguardInterface);
-            String serverEndpoint = extractServerEndpoint();
-
-            Path peerDir = Paths.get(wireguardConfigPath, id);
-            Files.createDirectories(peerDir);
-
-            String serverLanCidr = forResolvingServerLanCidr.resolve().orElse(null);
-            // The one place a machine's identity is minted rather than read. It is stamped into the
-            // config's # VAIER: metadata, which IS the peer's record — a config written without one
-            // produces a peer the adapter refuses to load, so it joins the WireGuard server and is
-            // then invisible to Vaier: no machine, no credential, no backup, and no error to see.
-            MachineId machineId = MachineId.generate();
             String clientConfig = WireGuardPeerConfig.generate(
-                    privateKey, ipAddress, serverPublicKey, presharedKey, serverEndpoint, resolvedType, lanCidr, lanAddress, vpnSubnet,
-                    description, name, serverLanCidr, null, machineId);
+                    privateKey, slot.ipAddress(), slot.serverPublicKey(), slot.presharedKey(),
+                    slot.serverEndpoint(), resolvedType, lanCidr, lanAddress, vpnSubnet,
+                    description, name, slot.serverLanCidr(), null, slot.machineId());
 
-            Path peerConfigPath = peerDir.resolve(id + ".conf");
-            Files.writeString(peerConfigPath, clientConfig);
-            log.info("Created client config file at {}", peerConfigPath);
+            writePeerConfig(id, clientConfig);
 
-            addPeerToServer(wireguardInterface, publicKey, presharedKey, ipAddress, lanCidr);
-            log.info("Added peer to server configuration");
+            addPeerToServer(wireguardInterface, publicKey, slot.presharedKey(), slot.ipAddress(), lanCidr);
+            log.info("Peer created successfully: {} with IP {}", id, slot.ipAddress());
 
-            log.info("Peer created successfully: {} with IP {}", id, ipAddress);
-
-            return new CreatedPeerUco(id, machineId, name, ipAddress, publicKey, privateKey, clientConfig,
-                    resolvedType);
+            return new CreatedPeerUco(id, slot.machineId(), name, slot.ipAddress(), publicKey, privateKey,
+                    clientConfig, resolvedType);
 
         } catch (IOException | InterruptedException e) {
             log.error("Error creating peer", e);
             throw new RuntimeException("Failed to create peer: " + e.getMessage(), e);
         }
+    }
+
+    // --- EnrolDeviceUseCase (#359) ---
+
+    @Override
+    public EnrolledDeviceUco enrol(String name, String publicKey) {
+        // Both judgements BEFORE any state change, exactly as createPeer validates a lanCidr: the key
+        // goes straight into `wg set ... peer <key>`'s argv and onto disk, and a name that slugs to
+        // nothing has no config directory to live in.
+        WireGuardKey deviceKey = WireGuardKey.of(publicKey);
+        PeerId.sanitized(name);
+
+        List<ForGettingPeerConfigurations.PeerConfiguration> allPeers = peerConfigProvider.getAllPeerConfigs();
+        Set<String> existingIds = allPeers.stream()
+                .map(ForGettingPeerConfigurations.PeerConfiguration::id)
+                .collect(Collectors.toSet());
+        String id = PeerId.generate(name, existingIds).value();
+        log.info("Enrolling device '{}' (id {}) under its own public key", name, id);
+
+        try {
+            PeerSlot slot = openPeerSlot(id);
+
+            // Rendered with no private key and the device's public key in the metadata: the config is
+            // installable by the app, which supplies the half Vaier does not have.
+            // The Vaier app runs on a phone: a personal device that is not Windows. The intent -> type
+            // mapping stays MachineIntent's, exactly as it is for the peer form.
+            MachineType peerType = MachineIntent.PERSONAL_DEVICE.toMachineType(false);
+            String clientConfig = WireGuardPeerConfig.generate(
+                    null, slot.ipAddress(), slot.serverPublicKey(), slot.presharedKey(),
+                    slot.serverEndpoint(), peerType, null, null, vpnSubnet,
+                    null, name, slot.serverLanCidr(), null, slot.machineId(), deviceKey.value());
+
+            writePeerConfig(id, clientConfig);
+
+            addPeerToServer(wireguardInterface, deviceKey.value(), slot.presharedKey(), slot.ipAddress(), null);
+
+            // The config went to the app in this response and there is nothing left to hand out — a
+            // device-held key has no artefact at all. Spending the budget here is what makes the five
+            // secret-bearing GETs answer 410 from the first moment.
+            forTrackingPeerConfigRetrieval.markViewedIfNotAlready(id);
+
+            log.info("Device enrolled: {} with IP {}", id, slot.ipAddress());
+            return new EnrolledDeviceUco(id, slot.machineId(), name, slot.ipAddress(), deviceKey.value(),
+                    clientConfig, peerType);
+
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            log.error("Error enrolling device", e);
+            throw new RuntimeException("Failed to enrol device: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Everything a peer about to join needs that is the same whether Vaier minted its keypair or the
+     * device did: its tunnel address, its preshared key, the server's key and endpoint, and the identity
+     * stamped into its config.
+     *
+     * @param machineId the one place a machine's identity is minted rather than read. It goes into the
+     *                  config's {@code # VAIER:} metadata, which IS the peer's record — a config written
+     *                  without one produces a peer the adapter refuses to load, so it joins the WireGuard
+     *                  server and is then invisible to Vaier: no machine, no credential, no backup, and no
+     *                  error to see.
+     */
+    private record PeerSlot(String ipAddress, String presharedKey, String serverPublicKey,
+                            String serverEndpoint, String serverLanCidr, MachineId machineId) {}
+
+    private PeerSlot openPeerSlot(String id) throws IOException, InterruptedException {
+        String presharedKey = forExecutingInContainer.execute(wireguardContainerName, "wg", "genpsk").trim();
+        String ipAddress = findNextAvailableIp();
+        log.info("Assigned IP address {} to peer {}", ipAddress, id);
+        return new PeerSlot(ipAddress, presharedKey, getServerPublicKey(wireguardInterface),
+                extractServerEndpoint(), forResolvingServerLanCidr.resolve().orElse(null),
+                MachineId.generate());
+    }
+
+    private void writePeerConfig(String id, String clientConfig) throws IOException {
+        Path peerDir = Paths.get(wireguardConfigPath, id);
+        Files.createDirectories(peerDir);
+        Path peerConfigPath = peerDir.resolve(id + ".conf");
+        Files.writeString(peerConfigPath, clientConfig);
+        log.info("Created client config file at {}", peerConfigPath);
     }
 
     // --- ReissuePeerConfigUseCase ---
@@ -659,18 +727,24 @@ public class VpnService implements
                 serverPublicKey, serverEndpoint, vpnSubnet, serverLanCidr, deviceCategoryOverride);
 
             forUpdatingPeerConfigurations.rewriteConfig(peer.id(), newContent);
-            // Deliberate operator-initiated re-exposure: re-open the one-shot retrieval budget.
-            forTrackingPeerConfigRetrieval.resetViewed(peer.id());
+            // Deliberate operator-initiated re-exposure: re-open the one-shot retrieval budget. Not for a
+            // Device-held key — there is no artefact to re-expose, and the config still carries the
+            // preshared key, so re-opening would put secret material back behind a GET for nobody.
+            if (!peer.deviceHeldKey()) {
+                forTrackingPeerConfigRetrieval.resetViewed(peer.id());
+            }
 
             // The peer's public key is derived from its preserved private key — no server-side
-            // mutation, so the live tunnel and the wg0.conf [Peer] entry are untouched.
-            String privateKey = WireGuardPeerConfig.readDirective(newContent, "PrivateKey");
-            String publicKey = forExecutingInContainer
-                .executeWithInput(wireguardContainerName, privateKey, "wg", "pubkey").trim();
+            // mutation, so the live tunnel and the wg0.conf [Peer] entry are untouched. A peer with a
+            // Device-held key has no private key to derive from; its public key is the one it gave us.
+            String publicKey = peer.deviceHeldKey()
+                ? peer.publicKey()
+                : forExecutingInContainer.executeWithInput(wireguardContainerName,
+                    WireGuardPeerConfig.readDirective(newContent, "PrivateKey"), "wg", "pubkey").trim();
 
             log.info("Reissued config for peer {} (serverLanCidr: {})", peer.id(), serverLanCidr);
             return new ReissuedPeerUco(peer.id(), peer.machineId(), peer.name(), peer.ipAddress(),
-                publicKey, newContent, peer.peerType());
+                publicKey, newContent, peer.peerType(), peer.deviceHeldKey());
         } catch (IOException | InterruptedException e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
             throw new RuntimeException("Failed to reissue config for peer " + peerId + ": " + e.getMessage(), e);

@@ -3855,4 +3855,126 @@ class ExplorerShellTest {
         assertThat(css).as("no ground, no border, no alarm colour")
             .doesNotContain(".ex-lkind { margin-left: 7px; font-size: 12px; color: var(--red)");
     }
+
+    // --- enrolment: a phone joins with a key born on the device (#359 slice 1) --------------------------
+    //
+    // The Vaier app mints the WireGuard keypair on the phone and only ever presents the public half. It
+    // opens the operator's browser at the Explorer with that key on the query string, the operator signs in
+    // with Google exactly as always, and one button admits the device. Nothing is copied by hand, and the
+    // private key never exists anywhere but the phone.
+
+    @Test
+    void theEnrolmentKey_travelsOnTheQueryString_becauseAHashWouldNotSurviveTheLogin() throws IOException {
+        // oauth2-proxy bounces the browser through Google and back. A query string makes that round trip;
+        // a fragment is never sent to a server and would be gone by the time the page loaded. This is the
+        // whole reason the parameter is where it is, so it is worth a guard rather than a comment.
+        String js = read("explorer-shell.js");
+
+        int from = js.indexOf("function pendingEnrolment(");
+        assertThat(from).as("the shell reads an enrolment off the address").isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).as("the key is read off the query").contains("new URLSearchParams(location.search)");
+        assertThat(body).as("never parsed out of the fragment — the login round trip drops it")
+            .doesNotContain("URLSearchParams(location.hash");
+    }
+
+    @Test
+    void anEnrolment_isAskedOnceAndThenStrippedFromTheAddress() throws IOException {
+        // A reload must not ask again: the key is spent the moment the peer exists, and a second Add would
+        // mint a second peer for the same phone.
+        String js = read("explorer-shell.js");
+
+        int from = js.indexOf("function pendingEnrolment(");
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        // replaceState, not location.replace: changing the query is a different URL, so location.replace
+        // would reload the document — and the reloaded page would arrive with no key and nothing to do.
+        assertThat(body).as("the address is rewritten in place, and not pushed onto history")
+            .contains("history.replaceState(");
+        assertThat(body).doesNotContain("history.pushState(");
+    }
+
+    @Test
+    void theShell_neverInventsTheNameAPhoneWillWear() throws IOException {
+        // The name goes into the peer's config as the machine's own label. A default made up in the
+        // browser would be a naming decision taken where no decision belongs; the app says what the
+        // device is called, and a link that does not is refused with a sentence rather than guessed at.
+        String js = read("explorer-shell.js");
+
+        int from = js.indexOf("function pendingEnrolment(");
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).doesNotContain("'This phone'").doesNotContain("name ||");
+        assertThat(body).contains("toast(");
+    }
+
+    @Test
+    void anEnrolment_opensTheAddMachineDialogStraightAtItsOwnScreen() throws IOException {
+        // Not a dialog of its own. The operator is adding a machine, which is a flow the Explorer already
+        // has — the device just answers the questions the flow would otherwise ask.
+        String js = read("explorer-shell.js");
+
+        assertThat(js).contains("addMachineFork('enrol'");
+        // The dialog's opening line is where the screen is actually chosen. Registering the screen in the
+        // router is not enough: opened at 'enrol' but landing on the fork, the operator is asked "server or
+        // personal device?" about a phone that already answered — which is exactly what happened first time.
+        assertThat(js).as("the dialog opens ON the enrol screen, not on the fork")
+            .contains("else if (initialScreen === 'enrol' && enrolment) screen('enrol');");
+        assertThat(js).contains("else if (id === 'enrol') paintEnrol();");
+        assertThat(js).contains("else if (id === 'enrolHandoff') paintEnrolHandoff();");
+    }
+
+    @Test
+    void addingAnEnrolledDevice_postsToTheEnrolEndpoint() throws IOException {
+        String js = read("explorer-shell.js");
+        assertThat(js).contains("fetch('/vpn/peers/enrol'");
+    }
+
+    @Test
+    void theEnrolmentScreens_neverShowTheConfigOrAQr() throws IOException {
+        // The point of an enrolment is that nothing is copied by hand. Painting the config text — or a QR
+        // of it — would put a tunnel's credentials on a screen for no reason and invite a photograph.
+        String js = read("explorer-shell.js");
+
+        int from = js.indexOf("function paintEnrolHandoff(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n        }", from));
+        assertThat(body).doesNotContain("ex-config").doesNotContain("ex-qr")
+            .doesNotContain("downloadText(").doesNotContain("qrCodePngBase64");
+
+        int ask = js.indexOf("function paintEnrol(");
+        String askBody = js.substring(ask, js.indexOf("\n        }", ask));
+        assertThat(askBody).doesNotContain("ex-config").doesNotContain("ex-qr");
+    }
+
+    @Test
+    void theEnrolledDevice_isHandedBackToTheAppOverItsOwnScheme() throws IOException {
+        // The app opened the browser; the browser hands the config back. base64url (RFC 4648 §5) because a
+        // WireGuard config carries '+' and '/' and both mean something else in a URL.
+        String js = read("explorer-shell.js");
+
+        int from = js.indexOf("function enrolDeepLink(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).contains("vaier://enrol#");
+        assertThat(body).contains("TextEncoder");
+        assertThat(body).contains("btoa(");
+        assertThat(body).contains("replace(/\\+/g, '-')").contains("replace(/\\//g, '_')");
+        assertThat(body).as("no padding").contains("replace(/=+$/, '')");
+
+        // Both ways over: the automatic hop, and a button for when the browser blocks it.
+        String handoff = js.substring(js.indexOf("function paintEnrolHandoff("));
+        handoff = handoff.substring(0, handoff.indexOf("\n        }"));
+        assertThat(handoff).contains("Open Vaier on this phone");
+    }
+
+    @Test
+    void anEnrolledDevice_waitsForItsFirstHandshakeLikeEveryOtherPeer() throws IOException {
+        // One product, one way of saying "it is not on yet". Same live dot, same sentence shape.
+        String js = read("explorer-shell.js");
+        String handoff = js.substring(js.indexOf("function paintEnrolHandoff("));
+        handoff = handoff.substring(0, handoff.indexOf("\n        }"));
+
+        assertThat(handoff).contains("ex-waiting");
+        assertThat(handoff).contains("ex-scanmeta-dot is-live");
+        assertThat(handoff).contains("first handshake");
+    }
 }

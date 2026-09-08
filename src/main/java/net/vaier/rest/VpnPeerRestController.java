@@ -3,6 +3,7 @@ package net.vaier.rest;
 import net.vaier.application.ClaimDeviceUseCase;
 import net.vaier.application.CreatePeerUseCase;
 import net.vaier.application.DeletePeerUseCase;
+import net.vaier.application.EnrolDeviceUseCase;
 import net.vaier.application.ForgetMyPositionUseCase;
 import net.vaier.application.GetMyDeviceUseCase;
 import net.vaier.application.GenerateDockerComposeUseCase;
@@ -20,6 +21,7 @@ import net.vaier.config.ConfigResolver;
 import net.vaier.domain.CallerIp;
 import net.vaier.domain.GeoLocation;
 import net.vaier.domain.MachineId;
+import net.vaier.domain.PeerArtifact;
 import net.vaier.domain.Placement;
 import net.vaier.domain.ReportedPosition;
 import net.vaier.domain.port.ForPublishingEvents;
@@ -47,6 +49,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 
 @RestController
 @RequestMapping("/vpn/peers")
@@ -58,6 +61,7 @@ public class VpnPeerRestController {
     private final GetPeerConfigUseCase getPeerConfigUseCase;
     private final CreatePeerUseCase createPeerUseCase;
     private final DeletePeerUseCase deletePeerUseCase;
+    private final EnrolDeviceUseCase enrolDeviceUseCase;
     private final GenerateDockerComposeUseCase generateDockerComposeUseCase;
     private final GeneratePeerSetupScriptUseCase generatePeerSetupScriptUseCase;
     private final UpdateLanCidrUseCase updateLanCidrUseCase;
@@ -279,12 +283,35 @@ public class VpnPeerRestController {
         // marker (#202); the marker is set on first GET, NOT on create. The UI uses only the
         // inline payload so it never burns the budget; a raw curl GET can still recover any one
         // artefact once (then 410 forever).
+        // false: createPeer always mints the keypair itself, so a created peer never holds its own key.
         CreatePeerResponse response = buildConfigDeliveryResponse(
                 createdPeer.id(), createdPeer.machineId(), createdPeer.name(), createdPeer.ipAddress(),
-                createdPeer.publicKey(), createdPeer.clientConfigFile(), createdPeer.peerType());
+                createdPeer.publicKey(), createdPeer.clientConfigFile(), createdPeer.peerType(), false);
 
         forPublishingEvents.publish("vpn-peers", "peers-updated", "");
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * {@code Enrol} a device that minted its own WireGuard keypair (#359 slice 1).
+     *
+     * <p>Admin-tier like every other {@code /vpn/peers} route — the operator reaches it from the Explorer
+     * having signed in, and the device's public key travelled in on that same signed-in browser.
+     *
+     * <p>The response deliberately carries no key: the config it returns has no {@code PrivateKey} line,
+     * because the private half was minted on the device and has never existed here.
+     */
+    @PostMapping("/enrol")
+    public ResponseEntity<EnrolDeviceResponse> enrolDevice(@RequestBody EnrolDeviceRequest request) {
+        log.info("Enrolling device: {}", LogSafe.forLog(request.name()));
+        // The key is judged in the domain (IllegalArgumentException -> 400); no second copy of the rule here.
+        EnrolDeviceUseCase.EnrolledDeviceUco enrolled =
+            enrolDeviceUseCase.enrol(request.name(), request.publicKey());
+
+        forPublishingEvents.publish("vpn-peers", "peers-updated", "");
+        return ResponseEntity.ok(new EnrolDeviceResponse(
+            enrolled.id(), enrolled.machineId() == null ? null : enrolled.machineId().value(),
+            enrolled.name(), enrolled.ipAddress(), enrolled.configFile()));
     }
 
     /**
@@ -303,7 +330,8 @@ public class VpnPeerRestController {
 
         CreatePeerResponse response = buildConfigDeliveryResponse(
                 reissued.id(), reissued.machineId(), reissued.name(), reissued.ipAddress(),
-                reissued.publicKey(), reissued.clientConfigFile(), reissued.peerType());
+                reissued.publicKey(), reissued.clientConfigFile(), reissued.peerType(),
+                reissued.deviceHeldKey());
 
         forPublishingEvents.publish("vpn-peers", "peers-updated", "");
         return ResponseEntity.ok(response);
@@ -315,18 +343,18 @@ public class VpnPeerRestController {
      * the UI consumes only this inline payload so it never burns the budget.
      */
     private CreatePeerResponse buildConfigDeliveryResponse(String id, MachineId machineId, String name,
-            String ipAddress, String publicKey, String configFile, MachineType peerType) {
-        java.util.Set<net.vaier.domain.PeerArtifact> artefacts =
-            net.vaier.domain.PeerArtifact.forPeerType(peerType);
+            String ipAddress, String publicKey, String configFile, MachineType peerType,
+            boolean deviceHeldKey) {
+        Set<PeerArtifact> artefacts = PeerArtifact.forPeer(peerType, deviceHeldKey);
 
-        String qrCodePngBase64 = artefacts.contains(net.vaier.domain.PeerArtifact.QR_CODE)
+        String qrCodePngBase64 = artefacts.contains(PeerArtifact.QR_CODE)
             ? tryEncodeQrCodeBase64(configFile, name)
             : null;
-        String dockerCompose = artefacts.contains(net.vaier.domain.PeerArtifact.DOCKER_COMPOSE)
+        String dockerCompose = artefacts.contains(PeerArtifact.DOCKER_COMPOSE)
             ? generateDockerComposeUseCase.generateWireguardClientDockerCompose(
                 id, defaultServerUrl(), ServiceNames.DEFAULT_WG_PORT)
             : null;
-        String setupScript = artefacts.contains(net.vaier.domain.PeerArtifact.SETUP_SCRIPT)
+        String setupScript = artefacts.contains(PeerArtifact.SETUP_SCRIPT)
             ? generatePeerSetupScriptUseCase.generateSetupScript(
                 id, defaultServerUrl(), ServiceNames.DEFAULT_WG_PORT).orElse(null)
             : null;
@@ -437,7 +465,7 @@ public class VpnPeerRestController {
                 result.ipAddress(),
                 result.configContent(),
                 result.peerType() != null ? result.peerType().name() : null,
-                net.vaier.domain.PeerArtifact.forPeerType(result.peerType()).stream()
+                PeerArtifact.forPeer(result.peerType(), result.deviceHeldKey()).stream()
                     .map(Enum::name).sorted().toList()
         );
         return ResponseEntity.ok(response);
@@ -764,6 +792,27 @@ public class VpnPeerRestController {
             String dockerCompose,
             String setupScript,
             String setupToken
+    ) {}
+
+    /**
+     * An {@code Enrolment} request: the device's chosen label and the public half of the keypair it
+     * minted itself. There is no peer type to choose — the Vaier app runs on a phone.
+     */
+    public record EnrolDeviceRequest(
+            String name,
+            String publicKey
+    ) {}
+
+    /**
+     * What the app gets back. No key of any kind: {@code configFile} is the installable WireGuard config
+     * with its {@code PrivateKey} line absent, because the device already holds that half.
+     */
+    public record EnrolDeviceResponse(
+            String id,
+            String machineId,
+            String name,
+            String ipAddress,
+            String configFile
     ) {}
 
     public record UpdateLanAddressRequest(

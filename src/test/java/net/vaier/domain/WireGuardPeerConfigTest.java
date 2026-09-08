@@ -595,4 +595,97 @@ class WireGuardPeerConfigTest {
 
         assertThat(reissued).doesNotContain("\"id\"");
     }
+
+    // --- a device-held key: the private half was minted on the phone and never existed here (#359) ---
+
+    @Test
+    void generate_withNoPrivateKey_omitsThePrivateKeyLineEntirely() {
+        // An {@code Enrolment}'s config carries everything but the private key. Writing "PrivateKey = "
+        // with nothing after it would be both invalid to wg-quick and a lie about what Vaier holds.
+        String config = WireGuardPeerConfig.generate(
+            null, "10.13.13.7", "serverPubKey", "presharedKey", "vpn.example.com:51820",
+            MachineType.MOBILE_CLIENT, null, null, "10.13.13.0/24", null, "Geir's phone", null, null,
+            MachineId.generate(), "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=");
+
+        assertThat(config).doesNotContain("PrivateKey");
+        assertThat(config).contains("[Interface]");
+        assertThat(config).contains("Address = 10.13.13.7/32");
+        assertThat(config).contains("PresharedKey = presharedKey");
+    }
+
+    @Test
+    void generate_withBlankPrivateKey_alsoOmitsTheLine() {
+        String config = WireGuardPeerConfig.generate(
+            "   ", "10.13.13.7", "serverPubKey", "presharedKey", "vpn.example.com:51820",
+            MachineType.MOBILE_CLIENT, null, null, "10.13.13.0/24", null, "phone", null, null, null,
+            "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=");
+
+        assertThat(config).doesNotContain("PrivateKey");
+    }
+
+    @Test
+    void generate_withAPublicKey_stampsItIntoTheVaierMetadata() {
+        String config = WireGuardPeerConfig.generate(
+            null, "10.13.13.7", "serverPubKey", "presharedKey", "vpn.example.com:51820",
+            MachineType.MOBILE_CLIENT, null, null, "10.13.13.0/24", null, "phone", null, null, null,
+            "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=");
+
+        assertThat(config).contains("\"publicKey\":\"xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=\"");
+    }
+
+    @Test
+    void generate_withoutAPublicKey_omitsTheKeyAltogether() {
+        // Every other peer derives its public key from the private key Vaier holds, so recording one
+        // would be a second copy of a fact — and a key present in metadata is what marks a device-held key.
+        String config = WireGuardPeerConfig.generate(
+            "privkey", "10.13.13.7", "serverPubKey", "presharedKey", "vpn.example.com:51820",
+            MachineType.MOBILE_CLIENT, null, null, "10.13.13.0/24", null, "phone");
+
+        assertThat(config).doesNotContain("publicKey");
+    }
+
+    @Test
+    void reissue_anEnrolledPeer_staysPrivateKeyFreeAndKeepsItsPublicKey() {
+        // The whole point of an Enrolment survives a Reissue or it was never true: Vaier must not
+        // acquire a private key it never had, and must not forget the public one it was given.
+        MachineId identity = MachineId.generate();
+        String enrolled = WireGuardPeerConfig.generate(
+            null, "10.13.13.7", "oldpub", "psk", "old.example.com:51820",
+            MachineType.MOBILE_CLIENT, null, null, "10.13.13.0/24", null, "Geir's phone", null, null,
+            identity, "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=");
+
+        String reissued = WireGuardPeerConfig.reissue(enrolled, MachineType.MOBILE_CLIENT, null, null,
+            null, "Geir's phone", "newpub", "new.example.com:51820", "10.13.13.0/24", null);
+
+        assertThat(reissued).doesNotContain("PrivateKey");
+        assertThat(reissued).contains("\"publicKey\":\"xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=\"");
+        assertThat(reissued).contains("\"id\":\"" + identity.value() + "\"");
+        assertThat(reissued).contains("Endpoint = new.example.com:51820");
+    }
+
+    @Test
+    void reissue_anOrdinaryPeer_keepsItsPrivateKeyAndGainsNoPublicKey() {
+        String existing = WireGuardPeerConfig.generate("privkey", "10.13.13.9", "oldpub", "psk",
+            "old.example.com:51820", MachineType.UBUNTU_SERVER, null, null, "10.13.13.0/24",
+            null, "NUC 02", null, null, MachineId.generate());
+
+        String reissued = WireGuardPeerConfig.reissue(existing, MachineType.UBUNTU_SERVER, null, null,
+            null, "NUC 02", "newpub", "new.example.com:51820", "10.13.13.0/24", null);
+
+        assertThat(reissued).contains("PrivateKey = privkey");
+        assertThat(reissued).doesNotContain("publicKey");
+    }
+
+    @Test
+    void isOutOfDate_anEnrolledPeersFreshConfig_isNotOutOfDate() {
+        // A config with no PrivateKey line must not read as "differs from what we would render now" —
+        // that would put every enrolled phone permanently in the out-of-date state.
+        String enrolled = WireGuardPeerConfig.generate(
+            null, "10.13.13.7", "serverpub", "psk", "vpn.example.com:51820",
+            MachineType.MOBILE_CLIENT, null, null, "10.13.13.0/24", null, "phone", null, null,
+            MachineId.generate(), "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=");
+
+        assertThat(WireGuardPeerConfig.isOutOfDate(enrolled, MachineType.MOBILE_CLIENT, null, null,
+            null, "phone", "serverpub", "vpn.example.com:51820", "10.13.13.0/24", null)).isFalse();
+    }
 }

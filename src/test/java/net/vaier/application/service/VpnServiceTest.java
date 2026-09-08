@@ -22,6 +22,7 @@ import net.vaier.domain.ReportedPosition;
 import net.vaier.domain.ReverseProxyRoute;
 import net.vaier.domain.UnidentifiedDeviceException;
 import net.vaier.domain.VpnClient;
+import net.vaier.domain.WireGuardPeerConfig;
 import net.vaier.domain.port.ForPersistingLastServicesReached;
 import net.vaier.domain.port.ForPersistingMachinePositions;
 import net.vaier.domain.port.ForDeletingVpnPeers;
@@ -44,12 +45,17 @@ import net.vaier.domain.port.ForUpdatingServerAllowedIps;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -516,7 +522,7 @@ class VpnServiceTest {
     @Test
     void generateSetupScript_pinsWireguardImageToSameVersionAsServer() throws Exception {
         // Drift guard: install-script wireguard image must match the server's docker-compose.yml pin.
-        String serverCompose = java.nio.file.Files.readString(java.nio.file.Path.of("docker-compose.yml"));
+        String serverCompose = Files.readString(Path.of("docker-compose.yml"));
         java.util.regex.Matcher m = java.util.regex.Pattern.compile(
             "image:\\s*(lscr\\.io/linuxserver/wireguard:\\S+)").matcher(serverCompose);
         assertThat(m.find()).as("server docker-compose.yml should declare a wireguard image").isTrue();
@@ -1269,6 +1275,20 @@ class VpnServiceTest {
     }
 
     @Test
+    void getVpnPeers_anEnrolledPhone_offersNothingToDownload() {
+        // Its private key was minted on the phone. There is no config to hand out and no QR to
+        // photograph, so the machine pane must offer neither — the decision is PeerArtifact's.
+        VpnClient client = new VpnClient("pub", "10.13.13.7/32", "", "", "0", "0", "0");
+        when(forGettingVpnClients.getClients()).thenReturn(List.of(client));
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.7")).thenReturn("phone");
+        when(peerConfigProvider.getPeerConfigByIp("10.13.13.7")).thenReturn(Optional.of(
+            new PeerConfiguration("phone", "Phone", "10.13.13.7", "", MachineType.MOBILE_CLIENT,
+                null, null, null, null, null, mid("phone"), DEVICE_KEY)));
+
+        assertThat(service.getVpnPeers().get(0).availableArtifacts()).isEmpty();
+    }
+
+    @Test
     void getVpnPeers_fallsBackToDefaultTypeAndDisplayLabelWhenNoPeerConfig() {
         VpnClient client = new VpnClient("pub", "10.13.13.2/32", "", "", "0", "0", "0");
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client));
@@ -1296,7 +1316,7 @@ class VpnServiceTest {
         when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.2")).thenReturn("alice-1");
         when(peerConfigProvider.getPeerConfigByIp("10.13.13.2")).thenReturn(Optional.of(
             new PeerConfiguration("alice-1", "Alice", "10.13.13.2", "[Interface]",
-                MachineType.UBUNTU_SERVER, null, null, null, null, null, identity)));
+                MachineType.UBUNTU_SERVER, null, null, null, null, null, identity, null)));
 
         assertThat(service.getVpnPeers().get(0).machineId()).isEqualTo(identity.value());
     }
@@ -1328,7 +1348,7 @@ class VpnServiceTest {
         when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.5")).thenReturn("phone");
         when(peerConfigProvider.getPeerConfigByIp("10.13.13.5")).thenReturn(Optional.of(
             new PeerConfiguration("phone", "Phone", "10.13.13.5", "", MachineType.MOBILE_CLIENT,
-                null, null, null, null, null, phone)));
+                null, null, null, null, null, phone, null)));
         when(forPersistingLastServicesReached.getAll()).thenReturn(LastServicesReached.of(List.of(
             new LastServiceReached(phone, "grafana.example.com", reachedAt))));
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of(
@@ -1348,7 +1368,7 @@ class VpnServiceTest {
         when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.5")).thenReturn("phone");
         when(peerConfigProvider.getPeerConfigByIp("10.13.13.5")).thenReturn(Optional.of(
             new PeerConfiguration("phone", "Phone", "10.13.13.5", "", MachineType.MOBILE_CLIENT,
-                null, null, null, null, null, MachineId.generate())));
+                null, null, null, null, null, MachineId.generate(), null)));
 
         assertThat(service.getVpnPeers().get(0).lastServiceReached()).isEmpty();
     }
@@ -1375,7 +1395,7 @@ class VpnServiceTest {
         when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.5")).thenReturn("phone");
         when(peerConfigProvider.getPeerConfigByIp("10.13.13.5")).thenReturn(Optional.of(
             new PeerConfiguration("phone", "Phone", "10.13.13.5", "", MachineType.MOBILE_CLIENT,
-                null, null, null, null, null, phone)));
+                null, null, null, null, null, phone, null)));
         when(forPersistingLastServicesReached.getAll()).thenReturn(LastServicesReached.of(List.of(
             new LastServiceReached(phone, "vaier.example.com", Instant.now()))));
         when(forPersistingReverseProxyRoutes.getReverseProxyRoutes()).thenReturn(List.of());
@@ -1565,7 +1585,7 @@ class VpnServiceTest {
 
     private PeerConfiguration phoneConfig() {
         return new PeerConfiguration("phone", "Phone", "10.13.13.6", "[Interface]",
-            MachineType.MOBILE_CLIENT, null, null, null, null, null, mid("phone"));
+            MachineType.MOBILE_CLIENT, null, null, null, null, null, mid("phone"), null);
     }
 
     private void livePeerAt(String endpointIp, GeoLocation estimate) {
@@ -1930,5 +1950,177 @@ class VpnServiceTest {
         assertThatThrownBy(() -> service.claimDevice(mid("phone").value()))
             .isInstanceOf(PeerNotFoundException.class);
         verify(forPersistingMachinePositions, never()).saveClaim(any(), any());
+    }
+
+    // --- enrol: a phone joins with a key born on the device (#359 slice 1) ---
+
+    /** A real, structurally valid WireGuard public key, as the app would present it. */
+    private static final String DEVICE_KEY = "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=";
+
+    private void wireguardIsReachable(Path configDir) {
+        ReflectionTestUtils.setField(service, "wireguardConfigPath", configDir.toString());
+        ReflectionTestUtils.setField(service, "wireguardContainerName", "wireguard");
+        ReflectionTestUtils.setField(service, "wireguardInterface", "wg0");
+        ReflectionTestUtils.setField(service, "vpnSubnet", "10.13.13.0/24");
+    }
+
+    @Test
+    void enrol_writesAConfigWithNoPrivateKeyAndTheDevicesOwnPublicKey(@TempDir Path dir)
+            throws Exception {
+        wireguardIsReachable(dir);
+        when(peerConfigProvider.getAllPeerConfigs()).thenReturn(List.of());
+        when(configResolver.getDomain()).thenReturn("eilertsen.family");
+        when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.empty());
+        when(forExecutingInContainer.execute("wireguard", "wg", "show", "wg0", "public-key"))
+            .thenReturn("SERVER_PUB\n");
+        when(forExecutingInContainer.execute("wireguard", "wg", "genpsk")).thenReturn("PSK\n");
+
+        var enrolled = service.enrol("Geir's phone", DEVICE_KEY);
+
+        // The private key was minted on the phone and must never appear anywhere here.
+        assertThat(enrolled.configFile()).doesNotContain("PrivateKey");
+        assertThat(enrolled.configFile()).contains("\"publicKey\":\"" + DEVICE_KEY + "\"");
+        assertThat(enrolled.configFile()).contains("PresharedKey = PSK");
+        assertThat(enrolled.publicKey()).isEqualTo(DEVICE_KEY);
+        assertThat(enrolled.name()).isEqualTo("Geir's phone");
+        assertThat(enrolled.peerType()).isEqualTo(MachineType.MOBILE_CLIENT);
+        assertThat(enrolled.ipAddress()).isEqualTo("10.13.13.2");
+        assertThat(enrolled.machineId()).isNotNull();
+
+        // What lands on disk is what was handed back.
+        String onDisk = Files.readString(
+            dir.resolve(enrolled.id()).resolve(enrolled.id() + ".conf"));
+        assertThat(onDisk).isEqualTo(enrolled.configFile());
+    }
+
+    @Test
+    void enrol_neverGeneratesAKeypair(@TempDir Path dir) throws Exception {
+        wireguardIsReachable(dir);
+        when(peerConfigProvider.getAllPeerConfigs()).thenReturn(List.of());
+        when(configResolver.getDomain()).thenReturn("eilertsen.family");
+        when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.empty());
+        when(forExecutingInContainer.execute("wireguard", "wg", "show", "wg0", "public-key"))
+            .thenReturn("SERVER_PUB\n");
+        when(forExecutingInContainer.execute("wireguard", "wg", "genpsk")).thenReturn("PSK\n");
+
+        service.enrol("phone", DEVICE_KEY);
+
+        // The whole point: no private key is ever minted here, and none is ever derived from.
+        verify(forExecutingInContainer, never()).execute(any(), eq("wg"), eq("genkey"));
+        verify(forExecutingInContainer, never()).executeWithInput(any(), any(), eq("wg"), eq("pubkey"));
+        // The preshared key is shared, so Vaier still generates it and ships it in the config.
+        verify(forExecutingInContainer).execute("wireguard", "wg", "genpsk");
+    }
+
+    @Test
+    void enrol_addsTheDevicesOwnKeyToTheServer(@TempDir Path dir) throws Exception {
+        wireguardIsReachable(dir);
+        when(peerConfigProvider.getAllPeerConfigs()).thenReturn(List.of());
+        when(configResolver.getDomain()).thenReturn("eilertsen.family");
+        when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.empty());
+        when(forExecutingInContainer.execute("wireguard", "wg", "show", "wg0", "public-key"))
+            .thenReturn("SERVER_PUB\n");
+        when(forExecutingInContainer.execute("wireguard", "wg", "genpsk")).thenReturn("PSK\n");
+
+        service.enrol("phone", DEVICE_KEY);
+
+        verify(forExecutingInContainer).execute(eq("wireguard"), eq("wg"), eq("set"), eq("wg0"),
+            eq("peer"), eq(DEVICE_KEY), eq("preshared-key"), any(), eq("allowed-ips"), eq("10.13.13.2/32"));
+    }
+
+    @Test
+    void enrol_spendsTheOneShotRetrievalBudget(@TempDir Path dir) throws Exception {
+        // The config is handed to the app in the enrolment response. There is nothing left to retrieve,
+        // and a peer with a device-held key has no artefact at all — so the five GET endpoints must
+        // answer 410 from the first moment rather than serving a config without a private key.
+        wireguardIsReachable(dir);
+        when(peerConfigProvider.getAllPeerConfigs()).thenReturn(List.of());
+        when(configResolver.getDomain()).thenReturn("eilertsen.family");
+        when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.empty());
+        when(forExecutingInContainer.execute("wireguard", "wg", "show", "wg0", "public-key"))
+            .thenReturn("SERVER_PUB\n");
+        when(forExecutingInContainer.execute("wireguard", "wg", "genpsk")).thenReturn("PSK\n");
+
+        var enrolled = service.enrol("phone", DEVICE_KEY);
+
+        verify(forTrackingPeerConfigRetrieval).markViewedIfNotAlready(enrolled.id());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "not-a-key",
+        "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=; rm -rf /",
+        "$(id)",
+        "c2hvcnQ="
+    })
+    void enrol_rejectsAKeyThatIsNotAWireGuardKey_beforeAnythingMoves(String malicious) {
+        // Before any state change, exactly as createPeer validates a lanCidr: the key goes straight into
+        // `wg set ... peer <key>`'s argv and into the config on disk.
+        assertThatThrownBy(() -> service.enrol("phone", malicious))
+            .isInstanceOf(IllegalArgumentException.class);
+
+        verifyNoInteractions(peerConfigProvider, forExecutingInContainer, forUpdatingPeerConfigurations,
+            forTrackingPeerConfigRetrieval);
+    }
+
+    @Test
+    void enrol_rejectsABlankName() {
+        assertThatThrownBy(() -> service.enrol("  ", DEVICE_KEY))
+            .isInstanceOf(IllegalArgumentException.class);
+        verifyNoInteractions(peerConfigProvider, forExecutingInContainer);
+    }
+
+    @Test
+    void reissuePeerConfig_anEnrolledPeer_leavesTheRetrievalBudgetSpent() throws Exception {
+        // A Reissue re-opens the one-shot budget because it deliberately re-exposes a preserved secret.
+        // There is nothing to re-expose here — a device-held key has no artefact — and the config still
+        // carries the preshared key, so re-opening it would put secret material back behind a GET for
+        // no one's benefit.
+        ReflectionTestUtils.setField(service, "vpnSubnet", "10.13.13.0/24");
+        ReflectionTestUtils.setField(service, "wireguardContainerName", "wireguard");
+        ReflectionTestUtils.setField(service, "wireguardInterface", "wg0");
+
+        String existing = WireGuardPeerConfig.generate(
+            null, "10.13.13.7", "OLD_PUB", "PSK", "old.example.com:51820",
+            MachineType.MOBILE_CLIENT, null, null, "10.13.13.0/24", null, "phone", null, null,
+            mid("phone"), DEVICE_KEY);
+        when(peerConfigProvider.getPeerConfigByName("phone")).thenReturn(Optional.of(
+            new PeerConfiguration("phone", "phone", "10.13.13.7", existing, MachineType.MOBILE_CLIENT,
+                null, null, null, null, null, mid("phone"), DEVICE_KEY)));
+        when(configResolver.getDomain()).thenReturn("eilertsen.family");
+        when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.empty());
+        when(forExecutingInContainer.execute("wireguard", "wg", "show", "wg0", "public-key"))
+            .thenReturn("SERVER_PUB\n");
+
+        service.reissuePeerConfig("phone");
+
+        verify(forTrackingPeerConfigRetrieval, never()).resetViewed(any());
+    }
+
+    @Test
+    void reissuePeerConfig_anEnrolledPeer_keepsItsDeviceHeldKeyAndNeverDerivesOne() throws Exception {
+        ReflectionTestUtils.setField(service, "vpnSubnet", "10.13.13.0/24");
+        ReflectionTestUtils.setField(service, "wireguardContainerName", "wireguard");
+        ReflectionTestUtils.setField(service, "wireguardInterface", "wg0");
+
+        String existing = WireGuardPeerConfig.generate(
+            null, "10.13.13.7", "OLD_PUB", "PSK", "old.example.com:51820",
+            MachineType.MOBILE_CLIENT, null, null, "10.13.13.0/24", null, "phone", null, null,
+            mid("phone"), DEVICE_KEY);
+        when(peerConfigProvider.getPeerConfigByName("phone")).thenReturn(Optional.of(
+            new PeerConfiguration("phone", "phone", "10.13.13.7", existing, MachineType.MOBILE_CLIENT,
+                null, null, null, null, null, mid("phone"), DEVICE_KEY)));
+        when(configResolver.getDomain()).thenReturn("eilertsen.family");
+        when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.empty());
+        when(forExecutingInContainer.execute("wireguard", "wg", "show", "wg0", "public-key"))
+            .thenReturn("SERVER_PUB\n");
+
+        var result = service.reissuePeerConfig("phone");
+
+        // `wg pubkey` on an absent private key would return nonsense; the stored key is the answer.
+        verify(forExecutingInContainer, never()).executeWithInput(any(), any(), eq("wg"), eq("pubkey"));
+        assertThat(result.publicKey()).isEqualTo(DEVICE_KEY);
+        assertThat(result.clientConfigFile()).doesNotContain("PrivateKey");
+        assertThat(result.clientConfigFile()).contains("\"publicKey\":\"" + DEVICE_KEY + "\"");
     }
 }

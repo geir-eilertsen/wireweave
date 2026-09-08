@@ -14,6 +14,8 @@ public interface GetPeerConfigUseCase {
     /**
      * @param id   the peer's immutable identifier (WireGuard config directory name).
      * @param name the operator-facing display label.
+     * @param deviceHeldKey whether this peer's private key was minted on the device — carried so the web
+     *             layer can ask {@code PeerArtifact.forPeer} the whole question rather than assume it.
      */
     record PeerConfigResult(
         String id,
@@ -23,15 +25,16 @@ public interface GetPeerConfigUseCase {
         MachineType peerType,
         String lanCidr,
         String lanAddress,
-        String description
+        String description,
+        boolean deviceHeldKey
     ) {
         public PeerConfigResult(String id, String ipAddress, String configContent, MachineType peerType) {
-            this(id, PeerId.display(id), ipAddress, configContent, peerType, null, null, null);
+            this(id, PeerId.display(id), ipAddress, configContent, peerType, null, null, null, false);
         }
 
         public PeerConfigResult(String id, String ipAddress, String configContent,
                                 MachineType peerType, String lanCidr, String lanAddress) {
-            this(id, PeerId.display(id), ipAddress, configContent, peerType, lanCidr, lanAddress, null);
+            this(id, PeerId.display(id), ipAddress, configContent, peerType, lanCidr, lanAddress, null, false);
         }
     }
 }

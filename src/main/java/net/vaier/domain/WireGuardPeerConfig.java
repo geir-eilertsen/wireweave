@@ -49,6 +49,24 @@ public final class WireGuardPeerConfig {
                                   MachineType peerType, String lanCidr, String lanAddress, String vpnSubnet,
                                   String description, String name, String serverLanCidr,
                                   String deviceCategory, MachineId machineId) {
+        return generate(privateKey, ipAddress, serverPublicKey, presharedKey, serverEndpoint,
+            peerType, lanCidr, lanAddress, vpnSubnet, description, name, serverLanCidr,
+            deviceCategory, machineId, null);
+    }
+
+    /**
+     * As above, plus {@code publicKey} — set only for a peer with a {@code Device-held key}, whose
+     * private half was minted on the device and has never existed here. Vaier cannot derive the public
+     * key from a private key it does not hold, so the config's metadata is where that key lives.
+     *
+     * <p>A null or blank {@code privateKey} omits the {@code PrivateKey} line altogether. An empty
+     * {@code PrivateKey = } would be rejected by wg-quick, and would claim Vaier holds a secret it does not.
+     */
+    public static String generate(String privateKey, String ipAddress, String serverPublicKey,
+                                  String presharedKey, String serverEndpoint,
+                                  MachineType peerType, String lanCidr, String lanAddress, String vpnSubnet,
+                                  String description, String name, String serverLanCidr,
+                                  String deviceCategory, MachineId machineId, String publicKey) {
         // lanCidr is intentionally NOT appended to the client-side AllowedIPs: doing so makes
         // wg-quick install a route for that CIDR via wg0 on the relay peer, which hijacks the
         // relay's own LAN. lanCidr is still recorded in the # VAIER metadata below so that
@@ -67,17 +85,20 @@ public final class WireGuardPeerConfig {
         }
 
         String vaierJson = vaierJson(peerType, lanCidr, lanAddress, description, name, deviceCategory,
-            machineId);
+            machineId, publicKey);
 
         String dnsLine = peerType.isServerType()
                 ? ""
                 : "DNS = 172.20.0.53\n";
 
+        String privateKeyLine = (privateKey == null || privateKey.isBlank())
+                ? ""
+                : "PrivateKey = " + privateKey + "\n";
+
         return String.format("""
                 # VAIER: %s
                 [Interface]
-                PrivateKey = %s
-                Address = %s/32
+                %sAddress = %s/32
                 %s
                 [Peer]
                 PublicKey = %s
@@ -85,7 +106,7 @@ public final class WireGuardPeerConfig {
                 Endpoint = %s
                 AllowedIPs = %s
                 PersistentKeepalive = 25
-                """, vaierJson, privateKey, ipAddress, dnsLine,
+                """, vaierJson, privateKeyLine, ipAddress, dnsLine,
                 serverPublicKey, presharedKey, serverEndpoint, allowedIps);
     }
 
@@ -121,7 +142,7 @@ public final class WireGuardPeerConfig {
                 readDirective(existingContent, "PresharedKey"),
                 serverEndpoint,
                 peerType, lanCidr, lanAddress, vpnSubnet, description, name, serverLanCidr,
-                deviceCategory, readMachineId(existingContent));
+                deviceCategory, readMachineId(existingContent), readPublicKey(existingContent));
     }
 
     /**
@@ -163,6 +184,12 @@ public final class WireGuardPeerConfig {
     public static String vaierJson(MachineType peerType, String lanCidr, String lanAddress,
                                    String description, String name, String deviceCategory,
                                    MachineId machineId) {
+        return vaierJson(peerType, lanCidr, lanAddress, description, name, deviceCategory, machineId, null);
+    }
+
+    public static String vaierJson(MachineType peerType, String lanCidr, String lanAddress,
+                                   String description, String name, String deviceCategory,
+                                   MachineId machineId, String publicKey) {
         StringBuilder sb = new StringBuilder();
         sb.append("{\"peerType\":\"").append(peerType.name()).append("\"");
         // name is the operator's display label for the peer — free text, JSON-escaped, and (like
@@ -189,6 +216,12 @@ public final class WireGuardPeerConfig {
         if (deviceCategory != null && !deviceCategory.isBlank()) {
             sb.append(",\"deviceCategory\":\"").append(escapeJson(deviceCategory)).append("\"");
         }
+        // Only a Device-held key is recorded: for every other peer the public key is derived from the
+        // private key on the very next line, and a second copy of a fact is a fact that can disagree
+        // with itself. Its presence is therefore what marks the peer as device-held.
+        if (publicKey != null && !publicKey.isBlank()) {
+            sb.append(",\"publicKey\":\"").append(escapeJson(publicKey)).append("\"");
+        }
         // The peer's identity, last so the rest of the line reads as it always did. Omitted entirely
         // when there is none, which is what keeps a never-migrated config unchanged by a Reissue.
         if (machineId != null) {
@@ -212,6 +245,17 @@ public final class WireGuardPeerConfig {
         } catch (IllegalArgumentException e) {
             return null;
         }
+    }
+
+    /**
+     * The {@code Device-held key} stamped in {@code content}'s {@code # VAIER:} metadata, or null when
+     * the peer has none — i.e. when Vaier minted the keypair itself. Read the same lenient way as the
+     * machine id: this feeds a re-render, and a peer that fails to load is the adapter's call, not this one.
+     */
+    private static String readPublicKey(String content) {
+        if (content == null) return null;
+        Matcher m = Pattern.compile("\"publicKey\"\\s*:\\s*\"([^\"]+)\"").matcher(content);
+        return m.find() ? m.group(1) : null;
     }
 
     /**

@@ -1182,7 +1182,7 @@ class ContainerServiceTest {
     private PeerConfiguration peerConfig(String name, String ip, MachineType type) {
         // A stable identity per name, so a test can stub the scrape and assert on the id it files under.
         return new PeerConfiguration(name, PeerId.display(name), ip, "", type, null, null, null, null,
-            null, TestMachineIds.of(name));
+            null, TestMachineIds.of(name), null);
     }
 
     // --- discoverAllLanServerContainers (#177, #184) ---

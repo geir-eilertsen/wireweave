@@ -49,6 +49,10 @@ public interface ForGettingPeerConfigurations {
      *             the effective category is then auto-detected. Orthogonal to {@code peerType}:
      *             it only picks an icon, never routing. Backward-compatible: absent in pre-feature
      *             configs, reads as null.
+     * @param publicKey the peer's {@code Device-held key} — set only when the private half was minted
+     *             on the device and has never existed in Vaier. Null for every peer whose keypair Vaier
+     *             generated, because there the public key is derived from the private one on demand.
+     *             Its presence is what {@link #deviceHeldKey()} answers.
      */
     record PeerConfiguration(
         String id,
@@ -61,7 +65,8 @@ public interface ForGettingPeerConfigurations {
         String description,
         DeviceCategory deviceCategory,
         Boolean sshAccess,
-        MachineId machineId
+        MachineId machineId,
+        String publicKey
     ) {
         public PeerConfiguration {
             if (machineId == null) {
@@ -77,19 +82,19 @@ public interface ForGettingPeerConfigurations {
          */
         public PeerConfiguration(String id, String ipAddress, String configContent) {
             this(id, PeerId.display(id), ipAddress, configContent, MachineType.UBUNTU_SERVER,
-                null, null, null, null, null, MachineId.generate());
+                null, null, null, null, null, MachineId.generate(), null);
         }
 
         public PeerConfiguration(String id, String ipAddress, String configContent,
                                  MachineType peerType, String lanCidr) {
             this(id, PeerId.display(id), ipAddress, configContent, peerType, lanCidr, null, null, null,
-                null, MachineId.generate());
+                null, MachineId.generate(), null);
         }
 
         public PeerConfiguration(String id, String ipAddress, String configContent,
                                  MachineType peerType, String lanCidr, String lanAddress) {
             this(id, PeerId.display(id), ipAddress, configContent, peerType, lanCidr, lanAddress, null,
-                null, null, MachineId.generate());
+                null, null, MachineId.generate(), null);
         }
 
         /** Pre-device-category constructor: no override, effective category is auto-detected. */
@@ -97,7 +102,7 @@ public interface ForGettingPeerConfigurations {
                                  MachineType peerType, String lanCidr, String lanAddress,
                                  String description) {
             this(id, name, ipAddress, configContent, peerType, lanCidr, lanAddress, description, null,
-                null, MachineId.generate());
+                null, MachineId.generate(), null);
         }
 
         /** Pre-ssh-access constructor: no SSH-access override, effective access is the smart default. */
@@ -105,7 +110,7 @@ public interface ForGettingPeerConfigurations {
                                  MachineType peerType, String lanCidr, String lanAddress,
                                  String description, DeviceCategory deviceCategory) {
             this(id, name, ipAddress, configContent, peerType, lanCidr, lanAddress, description,
-                deviceCategory, null, MachineId.generate());
+                deviceCategory, null, MachineId.generate(), null);
         }
 
         /**
@@ -118,6 +123,14 @@ public interface ForGettingPeerConfigurations {
             return deviceCategory != null
                 ? deviceCategory
                 : DeviceCategory.detect(name, peerType, null);
+        }
+
+        /**
+         * True when this peer's private key was minted on the device and has never existed in Vaier —
+         * the peer then has no downloadable artefact at all. See {@code PeerArtifact.forPeer}.
+         */
+        public boolean deviceHeldKey() {
+            return publicKey != null && !publicKey.isBlank();
         }
 
         /** True when an explicit device-category override is pinned (rather than auto-detected). */

@@ -2416,12 +2416,41 @@
     // address, the kind, the Docker port, the site it sits behind — Vaier already knows, so it is never typed.
     function addMachine() { addMachineFork('fork', null); }
 
+    // An enrolment the Vaier app asked for: the phone minted its own WireGuard keypair and opened this page
+    // with the public half. It rides the QUERY string, never a fragment — oauth2-proxy bounces the browser
+    // through Google and back, and a fragment is never sent to a server, so it would be gone on arrival.
+    function pendingEnrolment() {
+        const q = new URLSearchParams(location.search);
+        const publicKey = q.get('enrol');
+        if (!publicKey) return null;
+        const name = (q.get('name') || '').trim();
+        // Asked once. The key is spent the moment the peer exists, so a reload must not offer it again —
+        // rewritten in place with replaceState because changing the query with location.replace would
+        // reload the document and arrive with nothing to do.
+        q.delete('enrol'); q.delete('name');
+        const rest = q.toString();
+        history.replaceState(null, '', location.pathname + (rest ? '?' + rest : '') + location.hash);
+        // The app says what the device is called; Vaier never invents that, because the name it invented
+        // would be written into the peer's config as the machine's own label.
+        if (!name) { toast('That link did not say which device wants to join.'); return null; }
+        return { publicKey: publicKey, name: name };
+    }
+
+    // How the config goes back to the app that opened this page. base64url (RFC 4648 §5, unpadded): a
+    // WireGuard config carries '+' and '/', and both mean something else inside a URL.
+    function enrolDeepLink(configFile) {
+        const bytes = new TextEncoder().encode(configFile || '');
+        let binary = '';
+        bytes.forEach((b) => { binary += String.fromCharCode(b); });
+        return 'vaier://enrol#' + btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+
     // One modal, internal screens — the fork Vaier can't infer, then (LAN-server branch) discover + adopt, with
     // a quiet by-address fallback for empty scans. Optionally opens straight on a screen
     // (the fleet's "Discovered on the LAN" list jumps in at 'adopt' for a chosen candidate). Cached-first and
     // push-driven: candidates show instantly from the last scan, and a finished scan repaints the list over the
     // lan-scan-updated stream the shell already holds — never a timer, never a poll.
-    function addMachineFork(initialScreen, initialCandidate) {
+    function addMachineFork(initialScreen, initialCandidate, initialEnrolment) {
         const scrim = el('div', 'ex-scrim is-on');
         const dialog = el('div', 'ex-dialog is-wide');
         const titleEl = el('div', 'ex-dialog-title');
@@ -2436,6 +2465,8 @@
         let peerWindows = false;                    // whether the peer runs Windows — the OS second step's answer
         let peerCreated = null;                     // the create response, held for the handoff screen
         let adopted = null;                         // the adopt result, held for the LAN handoff screen: { name, credNote }
+        const enrolment = initialEnrolment || null; // the app's request: { publicKey, name }
+        let enrolled = null;                        // the enrol response, held for the handoff screen
 
         const close = () => {
             _lanScanModalRefresh = null;
@@ -2461,6 +2492,23 @@
             return b;
         };
         const actionsRow = () => el('div', 'ex-dialog-actions');
+        // One line of the "Vaier will generate" block: what it is, and what Vaier fills in.
+        const drow = (k, v, accent) => {
+            const r = el('div', 'ex-drow');
+            const kk = el('span', 'ex-drow-k'); kk.textContent = k;
+            const vv = el('span', 'ex-drow-v' + (accent ? ' is-accent' : '')); vv.textContent = v;
+            r.append(kk, vv); return r;
+        };
+        // The "Vaier will generate" panel, shared by the peer form and an enrolment.
+        const generatedBlock = (rows) => {
+            const det = el('div', 'ex-detected');
+            const head = el('div', 'ex-detected-head');
+            head.appendChild(el('span', 'ex-detected-check')).textContent = '✓';
+            const ht = el('span'); ht.textContent = 'Vaier will generate'; head.appendChild(ht);
+            det.appendChild(head);
+            rows.forEach((r) => det.appendChild(r));
+            return det;
+        };
 
         // The screen router. The refresh hook is armed only on the two screens that read live scan state —
         // the LAN picker (counts) and the discover list — so a scan settling elsewhere never repaints under
@@ -2478,6 +2526,8 @@
             else if (id === 'peerOs') paintPeerOs();
             else if (id === 'peerName') paintPeerName();
             else if (id === 'peerHandoff') paintPeerHandoff();
+            else if (id === 'enrol') paintEnrol();
+            else if (id === 'enrolHandoff') paintEnrolHandoff();
         }
 
         // The LAN a candidate sits on, for jumping into discover from an adopt opened directly off the fleet
@@ -3090,20 +3140,9 @@
             name.autocomplete = 'off'; name.spellcheck = false;
             content.appendChild(field('Name', 'The only thing Vaier can’t generate — what to call it.', name));
 
-            const det = el('div', 'ex-detected');
-            const head = el('div', 'ex-detected-head');
-            head.appendChild(el('span', 'ex-detected-check')).textContent = '✓';
-            const ht = el('span'); ht.textContent = 'Vaier will generate'; head.appendChild(ht);
-            det.appendChild(head);
-            const drow = (k, v, accent) => {
-                const r = el('div', 'ex-drow');
-                const kk = el('span', 'ex-drow-k'); kk.textContent = k;
-                const vv = el('span', 'ex-drow-v' + (accent ? ' is-accent' : '')); vv.textContent = v;
-                r.append(kk, vv); return r;
-            };
-            det.appendChild(drow('Tunnel IP', 'the next free address', true));
-            det.appendChild(drow('Keys + preshared key', 'on save'));
-            content.appendChild(det);
+            content.appendChild(generatedBlock([
+                drow('Tunnel IP', 'the next free address', true),
+                drow('Keys + preshared key', 'on save')]));
 
             const actions = actionsRow();
             const back = el('button', 'ex-btn'); back.textContent = 'Back';
@@ -3143,6 +3182,94 @@
                 toast('Vaier could not add that machine.');
                 addBtn.disabled = false; addBtn.textContent = was;
             }
+        }
+
+        // ---- enrol · a phone that arrived with its own key ---------------------------------------------
+        // The device answered every question the peer flow would have asked, and the one answer Vaier
+        // normally generates — the key — it generated itself. So there is nothing to fill in: one button.
+        function paintEnrol() {
+            if (!enrolment) { screen('fork'); return; }
+            titleEl.textContent = 'Add a machine';
+            content.innerHTML = '';
+
+            const sub = el('div', 'ex-dialog-body');
+            sub.textContent = 'A phone called ' + enrolment.name + ' wants to join the fleet. Its key was '
+                + 'made on the phone and never leaves it — Vaier only ever sees the public half.';
+            content.appendChild(sub);
+
+            content.appendChild(generatedBlock([
+                drow('Tunnel IP', 'the next free address', true),
+                drow('Preshared key', 'on save')]));
+
+            const actions = actionsRow();
+            const add = el('button', 'ex-btn is-accent'); add.textContent = 'Add';
+            add.onclick = () => submitEnrolment(add);
+            actions.appendChild(add);
+            content.appendChild(actions);
+            add.focus();
+        }
+
+        // The enrol call: the name the app gave and the public key the phone minted, and nothing else. The
+        // response carries the config with no PrivateKey line — the phone already holds that half.
+        async function submitEnrolment(addBtn) {
+            addBtn.disabled = true; const was = addBtn.textContent; addBtn.textContent = 'Adding…';
+            try {
+                const res = await fetch('/vpn/peers/enrol', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: enrolment.name, publicKey: enrolment.publicKey }),
+                });
+                if (!res.ok) {
+                    const e = await res.json().catch(() => ({}));
+                    toast(e.message || 'Vaier could not add that device.');
+                    addBtn.disabled = false; addBtn.textContent = was; return;
+                }
+                enrolled = await res.json();
+                await loadFleet();
+                toast(enrolled.name + ' added.');
+                screen('enrolHandoff');
+            } catch (e) {
+                toast('Vaier could not add that device.');
+                addBtn.disabled = false; addBtn.textContent = was;
+            }
+        }
+
+        // ---- enrol · handoff — back to the app, never to the operator -----------------------------------
+        // Nothing is shown and nothing is saved: the config goes straight to the app over its own scheme.
+        // The button is for the browser that refuses the automatic hop, not a second way of doing it.
+        function paintEnrolHandoff() {
+            const p = enrolled;
+            if (!p) { screen('enrol'); return; }
+            titleEl.textContent = p.name + ' — over to the app';
+            content.innerHTML = '';
+
+            const sub = el('div', 'ex-dialog-body');
+            sub.textContent = 'Vaier sent ' + p.name + ' everything except the private key, which the phone '
+                + 'already has. There is nothing here to save.';
+            content.appendChild(sub);
+
+            const row = el('div', 'ex-set-actions');
+            const appLink = el('a', 'ex-btn is-accent');
+            appLink.href = enrolDeepLink(p.configFile);
+            appLink.textContent = 'Open Vaier on this phone';
+            row.appendChild(appLink);
+            content.appendChild(row);
+
+            const wait = el('div', 'ex-waiting');
+            wait.appendChild(el('span', 'ex-scanmeta-dot is-live'));
+            const wt = el('span');
+            wt.textContent = 'Waiting for ' + p.name + '’s first handshake — it turns green here on its own.';
+            wait.appendChild(wt);
+            content.appendChild(wait);
+
+            const actions = actionsRow();
+            const done = el('button', 'ex-btn'); done.textContent = 'Done';
+            done.onclick = () => { close(); go(['fleet', p.machineId]); };
+            actions.appendChild(done);
+            content.appendChild(actions);
+
+            // The hop the app is waiting for, taken after the paint so the fallback button is already on
+            // screen when a browser blocks it.
+            location.href = appLink.href;
         }
 
         // ---- peer · handoff — the config, shown once, and the way to get it onto the box ----------------
@@ -3333,6 +3460,7 @@
         }
 
         if (initialScreen === 'adopt' && cand) screen('adopt');
+        else if (initialScreen === 'enrol' && enrolment) screen('enrol');
         else screen('fork');
     }
 
@@ -9205,6 +9333,9 @@
 
     async function init() {
         renderVMenu();
+        // Read (and clear) an app's enrolment first, so normalising the address below does not write the
+        // key straight back into the bar.
+        const enrolment = pendingEnrolment();
         // Where the address says we are, before anything is fetched — so a reload or a pasted link paints the
         // right place on the first frame rather than landing on the fleet and jumping.
         const start = parseHash();
@@ -9223,6 +9354,8 @@
         // tree begins. Standing anywhere else this is a no-op.
         if (S.path.length > 3) readPathChain(S.path[1]);
         render();
+        // A phone is waiting on the other end of this, so it comes before the background loads.
+        if (enrolment) addMachineFork('enrol', null, enrolment);
         // Not awaited and never toasted — a claimed device quietly refreshing its own position is a background
         // habit the operator opted into once, not an event of the visit.
         maybeAutoSharePosition();

@@ -186,7 +186,7 @@ class MachineTest {
     void effectiveSshAccess_overrideWinsOverDefault() {
         // A server that would default to true, pinned off.
         PeerConfiguration peer = new PeerConfiguration("srv", "srv", "10.13.13.2", "",
-            MachineType.UBUNTU_SERVER, null, null, null, null, false, MachineId.generate());
+            MachineType.UBUNTU_SERVER, null, null, null, null, false, MachineId.generate(), null);
         Machine machine = Machine.fromPeer(peer, null);
         assertThat(machine.effectiveSshAccess()).isFalse();
 
@@ -200,7 +200,7 @@ class MachineTest {
     @Test
     void effectiveSshAccess_noOverride_usesDefault() {
         PeerConfiguration peer = new PeerConfiguration("srv", "srv", "10.13.13.2", "",
-            MachineType.UBUNTU_SERVER, null, null, null, null, null, MachineId.generate());
+            MachineType.UBUNTU_SERVER, null, null, null, null, null, MachineId.generate(), null);
         assertThat(Machine.fromPeer(peer, null).effectiveSshAccess()).isTrue();
     }
 
@@ -235,14 +235,14 @@ class MachineTest {
     @Test
     void canRelayALan_aServerPeerCan() {
         PeerConfiguration peer = new PeerConfiguration("srv", "srv", "10.13.13.2", "",
-            MachineType.UBUNTU_SERVER, null, null, null, null, null, MachineId.generate());
+            MachineType.UBUNTU_SERVER, null, null, null, null, null, MachineId.generate(), null);
         assertThat(Machine.fromPeer(peer, null).canRelayALan()).isTrue();
     }
 
     @Test
     void canRelayALan_aPersonalDeviceCannot() {
         PeerConfiguration phone = new PeerConfiguration("phone", "phone", "10.13.13.8", "",
-            MachineType.MOBILE_CLIENT, null, null, null, null, null, MachineId.generate());
+            MachineType.MOBILE_CLIENT, null, null, null, null, null, MachineId.generate(), null);
         assertThat(Machine.fromPeer(phone, null).canRelayALan()).isFalse();
     }
 

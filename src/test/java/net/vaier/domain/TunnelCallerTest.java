@@ -22,7 +22,7 @@ class TunnelCallerTest {
 
     private static PeerConfiguration peer(String id, String tunnelIp, MachineId machineId) {
         return new PeerConfiguration(id, id, tunnelIp, "", MachineType.MOBILE_CLIENT, null, null, null,
-            null, null, machineId);
+            null, null, machineId, null);
     }
 
     @Test

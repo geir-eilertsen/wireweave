@@ -63,7 +63,7 @@ class MachineSshTargetAdapterTest {
     /** A stored peer carrying the id it was stored with, rather than a freshly minted one. */
     private PeerConfiguration peer(String name, String tunnelIp) {
         return new PeerConfiguration(name, name, tunnelIp, "", MachineType.UBUNTU_SERVER,
-            null, null, null, null, null, mid(name));
+            null, null, null, null, null, mid(name), null);
     }
 
     /** A stored LAN server carrying the id it was stored with. */

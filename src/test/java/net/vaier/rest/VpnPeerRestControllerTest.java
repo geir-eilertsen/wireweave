@@ -15,9 +15,11 @@ import net.vaier.domain.port.ForSubscribingToEvents;
 import net.vaier.config.ConfigResolver;
 import net.vaier.application.CreatePeerUseCase;
 import net.vaier.application.DeletePeerUseCase;
+import net.vaier.application.EnrolDeviceUseCase;
 import net.vaier.application.GenerateDockerComposeUseCase;
 import net.vaier.application.GeneratePeerSetupScriptUseCase;
 import net.vaier.application.GetPeerConfigUseCase;
+import net.vaier.application.GetPeerConfigUseCase.PeerConfigResult;
 import net.vaier.application.GetServerLocationUseCase;
 import net.vaier.application.GetServerLocationUseCase.ServerLocation;
 import net.vaier.application.GetVpnPeersUseCase;
@@ -73,6 +75,7 @@ class VpnPeerRestControllerTest {
     @Mock GetPeerConfigUseCase getPeerConfigUseCase;
     @Mock CreatePeerUseCase createPeerUseCase;
     @Mock DeletePeerUseCase deletePeerUseCase;
+    @Mock EnrolDeviceUseCase enrolDeviceUseCase;
     @Mock GenerateDockerComposeUseCase generateDockerComposeUseCase;
     @Mock GeneratePeerSetupScriptUseCase generatePeerSetupScriptUseCase;
     @Mock UpdateLanCidrUseCase updateLanCidrUseCase;
@@ -359,7 +362,7 @@ class VpnPeerRestControllerTest {
             "apalveien5", TestMachineIds.of("apalveien5"), "apalveien5", "10.13.13.6", "pub",
             "# VAIER: {\"peerType\":\"UBUNTU_SERVER\"}\n[Interface]\nPrivateKey = k\n"
                 + "Address = 10.13.13.6/32\n[Peer]\nAllowedIPs = 10.13.13.0/24,172.31.16.0/20\n",
-            MachineType.UBUNTU_SERVER);
+            MachineType.UBUNTU_SERVER, false);
         when(reissuePeerConfigUseCase.reissuePeerConfig("apalveien5")).thenReturn(reissued);
         when(configResolver.getDomain()).thenReturn("eilertsen.family");
         when(generateDockerComposeUseCase.generateWireguardClientDockerCompose(eq("apalveien5"), any(), any()))
@@ -885,5 +888,98 @@ class VpnPeerRestControllerTest {
 
         assertThatThrownBy(() -> controller.claimDevice("phone"))
             .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    // --- POST /vpn/peers/enrol: a phone joins with a key born on the device (#359 slice 1) ---
+
+    private static final String DEVICE_KEY = "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=";
+
+    @Test
+    void enrolDevice_handsBackTheConfigTheAppNeeds_andNothingElse() {
+        var enrolled = new EnrolDeviceUseCase.EnrolledDeviceUco(
+            "geirs-phone", TestMachineIds.of("geirs-phone"), "Geir's phone", "10.13.13.7",
+            DEVICE_KEY, "# VAIER: {}\n[Interface]\nAddress = 10.13.13.7/32\n",
+            MachineType.MOBILE_CLIENT);
+        when(enrolDeviceUseCase.enrol("Geir's phone", DEVICE_KEY)).thenReturn(enrolled);
+
+        var response = controller.enrolDevice(
+            new VpnPeerRestController.EnrolDeviceRequest("Geir's phone", DEVICE_KEY));
+
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
+        var body = response.getBody();
+        assertThat(body.id()).isEqualTo("geirs-phone");
+        assertThat(body.machineId()).isEqualTo(TestMachineIds.of("geirs-phone").value());
+        assertThat(body.name()).isEqualTo("Geir's phone");
+        assertThat(body.ipAddress()).isEqualTo("10.13.13.7");
+        assertThat(body.configFile()).isEqualTo(enrolled.configFile());
+    }
+
+    @Test
+    void enrolDeviceResponse_carriesNoKeyOfAnyKind() {
+        // The response goes back into a browser and on to the app. A private key cannot be in it — Vaier
+        // has none — and the public key is something the device already holds, so it says nothing.
+        assertThat(VpnPeerRestController.EnrolDeviceResponse.class.getRecordComponents())
+            .extracting(RecordComponent::getName)
+            .containsExactly("id", "machineId", "name", "ipAddress", "configFile");
+    }
+
+    @Test
+    void enrolDevice_tellsTheFleetSomethingChanged() {
+        var enrolled = new EnrolDeviceUseCase.EnrolledDeviceUco(
+            "phone", TestMachineIds.of("phone"), "phone", "10.13.13.7", DEVICE_KEY, "[Interface]",
+            MachineType.MOBILE_CLIENT);
+        when(enrolDeviceUseCase.enrol("phone", DEVICE_KEY)).thenReturn(enrolled);
+
+        controller.enrolDevice(new VpnPeerRestController.EnrolDeviceRequest("phone", DEVICE_KEY));
+
+        verify(forPublishingEvents).publish("vpn-peers", "peers-updated", "");
+    }
+
+    @Test
+    void enrolDevice_doesNotJudgeTheKeyItself_theDomainDoes() {
+        // A thin controller: a bad key is the domain's refusal (-> 400 via GlobalExceptionHandler),
+        // never a second copy of the rule here.
+        when(enrolDeviceUseCase.enrol("phone", "not-a-key"))
+            .thenThrow(new IllegalArgumentException("WireGuard key must be a 32-byte base64 key"));
+
+        assertThatThrownBy(() -> controller.enrolDevice(
+                new VpnPeerRestController.EnrolDeviceRequest("phone", "not-a-key")))
+            .isInstanceOf(IllegalArgumentException.class);
+        verify(forPublishingEvents, never()).publish(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void reissuingAnEnrolledPeer_offersNothingToDownload() {
+        // buildConfigDeliveryResponse is shared by create and reissue, and a reissue is the one path that
+        // reaches it with a device-held key. Without the flag the web layer re-decides the artefact rule
+        // as "not device-held" and renders a QR of a config with no PrivateKey line in it.
+        var reissued = new ReissuePeerConfigUseCase.ReissuedPeerUco(
+            "phone", TestMachineIds.of("phone"), "phone", "10.13.13.7", DEVICE_KEY,
+            "# VAIER: {\"peerType\":\"MOBILE_CLIENT\",\"publicKey\":\"" + DEVICE_KEY + "\"}\n"
+                + "[Interface]\nAddress = 10.13.13.7/32\n",
+            MachineType.MOBILE_CLIENT, true);
+        when(reissuePeerConfigUseCase.reissuePeerConfig("phone")).thenReturn(reissued);
+
+        var response = (VpnPeerRestController.CreatePeerResponse) controller.reissuePeer("phone").getBody();
+
+        assertThat(response.availableArtifacts()).isEmpty();
+        assertThat(response.qrCodePngBase64()).isNull();
+        assertThat(response.dockerCompose()).isNull();
+        assertThat(response.setupScript()).isNull();
+        assertThat(response.setupToken()).isNull();
+    }
+
+    @Test
+    void theConfigEndpoint_listsNoArtefactsForAnEnrolledPeer() {
+        // In practice this endpoint answers 410 for such a peer, because enrolment spends the one-shot
+        // budget. It must still be honest if it is ever reached: the rule is the domain's, at every edge.
+        when(getPeerConfigUseCase.getPeerConfig("phone")).thenReturn(Optional.of(new PeerConfigResult(
+            "phone", "phone", "10.13.13.7", "[Interface]\n", MachineType.MOBILE_CLIENT,
+            null, null, null, true)));
+        when(forTrackingPeerConfigRetrieval.markViewedIfNotAlready("phone")).thenReturn(true);
+
+        var body = (VpnPeerRestController.PeerConfigResponse) controller.getPeerConfig("phone").getBody();
+
+        assertThat(body.availableArtifacts()).isEmpty();
     }
 }

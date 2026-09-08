@@ -543,7 +543,7 @@ class SecurityServiceTest {
 
     private static PeerConfiguration phoneAt(String tunnelIp) {
         return new PeerConfiguration("phone", "phone", tunnelIp, "", MachineType.MOBILE_CLIENT, null,
-            null, null, null, null, PHONE);
+            null, null, null, null, PHONE, null);
     }
 
     /**

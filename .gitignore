@@ -17,6 +17,9 @@ dist/
 build/
 .npm
 
+# Gradle (the Android app in android/ builds here; build/ above covers its output)
+.gradle/
+
 # IDEs
 .idea/
 .vscode/

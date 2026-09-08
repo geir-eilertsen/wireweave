@@ -793,4 +793,66 @@ class WireguardConfigFileAdapterTest {
         Files.writeString(peerDir.resolve(peerName + ".conf"),
                 "# VAIER: " + json + "\n[Interface]\nAddress=" + ip + "/32\nPrivateKey=testkey\n");
     }
+
+    // --- a device-held key survives every metadata rewrite (#359) ---
+
+    private static final String DEVICE_KEY = "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=";
+
+    @Test
+    void getPeerConfigByName_readsTheDeviceHeldPublicKeyFromVaierMetadata() throws IOException {
+        createPeerConfWithVaierMetadata("phone", "10.13.13.7",
+            "{\"peerType\":\"MOBILE_CLIENT\",\"publicKey\":\"" + DEVICE_KEY + "\"}");
+
+        assertThat(adapter.getPeerConfigByName("phone")).get()
+            .extracting(PeerConfiguration::publicKey).isEqualTo(DEVICE_KEY);
+    }
+
+    @Test
+    void getPeerConfigByName_publicKeyIsNullForAPeerWhoseKeyVaierMinted() throws IOException {
+        createPeerConfWithVaierMetadata("laptop", "10.13.13.2", "{\"peerType\":\"UBUNTU_SERVER\"}");
+
+        assertThat(adapter.getPeerConfigByName("laptop")).get()
+            .extracting(PeerConfiguration::publicKey).isNull();
+    }
+
+    /**
+     * Every {@code update*} rewrites the whole {@code # VAIER:} line, so a field a mutator does not carry
+     * is a field erased from disk. For a {@code Device-held key} that erasure is unrecoverable — Vaier has
+     * no private key to derive the public one from — and it would silently re-open the peer's downloads.
+     * One test per mutator, because the bug is per-mutator.
+     */
+    @Test
+    void everyMetadataRewrite_preservesTheDeviceHeldPublicKey() throws IOException {
+        record Mutation(String label, Runnable action) {}
+        List<Mutation> mutations = List.of(
+            new Mutation("rename", () -> adapter.updateName("phone", "Geir's phone")),
+            new Mutation("description", () -> adapter.updateDescription("phone", "the daily driver")),
+            new Mutation("deviceCategory", () -> adapter.updateDeviceCategory("phone", "PHONE")),
+            new Mutation("lanAddress", () -> adapter.updateLanAddress("phone", "192.168.1.20")),
+            new Mutation("lanCidr", () -> adapter.updateLanCidr("phone", "192.168.1.0/24")),
+            new Mutation("sshAccess", () -> adapter.updateSshAccess("phone", true)));
+
+        for (Mutation mutation : mutations) {
+            Files.deleteIfExists(configDir.resolve("phone").resolve("phone.conf"));
+            createPeerConfWithVaierMetadata("phone", "10.13.13.7",
+                "{\"peerType\":\"MOBILE_CLIENT\",\"publicKey\":\"" + DEVICE_KEY + "\"}");
+
+            mutation.action().run();
+
+            assertThat(adapter.getPeerConfigByName("phone")).get()
+                .extracting(PeerConfiguration::publicKey)
+                .as("%s must not erase the device-held key", mutation.label())
+                .isEqualTo(DEVICE_KEY);
+        }
+    }
+
+    @Test
+    void metadataParsing_toleratesAnUnknownKey() throws IOException {
+        // Both directions of the compatibility question: a conf written by a newer Vaier must still load
+        // on an older one, and a hand-added key must not take the peer down.
+        createPeerConfWithVaierMetadata("laptop", "10.13.13.2",
+            "{\"peerType\":\"UBUNTU_SERVER\",\"somethingNobodyHasWrittenYet\":\"x\"}");
+
+        assertThat(adapter.getPeerConfigByName("laptop")).isPresent();
+    }
 }

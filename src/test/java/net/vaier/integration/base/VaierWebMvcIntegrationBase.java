@@ -99,6 +99,9 @@ public abstract class VaierWebMvcIntegrationBase {
     protected CreatePeerUseCase createPeerUseCase;
 
     @MockBean
+    protected EnrolDeviceUseCase enrolDeviceUseCase;
+
+    @MockBean
     protected DeletePeerUseCase deletePeerUseCase;
 
     @MockBean
