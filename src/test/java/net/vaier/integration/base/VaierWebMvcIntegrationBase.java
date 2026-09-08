@@ -50,6 +50,10 @@ public abstract class VaierWebMvcIntegrationBase {
     @MockBean
     protected GetIconUseCase getIconUseCase;
 
+    /** #359: AndroidAppRestController is a controller, so @WebMvcTest loads it and needs its use case. */
+    @MockBean
+    protected GetAndroidAppUseCase getAndroidAppUseCase;
+
     // --- Social-login authorization use cases ---
     @MockBean
     protected VerifyAccessUseCase verifyAccessUseCase;

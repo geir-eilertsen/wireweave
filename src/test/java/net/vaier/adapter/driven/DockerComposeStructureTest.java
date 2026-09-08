@@ -67,6 +67,18 @@ class DockerComposeStructureTest {
     }
 
     @Test
+    void publicRouter_handsOutTheAndroidAppBeforeAPhoneCanPossiblySignIn() throws Exception {
+        // #359: the phone fetches the Vaier app, then signs in from it and enrols. Behind the auth chain
+        // that is a locked door with the key behind it. The package carries no secret — the same signed
+        // file for every visitor — so it is the one download that belongs on the anonymous tier.
+        String rule = vaierLabels().get("traefik.http.routers.vaier-public.rule");
+
+        assertThat(rule).contains("Path(`/app/android/vaier.apk`)");
+        // One file, exactly — never a prefix that could grow into serving the whole /app directory.
+        assertThat(rule).doesNotContain("PathPrefix(`/app");
+    }
+
+    @Test
     void identityRouter_carriesOnlyOauth2AuthnForTheViewerAdaptiveEndpoints() throws Exception {
         Map<String, String> labels = vaierLabels();
         String rule = labels.get("traefik.http.routers.vaier-identity.rule");

@@ -1960,7 +1960,11 @@
         // Named by what it does rather than "Advanced", which said only that the operator was unlikely to
         // want it — never that opening it put a working machine at risk.
         if (!isVaierServer) {
-            const canReissue = S.peers.has(m.id);
+            // A device that enrolled from the app holds the only copy of its private key. Reissue would
+            // re-render a config nobody can hand to it, and Regenerate would mint a server-side keypair —
+            // turning it back into a QR-code peer. Neither is offered; the server refuses the first anyway.
+            const deviceHeld = !!(S.peers.get(m.id) || {}).deviceHeldKey;
+            const canReissue = S.peers.has(m.id) && !deviceHeld;
             const adv = dangerFold(canReissue ? 'Reissue, regenerate or remove this machine'
                                               : 'Remove this machine');
             if (canReissue) {
@@ -1970,6 +1974,10 @@
                 adv.appendChild(cfg);
                 adv.appendChild(hint('Reissue re-hands the same identity’s config. Regenerate replaces the '
                     + 'keypair — a new identity on the VPN — and the old config stops working at once.'));
+            } else if (deviceHeld) {
+                adv.appendChild(hint('This machine made its own key when it enrolled, so there is no config '
+                    + 'here to reissue or regenerate — the private half only ever existed on the device. '
+                    + 'To replace the key, remove the machine and enrol it again from the app.'));
             }
             const rm = el('div', 'ex-lactions is-static');
             rm.appendChild(selVerb('trash', 'Remove machine', 'ex-btn is-danger', () => removeMachine(m)));
@@ -3445,6 +3453,17 @@
         // Phone / Mac / Linux: the QR to scan, the config to import.
         function peerHandoffMobile(p) {
             const wrap = el('div');
+            // #359: on Android there is a better route than a photographed QR — the Vaier app mints the
+            // key on the phone and enrols it over the operator's own session, so nothing is copied by
+            // hand. Named first, with the link to fetch it; the QR below stays for the WireGuard app.
+            const app = el('div', 'ex-hint');
+            app.textContent = 'On Android, get the Vaier app from the launchpad and enrol '
+                + p.name + ' from it instead — the phone makes its own key and nothing is copied by hand. ';
+            const appLink = el('a');
+            appLink.href = '/launchpad.html';
+            appLink.textContent = 'Open the launchpad';
+            app.appendChild(appLink);
+            wrap.appendChild(app);
             wrap.appendChild(section('Scan it into WireGuard'));
             const list = el('ol', 'ex-instr');
             ['Open the WireGuard app on the device.',

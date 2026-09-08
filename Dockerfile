@@ -19,6 +19,10 @@ LABEL org.opencontainers.image.version="${VAIER_VERSION}"
 RUN apt-get update && apt-get install -y --no-install-recommends iproute2 util-linux iputils-ping && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build --chown=1000:1000 /app/target/*.jar app.jar
+# #359: the Vaier Android app, served from /app/android/vaier.apk. The apk/ directory always exists (it
+# holds a README), so an image built from a tree with the package serves it and one built without simply
+# has nothing to offer — FilesystemAndroidAppAdapter reads the absence as "no app", never as an error.
+COPY --chown=1000:1000 apk/ /app/apk/
 EXPOSE 8080
 # Entrypoint starts as root (so setpriv can manage caps), uses cap_add: NET_ADMIN
 # from compose, adds NET_ADMIN to inheritable+ambient sets (so it transfers to ip

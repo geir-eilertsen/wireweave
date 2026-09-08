@@ -688,4 +688,62 @@ class WireGuardPeerConfigTest {
         assertThat(WireGuardPeerConfig.isOutOfDate(enrolled, MachineType.MOBILE_CLIENT, null, null,
             null, "phone", "serverpub", "vpn.example.com:51820", "10.13.13.0/24", null)).isFalse();
     }
+
+    @Test
+    void isOutOfDate_anEnrolledPeerWhoseServerMoved_isStillNotOutOfDate() {
+        // The mark exists to say "a Reissue would change this file". A Reissue of a device-held key is
+        // refused — the config it would re-render is one nobody can hand to the phone — so the mark would
+        // be a warning with no action behind it, which Vaier does not paint.
+        String enrolled = WireGuardPeerConfig.generate(
+            null, "10.13.13.7", "oldpub", "psk", "old.example.com:51820",
+            MachineType.MOBILE_CLIENT, null, null, "10.13.13.0/24", null, "Ruten", null, null,
+            MachineId.generate(), "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=");
+
+        // Same peer, but the server has since changed its public key and endpoint: for any ordinary peer
+        // this is exactly the divergence the mark is for.
+        assertThat(WireGuardPeerConfig.isOutOfDate(enrolled, MachineType.MOBILE_CLIENT, null, null,
+            null, "Ruten", "newpub", "new.example.com:51820", "10.13.13.0/24", null)).isFalse();
+    }
+
+    @Test
+    void isOutOfDate_anOrdinaryPeerWhoseServerMoved_isOutOfDate() {
+        // The counterpart, so the carve-out above cannot quietly swallow the whole mark.
+        String existing = WireGuardPeerConfig.generate("privkey", "10.13.13.9", "oldpub", "psk",
+            "old.example.com:51820", MachineType.MOBILE_CLIENT, null, null, "10.13.13.0/24",
+            null, "phone", null, null, MachineId.generate());
+
+        assertThat(WireGuardPeerConfig.isOutOfDate(existing, MachineType.MOBILE_CLIENT, null, null,
+            null, "phone", "newpub", "new.example.com:51820", "10.13.13.0/24", null)).isTrue();
+    }
+
+    @Test
+    void deviceHeldKey_isTrueForAConfigWithNoPrivateKeyAndAStampedPublicKey() {
+        String enrolled = WireGuardPeerConfig.generate(
+            null, "10.13.13.7", "serverpub", "psk", "vpn.example.com:51820",
+            MachineType.MOBILE_CLIENT, null, null, "10.13.13.0/24", null, "Ruten", null, null,
+            MachineId.generate(), "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=");
+
+        assertThat(WireGuardPeerConfig.deviceHeldKey(enrolled)).isTrue();
+    }
+
+    @Test
+    void deviceHeldKey_isFalseForAKeylessConfigThatStampsNoPublicKey() {
+        // One rule, one spelling: the stamped public key is what marks a device-held key, exactly as
+        // PeerConfiguration.deviceHeldKey() says. A config that is merely missing its PrivateKey line is
+        // damaged, not enrolled, and calling it enrolled would tell the operator the phone made its own key.
+        String keyless = WireGuardPeerConfig.generate(null, "10.13.13.9", "serverpub", "psk",
+            "vpn.example.com:51820", MachineType.UBUNTU_SERVER, null, null, "10.13.13.0/24",
+            null, "NUC 02", null, null, MachineId.generate());
+
+        assertThat(WireGuardPeerConfig.deviceHeldKey(keyless)).isFalse();
+    }
+
+    @Test
+    void deviceHeldKey_isFalseForAConfigVaierMintedTheKeypairFor() {
+        String existing = WireGuardPeerConfig.generate("privkey", "10.13.13.9", "serverpub", "psk",
+            "vpn.example.com:51820", MachineType.UBUNTU_SERVER, null, null, "10.13.13.0/24",
+            null, "NUC 02", null, null, MachineId.generate());
+
+        assertThat(WireGuardPeerConfig.deviceHeldKey(existing)).isFalse();
+    }
 }

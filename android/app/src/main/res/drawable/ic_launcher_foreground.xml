@@ -1,11 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Vaier's own mark, a hub and four spokes, in the shell's amber. Same geometry as the favicon
+     (16-unit viewBox), scaled 3x into the adaptive icon's safe zone. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- A plain "V", drawn rather than drawn on. -->
     <path
-        android:fillColor="#F2F7F4"
-        android:pathData="M36,36 L46,36 L54,60 L62,36 L72,36 L59,74 L49,74 Z" />
+        android:strokeColor="#D9A05B"
+        android:strokeWidth="4.5"
+        android:strokeLineCap="round"
+        android:pathData="M37.5,40.5 L48,49.5 M70.5,40.5 L60,49.5 M37.5,67.5 L48,58.5 M70.5,67.5 L60,58.5" />
+    <path
+        android:fillColor="#D9A05B"
+        android:pathData="M54,47.4 a6.6,6.6 0 1,0 0.01,0 Z" />
+    <path
+        android:fillColor="#D9A05B"
+        android:pathData="M37.5,36 a4.5,4.5 0 1,0 0.01,0 Z M70.5,36 a4.5,4.5 0 1,0 0.01,0 Z M37.5,63 a4.5,4.5 0 1,0 0.01,0 Z M70.5,63 a4.5,4.5 0 1,0 0.01,0 Z" />
 </vector>

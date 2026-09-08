@@ -90,6 +90,12 @@ public interface GetVpnPeersUseCase {
         boolean isClient,
         boolean isRelay,
         Set<PeerArtifact> availableArtifacts,
+        /**
+         * True when this peer's private key was minted on the device and has never existed in Vaier —
+         * an {@code Enrolment}. Carried in its own right, not only as an empty {@code availableArtifacts}:
+         * it is what tells the pane that a {@code Reissue} and a regeneration are both meaningless here.
+         */
+        boolean deviceHeldKey,
         String lanCidr,
         String lanAddress,
         String description,

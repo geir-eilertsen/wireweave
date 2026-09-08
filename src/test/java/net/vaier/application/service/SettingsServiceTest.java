@@ -3,10 +3,12 @@ package net.vaier.application.service;
 import net.vaier.application.GetAppSettingsUseCase.AppSettingsResult;
 import net.vaier.config.ConfigResolver;
 import net.vaier.config.WildcardDnsStatusHolder;
+import net.vaier.domain.AndroidApp;
 import net.vaier.domain.VaierConfig;
 import net.vaier.domain.WildcardDnsReport;
 import net.vaier.domain.WildcardDnsStatus;
 import net.vaier.domain.port.ForPersistingAppConfiguration;
+import net.vaier.domain.port.ForReadingAndroidApp;
 import net.vaier.domain.port.ForReadingAppVersion;
 import net.vaier.domain.port.ForReadingStoredSmtpPassword;
 import net.vaier.domain.port.ForSendingTestEmail;
@@ -46,6 +48,7 @@ class SettingsServiceTest {
     @Mock ConfigResolver configResolver;
     @Mock WildcardDnsStatusHolder wildcardDnsStatusHolder;
     @Mock ForReadingAppVersion appVersionReader;
+    @Mock ForReadingAndroidApp androidAppReader;
 
     /** A zone that is not the CI JVM's default (UTC), so a hardcoded-UTC answer can't pass by accident. */
     @Spy Clock clock = Clock.fixed(Instant.parse("2026-07-10T00:00:00Z"), ZoneId.of("Europe/Oslo"));
@@ -66,6 +69,26 @@ class SettingsServiceTest {
         when(appVersionReader.currentVersion()).thenReturn("1.0.0");
 
         assertThat(service.appVersion()).isEqualTo("1.0.0");
+    }
+
+    // --- androidApp ---
+
+    @Test
+    void androidApp_isWhateverPackageTheImageCarries() {
+        // The service orchestrates and nothing more: whether there is an app to offer is the package's
+        // own fact, read through the port, and the domain has already decided what counts as one.
+        AndroidApp app = AndroidApp.of(20_467_986L, out -> {
+        }).orElseThrow();
+        when(androidAppReader.readApp()).thenReturn(Optional.of(app));
+
+        assertThat(service.androidApp()).contains(app);
+    }
+
+    @Test
+    void androidApp_isEmptyWhenTheImageCarriesNone() {
+        when(androidAppReader.readApp()).thenReturn(Optional.empty());
+
+        assertThat(service.androidApp()).isEmpty();
     }
 
     // --- getSettings ---

@@ -3977,4 +3977,48 @@ class ExplorerShellTest {
         assertThat(handoff).contains("ex-scanmeta-dot is-live");
         assertThat(handoff).contains("first handshake");
     }
+
+    @Test
+    void aPhoneIsToldAboutTheVaierAppBeforeItIsHandedAQrCode() throws IOException {
+        // #359: a phone that runs the Vaier app mints its own key and enrols over the operator's session —
+        // strictly better than photographing a config off a screen. So the app is named first, with the
+        // link to fetch it, and the QR stays underneath as the fallback for the WireGuard app.
+        String js = read("explorer-shell.js");
+
+        int from = js.indexOf("function peerHandoffMobile(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n        }", from));
+
+        assertThat(body).as("the app is named, and it is fetched from the launchpad")
+            .contains("Vaier app").contains("launchpad.html");
+        assertThat(body).as("and what the operator does there").contains("enrol");
+        assertThat(body).as("above the QR, not below it")
+            .satisfies(b -> assertThat(b.indexOf("Vaier app")).isLessThan(b.indexOf("Scan it into WireGuard")));
+        assertThat(body).as("the QR is still there for the WireGuard app").contains("qr: true");
+
+        // A bare anchor renders in the browser's default link blue, which is the one colour this palette
+        // never uses — it would shout louder than the paragraph carrying it. Hints style their own links.
+        String css = read("explorer-shell.css");
+        assertThat(css).contains(".ex-hint a");
+    }
+
+    @Test
+    void aMachineThatMintedItsOwnKey_isOfferedNeitherReissueNorRegenerate() throws IOException {
+        // Both are meaningless for an enrolled device: a reissue re-renders a config nobody can hand to
+        // the phone, and a regeneration deletes the peer and mints a server-side keypair — quietly turning
+        // a device that enrolled through the app back into a QR-code peer. The server refuses the reissue;
+        // the pane must not offer either in the first place.
+        String js = read("explorer-shell.js");
+
+        int from = js.indexOf("function renderMachine(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+
+        assertThat(body).as("the fact comes from the peer record, not guessed at from the artefact list")
+            .contains("deviceHeldKey");
+        assertThat(body).as("a device-held key is never reissuable")
+            .containsPattern("canReissue = [^;]*!deviceHeld");
+        assertThat(body).as("and the fold says why, and what to do instead")
+            .contains("enrol it again from the app");
+    }
 }

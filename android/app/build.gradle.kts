@@ -18,10 +18,26 @@ android {
         versionName = "0.1"
     }
 
+    // Release signing comes from the environment, never from a file in the tree. Unset, the release
+    // build falls back to the debug key so a local build still produces an installable APK.
+    val keystore = System.getenv("VAIER_ANDROID_KEYSTORE")
+    signingConfigs {
+        if (keystore != null) {
+            create("release") {
+                storeFile = file(keystore)
+                storePassword = System.getenv("VAIER_ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("VAIER_ANDROID_KEY_ALIAS") ?: "vaier"
+                keyPassword = System.getenv("VAIER_ANDROID_KEYSTORE_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = if (keystore != null) signingConfigs.getByName("release")
+                            else signingConfigs.getByName("debug")
         }
     }
 

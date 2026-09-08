@@ -128,6 +128,7 @@ public class VpnPeerRestController {
             v.connected(), v.transferRx(), v.transferTx(),
             v.peerType().name(), v.isServer(), v.isClient(), v.isRelay(),
             v.availableArtifacts().stream().map(Enum::name).sorted().toList(),
+            v.deviceHeldKey(),
             v.lanCidr(), v.lanAddress(), v.description(),
             v.geoLocation().map(GeoLocation::latitude).orElse(null),
             v.geoLocation().map(GeoLocation::longitude).orElse(null),
@@ -283,10 +284,9 @@ public class VpnPeerRestController {
         // marker (#202); the marker is set on first GET, NOT on create. The UI uses only the
         // inline payload so it never burns the budget; a raw curl GET can still recover any one
         // artefact once (then 410 forever).
-        // false: createPeer always mints the keypair itself, so a created peer never holds its own key.
         CreatePeerResponse response = buildConfigDeliveryResponse(
                 createdPeer.id(), createdPeer.machineId(), createdPeer.name(), createdPeer.ipAddress(),
-                createdPeer.publicKey(), createdPeer.clientConfigFile(), createdPeer.peerType(), false);
+                createdPeer.publicKey(), createdPeer.clientConfigFile(), createdPeer.peerType());
 
         forPublishingEvents.publish("vpn-peers", "peers-updated", "");
         return ResponseEntity.ok(response);
@@ -318,7 +318,7 @@ public class VpnPeerRestController {
      * Reissues a peer's config (#247): re-renders it from current generation logic with the
      * keypair preserved, persists it, re-opens the one-shot retrieval budget, and returns the
      * fresh config + artefacts inline — the same shape as create, so the UI reuses the
-     * create-success modal. 404 when the peer is unknown.
+     * create-success modal. 404 when the peer is unknown, 409 when the peer holds its own key.
      */
     @PostMapping("/{peerId}/reissue")
     public ResponseEntity<?> reissuePeer(@PathVariable String peerId) {
@@ -330,8 +330,7 @@ public class VpnPeerRestController {
 
         CreatePeerResponse response = buildConfigDeliveryResponse(
                 reissued.id(), reissued.machineId(), reissued.name(), reissued.ipAddress(),
-                reissued.publicKey(), reissued.clientConfigFile(), reissued.peerType(),
-                reissued.deviceHeldKey());
+                reissued.publicKey(), reissued.clientConfigFile(), reissued.peerType());
 
         forPublishingEvents.publish("vpn-peers", "peers-updated", "");
         return ResponseEntity.ok(response);
@@ -343,9 +342,10 @@ public class VpnPeerRestController {
      * the UI consumes only this inline payload so it never burns the budget.
      */
     private CreatePeerResponse buildConfigDeliveryResponse(String id, MachineId machineId, String name,
-            String ipAddress, String publicKey, String configFile, MachineType peerType,
-            boolean deviceHeldKey) {
-        Set<PeerArtifact> artefacts = PeerArtifact.forPeer(peerType, deviceHeldKey);
+            String ipAddress, String publicKey, String configFile, MachineType peerType) {
+        // Neither path reaches here with a Device-held key: create always mints the keypair itself, and
+        // a reissue of an enrolled peer is refused before anything is rendered.
+        Set<PeerArtifact> artefacts = PeerArtifact.forPeerType(peerType);
 
         String qrCodePngBase64 = artefacts.contains(PeerArtifact.QR_CODE)
             ? tryEncodeQrCodeBase64(configFile, name)
@@ -688,6 +688,8 @@ public class VpnPeerRestController {
             boolean isClient,
             boolean isRelay,
             List<String> availableArtifacts,
+            /** True when the peer minted its own keypair: nothing here can reissue or regenerate it. */
+            boolean deviceHeldKey,
             String lanCidr,
             String lanAddress,
             String description,

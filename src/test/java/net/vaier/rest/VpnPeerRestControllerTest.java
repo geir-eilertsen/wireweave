@@ -55,10 +55,12 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -362,7 +364,7 @@ class VpnPeerRestControllerTest {
             "apalveien5", TestMachineIds.of("apalveien5"), "apalveien5", "10.13.13.6", "pub",
             "# VAIER: {\"peerType\":\"UBUNTU_SERVER\"}\n[Interface]\nPrivateKey = k\n"
                 + "Address = 10.13.13.6/32\n[Peer]\nAllowedIPs = 10.13.13.0/24,172.31.16.0/20\n",
-            MachineType.UBUNTU_SERVER, false);
+            MachineType.UBUNTU_SERVER);
         when(reissuePeerConfigUseCase.reissuePeerConfig("apalveien5")).thenReturn(reissued);
         when(configResolver.getDomain()).thenReturn("eilertsen.family");
         when(generateDockerComposeUseCase.generateWireguardClientDockerCompose(eq("apalveien5"), any(), any()))
@@ -949,24 +951,20 @@ class VpnPeerRestControllerTest {
     }
 
     @Test
-    void reissuingAnEnrolledPeer_offersNothingToDownload() {
-        // buildConfigDeliveryResponse is shared by create and reissue, and a reissue is the one path that
-        // reaches it with a device-held key. Without the flag the web layer re-decides the artefact rule
-        // as "not device-held" and renders a QR of a config with no PrivateKey line in it.
-        var reissued = new ReissuePeerConfigUseCase.ReissuedPeerUco(
-            "phone", TestMachineIds.of("phone"), "phone", "10.13.13.7", DEVICE_KEY,
-            "# VAIER: {\"peerType\":\"MOBILE_CLIENT\",\"publicKey\":\"" + DEVICE_KEY + "\"}\n"
-                + "[Interface]\nAddress = 10.13.13.7/32\n",
-            MachineType.MOBILE_CLIENT, true);
-        when(reissuePeerConfigUseCase.reissuePeerConfig("phone")).thenReturn(reissued);
+    void theListedPeer_saysWhetherItHoldsItsOwnKey() {
+        // The pane decides from this whether to offer a Reissue or a regeneration at all, so the fact has
+        // to reach the browser in its own right — an empty artefact list says something narrower.
+        when(getVpnPeersUseCase.getVpnPeers()).thenReturn(List.of(
+            viewBuilder("ruten", "Ruten", true, "203.0.113.10", MachineType.MOBILE_CLIENT, null)
+                .availableArtifacts(Set.of()).deviceHeldKey(true).build(),
+            viewBuilder("nuc", "NUC 02", true, "203.0.113.11", MachineType.UBUNTU_SERVER, null).build()));
 
-        var response = (VpnPeerRestController.CreatePeerResponse) controller.reissuePeer("phone").getBody();
+        var peers = controller.listPeers().getBody();
 
-        assertThat(response.availableArtifacts()).isEmpty();
-        assertThat(response.qrCodePngBase64()).isNull();
-        assertThat(response.dockerCompose()).isNull();
-        assertThat(response.setupScript()).isNull();
-        assertThat(response.setupToken()).isNull();
+        assertThat(peers).extracting(
+                VpnPeerRestController.VpnPeerResponse::id,
+                VpnPeerRestController.VpnPeerResponse::deviceHeldKey)
+            .containsExactly(tuple("ruten", true), tuple("nuc", false));
     }
 
     @Test

@@ -1,6 +1,7 @@
 package net.vaier.application.service;
 
 import lombok.extern.slf4j.Slf4j;
+import net.vaier.application.GetAndroidAppUseCase;
 import net.vaier.application.GetAppSettingsUseCase;
 import net.vaier.application.GetAppVersionUseCase;
 import net.vaier.application.SetSurvivalKitPassphraseUseCase;
@@ -10,9 +11,11 @@ import net.vaier.application.UpdateDiskMonitorSettingsUseCase;
 import net.vaier.application.UpdateSmtpSettingsUseCase;
 import net.vaier.config.ConfigResolver;
 import net.vaier.config.WildcardDnsStatusHolder;
+import net.vaier.domain.AndroidApp;
 import net.vaier.domain.VaierConfig;
 import net.vaier.domain.WildcardDnsReport;
 import net.vaier.domain.port.ForPersistingAppConfiguration;
+import net.vaier.domain.port.ForReadingAndroidApp;
 import net.vaier.domain.port.ForReadingAppVersion;
 import net.vaier.domain.port.ForReadingStoredSmtpPassword;
 import net.vaier.domain.port.ForSendingTestEmail;
@@ -20,12 +23,14 @@ import net.vaier.domain.port.ForVerifyingSmtpCredentials;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
+import java.util.Optional;
 
 @Service
 @Slf4j
 public class SettingsService implements
     GetAppSettingsUseCase,
     GetAppVersionUseCase,
+    GetAndroidAppUseCase,
     UpdateSmtpSettingsUseCase,
     UpdateDiskMonitorSettingsUseCase,
     UpdateBackupSettingsUseCase,
@@ -39,6 +44,7 @@ public class SettingsService implements
     private final ConfigResolver configResolver;
     private final WildcardDnsStatusHolder wildcardDnsStatusHolder;
     private final ForReadingAppVersion appVersionReader;
+    private final ForReadingAndroidApp androidAppReader;
     private final Clock clock;
 
     public SettingsService(ForPersistingAppConfiguration configPersistence,
@@ -48,6 +54,7 @@ public class SettingsService implements
                            ConfigResolver configResolver,
                            WildcardDnsStatusHolder wildcardDnsStatusHolder,
                            ForReadingAppVersion appVersionReader,
+                           ForReadingAndroidApp androidAppReader,
                            Clock clock) {
         this.configPersistence = configPersistence;
         this.smtpVerifier = smtpVerifier;
@@ -56,12 +63,23 @@ public class SettingsService implements
         this.configResolver = configResolver;
         this.wildcardDnsStatusHolder = wildcardDnsStatusHolder;
         this.appVersionReader = appVersionReader;
+        this.androidAppReader = androidAppReader;
         this.clock = clock;
     }
 
     @Override
     public String appVersion() {
         return appVersionReader.currentVersion();
+    }
+
+    /**
+     * The deployment's own Android package, read through its port. The Vaier app belongs with the other
+     * facts about this deployment's build — its version, its configuration — rather than with the VPN:
+     * serving it is not a tunnel operation, it is Vaier handing out a copy of itself.
+     */
+    @Override
+    public Optional<AndroidApp> androidApp() {
+        return androidAppReader.readApp();
     }
 
     @Override

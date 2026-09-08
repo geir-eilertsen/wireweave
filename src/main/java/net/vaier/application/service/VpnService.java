@@ -263,6 +263,8 @@ public class VpnService implements
         boolean isServer = peerType.isServerType();
         boolean isClient = peerType.isVpnPeer() && !isServer;
         boolean isRelay = isServer && lanCidr != null && !lanCidr.isBlank();
+        boolean deviceHeldKey = rawCfg
+            .map(ForGettingPeerConfigurations.PeerConfiguration::deviceHeldKey).orElse(false);
         boolean configOutOfDate = cfg.isPresent() && serverContext != null
             && WireGuardPeerConfig.isOutOfDate(
                 cfg.get().configContent(), peerType, lanCidr, lanAddress, description,
@@ -297,9 +299,10 @@ public class VpnService implements
             .latestHandshake(client.latestHandshake()).connected(client.isConnected())
             .transferRx(client.transferRx()).transferTx(client.transferTx())
             .peerType(peerType).isServer(isServer).isClient(isClient).isRelay(isRelay)
-            // Empty for a peer with a Device-held key: there is nothing Vaier could hand over.
-            .availableArtifacts(PeerArtifact.forPeer(peerType, rawCfg
-                .map(ForGettingPeerConfigurations.PeerConfiguration::deviceHeldKey).orElse(false)))
+            // Empty for a peer with a Device-held key: there is nothing Vaier could hand over. The fact
+            // itself travels too — it is what tells the pane a Reissue is refused for this machine.
+            .availableArtifacts(PeerArtifact.forPeer(peerType, deviceHeldKey))
+            .deviceHeldKey(deviceHeldKey)
             .lanCidr(lanCidr).lanAddress(lanAddress).description(description)
             .geoLocation(geo).configOutOfDate(configOutOfDate)
             .deviceCategory(deviceCategory).deviceCategoryOverridden(deviceCategoryOverridden)
@@ -709,6 +712,13 @@ public class VpnService implements
         log.info("Reissuing config for peer: {}", peerId);
         ForGettingPeerConfigurations.PeerConfiguration peer = peerConfigProvider.getPeerConfigByName(peerId)
             .orElseThrow(() -> new PeerNotFoundException("Peer not found: " + peerId));
+        // A Reissue re-renders an installable config, and for a Device-held key there is none to render:
+        // the private half was minted on the device and lives only there. Refused up front rather than
+        // rendered and quietly handed to nobody.
+        if (peer.deviceHeldKey()) {
+            throw new ConflictException(peer.name() + " made its own key, so there is no config to "
+                + "reissue. Remove it and enrol it again from the app to replace the key.");
+        }
         try {
             String serverPublicKey = getServerPublicKey(wireguardInterface);
             String serverEndpoint = extractServerEndpoint();
@@ -727,24 +737,17 @@ public class VpnService implements
                 serverPublicKey, serverEndpoint, vpnSubnet, serverLanCidr, deviceCategoryOverride);
 
             forUpdatingPeerConfigurations.rewriteConfig(peer.id(), newContent);
-            // Deliberate operator-initiated re-exposure: re-open the one-shot retrieval budget. Not for a
-            // Device-held key — there is no artefact to re-expose, and the config still carries the
-            // preshared key, so re-opening would put secret material back behind a GET for nobody.
-            if (!peer.deviceHeldKey()) {
-                forTrackingPeerConfigRetrieval.resetViewed(peer.id());
-            }
+            // Deliberate operator-initiated re-exposure: re-open the one-shot retrieval budget.
+            forTrackingPeerConfigRetrieval.resetViewed(peer.id());
 
             // The peer's public key is derived from its preserved private key — no server-side
-            // mutation, so the live tunnel and the wg0.conf [Peer] entry are untouched. A peer with a
-            // Device-held key has no private key to derive from; its public key is the one it gave us.
-            String publicKey = peer.deviceHeldKey()
-                ? peer.publicKey()
-                : forExecutingInContainer.executeWithInput(wireguardContainerName,
-                    WireGuardPeerConfig.readDirective(newContent, "PrivateKey"), "wg", "pubkey").trim();
+            // mutation, so the live tunnel and the wg0.conf [Peer] entry are untouched.
+            String publicKey = forExecutingInContainer.executeWithInput(wireguardContainerName,
+                WireGuardPeerConfig.readDirective(newContent, "PrivateKey"), "wg", "pubkey").trim();
 
             log.info("Reissued config for peer {} (serverLanCidr: {})", peer.id(), serverLanCidr);
             return new ReissuedPeerUco(peer.id(), peer.machineId(), peer.name(), peer.ipAddress(),
-                publicKey, newContent, peer.peerType(), peer.deviceHeldKey());
+                publicKey, newContent, peer.peerType());
         } catch (IOException | InterruptedException e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
             throw new RuntimeException("Failed to reissue config for peer " + peerId + ": " + e.getMessage(), e);

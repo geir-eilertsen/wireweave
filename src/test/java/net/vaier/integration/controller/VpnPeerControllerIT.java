@@ -5,6 +5,7 @@ import net.vaier.application.CreatePeerUseCase.CreatedPeerUco;
 import net.vaier.application.GetPeerConfigUseCase.PeerConfigResult;
 import net.vaier.application.GetVpnPeersUseCase;
 import net.vaier.application.GetVpnPeersUseCase.VpnPeerView;
+import net.vaier.application.ReissuePeerConfigUseCase.ReissuedPeerUco;
 import net.vaier.domain.DeviceCategory;
 import net.vaier.domain.MachineType;
 import net.vaier.domain.PositionTrail;
@@ -327,11 +328,11 @@ class VpnPeerControllerIT extends VaierWebMvcIntegrationBase {
 
     @Test
     void reissuePeer_returns200WithFreshConfigAndReopensTheOneShotGate() throws Exception {
-        var reissued = new net.vaier.application.ReissuePeerConfigUseCase.ReissuedPeerUco(
+        var reissued = new ReissuedPeerUco(
                 "peer1", TestMachineIds.of("peer1"), "peer1", "10.13.13.6", "pubkey",
                 "# VAIER: {\"peerType\":\"UBUNTU_SERVER\"}\n[Interface]\nPrivateKey = abc\n"
                     + "Address = 10.13.13.6/32\n[Peer]\nAllowedIPs = 10.13.13.0/24,172.31.16.0/20\n",
-                MachineType.UBUNTU_SERVER, false);
+                MachineType.UBUNTU_SERVER);
         when(reissuePeerConfigUseCase.reissuePeerConfig("peer1")).thenReturn(reissued);
         // After reissue the gate is reset; the use case owns that. A subsequent GET is allowed once.
         when(forTrackingPeerConfigRetrieval.markViewedIfNotAlready("peer1")).thenReturn(true);

@@ -9,6 +9,17 @@ Vaier app changes (including `src/main/resources/static/**`) only take effect on
 
 ## Steps
 
+0. **Only if `android/` changed** — rebuild the Vaier app first, because the image copies `apk/` and
+   serves whatever package is sitting there. Skip this whenever the change is Java or static assets only.
+   ```bash
+   set -a; source ~/.vaier-android/release.env; set +a
+   cd android && timeout 600 ./gradlew --no-daemon -q \
+     -Dorg.gradle.jvmargs="-Xmx900m -XX:MaxMetaspaceSize=384m" \
+     -Pkotlin.compiler.execution.strategy=in-process assembleRelease
+   cp android/app/build/outputs/apk/release/app-release.apk apk/vaier.apk
+   ```
+   `release.env` holds the signing secrets (`VAIER_ANDROID_KEYSTORE`, `..._KEYSTORE_PASSWORD`,
+   `..._KEY_ALIAS`); without it Gradle signs with the debug key and the phone refuses the upgrade.
 1. Build with the version baked in and the **exact** tag `getvaier/vaier:latest`:
    ```bash
    docker build --build-arg VAIER_VERSION=$(mvn -q help:evaluate -Dexpression=project.version -DforceStdout) \
@@ -51,4 +62,7 @@ Vaier app changes (including `src/main/resources/static/**`) only take effect on
 - **Don't curl `localhost:8888` to verify** — that port isn't publicly reachable and Vaier is fronted by Traefik/Authelia. For API checks, exec inside the container: `docker exec vaier curl -s localhost:8080/<path>`. For browser checks, use `vaier.${VAIER_DOMAIN}`.
 - **Updating staging** (Docker Hub `getvaier/vaier:latest`) needs `docker compose pull` first — `--force-recreate` alone reuses the cached `:latest`.
 - This deploys **only** the vaier service. Bumping pinned sub-images (wireguard/traefik/authelia/redis) is a different, ask-first workflow — see the `bump-subimage` skill.
+- **Never run Gradle and Maven at the same time on this box.** Both want most of the free RAM and both
+  hold it for minutes; earlyoom kills whichever loses, and the loser dies with an exit 143 and a wall of
+  nonsense errors that look like a code problem. Finish the APK build, *then* run `mvn test`.
 - Run `mvn test` green before deploying.

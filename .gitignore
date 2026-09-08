@@ -81,3 +81,6 @@ Thumbs.db
 .claude/scheduled_tasks.lock
 # A test writes a Traefik config to the literal path "null" when no config dir is set.
 /null/
+
+# The served Android app is a build product, never committed
+apk/*.apk

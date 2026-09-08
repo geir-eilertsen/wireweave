@@ -1,6 +1,5 @@
 package net.vaier.app.ui
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -29,7 +28,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -52,7 +50,12 @@ import net.vaier.app.Membership
 import net.vaier.app.PendingEnrolment
 import net.vaier.app.TunnelStatus
 
-private val VaierGreen = Color(0xFF2E6B54)
+// The Explorer's own palette — Vaier commits to one warm dark look, so the app does too.
+private val VaierAmber = Color(0xFFD9A05B)
+private val VaierPanel = Color(0xFF191510)
+private val VaierCard = Color(0xFF201A13)
+private val VaierText = Color(0xFFEAE0D2)
+private val VaierTextDim = Color(0xFF7A6A53)
 
 @Composable
 fun VaierApp(
@@ -67,11 +70,12 @@ fun VaierApp(
     onLeave: () -> Unit,
     onRefresh: () -> Unit,
 ) {
-    val colours = if (isSystemInDarkTheme()) {
-        darkColorScheme(primary = Color(0xFF7FD1AE), secondary = Color(0xFF7FD1AE))
-    } else {
-        lightColorScheme(primary = VaierGreen, secondary = VaierGreen)
-    }
+    val colours = darkColorScheme(
+        primary = VaierAmber, secondary = VaierAmber, onPrimary = VaierPanel,
+        background = VaierPanel, onBackground = VaierText,
+        surface = VaierPanel, onSurface = VaierText,
+        surfaceVariant = VaierCard, onSurfaceVariant = VaierTextDim,
+    )
 
     MaterialTheme(colorScheme = colours) {
         if (membership == null) {

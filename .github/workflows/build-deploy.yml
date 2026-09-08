@@ -37,6 +37,24 @@ jobs:
       if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
       run: mvn -B com.github.spotbugs:spotbugs-maven-plugin:check
 
+    # #359: Vaier serves its own Android app, so the app is built here and copied into apk/ before the
+    # image is. The runner already carries the Android SDK. Signing comes from three secrets; the Gradle
+    # build falls back to the debug key when VAIER_ANDROID_KEYSTORE is unset, so a repository without
+    # them — a fork, a PR from one — still produces a working image rather than a failed job.
+    - name: Build the Android app
+      env:
+        VAIER_ANDROID_KEYSTORE_B64: ${{ secrets.VAIER_ANDROID_KEYSTORE_B64 }}
+        VAIER_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.VAIER_ANDROID_KEYSTORE_PASSWORD }}
+        VAIER_ANDROID_KEY_ALIAS: ${{ secrets.VAIER_ANDROID_KEY_ALIAS }}
+      run: |
+        if [ -n "${VAIER_ANDROID_KEYSTORE_B64:-}" ]; then
+          printf '%s' "$VAIER_ANDROID_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          export VAIER_ANDROID_KEYSTORE="$RUNNER_TEMP/release.jks"
+        fi
+        cd android
+        ./gradlew --no-daemon assembleRelease
+        cp app/build/outputs/apk/release/app-release.apk ../apk/vaier.apk
+
     - name: Build Docker image
       run: |
         VAIER_VERSION=$(mvn -q help:evaluate -Dexpression=project.version -DforceStdout)

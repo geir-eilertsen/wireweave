@@ -146,14 +146,31 @@ public final class WireGuardPeerConfig {
     }
 
     /**
+     * Whether {@code content} belongs to a peer with a {@code Device-held key}: its keypair was minted on
+     * the device, so Vaier holds no private half and can render no installable config for it. The stamped
+     * {@code publicKey} is the mark — the same rule, spelled the same way, as
+     * {@code ForGettingPeerConfigurations.PeerConfiguration.deviceHeldKey()}, which reads it off the parsed
+     * record rather than the file. A config merely missing its {@code PrivateKey} line is damaged, not
+     * enrolled, and is deliberately not covered here.
+     */
+    public static boolean deviceHeldKey(String content) {
+        String publicKey = readPublicKey(content);
+        return publicKey != null && !publicKey.isBlank();
+    }
+
+    /**
      * Whether {@code existingContent} differs from the config current logic would render for the
      * same peer (its {@code Rendered config}). True means the on-disk config is {@code out of date}
-     * and a {@code Reissue} would change it. Same arguments as {@link #reissue}.
+     * and a {@code Reissue} would change it. Same arguments as {@link #reissue}. Always false for a
+     * {@code Device-held key}, which cannot be reissued at all.
      */
     public static boolean isOutOfDate(String existingContent, MachineType peerType, String lanCidr,
                                       String lanAddress, String description, String name,
                                       String serverPublicKey, String serverEndpoint, String vpnSubnet,
                                       String serverLanCidr) {
+        // A Device-held key is never out of date: a Reissue of one is refused, so the mark would name a
+        // divergence with no action behind it — and nothing is marked that nobody can act on.
+        if (deviceHeldKey(existingContent)) return false;
         // The "# VAIER:" comment is pure Vaier-side metadata — never installed into the WireGuard
         // tunnel — and is written by Jackson (different field order, may carry a deviceCategory key
         // that generate() omits). Out-of-date must reflect divergence in the real tunnel directives

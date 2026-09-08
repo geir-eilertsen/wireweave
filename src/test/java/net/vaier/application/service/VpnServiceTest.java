@@ -1289,6 +1289,57 @@ class VpnServiceTest {
     }
 
     @Test
+    void getVpnPeers_anEnrolledPhone_saysSoInItsOwnRight() {
+        // The pane needs the fact itself, not only its consequence for downloads: it is what decides
+        // whether Reissue and Regenerate are offered at all.
+        VpnClient client = new VpnClient("pub", "10.13.13.7/32", "", "", "0", "0", "0");
+        when(forGettingVpnClients.getClients()).thenReturn(List.of(client));
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.7")).thenReturn("ruten");
+        when(peerConfigProvider.getPeerConfigByIp("10.13.13.7")).thenReturn(Optional.of(
+            new PeerConfiguration("ruten", "Ruten", "10.13.13.7", "", MachineType.MOBILE_CLIENT,
+                null, null, null, null, null, mid("ruten"), DEVICE_KEY)));
+
+        assertThat(service.getVpnPeers().get(0).deviceHeldKey()).isTrue();
+    }
+
+    @Test
+    void getVpnPeers_anOrdinaryPeer_holdsNoDeviceHeldKey() {
+        VpnClient client = new VpnClient("pub", "10.13.13.6/32", "", "", "0", "0", "0");
+        when(forGettingVpnClients.getClients()).thenReturn(List.of(client));
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.6")).thenReturn("apalveien5");
+        when(peerConfigProvider.getPeerConfigByIp("10.13.13.6")).thenReturn(Optional.of(
+            new PeerConfiguration("apalveien5", "apalveien5", "10.13.13.6", "[Interface]",
+                MachineType.UBUNTU_SERVER, null, null, null)));
+
+        assertThat(service.getVpnPeers().get(0).deviceHeldKey()).isFalse();
+    }
+
+    @Test
+    void getVpnPeers_anEnrolledPhoneWhoseServerMoved_isNeverMarkedOutOfDate() {
+        // Reissue is the only action behind that mark, and it is refused for a device-held key.
+        ReflectionTestUtils.setField(service, "vpnSubnet", "10.13.13.0/24");
+        ReflectionTestUtils.setField(service, "wireguardContainerName", "wireguard");
+        ReflectionTestUtils.setField(service, "wireguardInterface", "wg0");
+
+        String existing = WireGuardPeerConfig.generate(
+            null, "10.13.13.7", "OLD_PUB", "PSK", "old.example.com:51820",
+            MachineType.MOBILE_CLIENT, null, null, "10.13.13.0/24", null, "Ruten", null, null,
+            mid("ruten"), DEVICE_KEY);
+        VpnClient client = new VpnClient("pub", "10.13.13.7/32", "", "", "0", "0", "0");
+        when(forGettingVpnClients.getClients()).thenReturn(List.of(client));
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.7")).thenReturn("ruten");
+        when(peerConfigProvider.getPeerConfigByIp("10.13.13.7")).thenReturn(Optional.of(
+            new PeerConfiguration("ruten", "Ruten", "10.13.13.7", existing, MachineType.MOBILE_CLIENT,
+                null, null, null, null, null, mid("ruten"), DEVICE_KEY)));
+        when(configResolver.getDomain()).thenReturn("eilertsen.family");
+        when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.of("172.31.16.0/20"));
+        when(forExecutingInContainer.execute("wireguard", "wg", "show", "wg0", "public-key"))
+            .thenReturn("SERVER_PUB\n");
+
+        assertThat(service.getVpnPeers().get(0).configOutOfDate()).isFalse();
+    }
+
+    @Test
     void getVpnPeers_fallsBackToDefaultTypeAndDisplayLabelWhenNoPeerConfig() {
         VpnClient client = new VpnClient("pub", "10.13.13.2/32", "", "", "0", "0", "0");
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client));
@@ -2071,56 +2122,26 @@ class VpnServiceTest {
     }
 
     @Test
-    void reissuePeerConfig_anEnrolledPeer_leavesTheRetrievalBudgetSpent() throws Exception {
-        // A Reissue re-opens the one-shot budget because it deliberately re-exposes a preserved secret.
-        // There is nothing to re-expose here — a device-held key has no artefact — and the config still
-        // carries the preshared key, so re-opening it would put secret material back behind a GET for
-        // no one's benefit.
-        ReflectionTestUtils.setField(service, "vpnSubnet", "10.13.13.0/24");
-        ReflectionTestUtils.setField(service, "wireguardContainerName", "wireguard");
-        ReflectionTestUtils.setField(service, "wireguardInterface", "wg0");
-
+    void reissuePeerConfig_refusesADeviceHeldKey_andSaysWhatToDoInstead() {
+        // A Reissue re-renders an installable config. For a phone that minted its own key there is
+        // nothing installable to re-render — the private half exists only on the device — so the
+        // operation is refused before it touches the peer's file at all.
         String existing = WireGuardPeerConfig.generate(
             null, "10.13.13.7", "OLD_PUB", "PSK", "old.example.com:51820",
-            MachineType.MOBILE_CLIENT, null, null, "10.13.13.0/24", null, "phone", null, null,
-            mid("phone"), DEVICE_KEY);
-        when(peerConfigProvider.getPeerConfigByName("phone")).thenReturn(Optional.of(
-            new PeerConfiguration("phone", "phone", "10.13.13.7", existing, MachineType.MOBILE_CLIENT,
-                null, null, null, null, null, mid("phone"), DEVICE_KEY)));
-        when(configResolver.getDomain()).thenReturn("eilertsen.family");
-        when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.empty());
-        when(forExecutingInContainer.execute("wireguard", "wg", "show", "wg0", "public-key"))
-            .thenReturn("SERVER_PUB\n");
+            MachineType.MOBILE_CLIENT, null, null, "10.13.13.0/24", null, "Ruten", null, null,
+            mid("ruten"), DEVICE_KEY);
+        when(peerConfigProvider.getPeerConfigByName("ruten")).thenReturn(Optional.of(
+            new PeerConfiguration("ruten", "Ruten", "10.13.13.7", existing, MachineType.MOBILE_CLIENT,
+                null, null, null, null, null, mid("ruten"), DEVICE_KEY)));
 
-        service.reissuePeerConfig("phone");
+        assertThatThrownBy(() -> service.reissuePeerConfig("ruten"))
+            .isInstanceOf(ConflictException.class)
+            .hasMessageContaining("Ruten")
+            .hasMessageContaining("enrol it again");
 
+        verify(forUpdatingPeerConfigurations, never()).rewriteConfig(any(), any());
         verify(forTrackingPeerConfigRetrieval, never()).resetViewed(any());
+        verifyNoInteractions(forExecutingInContainer);
     }
 
-    @Test
-    void reissuePeerConfig_anEnrolledPeer_keepsItsDeviceHeldKeyAndNeverDerivesOne() throws Exception {
-        ReflectionTestUtils.setField(service, "vpnSubnet", "10.13.13.0/24");
-        ReflectionTestUtils.setField(service, "wireguardContainerName", "wireguard");
-        ReflectionTestUtils.setField(service, "wireguardInterface", "wg0");
-
-        String existing = WireGuardPeerConfig.generate(
-            null, "10.13.13.7", "OLD_PUB", "PSK", "old.example.com:51820",
-            MachineType.MOBILE_CLIENT, null, null, "10.13.13.0/24", null, "phone", null, null,
-            mid("phone"), DEVICE_KEY);
-        when(peerConfigProvider.getPeerConfigByName("phone")).thenReturn(Optional.of(
-            new PeerConfiguration("phone", "phone", "10.13.13.7", existing, MachineType.MOBILE_CLIENT,
-                null, null, null, null, null, mid("phone"), DEVICE_KEY)));
-        when(configResolver.getDomain()).thenReturn("eilertsen.family");
-        when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.empty());
-        when(forExecutingInContainer.execute("wireguard", "wg", "show", "wg0", "public-key"))
-            .thenReturn("SERVER_PUB\n");
-
-        var result = service.reissuePeerConfig("phone");
-
-        // `wg pubkey` on an absent private key would return nonsense; the stored key is the answer.
-        verify(forExecutingInContainer, never()).executeWithInput(any(), any(), eq("wg"), eq("pubkey"));
-        assertThat(result.publicKey()).isEqualTo(DEVICE_KEY);
-        assertThat(result.clientConfigFile()).doesNotContain("PrivateKey");
-        assertThat(result.clientConfigFile()).contains("\"publicKey\":\"" + DEVICE_KEY + "\"");
-    }
 }
