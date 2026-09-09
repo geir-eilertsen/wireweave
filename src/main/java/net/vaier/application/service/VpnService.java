@@ -963,7 +963,9 @@ public class VpnService implements
         String saveOutput = forExecutingInContainer.execute(wireguardContainerName, "wg-quick", "save", interfaceName);
         log.info("Save config output: {}", saveOutput);
 
-        forExecutingInContainer.restartWithMasqueradeSidecar(wireguardContainerName);
-        log.info("WireGuard service restarted to apply NAT rules");
+        // wg set registers the peer but installs no kernel route; without one, replies to it leave by
+        // the default route. This used to be done by restarting the whole interface, which dropped
+        // every other peer's tunnel each time a machine was added.
+        forUpdatingServerAllowedIps.installRoutes(serverAllowedIps);
     }
 }

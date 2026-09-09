@@ -187,6 +187,16 @@ public class WireGuardVpnAdapter implements ForGettingVpnClients, ForDeletingVpn
         }
     }
 
+    @Override
+    public void installRoutes(String allowedIps) {
+        try {
+            reconcileKernelRoutes(AllowedIps.routeDelta(null, allowedIps));
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            throw new RuntimeException("Failed to install routes for " + allowedIps + ": " + e.getMessage(), e);
+        }
+    }
+
     private void reconcileKernelRoutes(AllowedIps.RouteDelta routeDelta) throws IOException, InterruptedException {
         for (String cidr : routeDelta.toAdd()) {
             log.info("Installing kernel route: {} dev {}", cidr, wireguardInterface);
@@ -223,23 +233,27 @@ public class WireGuardVpnAdapter implements ForGettingVpnClients, ForDeletingVpn
 
             log.info("Found peer IP address: {}", ipAddress);
 
-            String publicKey = findPeerPublicKeyByIp(wireguardInterface, ipAddress);
-            if (publicKey.isEmpty()) {
+            PeerInfo peer = findPeerInfoByIp(wireguardInterface, ipAddress);
+            if (peer == null) {
                 // Already gone from the interface. Refusing to finish here is what left a directory
-                // nothing could delete: the peer must still be removed from disk.
+                // nothing could delete: the peer must still be removed from disk, and so must the
+                // host route bring-up may have left behind for it.
                 log.warn("Peer {} has no entry on {}; removing what is left on disk", peerId, wireguardInterface);
+                reconcileKernelRoutes(AllowedIps.routeDelta(ipAddress + "/32", null));
             } else {
-                log.info("Removing peer with public key: {}", publicKey);
+                log.info("Removing peer with public key: {}", peer.publicKey());
 
                 // Argv-style — no shell. publicKey is computed locally from `wg show`,
                 // not user-supplied, but the sh-c pattern is being purged repo-wide. Closes #195.
                 String output = forExecutingInContainer.execute(
-                    wireguardContainerName, "wg", "set", wireguardInterface, "peer", publicKey, "remove");
+                    wireguardContainerName, "wg", "set", wireguardInterface, "peer", peer.publicKey(), "remove");
                 log.info("Remove peer output: {}", output);
 
                 String saveOutput = forExecutingInContainer.execute(
                     wireguardContainerName, "wg-quick", "save", wireguardInterface);
                 log.info("Save config output: {}", saveOutput);
+
+                reconcileKernelRoutes(AllowedIps.routeDelta(peer.allowedIps(), null));
             }
 
             deleteDirectory(Paths.get(wireguardConfigPath, peerId));

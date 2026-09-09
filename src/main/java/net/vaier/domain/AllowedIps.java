@@ -9,9 +9,9 @@ import java.util.Set;
 /**
  * Domain rules for working with a peer's WireGuard {@code AllowedIPs} field — a comma-separated
  * CIDR list. Adapters parse the raw string, but the kernel-route delta (what to install / what to
- * remove) is a domain decision because it depends on knowing what {@code wg-quick up} already
- * manages: peer {@code /32} host routes are installed by wg-quick at bring-up and must not be
- * touched here; broader CIDRs (LAN routes a peer relays) are ours to reconcile.
+ * remove) is a domain decision. Every route in it is Vaier's to keep: {@code wg-quick up} installs
+ * routes only at bring-up, and a peer added or changed with {@code wg set} gets none, so the host
+ * route to a phone and the LAN a relay carries are reconciled here alike.
  */
 public final class AllowedIps {
 
@@ -21,9 +21,8 @@ public final class AllowedIps {
      * Compute which CIDRs need {@code ip route replace} (add) and which need {@code ip route del}
      * (remove) given the previous and new {@code AllowedIPs} values for one peer.
      *
-     * <p>{@code /32} host routes are filtered out — wg-quick owns them. Non-/32 CIDRs in the new
-     * set are always re-emitted as adds (idempotent via {@code ip route replace}) so any drift
-     * from earlier {@code wg set} calls heals on the next reconcile.
+     * <p>Every CIDR in the new set is re-emitted as an add (idempotent via {@code ip route replace})
+     * so any drift heals on the next reconcile; only what dropped out is removed.
      */
     public static RouteDelta routeDelta(String oldAllowedIps, String newAllowedIps) {
         List<String> oldCidrs = parseCidrList(oldAllowedIps);
@@ -31,12 +30,10 @@ public final class AllowedIps {
         Set<String> newSet = new HashSet<>(newCidrs);
 
         List<String> toAdd = newCidrs.stream()
-            .filter(cidr -> !cidr.endsWith("/32"))
             .distinct()
             .toList();
 
         List<String> toRemove = oldCidrs.stream()
-            .filter(cidr -> !cidr.endsWith("/32"))
             .filter(cidr -> !newSet.contains(cidr))
             .distinct()
             .toList();

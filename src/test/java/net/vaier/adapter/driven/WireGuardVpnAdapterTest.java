@@ -53,6 +53,30 @@ class WireGuardVpnAdapterTest {
         assertThat(configDir.resolve("Ruten")).doesNotExist();
         verify(exec, never()).execute(eq("wireguard"), eq("wg"), eq("set"), any(), any(), any(), any());
         verify(exec, never()).execute(eq("wireguard"), eq("wg-quick"), eq("save"), any());
+        // Bring-up may have left its host route behind; that goes too.
+        verify(exec).execute("wireguard", "ip", "route", "del", "10.13.13.8/32", "dev", "wg0");
+    }
+
+    @Test
+    void deletePeer_dropsTheRoutesThePeerHad_lanIncluded() {
+        when(exec.execute(eq("wireguard"), eq("wg"), eq("show"), eq("wg0"), eq("dump")))
+            .thenReturn(DUMP_HEADER + OTHER_PEER
+                + "rutenkey\t(none)\t1.2.3.4:2\t10.13.13.8/32,192.168.9.0/24\t0\t0\t0\toff\n");
+
+        adapter.deletePeer("Ruten");
+
+        verify(exec).execute("wireguard", "ip", "route", "del", "10.13.13.8/32", "dev", "wg0");
+        verify(exec).execute("wireguard", "ip", "route", "del", "192.168.9.0/24", "dev", "wg0");
+    }
+
+    @Test
+    void installRoutes_givesANewPeerItsHostRoute_andARelayItsLan_withoutTouchingTheInterface() {
+        // wg set installs no route; this is what the restart-on-every-add used to do for the whole fleet.
+        adapter.installRoutes("10.13.13.8/32, 192.168.9.0/24");
+
+        verify(exec).execute("wireguard", "ip", "route", "replace", "10.13.13.8/32", "dev", "wg0");
+        verify(exec).execute("wireguard", "ip", "route", "replace", "192.168.9.0/24", "dev", "wg0");
+        verify(exec, never()).execute(eq("wireguard"), eq("wg-quick"), any(), any());
     }
 
     @Test

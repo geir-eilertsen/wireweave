@@ -2068,6 +2068,23 @@ class VpnServiceTest {
     }
 
     @Test
+    void enrol_installsTheNewPeersRoute_insteadOfRestartingTheInterface(@TempDir Path dir) throws Exception {
+        // Every add used to bounce the whole WireGuard container to get a kernel route for one peer,
+        // dropping every other tunnel for seconds each time. The route is installed by itself now.
+        wireguardIsReachable(dir);
+        when(peerConfigProvider.getAllPeerConfigs()).thenReturn(List.of());
+        when(configResolver.getDomain()).thenReturn("eilertsen.family");
+        when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.empty());
+        when(forExecutingInContainer.execute("wireguard", "wg", "show", "wg0", "public-key"))
+            .thenReturn("SERVER_PUB\n");
+        when(forExecutingInContainer.execute("wireguard", "wg", "genpsk")).thenReturn("PSK\n");
+
+        service.enrol("Geir's phone", DEVICE_KEY);
+
+        verify(forUpdatingServerAllowedIps).installRoutes("10.13.13.2/32");
+    }
+
+    @Test
     void enrol_neverGeneratesAKeypair(@TempDir Path dir) throws Exception {
         wireguardIsReachable(dir);
         when(peerConfigProvider.getAllPeerConfigs()).thenReturn(List.of());

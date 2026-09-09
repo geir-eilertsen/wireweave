@@ -34,8 +34,6 @@ public class DockerExecAdapter implements ForExecutingInContainer {
     private static final Duration CONNECTION_TIMEOUT = Duration.ofSeconds(5);
     private static final Duration RESPONSE_TIMEOUT = Duration.ofSeconds(45);
 
-    private static final String MASQUERADE_SIDECAR_SUFFIX = "-masquerade";
-
     private DockerClient dockerClient;
 
     @PostConstruct
@@ -110,37 +108,6 @@ public class DockerExecAdapter implements ForExecutingInContainer {
     public String executeWithInput(String containerName, String input, String... command) {
         String bashCommand = String.format("echo '%s' | %s", input, String.join(" ", command));
         return execute(containerName, "bash", "-c", bashCommand);
-    }
-
-    @Override
-    public void restartWithMasqueradeSidecar(String containerName) {
-        try {
-            log.info("Restarting container: {}", containerName);
-            dockerClient.restartContainerCmd(containerName)
-                .withTimeout(30)
-                .exec();
-            Thread.sleep(2000);
-            log.info("Container {} restarted successfully", containerName);
-
-            String masqueradeContainer = containerName + MASQUERADE_SIDECAR_SUFFIX;
-            try {
-                log.info("Restarting masquerade sidecar: {}", masqueradeContainer);
-                dockerClient.restartContainerCmd(masqueradeContainer)
-                    .withTimeout(15)
-                    .exec();
-                Thread.sleep(3000);
-                log.info("Masquerade sidecar restarted successfully");
-            } catch (Exception e) {
-                log.warn("Could not restart masquerade sidecar {}: {}", masqueradeContainer, e.getMessage());
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            log.error("Interrupted while restarting container {}", containerName, e);
-            throw new RuntimeException("Failed to restart container " + containerName, e);
-        } catch (Exception e) {
-            log.error("Error restarting container {}: {}", containerName, e.getMessage(), e);
-            throw new RuntimeException("Failed to restart container " + containerName, e);
-        }
     }
 
     private static class DockerExecCallback extends ResultCallbackTemplate<DockerExecCallback, Frame> {

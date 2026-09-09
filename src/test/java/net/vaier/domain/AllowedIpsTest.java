@@ -10,17 +10,18 @@ class AllowedIpsTest {
     void routeDelta_addsBroaderCidrFromNew() {
         var delta = AllowedIps.routeDelta("10.13.13.5/32", "10.13.13.5/32, 192.168.3.0/24");
 
-        assertThat(delta.toAdd()).containsExactly("192.168.3.0/24");
+        assertThat(delta.toAdd()).containsExactly("10.13.13.5/32", "192.168.3.0/24");
         assertThat(delta.toRemove()).isEmpty();
     }
 
     @Test
-    void routeDelta_skipsPeer32HostRoutes_wgQuickOwnsThem() {
-        // Peer /32 host routes are managed by wg-quick at bring-up — we must not add or remove them.
+    void routeDelta_ownsPeerHostRoutesToo_becauseNothingElseInstallsThemAfterBringUp() {
+        // wg-quick installs routes only at bring-up. A peer added with wg set has no route until Vaier
+        // gives it one — the old "wg-quick owns /32s" rule only held while every add restarted wg0.
         var delta = AllowedIps.routeDelta("10.13.13.5/32", "10.13.13.7/32");
 
-        assertThat(delta.toAdd()).isEmpty();
-        assertThat(delta.toRemove()).isEmpty();
+        assertThat(delta.toAdd()).containsExactly("10.13.13.7/32");
+        assertThat(delta.toRemove()).containsExactly("10.13.13.5/32");
     }
 
     @Test
@@ -29,7 +30,7 @@ class AllowedIpsTest {
             "10.13.13.5/32, 192.168.3.0/24, 10.0.0.0/16",
             "10.13.13.5/32, 192.168.3.0/24");
 
-        assertThat(delta.toAdd()).containsExactly("192.168.3.0/24");
+        assertThat(delta.toAdd()).containsExactly("10.13.13.5/32", "192.168.3.0/24");
         assertThat(delta.toRemove()).containsExactly("10.0.0.0/16");
     }
 
@@ -41,7 +42,7 @@ class AllowedIpsTest {
             "10.13.13.5/32, 192.168.3.0/24",
             "10.13.13.5/32, 192.168.3.0/24");
 
-        assertThat(delta.toAdd()).containsExactly("192.168.3.0/24");
+        assertThat(delta.toAdd()).containsExactly("10.13.13.5/32", "192.168.3.0/24");
         assertThat(delta.toRemove()).isEmpty();
     }
 

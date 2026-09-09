@@ -16,7 +16,6 @@ class LanScanAdapterTest {
         return new ForExecutingInContainer() {
             public String execute(String containerName, String... command) { return output; }
             public String executeWithInput(String containerName, String input, String... command) { return output; }
-            public void restartWithMasqueradeSidecar(String containerName) { }
         };
     }
 
