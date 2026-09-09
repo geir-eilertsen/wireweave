@@ -220,6 +220,37 @@ public final class OperatorGlossary {
                     "Configure it to see at a glance which version each service is running."),
                 Concept.of("Launchpad display name",
                     "The friendly label shown on a service's launchpad tile.",
-                    "Set it so tiles read clearly instead of showing raw container names."))));
+                    "Set it so tiles read clearly instead of showing raw container names."))),
+
+            new ConceptGroup("Ask", List.of(
+                Concept.of("Ask",
+                    "The Explorer pane where you talk to Vaier in sentences and are answered from the "
+                        + "fleet's own facts. It can look, never change.",
+                    "It is the quickest way to a question that would otherwise mean opening three panes — "
+                        + "which machine is red and why, who is waiting to join, how last night's backups "
+                        + "went. It appears in the menu only once an Anthropic API key is stored."),
+                Concept.of("Anthropic API key",
+                    "Your own key for the Claude API, stored encrypted in Settings like the SMTP password "
+                        + "and never shown again.",
+                    "It is what makes Ask available, and it is billed to you. It never leaves this server "
+                        + "except to the Claude API, and clearing it removes Ask from the menu."),
+                Concept.of("Ask tool",
+                    "One read of the fleet Vaier may make while answering you — the machines, who is "
+                        + "waiting to join, the published services, backups, disks, container updates, "
+                        + "security decisions, or one read-only command on a machine.",
+                    "Everything Ask says comes from one of these reads and nothing else; when none of them "
+                        + "has the answer, Ask says it does not know rather than guess. No tool ever carries "
+                        + "a key, a password or a credential."),
+                Concept.of("Read-only command",
+                    "A single command line Ask runs on a machine over SSH, as Vaier's login user there and "
+                        + "without sudo, and reads back what it printed.",
+                    "It is how Ask answers what Vaier does not already track — pending OS updates, uptime, "
+                        + "a log, a process list. Only looking commands are allowed: anything that could "
+                        + "change the machine, chain commands or read where secrets live is refused, which "
+                        + "is what keeps \"Ask can look, never change\" true."),
+                Concept.of("Conversation",
+                    "The turns of one visit to Ask: what you asked and what Vaier answered, in order.",
+                    "A follow-up like \"and Colina?\" works because the visit's earlier turns are sent "
+                        + "along. It lives in your browser for the visit; Vaier keeps none of it yet."))));
     }
 }

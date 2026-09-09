@@ -91,4 +91,24 @@ class OperatorGlossaryTest {
         // And it has to say why the operator never sees the word anywhere else.
         assertThat(concept.whyYouCare()).contains("whose backups");
     }
+
+    @Test
+    void explainsAsk_theOnePaneWhoseWordsCameFromNowhereElseInTheUi() {
+        // #360: Ask arrived with five terms an operator meets on its pane and in Settings — and none of them
+        // was on the Concepts page, so the one place that explains Vaier's words had nothing to say about
+        // the pane that talks. The group carries every term the glossary doc has for it, verbatim.
+        ConceptGroup ask = OperatorGlossary.groups().stream()
+            .filter(g -> g.title().equals("Ask"))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("the Concepts page must have an Ask group"));
+
+        assertThat(ask.concepts()).extracting(Concept::term)
+            .containsExactly("Ask", "Anthropic API key", "Ask tool", "Read-only command", "Conversation");
+        // The two promises an operator needs before pasting a key: the key never leaves for anywhere but
+        // the Claude API, and the shell tool cannot change a machine.
+        Concept key = ask.concepts().get(1);
+        assertThat(key.definition() + " " + key.whyYouCare()).contains("Claude API");
+        Concept command = ask.concepts().get(3);
+        assertThat(command.definition() + " " + command.whyYouCare()).contains("sudo").contains("never change");
+    }
 }
