@@ -5,6 +5,7 @@ import net.vaier.application.NotifyAdminsOfBackupFailureUseCase;
 import net.vaier.application.NotifyAdminsOfBackupServerDownUseCase;
 import net.vaier.application.NotifyAdminsOfBreachAttemptUseCase;
 import net.vaier.application.NotifyAdminsOfDiskFillForecastUseCase;
+import net.vaier.application.NotifyAdminsOfEnrolmentRequestUseCase;
 import net.vaier.application.NotifyAdminsOfLockoutWarningUseCase;
 import net.vaier.application.NotifyAdminsOfPeerTransitionUseCase;
 import net.vaier.application.NotifyAdminsOfRemoteDiskPressureUseCase;
@@ -16,11 +17,14 @@ import net.vaier.domain.BreachAttemptRollup;
 import net.vaier.domain.DiskFillForecast;
 import net.vaier.domain.DiskFillForecastCleared;
 import net.vaier.domain.ImageUpdateRollup;
+import net.vaier.domain.EnrolmentRequest;
+import net.vaier.domain.JoinRequestNotice;
 import net.vaier.domain.LockoutWarning;
 import net.vaier.domain.RemoteDiskUsage;
 import net.vaier.domain.PeerSnapshot;
 import net.vaier.domain.port.ForProbingTcp.ProbeResult;
 import net.vaier.domain.port.ForSendingAdminNotification;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -33,7 +37,8 @@ public class NotificationService implements
         NotifyAdminsOfBackupServerDownUseCase,
         NotifyAdminsOfUpdateAvailableUseCase,
         NotifyAdminsOfBreachAttemptUseCase,
-        NotifyAdminsOfLockoutWarningUseCase {
+        NotifyAdminsOfLockoutWarningUseCase,
+        NotifyAdminsOfEnrolmentRequestUseCase {
 
     private final ForSendingAdminNotification adminNotifier;
     private final ConfigResolver configResolver;
@@ -133,6 +138,15 @@ public class NotificationService implements
      * One warning mail for the operator's own addresses that CrowdSec has started blocking. Its own
      * subject and body come from the domain — this is not a breach attempt and must not read like one.
      */
+    // Off the phone's own request: an anonymous POST must not wait on an SMTP round trip.
+    @Async
+    @Override
+    public void notifyAdminsOfEnrolmentRequest(EnrolmentRequest request) {
+        JoinRequestNotice notice = JoinRequestNotice.from(request, System.currentTimeMillis());
+        adminNotifier.sendToAdmins(notice.subject(), notice.body(configResolver.getDomain()),
+                "join request: code " + request.code());
+    }
+
     @Override
     public void notifyAdminsOfLockoutWarning(LockoutWarning warning) {
         adminNotifier.sendToAdmins(warning.subject(),

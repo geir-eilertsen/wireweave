@@ -17,14 +17,14 @@ import java.util.Optional;
  * Vaier minted had its config handed over as a file, so anyone who ever held that file could quote
  * its preshared key; only a phone that made its own key can be said to be the sole other holder.
  */
-public record LeaveProof(String publicKey, String presharedKey) {
+public record PeerProof(String publicKey, String presharedKey) {
 
-    public static LeaveProof of(String publicKey, String presharedKey) {
+    public static PeerProof of(String publicKey, String presharedKey) {
         if (publicKey == null || publicKey.isBlank() || presharedKey == null || presharedKey.isBlank()) {
             throw new IllegalArgumentException("Leaving requires both the device's public key and its "
                 + "preshared key");
         }
-        return new LeaveProof(publicKey.trim(), presharedKey.trim());
+        return new PeerProof(publicKey.trim(), presharedKey.trim());
     }
 
     /** Whether this proof is the config {@code peer} holds — the whole authorisation for leaving. */

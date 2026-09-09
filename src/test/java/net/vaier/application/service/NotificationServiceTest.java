@@ -10,6 +10,8 @@ import net.vaier.domain.BlockDecision;
 import net.vaier.domain.BreachAttemptRollup;
 import net.vaier.domain.DiskFillForecast;
 import net.vaier.domain.DiskFillForecastCleared;
+import net.vaier.domain.EnrolmentRequest;
+import org.springframework.scheduling.annotation.Async;
 import net.vaier.domain.LockoutWarning;
 import net.vaier.domain.MachineType;
 import net.vaier.domain.PeerSnapshot;
@@ -210,6 +212,29 @@ class NotificationServiceTest {
                 .contains("vaultwarden/server:latest on Apalveien 5")
                 .contains("lscr.io/linuxserver/wireguard:1.0.x on Colina 27")
                 .contains("vaier.example.com");
+    }
+
+    @Test
+    void notifyAdminsOfEnrolmentRequest_saysWhoAndWhichCode_andLinksTheApproval() {
+        when(configResolver.getDomain()).thenReturn("example.com");
+        EnrolmentRequest request = EnrolmentRequest.open("Ruten",
+            "Cdd32h4brltAwRS22xopgiyeyXUNv202FMgAoj1Hgio=", "4821", "ticket", System.currentTimeMillis());
+
+        service.notifyAdminsOfEnrolmentRequest(request);
+
+        ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(adminNotifier).sendToAdmins(subject.capture(), body.capture(), any());
+        assertThat(subject.getValue()).contains("Ruten").contains("4821");
+        assertThat(body.getValue()).contains("https://vaier.example.com/explorer.html?approve=4821");
+    }
+
+    @Test
+    void notifyAdminsOfEnrolmentRequest_runsOffTheCallersThread() throws NoSuchMethodException {
+        // The caller is a phone's anonymous POST; the SMTP round trip must not be its response time.
+        assertThat(NotificationService.class
+            .getMethod("notifyAdminsOfEnrolmentRequest", EnrolmentRequest.class)
+            .isAnnotationPresent(Async.class)).isTrue();
     }
 
     @Test

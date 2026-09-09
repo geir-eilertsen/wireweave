@@ -5,6 +5,7 @@ import net.vaier.application.ApproveEnrolmentUseCase.ApprovedEnrolmentUco;
 import net.vaier.application.EnrolDeviceUseCase.EnrolledDeviceUco;
 import net.vaier.application.ListEnrolmentRequestsUseCase;
 import net.vaier.application.LookUpEnrolmentTicketUseCase;
+import net.vaier.application.NotifyAdminsOfEnrolmentRequestUseCase;
 import net.vaier.application.RefuseEnrolmentUseCase;
 import net.vaier.application.RequestEnrolmentUseCase;
 import net.vaier.domain.ConflictException;
@@ -54,6 +55,7 @@ class EnrolmentRequestRestControllerTest {
     @Mock ApproveEnrolmentUseCase approveEnrolmentUseCase;
     @Mock RefuseEnrolmentUseCase refuseEnrolmentUseCase;
     @Mock LookUpEnrolmentTicketUseCase lookUpEnrolmentTicketUseCase;
+    @Mock NotifyAdminsOfEnrolmentRequestUseCase notifyAdminsOfEnrolmentRequestUseCase;
     @Mock ForPublishingEvents forPublishingEvents;
     @Mock ForSubscribingToEvents forSubscribingToEvents;
 
@@ -262,5 +264,16 @@ class EnrolmentRequestRestControllerTest {
         when(forSubscribingToEvents.subscribe("enrolment-requests")).thenReturn(emitter);
 
         assertThat(controller.adminEvents()).isSameAs(emitter);
+    }
+
+    @Test
+    void request_mailsTheAdmins_becauseAPhoneIsWaitingOnAPerson() {
+        EnrolmentRequest opened = EnrolmentRequest.open("Ruten", DEVICE_KEY, "4821", TICKET,
+            System.currentTimeMillis());
+        when(requestEnrolmentUseCase.request("Ruten", DEVICE_KEY)).thenReturn(opened);
+
+        controller.request(new EnrolmentRequestRestController.RequestEnrolmentRequest("Ruten", DEVICE_KEY));
+
+        verify(notifyAdminsOfEnrolmentRequestUseCase).notifyAdminsOfEnrolmentRequest(opened);
     }
 }

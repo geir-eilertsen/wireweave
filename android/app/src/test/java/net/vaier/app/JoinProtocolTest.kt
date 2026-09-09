@@ -57,6 +57,23 @@ class JoinProtocolTest {
         assertEquals(presharedKey, body.getString("presharedKey"))
         assertEquals(2, body.length())
     }
+
+    @Test
+    fun `asking about standing presents exactly the same proof as leaving`() {
+        assertEquals(
+            JoinProtocol.leaveRequest(publicKey, presharedKey),
+            JoinProtocol.standingRequest(publicKey, presharedKey),
+        )
+    }
+
+    @Test
+    fun `asking about standing carries nothing but the two keys`() {
+        val body = JSONObject(JoinProtocol.standingRequest(publicKey, presharedKey))
+
+        assertEquals(publicKey, body.getString("publicKey"))
+        assertEquals(presharedKey, body.getString("presharedKey"))
+        assertEquals(2, body.length())
+    }
 }
 
 private fun refusalFrom(block: () -> Unit): String =

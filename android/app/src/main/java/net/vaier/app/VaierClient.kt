@@ -114,6 +114,28 @@ class VaierClient {
             }
         }
 
+    /**
+     * Asks whether this phone is still one of Vaier's devices. Changes nothing there, and must be sent
+     * over ordinary internet: a removed phone's tunnel is a black hole, so an answer down it never comes.
+     */
+    suspend fun standing(address: String, publicKey: String, presharedKey: String): Standing =
+        withContext(Dispatchers.IO) {
+            var connection: HttpURLConnection? = null
+            try {
+                connection = post("https://$address/vpn/peers/standing",
+                    JoinProtocol.standingRequest(publicKey, presharedKey))
+                when (connection.responseCode) {
+                    HttpURLConnection.HTTP_NO_CONTENT -> Standing.MEMBER
+                    HttpURLConnection.HTTP_NOT_FOUND -> Standing.REMOVED
+                    else -> Standing.UNREACHABLE
+                }
+            } catch (e: IOException) {
+                Standing.UNREACHABLE
+            } finally {
+                connection?.disconnect()
+            }
+        }
+
     private fun verdictIn(reader: BufferedReader): Verdict {
         val events = EventStream()
         while (true) {

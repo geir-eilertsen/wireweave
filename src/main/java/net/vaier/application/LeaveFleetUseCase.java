@@ -5,7 +5,7 @@ package net.vaier.application;
  * peer standing on Vaier, which is how a fleet fills up with devices nobody has any more.
  *
  * <p>The phone has no session, so what it presents instead is the preshared key it was handed at
- * approval — a secret only it and Vaier hold. See {@code LeaveProof} for the judgement itself.
+ * approval — a secret only it and Vaier hold. See {@code PeerProof} for the judgement itself.
  */
 public interface LeaveFleetUseCase {
 

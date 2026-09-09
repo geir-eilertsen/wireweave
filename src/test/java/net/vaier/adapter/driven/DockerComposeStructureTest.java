@@ -90,6 +90,7 @@ class DockerComposeStructureTest {
         // 43 characters is exactly 32 random bytes in base64url without padding — the ticket's shape.
         assertThat(rule).contains("PathRegexp(`^/vpn/enrolments/[A-Za-z0-9_-]{43}/events$`)");
         assertThat(rule).contains("Path(`/vpn/peers/leave`) && Method(`POST`)");
+        assertThat(rule).contains("Path(`/vpn/peers/standing`) && Method(`POST`)");
 
         // Nothing else on /vpn may be anonymous — most of all not the admin list, the approve or the
         // refuse, which are what decide who gets into the fleet.
@@ -136,6 +137,7 @@ class DockerComposeStructureTest {
         String publicRule = labels.get("traefik.http.routers.vaier-public.rule");
         assertThat(publicRule).doesNotContain("/vpn/enrolments");
         assertThat(publicRule).doesNotContain("/vpn/peers/leave");
+        assertThat(publicRule).doesNotContain("/vpn/peers/standing");
     }
 
     @Test

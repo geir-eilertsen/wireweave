@@ -730,10 +730,11 @@ services:
       # unguessable random bytes handed to the phone once, no server secret exists until an admin
       # approves, at most 5 requests wait at a time and each dies after 10 minutes. Leaving proves
       # possession of the peer's own preshared key — a secret only that phone and Vaier hold — and
-      # the peer is gone afterwards, so a replay has nothing left to remove. The approve, refuse and
+      # the peer is gone afterwards, so a replay has nothing left to remove. Standing is the same
+      # proof asked as a question — "am I still in?" — and changes nothing. The approve, refuse and
       # pending routes stay on the Tier 3 admin catch-all, which is where the real decisions are.
       # Rate-limited on a middleware of its own so the anonymous POSTs cannot be used to churn.
-      - traefik.http.routers.vaier-enrolment.rule=Host(`vaier.${VAIER_DOMAIN}`) && ((Path(`/vpn/enrolments`) && Method(`POST`)) || PathRegexp(`^/vpn/enrolments/[A-Za-z0-9_-]{43}/events$`) || (Path(`/vpn/peers/leave`) && Method(`POST`)))
+      - traefik.http.routers.vaier-enrolment.rule=Host(`vaier.${VAIER_DOMAIN}`) && ((Path(`/vpn/enrolments`) && Method(`POST`)) || PathRegexp(`^/vpn/enrolments/[A-Za-z0-9_-]{43}/events$`) || (Path(`/vpn/peers/leave`) && Method(`POST`)) || (Path(`/vpn/peers/standing`) && Method(`POST`)))
       - traefik.http.routers.vaier-enrolment.entrypoints=websecure
       - traefik.http.routers.vaier-enrolment.tls.certresolver=letsencrypt
       - traefik.http.routers.vaier-enrolment.priority=210

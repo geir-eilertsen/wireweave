@@ -110,6 +110,12 @@ public abstract class VaierWebMvcIntegrationBase {
     protected LeaveFleetUseCase leaveFleetUseCase;
 
     @MockBean
+    protected CheckStandingUseCase checkStandingUseCase;
+
+    @MockBean
+    protected NotifyAdminsOfEnrolmentRequestUseCase notifyAdminsOfEnrolmentRequestUseCase;
+
+    @MockBean
     protected RequestEnrolmentUseCase requestEnrolmentUseCase;
 
     @MockBean

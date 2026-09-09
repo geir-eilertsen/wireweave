@@ -24,6 +24,7 @@ import net.vaier.application.GetServerLocationUseCase;
 import net.vaier.application.GetServerLocationUseCase.ServerLocation;
 import net.vaier.application.GetVpnPeersUseCase;
 import net.vaier.application.GetVpnPeersUseCase.VpnPeerView;
+import net.vaier.application.CheckStandingUseCase;
 import net.vaier.application.LeaveFleetUseCase;
 import net.vaier.application.ClaimDeviceUseCase;
 import net.vaier.application.ForgetMyPositionUseCase;
@@ -80,6 +81,7 @@ class VpnPeerRestControllerTest {
     @Mock DeletePeerUseCase deletePeerUseCase;
     @Mock EnrolDeviceUseCase enrolDeviceUseCase;
     @Mock LeaveFleetUseCase leaveFleetUseCase;
+    @Mock CheckStandingUseCase checkStandingUseCase;
     @Mock GenerateDockerComposeUseCase generateDockerComposeUseCase;
     @Mock GeneratePeerSetupScriptUseCase generatePeerSetupScriptUseCase;
     @Mock UpdateLanCidrUseCase updateLanCidrUseCase;
@@ -1020,5 +1022,26 @@ class VpnPeerRestControllerTest {
                 new VpnPeerRestController.LeaveFleetRequest(DEVICE_KEY, null)))
             .isInstanceOf(IllegalArgumentException.class);
         verify(forPublishingEvents, never()).publish(anyString(), anyString(), anyString());
+    }
+
+    // --- POST /vpn/peers/standing: a phone asks whether it is still in (#359 slice 3) ---
+
+    @Test
+    void standing_aMemberIs204_andNothingChanges() {
+        when(checkStandingUseCase.isMember(DEVICE_KEY, LEAVE_PSK)).thenReturn(true);
+
+        var response = controller.standing(new VpnPeerRestController.StandingRequest(DEVICE_KEY, LEAVE_PSK));
+
+        assertThat(response.getStatusCode().value()).isEqualTo(204);
+        verify(forPublishingEvents, never()).publish(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void standing_whenNothingIsProved_is404_likeLeaving() {
+        when(checkStandingUseCase.isMember(DEVICE_KEY, "wrong")).thenReturn(false);
+
+        var response = controller.standing(new VpnPeerRestController.StandingRequest(DEVICE_KEY, "wrong"));
+
+        assertThat(response.getStatusCode().value()).isEqualTo(404);
     }
 }

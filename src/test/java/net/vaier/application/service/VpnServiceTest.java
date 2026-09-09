@@ -2324,6 +2324,25 @@ class VpnServiceTest {
     }
 
     @Test
+    void isMember_isTrueForThePeerTheCallerProvesItHolds_andChangesNothing() {
+        when(peerConfigProvider.getAllPeerConfigs())
+            .thenReturn(List.of(enrolledPhone("ruten", DEVICE_KEY, PSK)));
+
+        assertThat(service.isMember(DEVICE_KEY, PSK)).isTrue();
+        verifyNoInteractions(vpnPeerDeleter);
+    }
+
+    @Test
+    void isMember_isFalseOnceThePeerIsGone_orForTheWrongPresharedKey() {
+        when(peerConfigProvider.getAllPeerConfigs()).thenReturn(List.of());
+        assertThat(service.isMember(DEVICE_KEY, PSK)).isFalse();
+
+        when(peerConfigProvider.getAllPeerConfigs())
+            .thenReturn(List.of(enrolledPhone("ruten", DEVICE_KEY, PSK)));
+        assertThat(service.isMember(DEVICE_KEY, "not-the-preshared-key")).isFalse();
+    }
+
+    @Test
     void leave_withTheWrongPresharedKey_removesNothing() {
         when(peerConfigProvider.getAllPeerConfigs())
             .thenReturn(List.of(enrolledPhone("ruten", DEVICE_KEY, PSK)));

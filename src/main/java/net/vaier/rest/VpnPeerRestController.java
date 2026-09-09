@@ -12,6 +12,7 @@ import net.vaier.application.GetPeerConfigUseCase;
 import net.vaier.application.GetServerLocationUseCase;
 import net.vaier.application.GetVpnPeersUseCase;
 import net.vaier.application.GetVpnPeersUseCase.VpnPeerView;
+import net.vaier.application.CheckStandingUseCase;
 import net.vaier.application.LeaveFleetUseCase;
 import net.vaier.application.ReissuePeerConfigUseCase;
 import net.vaier.application.RenamePeerUseCase;
@@ -64,6 +65,7 @@ public class VpnPeerRestController {
     private final DeletePeerUseCase deletePeerUseCase;
     private final EnrolDeviceUseCase enrolDeviceUseCase;
     private final LeaveFleetUseCase leaveFleetUseCase;
+    private final CheckStandingUseCase checkStandingUseCase;
     private final GenerateDockerComposeUseCase generateDockerComposeUseCase;
     private final GeneratePeerSetupScriptUseCase generatePeerSetupScriptUseCase;
     private final UpdateLanCidrUseCase updateLanCidrUseCase;
@@ -323,7 +325,7 @@ public class VpnPeerRestController {
      *
      * <p>The phone has no session and never had one, so what it presents instead is the preshared key
      * it was handed at approval: a secret only that phone and Vaier hold, and one Vaier already has in
-     * the peer's config on disk. The judgement is {@code LeaveProof}'s, and it is offered only to a
+     * the peer's config on disk. The judgement is {@code PeerProof}'s, and it is offered only to a
      * peer with a {@code Device-held key}.
      *
      * <p>{@code 404} covers an unknown key and a wrong preshared key alike — trying keys here must
@@ -337,6 +339,18 @@ public class VpnPeerRestController {
         log.info("A device removed itself from the fleet");
         forPublishingEvents.publish("vpn-peers", "peers-updated", "");
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * ANONYMOUS, on the same rate-limited router as {@code /leave}. A phone whose handshakes have
+     * stopped asks whether it was removed. Same proof, same {@code 404} for both failures, and it
+     * changes nothing.
+     */
+    @PostMapping("/standing")
+    public ResponseEntity<Void> standing(@RequestBody StandingRequest request) {
+        return checkStandingUseCase.isMember(request.publicKey(), request.presharedKey())
+            ? ResponseEntity.noContent().build()
+            : ResponseEntity.notFound().build();
     }
 
     /**
@@ -850,6 +864,9 @@ public class VpnPeerRestController {
             String publicKey,
             String presharedKey
     ) {}
+
+    /** The same proof as leaving; presented by a phone that only wants to know if it still belongs. */
+    public record StandingRequest(String publicKey, String presharedKey) {}
 
     public record UpdateLanAddressRequest(
             String lanAddress

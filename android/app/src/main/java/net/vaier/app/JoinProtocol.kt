@@ -15,7 +15,12 @@ object JoinProtocol {
     fun joinRequest(name: String, publicKey: String): String =
         JSONObject().put("name", name).put("publicKey", publicKey).toString()
 
-    fun leaveRequest(publicKey: String, presharedKey: String): String =
+    fun leaveRequest(publicKey: String, presharedKey: String): String = proof(publicKey, presharedKey)
+
+    /** Asking whether this phone is still in Vaier proves who is asking exactly as leaving does. */
+    fun standingRequest(publicKey: String, presharedKey: String): String = proof(publicKey, presharedKey)
+
+    private fun proof(publicKey: String, presharedKey: String): String =
         JSONObject().put("publicKey", publicKey).put("presharedKey", presharedKey).toString()
 
     fun readJoinAnswer(body: String): JoinAnswer =

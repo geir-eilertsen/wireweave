@@ -6,6 +6,7 @@ import net.vaier.application.DeletePeerUseCase;
 import net.vaier.application.DeletePublishedServiceUseCase;
 import net.vaier.application.ApproveEnrolmentUseCase;
 import net.vaier.application.EnrolDeviceUseCase;
+import net.vaier.application.CheckStandingUseCase;
 import net.vaier.application.LeaveFleetUseCase;
 import net.vaier.application.ListEnrolmentRequestsUseCase;
 import net.vaier.application.LookUpEnrolmentTicketUseCase;
@@ -36,7 +37,7 @@ import net.vaier.domain.EnrolmentRequest;
 import net.vaier.domain.EnrolmentVerdict;
 import net.vaier.domain.GeoLocation;
 import net.vaier.domain.LanServer;
-import net.vaier.domain.LeaveProof;
+import net.vaier.domain.PeerProof;
 import net.vaier.domain.Machine;
 import net.vaier.domain.MachineId;
 import net.vaier.domain.MachineIntent;
@@ -107,6 +108,7 @@ public class VpnService implements
     RefuseEnrolmentUseCase,
     LookUpEnrolmentTicketUseCase,
     LeaveFleetUseCase,
+    CheckStandingUseCase,
     DeletePeerUseCase,
     GetVpnClientsUseCase,
     GetVpnPeersUseCase,
@@ -758,7 +760,7 @@ public class VpnService implements
 
     @Override
     public boolean leave(String publicKey, String presharedKey) {
-        LeaveProof proof = LeaveProof.of(publicKey, presharedKey);
+        PeerProof proof = PeerProof.of(publicKey, presharedKey);
         Optional<ForGettingPeerConfigurations.PeerConfiguration> peer =
             proof.whichPeer(peerConfigProvider.getAllPeerConfigs());
         if (peer.isEmpty()) {
@@ -769,6 +771,15 @@ public class VpnService implements
         log.info("Peer {} is leaving the fleet at its own request", peer.get().id());
         deletePeer(peer.get().id());
         return true;
+    }
+
+    // --- CheckStandingUseCase (#359 slice 3) ---
+
+    @Override
+    public boolean isMember(String publicKey, String presharedKey) {
+        return PeerProof.of(publicKey, presharedKey)
+            .whichPeer(peerConfigProvider.getAllPeerConfigs())
+            .isPresent();
     }
 
     /**

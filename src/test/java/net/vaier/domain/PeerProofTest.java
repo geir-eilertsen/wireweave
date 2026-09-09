@@ -13,7 +13,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * the preshared key it was handed at approval, and only the pair together — against a peer that
  * actually holds a device-held key — proves it is the phone it says it is.
  */
-class LeaveProofTest {
+class PeerProofTest {
 
     private static final String DEVICE_KEY = "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=";
     private static final String OTHER_KEY = "aFPKMlUyDXQpBQwGA2CqcnMkbQ7yYbCKAsmLcVcLzGA=";
@@ -37,27 +37,27 @@ class LeaveProofTest {
 
     @Test
     void of_refusesAnEmptyClaim() {
-        assertThatThrownBy(() -> LeaveProof.of(null, PSK)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> LeaveProof.of(DEVICE_KEY, null)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> LeaveProof.of("  ", PSK)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> LeaveProof.of(DEVICE_KEY, " ")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> PeerProof.of(null, PSK)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> PeerProof.of(DEVICE_KEY, null)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> PeerProof.of("  ", PSK)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> PeerProof.of(DEVICE_KEY, " ")).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void proves_thePeerWhoseDeviceKeyAndPresharedKeyBothMatch() {
-        assertThat(LeaveProof.of(DEVICE_KEY, PSK).proves(peer("ruten", DEVICE_KEY, PSK))).isTrue();
+        assertThat(PeerProof.of(DEVICE_KEY, PSK).proves(peer("ruten", DEVICE_KEY, PSK))).isTrue();
     }
 
     @Test
     void proves_nothingWhenThePresharedKeyIsWrong() {
         // The public key is public — it is on the server and in every listing. Only the preshared key,
         // which lives on the phone and in Vaier's copy of the config, can prove anything.
-        assertThat(LeaveProof.of(DEVICE_KEY, OTHER_PSK).proves(peer("ruten", DEVICE_KEY, PSK))).isFalse();
+        assertThat(PeerProof.of(DEVICE_KEY, OTHER_PSK).proves(peer("ruten", DEVICE_KEY, PSK))).isFalse();
     }
 
     @Test
     void proves_nothingWhenTheDeviceKeyIsAnotherPeers() {
-        assertThat(LeaveProof.of(OTHER_KEY, PSK).proves(peer("ruten", DEVICE_KEY, PSK))).isFalse();
+        assertThat(PeerProof.of(OTHER_KEY, PSK).proves(peer("ruten", DEVICE_KEY, PSK))).isFalse();
     }
 
     @Test
@@ -67,7 +67,7 @@ class LeaveProofTest {
         PeerConfiguration qrPeer = peer("nuc02", null, PSK);
 
         assertThat(qrPeer.deviceHeldKey()).isFalse();
-        assertThat(LeaveProof.of(DEVICE_KEY, PSK).proves(qrPeer)).isFalse();
+        assertThat(PeerProof.of(DEVICE_KEY, PSK).proves(qrPeer)).isFalse();
     }
 
     @Test
@@ -76,12 +76,12 @@ class LeaveProofTest {
             "[Interface]\nAddress = 10.13.13.7/32\n", MachineType.MOBILE_CLIENT, null, null, null,
             null, null, MachineId.generate(), DEVICE_KEY);
 
-        assertThat(LeaveProof.of(DEVICE_KEY, PSK).proves(damaged)).isFalse();
+        assertThat(PeerProof.of(DEVICE_KEY, PSK).proves(damaged)).isFalse();
     }
 
     @Test
     void proves_nothingAgainstNothing() {
-        assertThat(LeaveProof.of(DEVICE_KEY, PSK).proves(null)).isFalse();
+        assertThat(PeerProof.of(DEVICE_KEY, PSK).proves(null)).isFalse();
     }
 
     @Test
@@ -91,7 +91,7 @@ class LeaveProofTest {
             peer("kikkut", OTHER_KEY, OTHER_PSK),
             peer("ruten", DEVICE_KEY, PSK));
 
-        assertThat(LeaveProof.of(DEVICE_KEY, PSK).whichPeer(fleet))
+        assertThat(PeerProof.of(DEVICE_KEY, PSK).whichPeer(fleet))
             .map(PeerConfiguration::id).contains("ruten");
     }
 
@@ -99,8 +99,8 @@ class LeaveProofTest {
     void whichPeer_isEmptyWhenNothingInTheFleetIsProved() {
         List<PeerConfiguration> fleet = List.of(peer("kikkut", OTHER_KEY, OTHER_PSK));
 
-        assertThat(LeaveProof.of(DEVICE_KEY, PSK).whichPeer(fleet)).isEmpty();
-        assertThat(LeaveProof.of(DEVICE_KEY, PSK).whichPeer(List.of())).isEmpty();
-        assertThat(LeaveProof.of(DEVICE_KEY, PSK).whichPeer(null)).isEmpty();
+        assertThat(PeerProof.of(DEVICE_KEY, PSK).whichPeer(fleet)).isEmpty();
+        assertThat(PeerProof.of(DEVICE_KEY, PSK).whichPeer(List.of())).isEmpty();
+        assertThat(PeerProof.of(DEVICE_KEY, PSK).whichPeer(null)).isEmpty();
     }
 }

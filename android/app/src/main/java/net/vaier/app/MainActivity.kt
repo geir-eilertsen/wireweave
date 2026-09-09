@@ -1,15 +1,19 @@
 package net.vaier.app
 
+import android.Manifest
 import android.content.ActivityNotFoundException
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
 import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.runtime.mutableStateOf
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -21,7 +25,8 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var store: VaierStore
     private lateinit var tunnels: TunnelController
-    private val vaier = VaierClient()
+    private lateinit var vaier: VaierClient
+    private lateinit var watchdog: StandingWatchdog
 
     private val membership = mutableStateOf<Membership?>(null)
     private val pending = mutableStateOf<PendingJoin?>(null)
@@ -38,10 +43,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Refusing this costs the one message about being removed, and nothing else. */
+    private val notifyPermission = registerForActivityResult(RequestPermission()) { }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        store = VaierStore(this)
-        tunnels = TunnelController(this)
+        val app = application as VaierApplication
+        store = app.store
+        tunnels = app.tunnels
+        vaier = app.vaier
+        watchdog = app.watchdog
         readStore()
 
         setContent {
@@ -62,6 +73,57 @@ class MainActivity : ComponentActivity() {
                 onRefresh = ::refreshStatus,
             )
         }
+    }
+
+    /**
+     * The watchdog outlives this screen, so a removal it found while the app was away is already in the
+     * store by now — reading it back is what puts the person on the setup screen. What it cannot do is
+     * check a phone whose connection is off, because nothing is watching then; that ask happens here.
+     */
+    override fun onResume() {
+        super.onResume()
+        watchdog.onRemoved = { runOnUiThread(::speakOfRemoval) }
+        readStore()
+        speakOfRemoval()
+        askAboutThisPhone()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        watchdog.onRemoved = null
+    }
+
+    private fun askAboutThisPhone() {
+        val current = membership.value ?: return
+        lifecycleScope.launch {
+            val connected = withContext(Dispatchers.IO) {
+                runCatching { tunnels.status().up }.getOrDefault(true)
+            }
+            // A connection that is on is the watchdog's business, and it is the only one allowed to
+            // interrupt it. Nothing to take down here, so the ask goes straight out.
+            if (connected) return@launch watchdog.watch()
+
+            val steps = StandingWatch.afterOpening(vaier.standing(
+                current.address, store.publicKey.orEmpty(),
+                EnrolmentPayload.presharedKeyIn(current.configText),
+            ))
+            if (steps.forget) {
+                store.forget()
+                removed(steps.notice)
+            }
+        }
+    }
+
+    /** Vaier let this phone go: back to the start, with words that say so. */
+    private fun removed(reason: String?) {
+        status.value = TunnelStatus(up = false)
+        notice.value = reason
+        readStore()
+    }
+
+    /** Says what the watchdog found while nobody was here to be told. Silent when it found nothing. */
+    private fun speakOfRemoval() {
+        removed(watchdog.takeNotice() ?: return)
     }
 
     private fun readStore() {
@@ -190,10 +252,22 @@ class MainActivity : ComponentActivity() {
 
     private fun bringUp() = onTunnel("Vaier could not connect this phone.") {
         tunnels.setUp(tunnels.configOf(it.configText))
+        // Only now is there anything worth a notification later, and only now has the person shown
+        // they want this connection. A refusal changes nothing about being connected.
+        runOnUiThread(::askToNotify)
+        watchdog.watch()
     }
 
     private fun takeDown() = onTunnel("Vaier could not disconnect this phone.") {
+        watchdog.rest()
         tunnels.setDown(tunnels.configOf(it.configText))
+    }
+
+    private fun askToNotify() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+        if (granted == PackageManager.PERMISSION_GRANTED) return
+        notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
     private fun onTunnel(failure: String, block: (Membership) -> Unit) {
@@ -229,6 +303,7 @@ class MainActivity : ComponentActivity() {
         busy.value = true
 
         lifecycleScope.launch {
+            watchdog.rest()
             if (wasConnected) quietly { tunnels.setDown(tunnels.configOf(current.configText)) }
 
             val outcome = vaier.leave(
@@ -236,7 +311,10 @@ class MainActivity : ComponentActivity() {
             )
             val steps = Leaving.after(outcome, wasConnected)
 
-            if (steps.reconnect) quietly { tunnels.setUp(tunnels.configOf(current.configText)) }
+            if (steps.reconnect) {
+                quietly { tunnels.setUp(tunnels.configOf(current.configText)) }
+                watchdog.watch()
+            }
             if (steps.forget) {
                 store.forget()
                 status.value = TunnelStatus(up = false)

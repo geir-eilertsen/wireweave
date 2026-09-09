@@ -6,6 +6,7 @@ import net.vaier.application.ApproveEnrolmentUseCase;
 import net.vaier.application.ApproveEnrolmentUseCase.ApprovedEnrolmentUco;
 import net.vaier.application.ListEnrolmentRequestsUseCase;
 import net.vaier.application.LookUpEnrolmentTicketUseCase;
+import net.vaier.application.NotifyAdminsOfEnrolmentRequestUseCase;
 import net.vaier.application.RefuseEnrolmentUseCase;
 import net.vaier.application.RequestEnrolmentUseCase;
 import net.vaier.domain.EnrolmentRequest;
@@ -62,6 +63,7 @@ public class EnrolmentRequestRestController {
     private final ApproveEnrolmentUseCase approveEnrolmentUseCase;
     private final RefuseEnrolmentUseCase refuseEnrolmentUseCase;
     private final LookUpEnrolmentTicketUseCase lookUpEnrolmentTicketUseCase;
+    private final NotifyAdminsOfEnrolmentRequestUseCase notifyAdminsOfEnrolmentRequestUseCase;
     private final ForPublishingEvents forPublishingEvents;
     private final ForSubscribingToEvents forSubscribingToEvents;
 
@@ -75,6 +77,8 @@ public class EnrolmentRequestRestController {
             LogSafe.forLog(opened.name()), opened.code());
 
         forPublishingEvents.publish(OPERATOR_TOPIC, "requested", opened.code());
+        // The fleet page learns over the stream; whoever is not looking at it learns by mail.
+        notifyAdminsOfEnrolmentRequestUseCase.notifyAdminsOfEnrolmentRequest(opened);
         return ResponseEntity.ok(new RequestEnrolmentResponse(opened.code(), opened.ticket(),
             opened.secondsLeft(System.currentTimeMillis())));
     }

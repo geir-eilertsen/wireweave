@@ -2,11 +2,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Only ever used to say that Vaier removed this phone. Refusing it costs the person that one
+         message and nothing else: the connection never depended on it. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- GoBackend's VpnService and its BIND_VPN_SERVICE permission arrive by manifest merge from
          com.wireguard.android:tunnel, so this app declares neither. allowBackup is off on purpose:
          the tunnel's private key is born here and must never leave the device in a backup. -->
     <application
+        android:name=".VaierApplication"
         android:allowBackup="false"
         android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
