@@ -41,6 +41,12 @@ public interface GetAppSettingsUseCase {
          * Whether a survival kit passphrase has been chosen. Whether, never what — the value opens every
          * backup in the fleet and the browser has no use for it.
          */
-        boolean hasSurvivalKitPassphrase
+        boolean hasSurvivalKitPassphrase,
+        /**
+         * Whether an <b>Anthropic API key</b> is stored, and therefore whether <b>Ask</b> is offered at all.
+         * Whether, never what — the key opens the operator's own Claude account and the browser has no use
+         * for it (#360).
+         */
+        boolean hasAnthropicApiKey
     ) {}
 }

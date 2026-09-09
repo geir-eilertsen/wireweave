@@ -6,6 +6,7 @@ import net.vaier.application.GetAppVersionUseCase;
 import net.vaier.application.GetSelfUpdateStatusUseCase;
 import net.vaier.application.SetSurvivalKitPassphraseUseCase;
 import net.vaier.application.TestSmtpCredentialsUseCase;
+import net.vaier.application.UpdateAnthropicApiKeyUseCase;
 import net.vaier.application.UpdateBackupSettingsUseCase;
 import net.vaier.application.UpdateDiskMonitorSettingsUseCase;
 import net.vaier.application.UpdateSmtpSettingsUseCase;
@@ -32,6 +33,7 @@ class SettingsRestControllerTest {
     @Mock UpdateDiskMonitorSettingsUseCase updateDiskMonitorSettingsUseCase;
     @Mock UpdateBackupSettingsUseCase updateBackupSettingsUseCase;
     @Mock SetSurvivalKitPassphraseUseCase setSurvivalKitPassphraseUseCase;
+    @Mock UpdateAnthropicApiKeyUseCase updateAnthropicApiKeyUseCase;
     @Mock GetSelfUpdateStatusUseCase getSelfUpdateStatusUseCase;
 
     @InjectMocks
@@ -53,7 +55,7 @@ class SettingsRestControllerTest {
                 "smtp.example.com", 587, "user@example.com", "noreply@example.com",
                 "COVERED", "Covered", "OK",
                 "Wildcard DNS is working — *.example.com resolves to 52.29.74.114.",
-                85, false, 2, "Europe/Oslo", true);
+                85, false, 2, "Europe/Oslo", true, true);
         when(getAppSettingsUseCase.getSettings()).thenReturn(settings);
 
         ResponseEntity<AppSettingsResult> response = controller.getConfig();
@@ -207,5 +209,30 @@ class SettingsRestControllerTest {
             new SelfUpdateStatus("run-1", SelfUpdateStatus.Outcome.UPGRADED, "2026-08-04T06:00:00Z", "img"));
 
         assertThat(controller.getUpdate().getBody().trouble()).isFalse();
+    }
+
+    // --- the Anthropic API key (#360) ------------------------------------------------------------------
+
+    /**
+     * A {@code PUT} of the value alone, answered {@code 204}: the key is never read back, so
+     * {@code GET /settings/config} answers only {@code hasAnthropicApiKey}.
+     */
+    @Test
+    void setAnthropicApiKey_storesItAndReturns204() {
+        ResponseEntity<?> response = controller.setAnthropicApiKey(
+                new SettingsRestController.AnthropicApiKeyRequest("sk-ant-api03-the-key"));
+
+        assertThat(response.getStatusCode().value()).isEqualTo(204);
+        verify(updateAnthropicApiKeyUseCase).updateAnthropicApiKey("sk-ant-api03-the-key");
+    }
+
+    /** Blank clears it — that is how the operator turns Ask off again, not an error. */
+    @Test
+    void setAnthropicApiKey_blankClearsTheStoredKey() {
+        ResponseEntity<?> response = controller.setAnthropicApiKey(
+                new SettingsRestController.AnthropicApiKeyRequest("  "));
+
+        assertThat(response.getStatusCode().value()).isEqualTo(204);
+        verify(updateAnthropicApiKeyUseCase).updateAnthropicApiKey("  ");
     }
 }

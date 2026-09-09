@@ -420,4 +420,32 @@ class VaierConfigFileAdapterTest {
         assertThat(loaded.get().getSmtpUsername()).isNull();
         assertThat(loaded.get().getSmtpSender()).isNull();
     }
+
+    // --- the Anthropic API key (#360) ------------------------------------------------------------------
+
+    /**
+     * The fourth reversible secret in this file, encrypted at rest exactly like the SMTP password. It is
+     * the operator's own Claude API key and it never leaves the server except to the Claude API, so it must
+     * not sit in plaintext in a file a stray backup could carry off.
+     */
+    @Test
+    void save_thenLoad_roundTripsTheAnthropicApiKeyEncrypted() throws IOException {
+        adapter().save(VaierConfig.builder()
+            .domain("example.com")
+            .anthropicApiKey("sk-ant-api03-the-key")
+            .build());
+
+        assertThat(Files.readString(tempDir.resolve("vaier-config.yml")))
+            .doesNotContain("sk-ant-api03-the-key")
+            .contains("enc:v1:");
+        assertThat(adapter().load().orElseThrow().getAnthropicApiKey())
+            .isEqualTo("sk-ant-api03-the-key");
+    }
+
+    @Test
+    void load_anthropicApiKeyIsAbsentWhenNoneHasBeenStored() {
+        adapter().save(VaierConfig.builder().domain("example.com").build());
+
+        assertThat(adapter().load().orElseThrow().hasAnthropicApiKey()).isFalse();
+    }
 }

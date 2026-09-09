@@ -492,4 +492,50 @@ class SettingsServiceTest {
 
         verify(testEmailSender, never()).sendTestEmail(any(), anyInt(), any(), any(), any(), any());
     }
+
+    // --- the Anthropic API key (#360) ------------------------------------------------------------------
+
+    @Test
+    void updateAnthropicApiKey_persistsItAndCarriesTheRestOfTheConfigOver() {
+        when(configPersistence.load()).thenReturn(Optional.of(existingConfig()));
+
+        service.updateAnthropicApiKey("sk-ant-api03-the-key");
+
+        ArgumentCaptor<VaierConfig> captor = ArgumentCaptor.forClass(VaierConfig.class);
+        verify(configPersistence).save(captor.capture());
+        assertThat(captor.getValue().getAnthropicApiKey()).isEqualTo("sk-ant-api03-the-key");
+        assertThat(captor.getValue().getDomain()).isEqualTo("example.com");
+    }
+
+    /** Clearing the field is how the operator turns Ask off again — it is a save, not a refusal. */
+    @Test
+    void updateAnthropicApiKey_clearsTheStoredKeyWhenBlank() {
+        when(configPersistence.load()).thenReturn(Optional.of(
+            existingConfig().withAnthropicApiKey("sk-ant-api03-the-key")));
+
+        service.updateAnthropicApiKey("  ");
+
+        ArgumentCaptor<VaierConfig> captor = ArgumentCaptor.forClass(VaierConfig.class);
+        verify(configPersistence).save(captor.capture());
+        assertThat(captor.getValue().hasAnthropicApiKey()).isFalse();
+    }
+
+    /** Whether, never what: the key opens the operator's own Claude account and the browser has no use for it. */
+    @Test
+    void getSettings_saysWhetherAnAnthropicApiKeyIsStoredAndNeverTheKeyItself() {
+        when(configPersistence.load()).thenReturn(Optional.of(
+            existingConfig().withAnthropicApiKey("sk-ant-api03-the-key")));
+
+        AppSettingsResult result = service.getSettings();
+
+        assertThat(result.hasAnthropicApiKey()).isTrue();
+        assertThat(result.toString()).doesNotContain("sk-ant-api03-the-key");
+    }
+
+    @Test
+    void getSettings_hasNoAnthropicApiKeyBeforeOneIsStored() {
+        when(configPersistence.load()).thenReturn(Optional.of(existingConfig()));
+
+        assertThat(service.getSettings().hasAnthropicApiKey()).isFalse();
+    }
 }

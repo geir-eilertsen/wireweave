@@ -21,6 +21,7 @@
         file:    '<path d="M4 2h5l3 3v9H4z"/><path d="M9 2v3h3"/>',
         shell:   '<rect x="2" y="3" width="12" height="10" rx="1"/><path d="M4.6 6.2l2 1.8-2 1.8M8.4 10h3"/>',
         chev:    '<path d="M6 4l4 4-4 4"/>',
+        ask:     '<path d="M2.5 3.5h11v7H7.5l-3 2.5v-2.5h-2z"/><path d="M6.6 6.4c0-.8.6-1.4 1.4-1.4s1.4.6 1.4 1.3c0 1-1.4 1.1-1.4 2.1M8 9.9v.1"/>',
         infra:   '<rect x="1" y="2" width="14" height="10" rx="1"/><path d="M5 15h6M8 12v3"/>',
         archive: '<path d="M2 5h12v8H2z"/><path d="M1.5 3h13v2h-13zM6.5 8h3"/>',
         users:   '<circle cx="6" cy="6" r="2.4"/><path d="M1.8 13.5c.3-2.4 2.2-3.8 4.2-3.8s3.9 1.4 4.2 3.8"/><path d="M11 4.2a2.2 2.2 0 0 1 0 4.3M12 9.9c1.4.5 2.3 1.8 2.5 3.6"/>',
@@ -109,6 +110,7 @@
         { name: 'credentials', label: 'Credentials', icon: 'key', native: true, group: 'Your fleet' },
         { name: 'users',    label: 'Users',    icon: 'users',  page: 'users.html', group: 'Who gets in' },
         { name: 'security', label: 'Security', icon: 'shield', native: true,      group: 'Who gets in' },
+        { name: 'ask',      label: 'Ask',      icon: 'ask',    native: true,      group: 'Vaier' },
         { name: 'settings', label: 'Settings', icon: 'gear',   native: true,      group: 'Vaier' },
         { name: 'concepts', label: 'Concepts', icon: 'book',   page: 'concepts.html', group: 'Vaier' },
     ];
@@ -143,6 +145,8 @@
     // --- state ----------------------------------------------------------------------------------------
 
     const S = {
+        askAvailable: false,     // whether an Anthropic API key is stored — Ask exists only then
+        ask: { turns: [], busy: false, error: null, draft: '' },   // this visit's conversation: { role, text }, and the question being typed
         enrolmentRequests: [],   // phones waiting on a join code: { code, name, publicKey, expiresAt }
         path: ['fleet'],                 // the selected entry, as its path
         machines: [],                    // GET /machines
@@ -1165,6 +1169,7 @@
         const kind = kindOf(S.path);
         // Standing anywhere else ends the visit to the Map, so opening it again frames the fleet afresh.
         if (kind !== 'map') _mapFramed = false;
+        if (kind !== 'ask') _askOpen = false;
         // The same reflex, for the same reason: leaving Credentials ends the visit, so opening it again
         // re-reads where every credential stands. Those standings age on the server — the reconcile runs
         // every five minutes — and a stale strip is the one thing this entry must never show.
@@ -1178,6 +1183,7 @@
         if (kind === 'fleet') return renderFleet(pane);
         if (kind === 'map') return renderMap(pane);
         if (kind === 'settings') return renderSettings(pane);
+        if (kind === 'ask') return renderAsk(pane);
         if (kind === 'security') return renderSecurity(pane);
         if (kind === 'credentials') return renderCredentials(pane);
         if (kind === 'gbridge') return renderGlobalBridge(pane);
@@ -6866,6 +6872,148 @@
     // lives here: it is the fleet-wide "when", the one backup knob that is the operator's to set — everything
     // else about a backup is Vaier's.
 
+    // Whether Ask may be offered — the one bit the menu needs before Settings has been opened.
+    async function loadAskAvailability() {
+        try {
+            const res = await fetch('/ask/availability', { cache: 'no-store' });
+            S.askAvailable = res.ok ? !!(await res.json()).available : false;
+        } catch (e) {
+            S.askAvailable = false;
+        }
+    }
+
+    // ---- Ask: the fleet, answered in sentences ------------------------------------------------------------
+    // The conversation lives here for the visit; Vaier keeps none of it yet. Answers arrive as a stream
+    // read off one POST — no EventSource, no timer — and are painted as they come.
+    let _askOpen = false;   // whether the Ask pane is the one being visited — the box takes focus once, on entry
+
+    function renderAsk(pane) {
+        pane.appendChild(paneHead('Ask', false, 'The fleet, answered in sentences'));
+        const body = el('div', 'ex-pane-body ex-ask');
+        pane.appendChild(body);
+
+        if (!S.askAvailable) {
+            body.appendChild(note('Ask needs your Anthropic API key. Add one under Settings and Ask appears here.', false));
+            return;
+        }
+
+        const thread = el('div', 'ex-ask-thread');
+        if (!S.ask.turns.length) {
+            const intro = el('div', 'ex-ask-intro');
+            intro.textContent = 'Ask about the fleet in your own words. Vaier answers from what it knows right now, and only that.';
+            thread.appendChild(intro);
+            const tries = el('div', 'ex-ask-tries');
+            ['Which machines are not connected?', 'Is anyone waiting to join?', 'How did last night\'s backups go?']
+                .forEach((q) => {
+                    const b = el('button', 'ex-btn'); b.textContent = q;
+                    b.onclick = () => askVaier(q);
+                    tries.appendChild(b);
+                });
+            thread.appendChild(tries);
+        }
+        S.ask.turns.forEach((t) => thread.appendChild(askTurn(t)));
+        if (S.ask.error) thread.appendChild(note(S.ask.error, true));
+        body.appendChild(thread);
+
+        // The pane is rebuilt on every render, and the shell renders whenever a stream event lands. A fresh
+        // textarea would drop the words being typed mid-sentence, so the draft is state and is put back
+        // here — caret and all — and the box takes focus on entry, and after that only if it had it or
+        // nothing else does, so a repaint never pulls the cursor out of a dialog.
+        const entering = !_askOpen; _askOpen = true;
+        const was = document.activeElement;
+        const hadFocus = was && was.classList && was.classList.contains('ex-ask-box');
+        const caret = hadFocus ? [was.selectionStart, was.selectionEnd] : null;
+        const row = el('div', 'ex-ask-row');
+        const box = el('textarea', 'ex-input ex-ask-box');
+        box.rows = 2; box.placeholder = 'Ask Vaier…'; box.spellcheck = true;
+        box.disabled = S.ask.busy;
+        box.value = S.ask.draft;
+        box.oninput = () => { S.ask.draft = box.value; };
+        const send = el('button', 'ex-btn is-accent'); send.textContent = S.ask.busy ? 'Answering…' : 'Ask';
+        send.disabled = S.ask.busy;
+        const go = () => { const q = box.value.trim(); if (q) { box.value = ''; S.ask.draft = ''; askVaier(q); } };
+        send.onclick = go;
+        box.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); go(); } };
+        row.append(box, send);
+        body.appendChild(row);
+        if (!S.ask.busy && (entering || hadFocus || !was || was === document.body)) {
+            box.focus();
+            if (caret) box.setSelectionRange(caret[0], caret[1]);
+        }
+        pane.scrollTop = pane.scrollHeight;
+    }
+
+    function askTurn(t) {
+        const turn = el('div', 'ex-ask-turn ' + (t.role === 'OPERATOR' ? 'is-you' : 'is-vaier'));
+        const who = el('div', 'ex-ask-who'); who.textContent = t.role === 'OPERATOR' ? 'You' : 'Vaier';
+        const text = el('div', 'ex-ask-text'); text.textContent = t.text || (t.role === 'VAIER' ? '…' : '');
+        turn.append(who, text);
+        return turn;
+    }
+
+    // One question: append it, open a Vaier turn, then fill that turn as the stream arrives. The history
+    // sent is everything before this question, so a follow-up ("and Colina?") still knows what "and" means.
+    async function askVaier(question) {
+        if (S.ask.busy) return;
+        const history = S.ask.turns.map((t) => ({ role: t.role, text: t.text }));
+        S.ask.turns.push({ role: 'OPERATOR', text: question });
+        const answer = { role: 'VAIER', text: '' };
+        S.ask.turns.push(answer);
+        S.ask.busy = true; S.ask.error = null;
+        render();
+        try {
+            const res = await fetch('/ask', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ question: question, history: history }),
+            });
+            if (!res.ok) {
+                const e = await res.json().catch(() => ({}));
+                throw new Error(e.message || 'Vaier could not answer.');
+            }
+            await readAnswerStream(res.body, (name, data) => {
+                if (name === 'text') { answer.text += data; paintLastAnswer(answer.text); }
+                else if (name === 'error') throw new Error(data || 'Vaier could not answer.');
+            });
+        } catch (e) {
+            if (!answer.text) S.ask.turns.pop();
+            S.ask.error = e.message || 'Vaier could not answer.';
+        }
+        S.ask.busy = false;
+        render();
+    }
+
+    // Repaint only the answer being written, so the page does not rebuild on every few words.
+    function paintLastAnswer(text) {
+        const turns = document.querySelectorAll('.ex-ask-turn.is-vaier .ex-ask-text');
+        const last = turns[turns.length - 1];
+        if (last) { last.textContent = text; const pane = $('exPane'); if (pane) pane.scrollTop = pane.scrollHeight; }
+    }
+
+    // A text/event-stream body read by hand: events are separated by a blank line, a multi-line payload
+    // arrives as several data: lines, and a chunk boundary can fall anywhere — so buffer until a blank line.
+    async function readAnswerStream(stream, onEvent) {
+        const reader = stream.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            let cut;
+            while ((cut = buffer.indexOf('\n\n')) >= 0) {
+                const raw = buffer.slice(0, cut); buffer = buffer.slice(cut + 2);
+                let name = 'message'; const data = [];
+                raw.split('\n').forEach((line) => {
+                    if (line.startsWith('event:')) name = line.slice(6).trim();
+                    // Spring writes `data:` with nothing after the colon, so a chunk that begins with a space
+                    // (" are") keeps it. Stripping one, as a browser's EventSource would, glued words together.
+                    else if (line.startsWith('data:')) data.push(line.slice(5));
+                });
+                onEvent(name, data.join('\n'));
+            }
+        }
+    }
+
     async function loadSettings() {
         if (S.settings.state === 'loading') return;
         S.settings = { ...S.settings, state: 'loading' };
@@ -6906,6 +7054,13 @@
 
     // Save one section: PUT/POST the body, then write the outcome into that section's own note. It never
     // re-reads the whole config — a saved section already shows its new value.
+    // A key saved or removed changes what the menu offers, so both are re-read before the next paint.
+    async function afterKeyChange() {
+        S.ask = { turns: [], busy: false, error: null };
+        await Promise.all([loadAskAvailability(), loadSettings()]);
+        renderVMenu();
+    }
+
     async function saveSetting(url, method, body, noteEl, okText) {
         noteEl.className = 'ex-set-note';
         noteEl.textContent = 'Saving…';
@@ -7177,6 +7332,29 @@
                 smtpNote, 'Test email sent to ' + test.value.trim() + '.');
         };
         smtp.querySelector('.ex-set-actions').insertBefore(testBtn, smtp.querySelector('.ex-set-note'));
+
+        // --- Ask: your own Anthropic API key, and nothing else about it ---
+        const ask = sectionForm('Ask');
+        const keyState = el('div', 'ex-hint');
+        keyState.textContent = c.hasAnthropicApiKey
+            ? 'A key is stored. Ask is in the menu.'
+            : 'No key stored. Ask appears in the menu once there is one.';
+        // Never prefilled: the key is written once and never read back to a browser.
+        const key = input('', c.hasAnthropicApiKey ? 'Paste a new key to replace the stored one' : 'sk-ant-…', 'password');
+        ask.append(keyState, field('Anthropic API key',
+            'Your own key for the Claude API. Vaier stores it encrypted and never shows it again; it leaves the server only to talk to Claude.',
+            key));
+        const askNote = saveRow(ask, 'Save key', (n) => {
+            if (!key.value.trim()) { n.className = 'ex-set-note is-err'; n.textContent = 'Paste a key first.'; return; }
+            saveSetting('/settings/anthropic-api-key', 'PUT', { apiKey: key.value.trim() }, n, 'Key saved. Ask is in the menu.')
+                .then((ok) => { key.value = ''; if (ok) afterKeyChange(); });
+        });
+        if (c.hasAnthropicApiKey) {
+            const forget = el('button', 'ex-btn'); forget.textContent = 'Remove key';
+            forget.onclick = () => saveSetting('/settings/anthropic-api-key', 'PUT', { apiKey: '' }, askNote, 'Key removed. Ask has left the menu.')
+                .then((ok) => { if (ok) afterKeyChange(); });
+            ask.querySelector('.ex-set-actions').insertBefore(forget, askNote);
+        }
 
         // --- Disk monitoring ---
         const disk = sectionForm('Disk monitoring');
@@ -8716,7 +8894,7 @@
         })(['fleet'], ['fleet']);
         // Vaier's own entries are not of the fleet, so the walk above cannot reach them — and they are now
         // behind a menu rather than standing in the fleet, which makes finding them here matter more, not less.
-        GLOBALS.forEach((g) => out.push({ path: [g.name], kind: kindOf([g.name]), label: '/' + g.label }));
+        GLOBALS.filter(offered).forEach((g) => out.push({ path: [g.name], kind: kindOf([g.name]), label: '/' + g.label }));
         return out;
     }
 
@@ -9346,6 +9524,7 @@
         // It heads its own group, with the fleet-wide acts under it.
         let group = null;
         GLOBALS.forEach((g) => {
+            if (!offered(g)) return;
             if (g.group !== group) {
                 group = g.group;
                 menu.appendChild(vMenuGroup(group));
@@ -9355,6 +9534,12 @@
             }
             menu.appendChild(vMenuItem(g.icon, g.label, [g.name]));
         });
+    }
+
+    // Ask is in the menu only while an Anthropic API key is stored: without one there is nothing to ask,
+    // and an entry that opens onto "go to Settings first" is a door painted on a wall.
+    function offered(g) {
+        return g.name !== 'ask' || S.askAvailable;
     }
 
     function vMenuGroup(text) {
@@ -9422,7 +9607,10 @@
         // The services are awaited because a machine cannot be honest without them: a `services` entry exists
         // only on a machine that actually publishes something, and an entry that grew a moment later would
         // have been lying for that moment.
-        await Promise.all([loadFleet(), loadServices(), loadBackup(), loadMyDevice(), loadEnrolmentRequests()]);
+        await Promise.all([loadFleet(), loadServices(), loadBackup(), loadMyDevice(), loadEnrolmentRequests(),
+            loadAskAvailability()]);
+        // The menu was drawn before Vaier had said whether Ask may be offered; now it has, draw it again.
+        renderVMenu();
         // A link into a folder needs the chain above it read before remotePath can resolve where the machine's
         // tree begins. Standing anywhere else this is a no-op.
         if (S.path.length > 3) readPathChain(S.path[1]);

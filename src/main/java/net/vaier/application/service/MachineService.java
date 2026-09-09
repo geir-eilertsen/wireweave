@@ -10,10 +10,12 @@ import net.vaier.application.GetMachineDiskUsageUseCase;
 import net.vaier.application.GetMachineNetworksUseCase;
 import net.vaier.application.GetMachinesUseCase;
 import net.vaier.application.GetVaierServerUseCase;
+import net.vaier.application.RunReadOnlyCommandUseCase;
 import net.vaier.application.SetDiskWatchUseCase;
 import net.vaier.application.SetMachineSshAccessUseCase;
 import net.vaier.config.ConfigResolver;
 import net.vaier.domain.ClaudeSignInStatus;
+import net.vaier.domain.CommandOutcome;
 import net.vaier.domain.CommandResult;
 import net.vaier.domain.DiskUnreadableException;
 import net.vaier.domain.DiskWatch;
@@ -23,6 +25,7 @@ import net.vaier.domain.LanServer;
 import net.vaier.domain.Machine;
 import net.vaier.domain.MachineDiskStanding;
 import net.vaier.domain.MachineId;
+import net.vaier.domain.ReadOnlyCommand;
 import net.vaier.domain.MachineNetworks;
 import net.vaier.domain.NotFoundException;
 import net.vaier.domain.RemoteDiskUsage;
@@ -62,7 +65,8 @@ import java.util.stream.Collectors;
 public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase,
     SetMachineSshAccessUseCase, GetMachineDiskUsageUseCase, GetMachineDiskStandingsUseCase,
     GetClaudeSignInStandingsUseCase, GetDiskWatchesUseCase, SetDiskWatchUseCase,
-    DetectMachineNetworksUseCase, GetMachineNetworksUseCase, ForgetMachineNetworksUseCase {
+    DetectMachineNetworksUseCase, GetMachineNetworksUseCase, ForgetMachineNetworksUseCase,
+    RunReadOnlyCommandUseCase {
 
     private final ForGettingPeerConfigurations forGettingPeerConfigurations;
     private final ForGettingVpnClients forGettingVpnClients;
@@ -296,6 +300,17 @@ public class MachineService implements GetMachinesUseCase, GetVaierServerUseCase
      * cross-domain question, and the port that used to answer it existed only because callers held a name
      * where they should have held an identity.
      */
+    /**
+     * One <b>Read-only command</b> for Ask (#360). Orchestration only: the domain judges the command — and
+     * does so first, so a refused command never so much as resolves a target — then runs it through the
+     * one exec port every other remote command goes through, pinning on first use as they all do.
+     */
+    @Override
+    public CommandOutcome runReadOnly(MachineId machineId, String command) {
+        ReadOnlyCommand read = ReadOnlyCommand.of(command);
+        return read.runOn(forResolvingSshTargets.resolve(machineId), forRunningSshCommands, forTrackingHostKeys);
+    }
+
     private String labelFor(MachineId machineId) {
         return getAllMachines().stream()
             .filter(m -> machineId.equals(m.id()))

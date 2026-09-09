@@ -6,6 +6,7 @@ import net.vaier.application.GetAppSettingsUseCase;
 import net.vaier.application.GetAppVersionUseCase;
 import net.vaier.application.SetSurvivalKitPassphraseUseCase;
 import net.vaier.application.TestSmtpCredentialsUseCase;
+import net.vaier.application.UpdateAnthropicApiKeyUseCase;
 import net.vaier.application.UpdateBackupSettingsUseCase;
 import net.vaier.application.UpdateDiskMonitorSettingsUseCase;
 import net.vaier.application.UpdateSmtpSettingsUseCase;
@@ -36,6 +37,7 @@ public class SettingsService implements
     UpdateDiskMonitorSettingsUseCase,
     UpdateBackupSettingsUseCase,
     SetSurvivalKitPassphraseUseCase,
+    UpdateAnthropicApiKeyUseCase,
     TestSmtpCredentialsUseCase {
 
     private final ForPersistingAppConfiguration configPersistence;
@@ -95,7 +97,7 @@ public class SettingsService implements
             .orElse(new AppSettingsResult(null, null, null, null, null, null,
                 wildcardDnsStatus(), wildcardDnsLabel(), wildcardDnsSeverity(), wildcardDnsMessage(),
                 VaierConfig.DEFAULT_DISK_MONITOR_THRESHOLD_PERCENT, configResolver.isSocialAuthAvailable(),
-                VaierConfig.DEFAULT_BACKUP_SCHEDULE_HOUR, backupScheduleZone(), false));
+                VaierConfig.DEFAULT_BACKUP_SCHEDULE_HOUR, backupScheduleZone(), false, false));
     }
 
     @Override
@@ -120,6 +122,15 @@ public class SettingsService implements
         configPersistence.save(current.withSurvivalKitPassphrase(passphrase));
         // Never logged, not even masked, and never its length: this one opens every backup in the fleet.
         log.info("Survival kit passphrase set");
+    }
+
+    @Override
+    public void updateAnthropicApiKey(String apiKey) {
+        VaierConfig current = configPersistence.load().orElse(VaierConfig.builder().build());
+        VaierConfig updated = current.withAnthropicApiKey(apiKey);
+        configPersistence.save(updated);
+        // Never the key, not even masked, and never its length: it bills the operator's own Claude account.
+        log.info("Anthropic API key {}", updated.hasAnthropicApiKey() ? "stored" : "cleared");
     }
 
     /**
@@ -192,7 +203,8 @@ public class SettingsService implements
             configResolver.isSocialAuthAvailable(),
             config.effectiveBackupScheduleHour(),
             backupScheduleZone(),
-            config.hasSurvivalKitPassphrase()
+            config.hasSurvivalKitPassphrase(),
+            config.hasAnthropicApiKey()
         );
     }
 

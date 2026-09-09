@@ -219,4 +219,35 @@ class VaierConfigTest {
         assertThat(VaierConfig.builder().vaierServerMachineId("  ").build()
             .vaierServerIdentity()).isEmpty();
     }
+
+    // --- the Anthropic API key (#360) ------------------------------------------------------------------
+
+    /**
+     * The one thing that makes <b>Ask</b> available. Stored like the SMTP password, and asked about the way
+     * the kit passphrase is: whether, never what.
+     */
+    @Test
+    void withAnthropicApiKey_storesTheKey() {
+        VaierConfig config = VaierConfig.builder().domain("example.com").build()
+            .withAnthropicApiKey("sk-ant-secret");
+
+        assertThat(config.getAnthropicApiKey()).isEqualTo("sk-ant-secret");
+        assertThat(config.hasAnthropicApiKey()).isTrue();
+        assertThat(config.getDomain()).isEqualTo("example.com");
+    }
+
+    /** A blank key is no key: the operator clearing the field is how Ask is turned off again. */
+    @Test
+    void withAnthropicApiKey_clearsTheKeyWhenBlank() {
+        VaierConfig stored = VaierConfig.builder().anthropicApiKey("sk-ant-secret").build();
+
+        assertThat(stored.withAnthropicApiKey("   ").getAnthropicApiKey()).isNull();
+        assertThat(stored.withAnthropicApiKey(null).hasAnthropicApiKey()).isFalse();
+    }
+
+    @Test
+    void hasAnthropicApiKey_isFalseWhenNoneIsStored() {
+        assertThat(VaierConfig.builder().build().hasAnthropicApiKey()).isFalse();
+        assertThat(VaierConfig.builder().anthropicApiKey("  ").build().hasAnthropicApiKey()).isFalse();
+    }
 }

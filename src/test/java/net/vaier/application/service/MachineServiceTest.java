@@ -3,6 +3,7 @@ package net.vaier.application.service;
 import net.vaier.application.GetMachineDiskUsageUseCase.MachineFilesystemUco;
 import net.vaier.config.ConfigResolver;
 import net.vaier.domain.AuthMethod;
+import net.vaier.domain.CommandOutcome;
 import net.vaier.domain.CommandResult;
 import net.vaier.domain.DiskUnreadableException;
 import net.vaier.domain.DiskWatch;
@@ -60,7 +61,9 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -762,5 +765,34 @@ class MachineServiceTest {
         when(forHoldingClaudeSignInStandings.getAll()).thenReturn(List.of());
 
         assertThat(service.getClaudeSignInStandings()).isEmpty();
+    }
+
+    // --- a read-only command, for Ask (#360) ---------------------------------------------------------
+
+    /** Orchestration only: resolve the machine, run through the one exec port, hand back the outcome. */
+    @Test
+    void runReadOnly_resolvesTheMachineAndRunsThroughTheSshPort() {
+        MachineId id = MachineId.of("c0355605-e5a0-419a-8943-fdc5ec209958");
+        SshTarget target = mock(SshTarget.class);
+        when(forResolvingSshTargets.resolve(id)).thenReturn(target);
+        when(forRunningSshCommands.run(target, "apt list --upgradable"))
+            .thenReturn(new CommandResult(0, "curl/noble-updates 8.5.0 amd64 [upgradable from: 8.4.0]", "", false, "SHA256:x"));
+
+        CommandOutcome outcome = service.runReadOnly(id, "apt list --upgradable");
+
+        assertThat(outcome.exitCode()).isZero();
+        assertThat(outcome.output()).contains("curl/noble-updates");
+        verify(target).pinOnFirstUse("SHA256:x", forTrackingHostKeys);
+    }
+
+    /** The domain refuses before anything is resolved or connected: a refused command touches no machine. */
+    @Test
+    void runReadOnly_refusesAChangingCommandBeforeAnySshHappens() {
+        MachineId id = MachineId.of("c0355605-e5a0-419a-8943-fdc5ec209958");
+
+        assertThatThrownBy(() -> service.runReadOnly(id, "apt install vim"))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("Ask can look, never change");
+        verifyNoInteractions(forResolvingSshTargets, forRunningSshCommands);
     }
 }

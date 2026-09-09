@@ -190,7 +190,7 @@ class ExplorerShellTest {
                                        "/docker-services", "/published-services", "/access/services",
                                        "/transfers", "/backup-servers", "/backup-repositories", "/backup-jobs",
                                        "/settings", "/lan-scan", "/survival-kit", "/security",
-                                       "/fleet-credentials", "/vpn/enrolments");
+                                       "/fleet-credentials", "/vpn/enrolments", "/ask");
         String js = read("explorer-shell.js");
         Matcher m = Pattern.compile("fetch\\([`']([^`']+)[`']").matcher(js);
         int found = 0;
@@ -4027,5 +4027,85 @@ class ExplorerShellTest {
             .containsPattern("canReissue = [^;]*!deviceHeld");
         assertThat(body).as("and the fold says why, and what to do instead")
             .contains("enrol it again from the app");
+    }
+
+    // --- Ask: the fleet, answered in sentences (#360 slice 1) --------------------------------------------
+
+    @Test
+    void ask_isOfferedOnlyWhileAnAnthropicApiKeyIsStored() throws IOException {
+        // Without a key there is nothing to ask, and an entry that opens onto "go to Settings first" is a
+        // door painted on a wall. The menu and the palette both ask the same one question.
+        String js = read("explorer-shell.js");
+
+        int from = js.indexOf("function offered(g)");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).contains("g.name !== 'ask' || S.askAvailable");
+        assertThat(js).contains("if (!offered(g)) return;");
+        assertThat(js).contains("GLOBALS.filter(offered)");
+        assertThat(js).contains("fetch('/ask/availability'");
+        // The menu is drawn on the first frame, before that read has answered — so it is drawn once more
+        // after it has. The live bug: a stored key and no Ask in the menu until the key was saved again.
+        int init = js.indexOf("async function init(");
+        String initBody = js.substring(init, js.indexOf("\n    }", init));
+        int known = initBody.indexOf("loadAskAvailability()]);");
+        assertThat(known).isPositive();
+        assertThat(initBody.indexOf("renderVMenu();", known)).as("the menu is redrawn once Ask's availability is known").isPositive();
+    }
+
+    @Test
+    void ask_streamsItsAnswerOffOnePost_andNeverPolls() throws IOException {
+        // One POST carries the question and the visit's history; the answer is read off that response as it
+        // streams. No EventSource for Ask, no timer, and the follow-up knows what "and" means.
+        String js = read("explorer-shell.js");
+
+        int from = js.indexOf("async function askVaier(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).contains("fetch('/ask', {").contains("method: 'POST'").contains("history: history");
+        assertThat(body).contains("readAnswerStream(res.body");
+        assertThat(js).doesNotContain("EventSource('/ask");
+        int reader = js.indexOf("function readAnswerStream(");
+        assertThat(reader).isPositive();
+        String readerBody = js.substring(reader, js.indexOf("\n    }", reader));
+        // A chunk that begins with a space must keep it: the server writes nothing after `data:`, and the
+        // first live answer read "Theseareshowing" because one leading space per chunk was stripped.
+        assertThat(readerBody).contains("data.push(line.slice(5));").doesNotContain("replace(/^ /");
+    }
+
+    @Test
+    void theAnthropicApiKey_isWrittenOnce_andNeverReadBackToTheBrowser() throws IOException {
+        // The settings pane only ever learns whether a key exists. The field starts empty, is a password
+        // field, and the shell never names the raw key — only the fact of it.
+        String js = read("explorer-shell.js");
+
+        assertThat(js).contains("'/settings/anthropic-api-key'");
+        assertThat(js).contains("c.hasAnthropicApiKey");
+        assertThat(js).doesNotContain("c.anthropicApiKey");
+        int from = js.indexOf("const ask = sectionForm('Ask');");
+        assertThat(from).isPositive();
+        String body = js.substring(from, from + 1200);
+        assertThat(body).contains("'password')");
+        assertThat(body).contains("input(''");
+    }
+
+    @Test
+    void aHalfTypedQuestion_survivesTheRepaintsTheShellMakesOnItsOwn() throws IOException {
+        // The pane is rebuilt on every render, and the shell renders whenever a stream event lands — a disk
+        // reading, a container flip. The live bug: the operator typed into Ask and the words vanished mid-
+        // sentence, because a fresh, empty textarea replaced the one they were writing in. So the draft is
+        // state, put back into the box on every paint, along with the caret — and the box takes focus only
+        // when it already had it or nothing else does, so a repaint never pulls the cursor out of a dialog.
+        String js = read("explorer-shell.js");
+
+        assertThat(js).contains("ask: { turns: [], busy: false, error: null, draft: '' }");
+        int from = js.indexOf("function renderAsk(");
+        assertThat(from).isPositive();
+        String body = js.substring(from, js.indexOf("\n    }", from));
+        assertThat(body).contains("box.value = S.ask.draft;");
+        assertThat(body).contains("box.oninput = () => { S.ask.draft = box.value; };");
+        assertThat(body).as("the caret goes back where it was").contains("box.setSelectionRange(");
+        assertThat(body).as("focus is not taken from wherever the operator was").doesNotContain("if (!S.ask.busy) box.focus();");
+        assertThat(body).contains("S.ask.draft = '';");
     }
 }

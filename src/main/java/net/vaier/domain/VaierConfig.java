@@ -61,6 +61,13 @@ public class VaierConfig {
     private String survivalKitFingerprint;
 
     /**
+     * The operator's own <b>Anthropic API key</b> (#360), or null when none is stored. Encrypted at rest
+     * beside the SMTP password, and never read back to the browser: {@link #hasAnthropicApiKey()} is the
+     * only question anything outside this file is allowed to ask about it.
+     */
+    private String anthropicApiKey;
+
+    /**
      * The Vaier server's own identity, or empty when it has not been assigned one yet or the stored value
      * is unusable.
      *
@@ -106,6 +113,21 @@ public class VaierConfig {
         return toBuilder()
             .survivalKitFingerprint(fingerprint)
             .build();
+    }
+
+    /**
+     * A copy with the <b>Anthropic API key</b> replaced; every other field carries over unchanged. A blank
+     * key is stored as none — clearing the field is how the operator turns <b>Ask</b> off again.
+     */
+    public VaierConfig withAnthropicApiKey(String apiKey) {
+        return toBuilder()
+            .anthropicApiKey(apiKey == null || apiKey.isBlank() ? null : apiKey)
+            .build();
+    }
+
+    /** Whether an <b>Anthropic API key</b> is stored — the one thing that makes <b>Ask</b> available. */
+    public boolean hasAnthropicApiKey() {
+        return anthropicApiKey != null && !anthropicApiKey.isBlank();
     }
 
     /** Whether a kit passphrase has been chosen — asked before a rollout, and answered for the browser. */

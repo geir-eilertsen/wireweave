@@ -1,6 +1,7 @@
 package net.vaier.rest;
 
 import net.vaier.domain.NotFoundException;
+import net.vaier.domain.AskUnavailableException;
 import net.vaier.domain.ConflictException;
 import net.vaier.domain.HostKeyMismatchException;
 import net.vaier.domain.NoHostCredentialException;
@@ -302,5 +303,22 @@ class GlobalExceptionHandlerTest {
         ApiError body = (ApiError) response.getBody();
         assertThat(body.code()).isEqualTo("METHOD_NOT_ALLOWED");
         assertThat(body.message()).isEqualTo("Method Not Allowed");
+    }
+
+    /**
+     * Ask reached for while no <b>Anthropic API key</b> is stored (#360). Nothing is broken — the one thing
+     * Ask needs simply is not there — so it is a {@code 409} carrying the domain's own sentence, which names
+     * the fix. A generic {@code 500} would read as "Vaier is broken" and send the operator hunting a fault
+     * that does not exist.
+     */
+    @Test
+    void askUnavailableException_mappedTo409_withTheSentenceThatNamesTheFix() {
+        ResponseEntity<ApiError> response = new GlobalExceptionHandler().handleAskUnavailable(
+                new AskUnavailableException("Ask needs an Anthropic API key. Add one in Settings."));
+
+        assertThat(response.getStatusCode().value()).isEqualTo(409);
+        assertThat(response.getBody().code()).isEqualTo("ASK_UNAVAILABLE");
+        assertThat(response.getBody().message())
+                .isEqualTo("Ask needs an Anthropic API key. Add one in Settings.");
     }
 }

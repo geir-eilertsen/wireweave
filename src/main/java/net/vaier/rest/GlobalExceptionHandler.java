@@ -13,6 +13,7 @@ import net.vaier.domain.NoHostCredentialException;
 import net.vaier.domain.NoSftpSubsystemException;
 import net.vaier.domain.NoSshServerException;
 import net.vaier.domain.ArchivesUnreadableException;
+import net.vaier.domain.AskUnavailableException;
 import net.vaier.domain.NotFoundException;
 import net.vaier.domain.PathOutsideSftpRootException;
 import net.vaier.domain.PermissionDeniedException;
@@ -109,6 +110,17 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public ResponseEntity<ApiError> handleUnidentifiedDevice(UnidentifiedDeviceException e) {
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
             .body(ApiError.of("UNIDENTIFIED_DEVICE", e.getMessage()));
+    }
+
+    /**
+     * <b>Ask</b> was reached for while no <b>Anthropic API key</b> is stored (#360). A state conflict, like
+     * every other {@code 409} here: nothing is broken, the one thing Ask needs is simply not there yet. It
+     * carries the domain's own sentence, which names the fix, and a code of its own so the pane can offer
+     * the Settings field rather than printing prose.
+     */
+    @ExceptionHandler(AskUnavailableException.class)
+    public ResponseEntity<ApiError> handleAskUnavailable(AskUnavailableException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiError.of("ASK_UNAVAILABLE", e.getMessage()));
     }
 
     @ExceptionHandler(ConflictException.class)

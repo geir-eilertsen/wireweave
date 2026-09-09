@@ -219,6 +219,19 @@ public abstract class VaierWebMvcIntegrationBase {
     @MockBean
     protected SetSurvivalKitPassphraseUseCase setSurvivalKitPassphraseUseCase;
 
+    @MockBean
+    protected UpdateAnthropicApiKeyUseCase updateAnthropicApiKeyUseCase;
+
+    // --- Ask (#360) ---
+    @MockBean
+    protected AskUseCase askUseCase;
+
+    @MockBean
+    protected IsAskAvailableUseCase isAskAvailableUseCase;
+
+    @MockBean
+    protected RunReadOnlyCommandUseCase runReadOnlyCommandUseCase;
+
     // Implemented by rest/SurvivalKitWriter, which composes machines, the backup stores and SSH — mocked
     // here like the other rest-layer orchestrators (@WebMvcTest loads controllers only).
     @MockBean

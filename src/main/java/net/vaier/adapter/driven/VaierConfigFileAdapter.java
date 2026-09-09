@@ -62,6 +62,7 @@ public class VaierConfigFileAdapter implements ForPersistingAppConfiguration, Fo
                 .smtpPassword(cipher.decrypt((String) data.get("smtpPassword")))
                 .survivalKitPassphrase(cipher.decrypt((String) data.get("survivalKitPassphrase")))
                 .survivalKitFingerprint((String) data.get("survivalKitFingerprint"))
+                .anthropicApiKey(cipher.decrypt((String) data.get("anthropicApiKey")))
                 .diskMonitorThresholdPercent((Integer) data.get("diskMonitorThresholdPercent"))
                 .backupScheduleHour((Integer) data.get("backupScheduleHour"))
                 .vaierServerSshAccess((Boolean) data.get("vaierServerSshAccess"))
@@ -99,6 +100,8 @@ public class VaierConfigFileAdapter implements ForPersistingAppConfiguration, Fo
         // What the kits on the fleet say, so a sweep can tell whether they still say it. Not a secret: a
         // digest of a page whose every line is already in this file, and it must be readable to be compared.
         data.put("survivalKitFingerprint", config.getSurvivalKitFingerprint());
+        // The Anthropic API key — the fourth reversible secret here, encrypted like the rest (#360).
+        data.put("anthropicApiKey", cipher.encrypt(config.getAnthropicApiKey()));
         data.put("diskMonitorThresholdPercent", config.getDiskMonitorThresholdPercent());
         data.put("backupScheduleHour", config.getBackupScheduleHour());
         // Vaier-server SSH-access override (#311); only written when the operator has pinned one.

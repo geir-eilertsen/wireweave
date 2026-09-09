@@ -6,6 +6,7 @@ import net.vaier.application.GetAppSettingsUseCase.AppSettingsResult;
 import net.vaier.application.GetAppVersionUseCase;
 import net.vaier.application.SetSurvivalKitPassphraseUseCase;
 import net.vaier.application.TestSmtpCredentialsUseCase;
+import net.vaier.application.UpdateAnthropicApiKeyUseCase;
 import net.vaier.application.UpdateBackupSettingsUseCase;
 import net.vaier.application.UpdateDiskMonitorSettingsUseCase;
 import net.vaier.application.UpdateSmtpSettingsUseCase;
@@ -32,6 +33,7 @@ public class SettingsRestController {
     private final SetSurvivalKitPassphraseUseCase setSurvivalKitPassphraseUseCase;
     private final GetSelfUpdateStatusUseCase getSelfUpdateStatusUseCase;
     private final UpdateVaierUseCase updateVaierUseCase;
+    private final UpdateAnthropicApiKeyUseCase updateAnthropicApiKeyUseCase;
 
     public SettingsRestController(GetAppSettingsUseCase getAppSettingsUseCase,
                                   GetAppVersionUseCase getAppVersionUseCase,
@@ -41,7 +43,8 @@ public class SettingsRestController {
                                   UpdateBackupSettingsUseCase updateBackupSettingsUseCase,
                                   SetSurvivalKitPassphraseUseCase setSurvivalKitPassphraseUseCase,
                                   GetSelfUpdateStatusUseCase getSelfUpdateStatusUseCase,
-                                  UpdateVaierUseCase updateVaierUseCase) {
+                                  UpdateVaierUseCase updateVaierUseCase,
+                                  UpdateAnthropicApiKeyUseCase updateAnthropicApiKeyUseCase) {
         this.getAppSettingsUseCase = getAppSettingsUseCase;
         this.getAppVersionUseCase = getAppVersionUseCase;
         this.updateSmtpSettingsUseCase = updateSmtpSettingsUseCase;
@@ -51,6 +54,7 @@ public class SettingsRestController {
         this.setSurvivalKitPassphraseUseCase = setSurvivalKitPassphraseUseCase;
         this.getSelfUpdateStatusUseCase = getSelfUpdateStatusUseCase;
         this.updateVaierUseCase = updateVaierUseCase;
+        this.updateAnthropicApiKeyUseCase = updateAnthropicApiKeyUseCase;
     }
 
     @GetMapping("/config")
@@ -158,6 +162,18 @@ public class SettingsRestController {
         }
     }
 
+    /**
+     * Store the <b>Anthropic API key</b>, or clear it by sending a blank one (#360). A {@code PUT} of the
+     * value alone, answered {@code 204}: nothing is ever read back, so {@code GET /settings/config} carries
+     * only {@code hasAnthropicApiKey}. Blank is not an error — clearing the field is how the operator turns
+     * <b>Ask</b> off again.
+     */
+    @PutMapping("/anthropic-api-key")
+    public ResponseEntity<Void> setAnthropicApiKey(@RequestBody AnthropicApiKeyRequest request) {
+        updateAnthropicApiKeyUseCase.updateAnthropicApiKey(request.apiKey());
+        return ResponseEntity.noContent().build();
+    }
+
     @PostMapping("/smtp/test")
     public ResponseEntity<?> testSmtp(@RequestBody TestSmtpRequest request) {
         try {
@@ -178,4 +194,5 @@ public class SettingsRestController {
     public record UpdateDiskMonitorRequest(int diskMonitorThresholdPercent) {}
     public record UpdateBackupScheduleRequest(int backupScheduleHour) {}
     public record SurvivalKitPassphraseRequest(String passphrase) {}
+    public record AnthropicApiKeyRequest(String apiKey) {}
 }
