@@ -12,6 +12,7 @@ import net.vaier.application.GetPeerConfigUseCase;
 import net.vaier.application.GetServerLocationUseCase;
 import net.vaier.application.GetVpnPeersUseCase;
 import net.vaier.application.GetVpnPeersUseCase.VpnPeerView;
+import net.vaier.application.LeaveFleetUseCase;
 import net.vaier.application.ReissuePeerConfigUseCase;
 import net.vaier.application.RenamePeerUseCase;
 import net.vaier.application.ReportMyPositionUseCase;
@@ -62,6 +63,7 @@ public class VpnPeerRestController {
     private final CreatePeerUseCase createPeerUseCase;
     private final DeletePeerUseCase deletePeerUseCase;
     private final EnrolDeviceUseCase enrolDeviceUseCase;
+    private final LeaveFleetUseCase leaveFleetUseCase;
     private final GenerateDockerComposeUseCase generateDockerComposeUseCase;
     private final GeneratePeerSetupScriptUseCase generatePeerSetupScriptUseCase;
     private final UpdateLanCidrUseCase updateLanCidrUseCase;
@@ -312,6 +314,29 @@ public class VpnPeerRestController {
         return ResponseEntity.ok(new EnrolDeviceResponse(
             enrolled.id(), enrolled.machineId() == null ? null : enrolled.machineId().value(),
             enrolled.name(), enrolled.ipAddress(), enrolled.configFile()));
+    }
+
+    /**
+     * ANONYMOUS. A phone removes itself from the fleet (#359 slice 1b) — forgetting the tunnel on the
+     * handset alone would leave the peer standing here forever, which is how a fleet fills up with
+     * devices nobody has any more.
+     *
+     * <p>The phone has no session and never had one, so what it presents instead is the preshared key
+     * it was handed at approval: a secret only that phone and Vaier hold, and one Vaier already has in
+     * the peer's config on disk. The judgement is {@code LeaveProof}'s, and it is offered only to a
+     * peer with a {@code Device-held key}.
+     *
+     * <p>{@code 404} covers an unknown key and a wrong preshared key alike — trying keys here must
+     * teach a caller nothing about which peers exist. Neither key is ever logged.
+     */
+    @PostMapping("/leave")
+    public ResponseEntity<Void> leaveFleet(@RequestBody LeaveFleetRequest request) {
+        if (!leaveFleetUseCase.leave(request.publicKey(), request.presharedKey())) {
+            return ResponseEntity.notFound().build();
+        }
+        log.info("A device removed itself from the fleet");
+        forPublishingEvents.publish("vpn-peers", "peers-updated", "");
+        return ResponseEntity.noContent().build();
     }
 
     /**
@@ -815,6 +840,15 @@ public class VpnPeerRestController {
             String name,
             String ipAddress,
             String configFile
+    ) {}
+
+    /**
+     * What a phone presents to {@code leave} the fleet: its own public key, and the preshared key it
+     * was handed at approval — the half of its config that only it and Vaier hold.
+     */
+    public record LeaveFleetRequest(
+            String publicKey,
+            String presharedKey
     ) {}
 
     public record UpdateLanAddressRequest(

@@ -24,13 +24,13 @@ class EnrolmentPayloadTest {
         PersistentKeepalive = 25
     """.trimIndent()
 
-    private fun fragmentOf(text: String) =
+    private fun encodedOf(text: String) =
         Base64.getUrlEncoder().withoutPadding().encodeToString(text.toByteArray())
 
-    private fun parse(text: String) = EnrolmentPayload.parse(fragmentOf(text), ourPublicKey, ourPrivateKey)
+    private fun parse(text: String) = EnrolmentPayload.parse(encodedOf(text), ourPublicKey, ourPrivateKey)
 
     @Test
-    fun `the enrolment carries what the home screen shows`() {
+    fun `the approval carries what the home screen shows`() {
         val enrolment = parse(conf())
 
         assertEquals("9f2c", enrolment.peerId)
@@ -64,23 +64,16 @@ class EnrolmentPayloadTest {
         // base64 decoder pass this test. These two characters (UTF-8 c3 bf e7 bf bf) put the
         // sextets 62 and 63 into the encoding, where only the URL-safe alphabet spells them.
         val name = "Pixel 8 \u00FF\u7FFF"
-        val fragment = fragmentOf(conf().replace("Pixel 8", name))
+        val encoded = encodedOf(conf().replace("Pixel 8", name))
 
-        assertTrue(fragment, fragment.contains('-'))
-        assertTrue(fragment, fragment.contains('_'))
-        assertFalse(fragment.endsWith("="))
-        assertEquals(name, EnrolmentPayload.parse(fragment, ourPublicKey, ourPrivateKey).peerName)
+        assertTrue(encoded, encoded.contains('-'))
+        assertTrue(encoded, encoded.contains('_'))
+        assertFalse(encoded.endsWith("="))
+        assertEquals(name, EnrolmentPayload.parse(encoded, ourPublicKey, ourPrivateKey).peerName)
     }
 
     @Test
-    fun `a leading hash from the deep link fragment is tolerated`() {
-        val enrolment = EnrolmentPayload.parse("#" + fragmentOf(conf()), ourPublicKey, ourPrivateKey)
-
-        assertEquals("Pixel 8", enrolment.peerName)
-    }
-
-    @Test
-    fun `a payload minted for another key is refused`() {
+    fun `an approval minted for another key is refused`() {
         val other = "AAAAZ0nOhTn2Yz0kQvVYcWkZ0m7l7pQ5rXcSbW8xTiE="
 
         val refusal = refusalFrom { parse(conf(publicKey = other)) }
@@ -89,7 +82,7 @@ class EnrolmentPayloadTest {
     }
 
     @Test
-    fun `a payload carrying a private key is refused, because Vaier must never send one`() {
+    fun `an approval carrying a private key is refused, because Vaier must never send one`() {
         val withPrivateKey = conf().replace("[Interface]", "[Interface]\nPrivateKey = $ourPrivateKey")
 
         val refusal = refusalFrom { parse(withPrivateKey) }
@@ -98,31 +91,46 @@ class EnrolmentPayloadTest {
     }
 
     @Test
-    fun `a payload with no VAIER comment is refused`() {
+    fun `an answer with no VAIER comment is refused`() {
         val refusal = refusalFrom { parse(conf().lines().drop(1).joinToString("\n")) }
 
         assertTrue(refusal, refusal.contains("not from Vaier"))
     }
 
     @Test
-    fun `a payload with no interface section is refused`() {
+    fun `an answer with no interface section is refused`() {
         val refusal = refusalFrom { parse(conf().replace("[Interface]", "[Nonsense]")) }
 
         assertTrue(refusal, refusal.contains("Interface"))
     }
 
     @Test
-    fun `a fragment that is not base64 at all is refused`() {
+    fun `data that is not base64 at all is refused`() {
         val refusal = refusalFrom { EnrolmentPayload.parse("not base 64 !!", ourPublicKey, ourPrivateKey) }
 
         assertTrue(refusal, refusal.contains("damaged"))
     }
 
     @Test
-    fun `an empty fragment is refused`() {
+    fun `an empty approval is refused`() {
         val refusal = refusalFrom { EnrolmentPayload.parse("", ourPublicKey, ourPrivateKey) }
 
         assertTrue(refusal, refusal.isNotEmpty())
+    }
+
+    @Test
+    fun `the shared secret that leaving needs is read back out of the configuration`() {
+        val configText = parse(conf()).configText
+
+        assertEquals(
+            "FpCyhws9cxwWoV4xELtfJvjJN+zQVRPISllRWgeopVE=",
+            EnrolmentPayload.presharedKeyIn(configText),
+        )
+    }
+
+    @Test
+    fun `a configuration with no shared secret reads back as nothing`() {
+        assertEquals("", EnrolmentPayload.presharedKeyIn("[Interface]\nAddress = 10.13.13.7/32"))
     }
 
     private fun refusalFrom(block: () -> Unit): String =

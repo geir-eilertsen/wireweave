@@ -549,8 +549,13 @@ public class ReverseProxyRoute {
     }
 
     public State hostState(List<DockerService> localServices, List<VpnClient> vpnClients) {
+        // An address inside a peer's allowed IPs is that peer's, and only its tunnel can vouch for it: a
+        // Vaier-server container that happens to listen on the same port says nothing about the far end.
+        if (vpnClients.stream().anyMatch(p -> p.containsAddress(address))) {
+            boolean up = vpnClients.stream().anyMatch(p -> p.containsAddress(address) && p.isConnected());
+            return up ? State.OK : State.UNREACHABLE;
+        }
         if (localServices.stream().anyMatch(s -> s.isRunning() && s.listensOnPort(port))) return State.OK;
-        if (vpnClients.stream().anyMatch(p -> p.containsAddress(address) && p.isConnected())) return State.OK;
         return State.UNREACHABLE;
     }
 

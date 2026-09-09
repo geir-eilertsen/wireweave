@@ -1,5 +1,7 @@
 package net.vaier.application.service;
 
+import net.vaier.domain.EnrolmentRequest;
+import net.vaier.domain.NotFoundException;
 import net.vaier.domain.PeerNotFoundException;
 import net.vaier.domain.ConflictException;
 import net.vaier.application.DeletePublishedServiceUseCase;
@@ -34,6 +36,7 @@ import net.vaier.domain.port.ForGeolocatingIps;
 import net.vaier.domain.port.ForGettingPeerConfigurations;
 import net.vaier.domain.port.ForGettingPeerConfigurations.PeerConfiguration;
 import net.vaier.domain.port.ForGettingVpnClients;
+import net.vaier.domain.port.ForHoldingEnrolmentRequests;
 import net.vaier.domain.port.ForPersistingReverseProxyRoutes;
 import net.vaier.domain.port.ForResolvingPeerIds;
 import net.vaier.domain.port.ForResolvingPublicHost;
@@ -101,6 +104,7 @@ class VpnServiceTest {
     @Mock net.vaier.domain.port.ForTrackingHostKeys forTrackingHostKeys;
     @Mock ForPersistingMachinePositions forPersistingMachinePositions;
     @Mock ForPersistingLastServicesReached forPersistingLastServicesReached;
+    @Mock ForHoldingEnrolmentRequests forHoldingEnrolmentRequests;
 
     @InjectMocks VpnService service;
 
@@ -1208,6 +1212,25 @@ class VpnServiceTest {
     }
 
     @Test
+    void getVpnPeers_aConfiguredPeerTheInterfaceHasForgotten_isStillListed_disconnected() {
+        // Two "Ruten" machines on the fleet page, one undeletable: its directory outlived its wg0 entry,
+        // so it was in /machines but not in the peers list, and the page took it for a LAN server.
+        when(forGettingVpnClients.getClients()).thenReturn(List.of());
+        when(peerConfigProvider.getAllPeerConfigs()).thenReturn(List.of(
+            new PeerConfiguration("Ruten", "10.13.13.8", "[Interface]", MachineType.MOBILE_CLIENT, null, null)));
+        when(forResolvingPeerIds.resolvePeerIdByIp("10.13.13.8")).thenReturn("Ruten");
+        when(peerConfigProvider.getPeerConfigByIp("10.13.13.8")).thenReturn(Optional.of(
+            new PeerConfiguration("Ruten", "10.13.13.8", "[Interface]", MachineType.MOBILE_CLIENT, null, null)));
+
+        var views = service.getVpnPeers();
+
+        assertThat(views).hasSize(1);
+        assertThat(views.get(0).id()).isEqualTo("Ruten");
+        assertThat(views.get(0).tunnelIp()).isEqualTo("10.13.13.8");
+        assertThat(views.get(0).connected()).isFalse();
+    }
+
+    @Test
     void getVpnPeers_assemblesFromClientPlusPeerConfigPlusGeo() {
         VpnClient client = new VpnClient("pub", "10.13.13.2/32", "203.0.113.10", "51820", "0", "0", "0");
         when(forGettingVpnClients.getClients()).thenReturn(List.of(client));
@@ -2144,4 +2167,170 @@ class VpnServiceTest {
         verifyNoInteractions(forExecutingInContainer);
     }
 
+    // --- enrolment requests: a phone waits, the operator approves from anywhere (#359 slice 1b) ---
+
+    private static final String PSK = "cGKrDp0z0Fs0IiUrPzuTfnJ7CEZzSXpGX0ZlLBFgLGE=";
+
+    private EnrolmentRequest waitingRequest(String code, String ticket) {
+        return EnrolmentRequest.open("Ruten", DEVICE_KEY, code, ticket, System.currentTimeMillis());
+    }
+
+    @Test
+    void request_opensARequestWhileFewerThanFivePhonesAreWaiting() {
+        EnrolmentRequest opened = waitingRequest("4821", "ticket-1");
+        when(forHoldingEnrolmentRequests.livePending()).thenReturn(List.of());
+        when(forHoldingEnrolmentRequests.open("Ruten", DEVICE_KEY)).thenReturn(opened);
+
+        assertThat(service.request("Ruten", DEVICE_KEY)).isEqualTo(opened);
+    }
+
+    @Test
+    void request_refusesASixthWaitingPhone() {
+        // The size of the anonymous surface is the whole safety argument; the cap is the domain's.
+        when(forHoldingEnrolmentRequests.livePending()).thenReturn(List.of(
+            waitingRequest("0001", "t1"), waitingRequest("0002", "t2"), waitingRequest("0003", "t3"),
+            waitingRequest("0004", "t4"), waitingRequest("0005", "t5")));
+
+        assertThatThrownBy(() -> service.request("Ruten", DEVICE_KEY))
+            .isInstanceOf(ConflictException.class);
+
+        verify(forHoldingEnrolmentRequests, never()).open(any(), any());
+    }
+
+    @Test
+    void pending_isWhateverIsStillWaiting() {
+        EnrolmentRequest waiting = waitingRequest("4821", "ticket-1");
+        when(forHoldingEnrolmentRequests.livePending()).thenReturn(List.of(waiting));
+
+        assertThat(service.pending()).containsExactly(waiting);
+    }
+
+    @Test
+    void approve_enrolsTheDeviceUnderTheKeyItPresented_andRecordsTheConfigOnTheRequest(@TempDir Path dir)
+            throws Exception {
+        wireguardIsReachable(dir);
+        when(forHoldingEnrolmentRequests.findByCode("4821"))
+            .thenReturn(Optional.of(waitingRequest("4821", "ticket-1")));
+        when(peerConfigProvider.getAllPeerConfigs()).thenReturn(List.of());
+        when(configResolver.getDomain()).thenReturn("eilertsen.family");
+        when(forResolvingServerLanCidr.resolve()).thenReturn(Optional.empty());
+        when(forExecutingInContainer.execute("wireguard", "wg", "show", "wg0", "public-key"))
+            .thenReturn("SERVER_PUB\n");
+        when(forExecutingInContainer.execute("wireguard", "wg", "genpsk")).thenReturn("PSK\n");
+
+        var approved = service.approve("4821");
+
+        assertThat(approved.ticket()).isEqualTo("ticket-1");
+        assertThat(approved.device().name()).isEqualTo("Ruten");
+        assertThat(approved.device().publicKey()).isEqualTo(DEVICE_KEY);
+        assertThat(approved.device().configFile()).doesNotContain("PrivateKey");
+        // The config stays on the request, so a phone whose stream dropped mid-approval still gets it.
+        verify(forHoldingEnrolmentRequests).recordApproval("4821", approved.device().configFile());
+    }
+
+    @Test
+    void approve_anUnknownOrExpiredCode_isNotFound() {
+        when(forHoldingEnrolmentRequests.findByCode("0000")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.approve("0000"))
+            .isInstanceOf(NotFoundException.class);
+    }
+
+    @Test
+    void approve_leavesTheRequestWaitingWhenTheEnrolmentFails() {
+        when(forHoldingEnrolmentRequests.findByCode("4821"))
+            .thenReturn(Optional.of(waitingRequest("4821", "ticket-1")));
+        when(peerConfigProvider.getAllPeerConfigs()).thenThrow(new IllegalStateException("wireguard is down"));
+
+        assertThatThrownBy(() -> service.approve("4821")).isInstanceOf(IllegalStateException.class);
+
+        // Nothing was approved, so the phone keeps waiting and the operator can try again.
+        verify(forHoldingEnrolmentRequests, never()).recordApproval(any(), any());
+    }
+
+    @Test
+    void refuse_removesTheRequestAndHandsBackItsTicket() {
+        EnrolmentRequest waiting = waitingRequest("4821", "ticket-1");
+        when(forHoldingEnrolmentRequests.remove("4821")).thenReturn(Optional.of(waiting));
+
+        assertThat(service.refuse("4821")).contains(waiting);
+    }
+
+    @Test
+    void refuse_anUnknownCode_isANoOp() {
+        when(forHoldingEnrolmentRequests.remove("0000")).thenReturn(Optional.empty());
+
+        assertThat(service.refuse("0000")).isEmpty();
+    }
+
+    @Test
+    void lookUp_anUnknownTicket_isNothing() {
+        when(forHoldingEnrolmentRequests.findByTicket("made-up")).thenReturn(Optional.empty());
+
+        assertThat(service.lookUp("made-up").isGone()).isTrue();
+    }
+
+    @Test
+    void lookUp_aWaitingTicket_isPending() {
+        when(forHoldingEnrolmentRequests.findByTicket("ticket-1"))
+            .thenReturn(Optional.of(waitingRequest("4821", "ticket-1")));
+
+        assertThat(service.lookUp("ticket-1").isPending()).isTrue();
+    }
+
+    @Test
+    void lookUp_anApprovedTicket_carriesTheConfig() {
+        when(forHoldingEnrolmentRequests.findByTicket("ticket-1"))
+            .thenReturn(Optional.of(waitingRequest("4821", "ticket-1").approved("[Interface]")));
+
+        assertThat(service.lookUp("ticket-1").configFile()).isEqualTo("[Interface]");
+    }
+
+    // --- leave: a phone removes itself from the fleet (#359 slice 1b) ---
+
+    private PeerConfiguration enrolledPhone(String id, String publicKey, String presharedKey) {
+        String config = "# VAIER: {}\n[Interface]\nAddress = 10.13.13.7/32\n\n[Peer]\n"
+            + "PublicKey = SERVER_PUB\nPresharedKey = " + presharedKey + "\n";
+        return new PeerConfiguration(id, id, "10.13.13.7", config, MachineType.MOBILE_CLIENT,
+            null, null, null, null, null, mid(id), publicKey);
+    }
+
+    @Test
+    void leave_removesThePeerWhoseConfigTheCallerProvesItHolds() {
+        when(peerConfigProvider.getAllPeerConfigs())
+            .thenReturn(List.of(enrolledPhone("ruten", DEVICE_KEY, PSK)));
+
+        assertThat(service.leave(DEVICE_KEY, PSK)).isTrue();
+
+        // The same cascade an operator's delete runs — published services first, then the peer.
+        verify(vpnPeerDeleter).deletePeer("ruten");
+    }
+
+    @Test
+    void leave_withTheWrongPresharedKey_removesNothing() {
+        when(peerConfigProvider.getAllPeerConfigs())
+            .thenReturn(List.of(enrolledPhone("ruten", DEVICE_KEY, PSK)));
+
+        assertThat(service.leave(DEVICE_KEY, "not-the-preshared-key")).isFalse();
+
+        verifyNoInteractions(vpnPeerDeleter);
+    }
+
+    @Test
+    void leave_isNotOfferedToAPeerThatDidNotMakeItsOwnKey() {
+        when(peerConfigProvider.getAllPeerConfigs())
+            .thenReturn(List.of(enrolledPhone("nuc02", null, PSK)));
+
+        assertThat(service.leave(DEVICE_KEY, PSK)).isFalse();
+
+        verifyNoInteractions(vpnPeerDeleter);
+    }
+
+    @Test
+    void leave_withoutBothKeys_isRefused() {
+        assertThatThrownBy(() -> service.leave(DEVICE_KEY, null))
+            .isInstanceOf(IllegalArgumentException.class);
+
+        verifyNoInteractions(peerConfigProvider, vpnPeerDeleter);
+    }
 }

@@ -12,6 +12,11 @@ public record VpnClient(
 
     private static final long HANDSHAKE_STALE_AFTER_SECONDS = 180;
 
+    /** A configured peer the running interface does not know: no endpoint, no handshake, never connected. */
+    public static VpnClient absent(String publicKey, String ipAddress) {
+        return new VpnClient(publicKey == null ? "" : publicKey, ipAddress + "/32", "", "", "0", "0", "0");
+    }
+
     public boolean isConnected() {
         long handshake = latestHandshakeEpoch();
         long now = System.currentTimeMillis() / 1000;

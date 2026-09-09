@@ -79,16 +79,45 @@ class SettingsServiceTest {
         // own fact, read through the port, and the domain has already decided what counts as one.
         AndroidApp app = AndroidApp.of(20_467_986L, out -> {
         }).orElseThrow();
-        when(androidAppReader.readApp()).thenReturn(Optional.of(app));
+        when(configResolver.getDomain()).thenReturn("example.com");
+        when(androidAppReader.readApp(any())).thenReturn(Optional.of(app));
 
         assertThat(service.androidApp()).contains(app);
     }
 
     @Test
     void androidApp_isEmptyWhenTheImageCarriesNone() {
-        when(androidAppReader.readApp()).thenReturn(Optional.empty());
+        when(configResolver.getDomain()).thenReturn("example.com");
+        when(androidAppReader.readApp(any())).thenReturn(Optional.empty());
 
         assertThat(service.androidApp()).isEmpty();
+    }
+
+    @Test
+    void androidApp_isServedStampedWithVaierOwnHostName() {
+        // The app that comes off this deployment has to know which Vaier served it — otherwise the first
+        // thing it asks a person for is an address they would have to read off a browser's URL bar. The
+        // host is Vaier's own FQDN, named by the domain object rather than concatenated here.
+        when(configResolver.getDomain()).thenReturn("eilertsen.family");
+        when(androidAppReader.readApp(any())).thenReturn(Optional.empty());
+
+        service.androidApp();
+
+        ArgumentCaptor<String> host = ArgumentCaptor.forClass(String.class);
+        verify(androidAppReader).readApp(host.capture());
+        assertThat(host.getValue()).isEqualTo("vaier.eilertsen.family");
+    }
+
+    @Test
+    void androidApp_isServedUnstampedBeforeADomainIsConfigured() {
+        // A fresh install has no domain yet, and "vaier.null" is not a host. The package is served as
+        // built rather than withheld — the download is the one door a phone can reach before anything else.
+        when(configResolver.getDomain()).thenReturn(null);
+        when(androidAppReader.readApp(null)).thenReturn(Optional.empty());
+
+        assertThat(service.androidApp()).isEmpty();
+
+        verify(androidAppReader).readApp(null);
     }
 
     // --- getSettings ---

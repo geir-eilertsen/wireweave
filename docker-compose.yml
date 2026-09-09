@@ -719,6 +719,28 @@ services:
       - traefik.http.routers.vaier-public.entrypoints=websecure
       - traefik.http.routers.vaier-public.tls.certresolver=letsencrypt
       - traefik.http.routers.vaier-public.priority=200
+      # #359 slice 1b — ANONYMOUS ENROLMENT router: the three routes a phone needs when nobody is
+      # signed in on it. POST /vpn/enrolments registers the key the phone minted and starts it
+      # waiting; the ticket-anchored SSE path is that one phone's own stream; POST /vpn/peers/leave
+      # lets it take itself back out of the fleet, which forgetting the tunnel on the handset cannot.
+      # Its own router, so the launchpad's public allowlist above stays exactly as narrow as it was.
+      #
+      # Safe because nothing here reveals or changes the fleet on its own: the join code is four
+      # digits for a human to read off a screen and authorises NOTHING, the enrolment ticket is 32
+      # unguessable random bytes handed to the phone once, no server secret exists until an admin
+      # approves, at most 5 requests wait at a time and each dies after 10 minutes. Leaving proves
+      # possession of the peer's own preshared key — a secret only that phone and Vaier hold — and
+      # the peer is gone afterwards, so a replay has nothing left to remove. The approve, refuse and
+      # pending routes stay on the Tier 3 admin catch-all, which is where the real decisions are.
+      # Rate-limited on a middleware of its own so the anonymous POSTs cannot be used to churn.
+      - traefik.http.routers.vaier-enrolment.rule=Host(`vaier.${VAIER_DOMAIN}`) && ((Path(`/vpn/enrolments`) && Method(`POST`)) || PathRegexp(`^/vpn/enrolments/[A-Za-z0-9_-]{43}/events$`) || (Path(`/vpn/peers/leave`) && Method(`POST`)))
+      - traefik.http.routers.vaier-enrolment.entrypoints=websecure
+      - traefik.http.routers.vaier-enrolment.tls.certresolver=letsencrypt
+      - traefik.http.routers.vaier-enrolment.priority=210
+      - traefik.http.routers.vaier-enrolment.middlewares=vaier-enrolment-ratelimit,vaier-down,vaier-frame-guard@file
+      - traefik.http.middlewares.vaier-enrolment-ratelimit.ratelimit.average=10
+      - traefik.http.middlewares.vaier-enrolment-ratelimit.ratelimit.period=1m
+      - traefik.http.middlewares.vaier-enrolment-ratelimit.ratelimit.burst=5
       # Tier 2 — IDENTITY-OPTIONAL router: the viewer-adaptive endpoints. oauth2-authn only — it
       # injects the identity headers (X-Auth-Request-*) when a session exists, and returns 401 for an
       # anonymous caller (the page treats that as anonymous and falls back to /launchpad/services).

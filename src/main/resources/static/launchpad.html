@@ -98,6 +98,53 @@
 
         .stat.ok .n { color: var(--live); }
 
+        /* Install card — the Vaier app, offered on the phone that can actually take it (#359).
+           Sits at the foot of the page, below the fleet. Same object family as a service tile: card ground, --radius-2, one shadow, no frame. The only
+           thing that marks it out is the app's amber mark, so the amber is spent exactly once and the
+           Install button stays the product's primary cyan. Nothing here moves. */
+        .install {
+            display: flex;
+            align-items: center;
+            gap: 0.85rem;
+            padding: 0.8rem 0.9rem;
+            margin-top: 1.5rem;
+            background: var(--bg-card);
+            border: 1px solid transparent;
+            border-radius: var(--radius-2);
+            box-shadow: var(--shadow-1);
+        }
+
+        .install-mark {
+            flex-shrink: 0;
+            width: 42px;
+            height: 42px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: var(--radius-1);
+            color: #d9a05b;
+            background: rgba(217, 160, 91, 0.12);
+            box-shadow: inset 0 0 0 1px rgba(217, 160, 91, 0.28);
+        }
+
+        .install-txt { flex: 1; min-width: 0; }
+
+        .install-name {
+            font-family: var(--display);
+            font-weight: 600;
+            font-size: 0.95rem;
+            line-height: 1.2;
+        }
+
+        .install-sub {
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            margin-top: 0.15rem;
+        }
+
+        .install .btn { flex-shrink: 0; }
+
+
         /* Peer section — an accent rail + machine name + mono online count */
         .peer-section { margin-bottom: 1.9rem; }
         .peer-section:last-child { margin-bottom: 0; }
@@ -335,6 +382,7 @@
         </div>
         <div id="grid">
         </div>
+        <div id="installCard"></div>
     </div>
 
     <script src="avatar.js"></script>
@@ -346,7 +394,10 @@
         const ICON_SETTINGS = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.2"/><path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3.05 3.05l1.06 1.06M11.89 11.89l1.06 1.06M3.05 12.95l1.06-1.06M11.89 4.11l1.06-1.06"/></svg>';
         const ICON_EXPLORER = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 4.2a1 1 0 0 1 1-1h3l1.4 1.6h6.6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z"/></svg>';
         const ICON_BACKUPS  = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="13" height="3" rx="0.5"/><path d="M2.5 5.5v7a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-7"/><line x1="6" y1="8.5" x2="10" y2="8.5"/></svg>';
-        const ICON_ANDROID  = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="1.5" width="8" height="13" rx="1.5"/><line x1="6.8" y1="12.2" x2="9.2" y2="12.2"/></svg>';
+        // The app's own mark: the hub and four spokes the favicon draws, in the app's amber (the colour
+        // lives in .install-mark, so it is stated once). A phone glyph would have said "Android", which is
+        // the platform, not the product.
+        const ICON_APP      = '<svg width="24" height="24" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="2.2" fill="currentColor" stroke="none"/><line x1="2.5" y1="3.5" x2="6" y2="6.5"/><line x1="13.5" y1="3.5" x2="10" y2="6.5"/><line x1="2.5" y1="12.5" x2="6" y2="9.5"/><line x1="13.5" y1="12.5" x2="10" y2="9.5"/><circle cx="2.5" cy="3.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="13.5" cy="3.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="2.5" cy="12.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="13.5" cy="12.5" r="1.4" fill="currentColor" stroke="none"/></svg>';
 
         async function loadTopbarNav() {
             const nav = document.getElementById('topbarNav');
@@ -419,25 +470,41 @@
                     <a href="${signInUrl}" class="topbar-item" title="Sign in">${ICON_LOGIN}<span class="link-label">Sign in</span></a>
                 `;
             }
-            paintAndroidLink(nav);
         }
 
-        // The Vaier app for Android, offered to whoever is looking — signed in or not. A phone has to
-        // fetch the app before it can sign in from it and enrol, so this is the one nav item that never
-        // depends on a session. Asked for with HEAD first: an image built without the package answers 404,
-        // and Vaier does not offer what it cannot serve, so the button is then simply absent.
-        async function paintAndroidLink(nav) {
+        // The Vaier app, offered on the phone that can actually take it (#359). Two things have to be
+        // true before anything is painted: the visitor is on Android, and this deployment carries a
+        // package. A desktop, an iPhone, or an image built without the package gets silence — Vaier does
+        // not offer what cannot be acted on. It sits at the foot of the page and is never dismissed: a
+        // card that is in nobody's way needs no cross, and one that went away and never came back was
+        // the first thing the operator tripped over.
+        function onAndroid() {
+            const platform = navigator.userAgentData?.platform;
+            return platform ? platform === 'Android' : /Android/i.test(navigator.userAgent);
+        }
+
+        async function paintInstallCard() {
+            if (!onAndroid()) return;
             try {
                 const res = await fetch('/app/android/vaier.apk', { method: 'HEAD', cache: 'no-store' });
                 if (!res.ok) return;
             } catch (_) { return; }
+            const slot = document.getElementById('installCard');
             // Trusted constants only — no viewer-owned value reaches this markup.
-            nav.insertAdjacentHTML('beforeend',
-                `<a href="/app/android/vaier.apk" class="topbar-item" download title="Get the Vaier app"
-                    >${ICON_ANDROID}<span class="link-label">Android</span></a>`);
+            slot.innerHTML = `
+                <div class="install">
+                    <div class="install-mark">${ICON_APP}</div>
+                    <div class="install-txt">
+                        <div class="install-name">Vaier</div>
+                        <div class="install-sub">Get on the VPN from this phone</div>
+                    </div>
+                    <a class="btn btn-primary" href="/app/android/vaier.apk" download>Install</a>
+                </div>`;
         }
 
         loadTopbarNav();
+        paintInstallCard();
+
 
         const AVATAR_COLORS = [
             '#0e639c', '#1a7340', '#7c4dbd', '#c0392b',

@@ -14,8 +14,8 @@ android {
         applicationId = "net.vaier.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1"
+        versionCode = 3
+        versionName = "0.3"
     }
 
     // Release signing comes from the environment, never from a file in the tree. Unset, the release

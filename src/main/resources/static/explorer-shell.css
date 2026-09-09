@@ -789,11 +789,6 @@ button.ex-lname:focus-visible, a.ex-lname:focus-visible { outline: 2px solid var
     font-size: 13.5px;
     line-height: 1.55;
 }
-/* A hint may carry a link on out of the sentence it sits in. It keeps the hint's own quiet colour and wears
-   a thin underline rather than the browser's default blue — the one colour this palette never uses — and
-   only takes the accent when a pointer or the keyboard is actually on it. */
-.ex-hint a { color: var(--text-muted); text-decoration: underline; text-underline-offset: 2px; }
-.ex-hint a:hover, .ex-hint a:focus-visible { color: var(--accent); }
 /* After a bordered surface a hint needs that surface's breathing room, not a control's — and two hints in a
    row need a gap, or they read as one grey paragraph nobody finishes. */
 .ex-note + .ex-hint, .ex-nudge + .ex-hint, .ex-hint + .ex-hint { margin-top: 10px; }
@@ -1459,6 +1454,8 @@ button.ex-brepo-name:focus-visible { outline: 2px solid var(--accent); outline-o
 /* Per-platform steps for the non-Ubuntu handoffs — plainer than the recipe, matching the shell's restraint. */
 .ex-instr { margin: 8px 0 12px; padding-left: 20px; display: grid; gap: 7px; }
 .ex-instr li { font-size: 13.5px; color: var(--text-muted); line-height: 1.55; padding-left: 4px; }
+/* the join code a waiting phone is showing — set large because matching it is the whole decision */
+.ex-joincode { font-family: var(--mono); font-size: 30px; letter-spacing: .2em; color: var(--text); margin: 4px 0 12px; }
 .ex-waiting { display: flex; align-items: center; gap: 9px; margin-top: 12px; font-size: 14px; color: var(--text-muted); }
 /* The fleet map fills the inspector; Leaflet paints inside it. */
 .ex-map-body { padding: 0; }

@@ -2,6 +2,7 @@ package net.vaier.app.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -10,7 +11,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -39,15 +43,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.delay
 import net.vaier.app.Membership
-import net.vaier.app.PendingEnrolment
+import net.vaier.app.PendingJoin
 import net.vaier.app.TunnelStatus
 
 // The Explorer's own palette — Vaier commits to one warm dark look, so the app does too.
@@ -60,12 +67,16 @@ private val VaierTextDim = Color(0xFF7A6A53)
 @Composable
 fun VaierApp(
     membership: Membership?,
-    pending: PendingEnrolment?,
+    pending: PendingJoin?,
+    stampedAddress: String?,
     status: TunnelStatus,
     notice: String?,
+    busy: Boolean,
     suggestedDeviceName: String,
     onJoin: (address: String, deviceName: String) -> Unit,
-    onResumeEnrolment: (PendingEnrolment) -> Unit,
+    onApproveHere: (PendingJoin) -> Unit,
+    onCancelJoin: () -> Unit,
+    onWait: suspend (PendingJoin) -> Unit,
     onConnectedChange: (Boolean) -> Unit,
     onLeave: () -> Unit,
     onRefresh: () -> Unit,
@@ -78,22 +89,31 @@ fun VaierApp(
     )
 
     MaterialTheme(colorScheme = colours) {
-        if (membership == null) {
-            SetupScreen(
-                pending = pending,
-                notice = notice,
-                suggestedDeviceName = suggestedDeviceName,
-                onJoin = onJoin,
-                onResumeEnrolment = onResumeEnrolment,
-            )
-        } else {
-            HomeScreen(
+        when {
+            membership != null -> HomeScreen(
                 membership = membership,
                 status = status,
                 notice = notice,
+                busy = busy,
                 onConnectedChange = onConnectedChange,
                 onLeave = onLeave,
                 onRefresh = onRefresh,
+            )
+
+            pending != null -> WaitingScreen(
+                waiting = pending,
+                notice = notice,
+                onApproveHere = onApproveHere,
+                onCancel = onCancelJoin,
+                onWait = onWait,
+            )
+
+            else -> SetupScreen(
+                stampedAddress = stampedAddress,
+                notice = notice,
+                busy = busy,
+                suggestedDeviceName = suggestedDeviceName,
+                onJoin = onJoin,
             )
         }
     }
@@ -102,64 +122,125 @@ fun VaierApp(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SetupScreen(
-    pending: PendingEnrolment?,
+    stampedAddress: String?,
     notice: String?,
+    busy: Boolean,
     suggestedDeviceName: String,
     onJoin: (String, String) -> Unit,
-    onResumeEnrolment: (PendingEnrolment) -> Unit,
 ) {
-    var address by rememberSaveable { mutableStateOf(pending?.address.orEmpty()) }
-    var deviceName by rememberSaveable { mutableStateOf(pending?.deviceName?.ifBlank { null } ?: suggestedDeviceName) }
+    var address by rememberSaveable { mutableStateOf("") }
+    var deviceName by rememberSaveable { mutableStateOf(suggestedDeviceName) }
 
     Scaffold(topBar = { TopAppBar(title = { Text("Vaier") }) }) { insets ->
         Column(
             modifier = Modifier.fillMaxSize().padding(insets).padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text("Join the fleet", style = MaterialTheme.typography.headlineSmall)
+            Text("Join Vaier", style = MaterialTheme.typography.headlineSmall)
             Text(
-                "This phone mints its own key and never shares it. Vaier only ever learns the public half.",
-                style = MaterialTheme.typography.bodyMedium,
+                "This phone asks to join. Whoever runs Vaier says yes, and you are in.",
+                style = MaterialTheme.typography.bodyLarge,
             )
 
-            OutlinedTextField(
-                value = address,
-                onValueChange = { address = it },
-                label = { Text("Vaier address") },
-                placeholder = { Text("vaier.example.com") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                modifier = Modifier.fillMaxWidth(),
-            )
+            // A download served by Vaier carries its server's name, so there is nothing to type.
+            // The field is the fallback for a sideloaded build, and the two never show together.
+            if (stampedAddress == null) {
+                OutlinedTextField(
+                    value = address,
+                    onValueChange = { address = it },
+                    label = { Text("Vaier address") },
+                    placeholder = { Text("vaier.example.com") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
 
             OutlinedTextField(
                 value = deviceName,
                 onValueChange = { deviceName = it },
-                label = { Text("Device name") },
+                label = { Text("Name this phone") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
                 modifier = Modifier.fillMaxWidth(),
             )
 
             Button(
-                onClick = { onJoin(address, deviceName) },
-                enabled = address.isNotBlank(),
+                onClick = { onJoin(stampedAddress ?: address, deviceName) },
+                enabled = !busy && (stampedAddress != null || address.isNotBlank()),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Join")
-            }
-
-            if (pending != null) {
-                Text(
-                    "Waiting for an operator to approve ${pending.deviceName} at ${pending.address}.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                TextButton(onClick = { onResumeEnrolment(pending) }) {
-                    Text("Open Vaier again")
-                }
+                Text(if (busy) "Asking…" else "Ask to join")
             }
 
             Notice(notice)
+        }
+    }
+}
+
+/**
+ * The code is the whole screen. Everything else here is quiet on purpose: a person reading it out to
+ * someone across a room should never have to hunt for the four digits.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun WaitingScreen(
+    waiting: PendingJoin,
+    notice: String?,
+    onApproveHere: (PendingJoin) -> Unit,
+    onCancel: () -> Unit,
+    onWait: suspend (PendingJoin) -> Unit,
+) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    // Vaier pushes the answer down this phone's own stream, so the app never asks twice. The wait
+    // lives exactly as long as the screen does.
+    LaunchedEffect(waiting.ticket, lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) { onWait(waiting) }
+    }
+
+    Scaffold(topBar = { TopAppBar(title = { Text("Vaier") }) }) { insets ->
+        Column(
+            modifier = Modifier.fillMaxSize().padding(insets).padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Spacer(Modifier.weight(1f))
+
+            Text(
+                waiting.code,
+                color = VaierAmber,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                fontSize = 60.sp,
+                letterSpacing = 14.sp,
+            )
+
+            Spacer(Modifier.height(24.dp))
+            Text(
+                "Read this code out to whoever runs Vaier.",
+                style = MaterialTheme.typography.bodyLarge,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "The moment they say yes, this phone is in. Leave the app open.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = VaierTextDim,
+                textAlign = TextAlign.Center,
+            )
+
+            Spacer(Modifier.weight(1f))
+            Notice(notice)
+
+            Button(
+                onClick = { onApproveHere(waiting) },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("I run Vaier — approve it here")
+            }
+            TextButton(onClick = onCancel) {
+                Text("Cancel")
+            }
         }
     }
 }
@@ -170,11 +251,13 @@ private fun HomeScreen(
     membership: Membership,
     status: TunnelStatus,
     notice: String?,
+    busy: Boolean,
     onConnectedChange: (Boolean) -> Unit,
     onLeave: () -> Unit,
     onRefresh: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
+    var confirmLeave by remember { mutableStateOf(false) }
     val lifecycleOwner = LocalLifecycleOwner.current
 
     // The only polling in the app, and it is a local call into the tunnel backend rather than the
@@ -188,6 +271,16 @@ private fun HomeScreen(
         }
     }
 
+    if (confirmLeave) {
+        LeaveDialog(
+            onConfirm = {
+                confirmLeave = false
+                onLeave()
+            },
+            onDismiss = { confirmLeave = false },
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -198,10 +291,10 @@ private fun HomeScreen(
                     }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                         DropdownMenuItem(
-                            text = { Text("Leave the fleet") },
+                            text = { Text("Leave Vaier") },
                             onClick = {
                                 menuOpen = false
-                                onLeave()
+                                confirmLeave = true
                             },
                         )
                     }
@@ -213,33 +306,78 @@ private fun HomeScreen(
             modifier = Modifier.fillMaxSize().padding(insets).padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text(membership.deviceName, style = MaterialTheme.typography.headlineSmall)
+            Text(membership.deviceName, style = MaterialTheme.typography.titleMedium, color = VaierTextDim)
 
             Card(colors = CardDefaults.cardColors(), modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("Connected", style = MaterialTheme.typography.titleMedium)
-                        Switch(checked = status.up, onCheckedChange = onConnectedChange)
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(20.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            if (status.up) "Connected" else "Not connected",
+                            style = MaterialTheme.typography.headlineSmall,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            if (status.up) "Everything this phone does online goes through Vaier."
+                            else "Turn it on to use Vaier.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = VaierTextDim,
+                        )
                     }
-
-                    if (status.up) {
-                        HorizontalDivider()
-                        Field("Last handshake", sinceHandshake(status.latestHandshakeEpochMillis))
-                        Field("Received", bytes(status.rxBytes))
-                        Field("Sent", bytes(status.txBytes))
-                    }
+                    Switch(checked = status.up, onCheckedChange = { if (!busy) onConnectedChange(it) })
                 }
             }
 
-            Field("Vaier", membership.address)
-            Field("Address on the fleet", membership.tunnelAddress)
-
-            Spacer(Modifier.height(4.dp))
             Notice(notice)
+
+            Spacer(Modifier.weight(1f))
+            Details {
+                Field("Vaier address", membership.address)
+                Field("This phone's address", membership.tunnelAddress)
+                Field("Last handshake", sinceHandshake(status.latestHandshakeEpochMillis))
+                Field("Received", bytes(status.rxBytes))
+                Field("Sent", bytes(status.txBytes))
+            }
+        }
+    }
+}
+
+@Composable
+private fun LeaveDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Leave Vaier?") },
+        text = {
+            Text("This phone will be removed from Vaier. To come back you'll need to join again and be approved.")
+        },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Leave") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Stay") } },
+    )
+}
+
+/** The one place technical words are allowed, and it is shut until somebody asks for it. */
+@Composable
+private fun Details(content: @Composable ColumnScope.() -> Unit) {
+    var open by rememberSaveable { mutableStateOf(false) }
+
+    Column(Modifier.fillMaxWidth()) {
+        TextButton(onClick = { open = !open }) {
+            Text("Details", style = MaterialTheme.typography.labelLarge)
+            Icon(
+                if (open) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                contentDescription = null,
+            )
+        }
+        if (open) {
+            HorizontalDivider()
+            Column(
+                modifier = Modifier.padding(top = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                content = content,
+            )
         }
     }
 }
@@ -247,7 +385,7 @@ private fun HomeScreen(
 @Composable
 private fun Field(label: String, value: String) {
     Column {
-        Text(label, style = MaterialTheme.typography.labelMedium)
+        Text(label, style = MaterialTheme.typography.labelMedium, color = VaierTextDim)
         Text(
             value.ifBlank { "—" },
             style = MaterialTheme.typography.bodyLarge,
@@ -282,4 +420,3 @@ private fun sinceHandshake(epochMillis: Long): String {
         else -> "${seconds / 3600} h ago"
     }
 }
-

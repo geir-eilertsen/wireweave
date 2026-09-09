@@ -13,6 +13,7 @@ import net.vaier.config.ConfigResolver;
 import net.vaier.config.WildcardDnsStatusHolder;
 import net.vaier.domain.AndroidApp;
 import net.vaier.domain.VaierConfig;
+import net.vaier.domain.VaierHostnames;
 import net.vaier.domain.WildcardDnsReport;
 import net.vaier.domain.port.ForPersistingAppConfiguration;
 import net.vaier.domain.port.ForReadingAndroidApp;
@@ -73,13 +74,18 @@ public class SettingsService implements
     }
 
     /**
-     * The deployment's own Android package, read through its port. The Vaier app belongs with the other
+     * The deployment's own Android package, read through its port and stamped with this Vaier's own host
+     * name so the app arrives already knowing where it came from. The Vaier app belongs with the other
      * facts about this deployment's build — its version, its configuration — rather than with the VPN:
      * serving it is not a tunnel operation, it is Vaier handing out a copy of itself.
+     *
+     * <p>Before a domain is configured there is no host to stamp with, and the package is served as built.
      */
     @Override
     public Optional<AndroidApp> androidApp() {
-        return androidAppReader.readApp();
+        return androidAppReader.readApp(new VaierHostnames(configResolver.getDomain())
+            .configuredVaierServerFqdn()
+            .orElse(null));
     }
 
     @Override

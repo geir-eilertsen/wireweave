@@ -225,21 +225,22 @@ public class WireGuardVpnAdapter implements ForGettingVpnClients, ForDeletingVpn
 
             String publicKey = findPeerPublicKeyByIp(wireguardInterface, ipAddress);
             if (publicKey.isEmpty()) {
-                log.error("Could not find peer with IP {} in WireGuard interface", ipAddress);
-                throw new RuntimeException("Peer not found in WireGuard interface");
+                // Already gone from the interface. Refusing to finish here is what left a directory
+                // nothing could delete: the peer must still be removed from disk.
+                log.warn("Peer {} has no entry on {}; removing what is left on disk", peerId, wireguardInterface);
+            } else {
+                log.info("Removing peer with public key: {}", publicKey);
+
+                // Argv-style — no shell. publicKey is computed locally from `wg show`,
+                // not user-supplied, but the sh-c pattern is being purged repo-wide. Closes #195.
+                String output = forExecutingInContainer.execute(
+                    wireguardContainerName, "wg", "set", wireguardInterface, "peer", publicKey, "remove");
+                log.info("Remove peer output: {}", output);
+
+                String saveOutput = forExecutingInContainer.execute(
+                    wireguardContainerName, "wg-quick", "save", wireguardInterface);
+                log.info("Save config output: {}", saveOutput);
             }
-
-            log.info("Removing peer with public key: {}", publicKey);
-
-            // Argv-style — no shell. publicKey is computed locally from `wg show`,
-            // not user-supplied, but the sh-c pattern is being purged repo-wide. Closes #195.
-            String output = forExecutingInContainer.execute(
-                wireguardContainerName, "wg", "set", wireguardInterface, "peer", publicKey, "remove");
-            log.info("Remove peer output: {}", output);
-
-            String saveOutput = forExecutingInContainer.execute(
-                wireguardContainerName, "wg-quick", "save", wireguardInterface);
-            log.info("Save config output: {}", saveOutput);
 
             deleteDirectory(Paths.get(wireguardConfigPath, peerId));
             log.info("Deleted peer directory: {}", peerId);

@@ -79,6 +79,66 @@ class DockerComposeStructureTest {
     }
 
     @Test
+    void enrolmentRouter_opensExactlyTheThreeRoutesAPhoneNeedsWithoutASession() throws Exception {
+        // #359 slice 1b: a phone joins before anyone has signed in on it, and leaves after nobody is
+        // signed in on it either. Three routes, each anchored, and nothing else.
+        Map<String, String> labels = vaierLabels();
+        String rule = labels.get("traefik.http.routers.vaier-enrolment.rule");
+
+        assertThat(rule).contains("Host(`vaier.${VAIER_DOMAIN}`)");
+        assertThat(rule).contains("Path(`/vpn/enrolments`) && Method(`POST`)");
+        // 43 characters is exactly 32 random bytes in base64url without padding — the ticket's shape.
+        assertThat(rule).contains("PathRegexp(`^/vpn/enrolments/[A-Za-z0-9_-]{43}/events$`)");
+        assertThat(rule).contains("Path(`/vpn/peers/leave`) && Method(`POST`)");
+
+        // Nothing else on /vpn may be anonymous — most of all not the admin list, the approve or the
+        // refuse, which are what decide who gets into the fleet.
+        assertThat(rule).doesNotContain("approve");
+        assertThat(rule).doesNotContain("PathPrefix(`/vpn");
+
+        assertThat(labels.get("traefik.http.routers.vaier-enrolment.entrypoints")).isEqualTo("websecure");
+        assertThat(labels.get("traefik.http.routers.vaier-enrolment.tls.certresolver"))
+            .isEqualTo("letsencrypt");
+        // Above the admin catch-all (100) and the identity tier is not involved; below oauth2 (300).
+        assertThat(labels.get("traefik.http.routers.vaier-enrolment.priority")).isEqualTo("210");
+    }
+
+    @Test
+    void enrolmentRouter_isRateLimitedAndNoOtherRouterIs() throws Exception {
+        Map<String, String> labels = vaierLabels();
+
+        assertThat(labels.get("traefik.http.middlewares.vaier-enrolment-ratelimit.ratelimit.average"))
+            .isEqualTo("10");
+        assertThat(labels.get("traefik.http.middlewares.vaier-enrolment-ratelimit.ratelimit.period"))
+            .isEqualTo("1m");
+        assertThat(labels.get("traefik.http.middlewares.vaier-enrolment-ratelimit.ratelimit.burst"))
+            .isEqualTo("5");
+
+        assertThat(labels.get("traefik.http.routers.vaier-enrolment.middlewares"))
+            .contains("vaier-enrolment-ratelimit");
+        // The limit is the anonymous tier's, and it belongs to no other router.
+        for (String router : List.of("vaier", "vaier-public", "vaier-identity", "vaier-oauth2")) {
+            assertThat(labels.get("traefik.http.routers." + router + ".middlewares"))
+                .doesNotContain("vaier-enrolment-ratelimit");
+        }
+    }
+
+    @Test
+    void enrolmentRouter_carriesNoAuthMiddleware_andThePublicRouterWasNotWidened() throws Exception {
+        Map<String, String> labels = vaierLabels();
+        String mw = labels.get("traefik.http.routers.vaier-enrolment.middlewares");
+
+        assertThat(mw).doesNotContain("oauth2");
+        assertThat(mw).doesNotContain("authz");
+
+        // The enrolment routes got their own router precisely so the launchpad's public allowlist
+        // stays exactly as narrow as it was.
+        String publicRule = labels.get("traefik.http.routers.vaier-public.rule");
+        assertThat(publicRule).doesNotContain("/vpn/enrolments");
+        assertThat(publicRule).doesNotContain("/vpn/peers/leave");
+    }
+
+    @Test
     void identityRouter_carriesOnlyOauth2AuthnForTheViewerAdaptiveEndpoints() throws Exception {
         Map<String, String> labels = vaierLabels();
         String rule = labels.get("traefik.http.routers.vaier-identity.rule");
@@ -902,7 +962,8 @@ class DockerComposeStructureTest {
     @Test
     void frameGuard_ridesEveryVaierOwnedRouter() throws Exception {
         Map<String, String> vaierLabels = labelsOf("vaier");
-        for (String router : List.of("vaier", "vaier-public", "vaier-identity", "vaier-oauth2")) {
+        for (String router : List.of("vaier", "vaier-public", "vaier-identity", "vaier-oauth2",
+                "vaier-enrolment")) {
             assertThat(vaierLabels.get("traefik.http.routers." + router + ".middlewares"))
                 .as("%s is one of Vaier's own surfaces and must carry frame protection", router)
                 .contains("vaier-frame-guard@file");

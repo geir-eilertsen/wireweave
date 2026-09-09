@@ -1,7 +1,6 @@
 package net.vaier.app
 
 import android.content.ActivityNotFoundException
-import android.content.Intent
 import android.net.Uri
 import android.net.VpnService
 import android.os.Build
@@ -13,6 +12,7 @@ import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import net.vaier.app.ui.VaierApp
@@ -21,17 +21,20 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var store: VaierStore
     private lateinit var tunnels: TunnelController
+    private val vaier = VaierClient()
 
     private val membership = mutableStateOf<Membership?>(null)
-    private val pending = mutableStateOf<PendingEnrolment?>(null)
+    private val pending = mutableStateOf<PendingJoin?>(null)
+    private val stampedAddress = mutableStateOf<String?>(null)
     private val status = mutableStateOf(TunnelStatus(up = false))
     private val notice = mutableStateOf<String?>(null)
+    private val busy = mutableStateOf(false)
 
     private val vpnPermission = registerForActivityResult(StartActivityForResult()) { result ->
         if (result.resultCode == RESULT_OK) {
             bringUp()
         } else {
-            notice.value = "Android did not grant permission for a VPN, so the tunnel stayed down."
+            notice.value = "Android did not allow the connection, so this phone is not connected."
         }
     }
 
@@ -45,32 +48,42 @@ class MainActivity : ComponentActivity() {
             VaierApp(
                 membership = membership.value,
                 pending = pending.value,
+                stampedAddress = stampedAddress.value,
                 status = status.value,
                 notice = notice.value,
-                suggestedDeviceName = Build.MODEL.orEmpty().ifBlank { "Phone" },
+                busy = busy.value,
+                suggestedDeviceName = suggestedName(),
                 onJoin = ::join,
-                onResumeEnrolment = ::openEnrolment,
+                onApproveHere = ::openApproval,
+                onCancelJoin = ::cancelJoin,
+                onWait = ::waitToBeLetIn,
                 onConnectedChange = ::setConnected,
                 onLeave = ::leave,
                 onRefresh = ::refreshStatus,
             )
         }
-
-        receiveEnrolment(intent)
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        receiveEnrolment(intent)
     }
 
     private fun readStore() {
         membership.value = store.membership
         pending.value = store.pending
+        stampedAddress.value =
+            if (membership.value == null && pending.value == null) stamp() else null
     }
 
-    // Setup -> keys minted here -> operator approves in a browser -> vaier://enrol comes back.
+    private fun suggestedName() = Build.MODEL.orEmpty().ifBlank { "Phone" }
+
+    /**
+     * Vaier stamps its own host into the APK it serves, so a download already knows where it came
+     * from and nobody has to type an address. Read once, then remembered.
+     */
+    private fun stamp(): String? =
+        store.stampedAddress
+            ?: StampedServer.of(this)
+                ?.let(VaierAddress::normalise)
+                ?.also(store::rememberStamp)
+
+    // Joining: this phone mints a key, asks, shows a code, and waits on its own stream.
 
     private fun join(typedAddress: String, deviceName: String) {
         val address = VaierAddress.normalise(typedAddress)
@@ -78,53 +91,93 @@ class MainActivity : ComponentActivity() {
             notice.value = "That does not look like a Vaier address. Try something like vaier.example.com."
             return
         }
-        val name = deviceName.trim().ifBlank { Build.MODEL.orEmpty().ifBlank { "Phone" } }
+        val name = deviceName.trim().ifBlank { suggestedName() }
         notice.value = null
-        openEnrolment(store.beginEnrolment(address, name))
-        readStore()
-    }
+        busy.value = true
 
-    private fun openEnrolment(enrolment: PendingEnrolment) {
-        val url = Uri.parse("https://${enrolment.address}/explorer.html")
-            .buildUpon()
-            .appendQueryParameter("enrol", enrolment.publicKey)
-            .appendQueryParameter("name", enrolment.deviceName)
-            .build()
-        try {
-            CustomTabsIntent.Builder().build().launchUrl(this, url)
-        } catch (e: ActivityNotFoundException) {
-            notice.value = "This phone has no browser to sign in with."
+        lifecycleScope.launch {
+            val publicKey = store.beginJoin(address, name)
+            when (val outcome = vaier.askToJoin(address, name, publicKey)) {
+                is JoinOutcome.Waiting -> store.awaitApproval(
+                    outcome.answer.code,
+                    outcome.answer.ticket,
+                    PendingJoin.deadlineOf(System.currentTimeMillis(), outcome.answer.expiresInSeconds),
+                )
+                // Nothing to wait on, so the freshly minted key goes too: the next try mints another.
+                is JoinOutcome.Turned -> {
+                    store.forget()
+                    notice.value = outcome.reason
+                }
+            }
+            busy.value = false
+            readStore()
         }
     }
 
-    private fun receiveEnrolment(intent: Intent) {
-        val data = intent.data ?: return
-        if (data.scheme != "vaier" || data.host != "enrol") return
-        val fragment = data.fragment.orEmpty()
+    /**
+     * Holds the waiting phone's own stream open until Vaier decides. The caller runs this only while
+     * the waiting screen is on show, and cancels it when it is not.
+     */
+    private suspend fun waitToBeLetIn(waiting: PendingJoin) {
+        while (true) {
+            if (waiting.hasExpired(System.currentTimeMillis())) {
+                giveUp("Nobody approved this phone in time. Try again.")
+                return
+            }
+            when (val verdict = vaier.awaitVerdict(waiting)) {
+                is Verdict.Approved -> return accept(verdict.payload, waiting)
+                Verdict.Refused -> return giveUp("Whoever runs Vaier turned this phone away.")
+                Verdict.Gone -> return giveUp("That code is no longer waiting. Ask to join again.")
+                Verdict.Lost -> delay(RECONNECT_MILLIS)
+            }
+        }
+    }
 
-        val publicKey = store.publicKey
+    private fun accept(payload: String, waiting: PendingJoin) {
         val privateKey = store.privateKey
-        if (publicKey == null || privateKey == null) {
-            notice.value = "This phone is not waiting to enrol. Start again from Setup."
-            return
-        }
-
+            ?: return giveUp("This phone can no longer prove who it is. Ask to join again.")
         try {
-            val enrolment = EnrolmentPayload.parse(fragment, publicKey, privateKey)
-            // Prove the tunnel library accepts it before we keep it, so a bad config is a message
-            // on the setup screen rather than a failure the first time the switch is touched.
+            val enrolment = EnrolmentPayload.parse(payload, waiting.publicKey, privateKey)
+            // Prove the tunnel library accepts it before we keep it, so a bad configuration is a
+            // message on this screen rather than a failure the first time the switch is touched.
             tunnels.configOf(enrolment.configText)
             store.complete(enrolment)
             notice.value = null
         } catch (e: EnrolmentException) {
-            notice.value = e.message
+            return giveUp(e.message.orEmpty())
         } catch (e: Exception) {
-            notice.value = "Vaier sent a configuration this phone could not read."
+            return giveUp("Vaier sent something this phone could not read. Ask to join again.")
         }
         readStore()
     }
 
-    // The tunnel.
+    /** Back to the start, with words that say why. */
+    private fun giveUp(reason: String) {
+        store.forget()
+        notice.value = reason
+        readStore()
+    }
+
+    private fun cancelJoin() {
+        store.forget()
+        notice.value = null
+        readStore()
+    }
+
+    /** For the person who runs Vaier themselves: approve this phone from this phone. */
+    private fun openApproval(waiting: PendingJoin) {
+        val url = Uri.parse("https://${waiting.address}/explorer.html")
+            .buildUpon()
+            .appendQueryParameter("approve", waiting.code)
+            .build()
+        try {
+            CustomTabsIntent.Builder().build().launchUrl(this, url)
+        } catch (e: ActivityNotFoundException) {
+            notice.value = "This phone has no browser to open Vaier in."
+        }
+    }
+
+    // The connection.
 
     private fun setConnected(connected: Boolean) {
         if (!connected) {
@@ -135,11 +188,11 @@ class MainActivity : ComponentActivity() {
         if (consent != null) vpnPermission.launch(consent) else bringUp()
     }
 
-    private fun bringUp() = onTunnel("Vaier could not bring the tunnel up.") {
+    private fun bringUp() = onTunnel("Vaier could not connect this phone.") {
         tunnels.setUp(tunnels.configOf(it.configText))
     }
 
-    private fun takeDown() = onTunnel("Vaier could not take the tunnel down.") {
+    private fun takeDown() = onTunnel("Vaier could not disconnect this phone.") {
         tunnels.setDown(tunnels.configOf(it.configText))
     }
 
@@ -149,7 +202,7 @@ class MainActivity : ComponentActivity() {
             val problem = withContext(Dispatchers.IO) {
                 runCatching { block(current) }.exceptionOrNull()
             }
-            notice.value = problem?.let { "$failure ${it.message.orEmpty()}".trim() }
+            notice.value = problem?.let { failure }
             refreshStatus()
         }
     }
@@ -163,17 +216,44 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Leaving for real: Vaier drops this phone first, and only then does the phone forget. Forgetting
+     * on the handset alone would leave a device standing in Vaier that nobody has any more.
+     * [Leaving] owns the order and what a failure owes the phone afterwards.
+     */
     private fun leave() {
+        val current = membership.value ?: return
+        val publicKey = store.publicKey.orEmpty()
+        val wasConnected = status.value.up
+        notice.value = null
+        busy.value = true
+
         lifecycleScope.launch {
-            membership.value?.let { current ->
-                withContext(Dispatchers.IO) {
-                    runCatching { tunnels.setDown(tunnels.configOf(current.configText)) }
-                }
+            if (wasConnected) quietly { tunnels.setDown(tunnels.configOf(current.configText)) }
+
+            val outcome = vaier.leave(
+                current.address, publicKey, EnrolmentPayload.presharedKeyIn(current.configText),
+            )
+            val steps = Leaving.after(outcome, wasConnected)
+
+            if (steps.reconnect) quietly { tunnels.setUp(tunnels.configOf(current.configText)) }
+            if (steps.forget) {
+                store.forget()
+                status.value = TunnelStatus(up = false)
             }
-            store.leave()
-            status.value = TunnelStatus(up = false)
-            notice.value = null
+            notice.value = steps.notice
+            busy.value = false
             readStore()
         }
+    }
+
+    /** The tunnel calls around leaving, where a failure changes nothing the person can act on. */
+    private suspend fun quietly(block: () -> Unit) {
+        withContext(Dispatchers.IO) { runCatching(block) }
+    }
+
+    private companion object {
+        /** How long to leave a dropped stream alone before opening it again. */
+        const val RECONNECT_MILLIS = 3_000L
     }
 }

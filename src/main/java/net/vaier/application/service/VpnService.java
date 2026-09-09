@@ -4,7 +4,11 @@ import lombok.extern.slf4j.Slf4j;
 import net.vaier.application.CreatePeerUseCase;
 import net.vaier.application.DeletePeerUseCase;
 import net.vaier.application.DeletePublishedServiceUseCase;
+import net.vaier.application.ApproveEnrolmentUseCase;
 import net.vaier.application.EnrolDeviceUseCase;
+import net.vaier.application.LeaveFleetUseCase;
+import net.vaier.application.ListEnrolmentRequestsUseCase;
+import net.vaier.application.LookUpEnrolmentTicketUseCase;
 import net.vaier.application.GenerateDockerComposeUseCase;
 import net.vaier.application.GeneratePeerSetupScriptUseCase;
 import net.vaier.application.GetPeerConfigUseCase;
@@ -16,7 +20,9 @@ import net.vaier.application.ClaimDeviceUseCase;
 import net.vaier.application.ForgetMyPositionUseCase;
 import net.vaier.application.GetMyDeviceUseCase;
 import net.vaier.application.ReportMyPositionUseCase;
+import net.vaier.application.RefuseEnrolmentUseCase;
 import net.vaier.application.ReissuePeerConfigUseCase;
+import net.vaier.application.RequestEnrolmentUseCase;
 import net.vaier.application.RenamePeerUseCase;
 import net.vaier.application.ResolveVpnPeerIdUseCase;
 import net.vaier.application.SyncLanRoutesUseCase;
@@ -26,8 +32,11 @@ import net.vaier.domain.DeviceCategory;
 import net.vaier.config.ConfigResolver;
 import net.vaier.config.ServiceNames;
 import net.vaier.domain.DeviceClaim;
+import net.vaier.domain.EnrolmentRequest;
+import net.vaier.domain.EnrolmentVerdict;
 import net.vaier.domain.GeoLocation;
 import net.vaier.domain.LanServer;
+import net.vaier.domain.LeaveProof;
 import net.vaier.domain.Machine;
 import net.vaier.domain.MachineId;
 import net.vaier.domain.MachineIntent;
@@ -36,9 +45,11 @@ import net.vaier.domain.MachinePositions;
 import net.vaier.domain.MachineType;
 import net.vaier.domain.PeerArtifact;
 import net.vaier.domain.PeerId;
+import net.vaier.domain.PeerRoster;
 import net.vaier.domain.Placement;
 import net.vaier.domain.ReportedPosition;
 import net.vaier.domain.UnidentifiedDeviceException;
+import net.vaier.domain.NotFoundException;
 import net.vaier.domain.PeerNotFoundException;
 import net.vaier.domain.ConflictException;
 import net.vaier.domain.PeerSetupScript;
@@ -56,6 +67,7 @@ import net.vaier.domain.port.ForGeneratingDockerComposeFiles;
 import net.vaier.domain.port.ForGeolocatingIps;
 import net.vaier.domain.port.ForGettingPeerConfigurations;
 import net.vaier.domain.port.ForGettingVpnClients;
+import net.vaier.domain.port.ForHoldingEnrolmentRequests;
 import net.vaier.domain.port.ForPersistingHostCredentials;
 import net.vaier.domain.port.ForPersistingLanServers;
 import net.vaier.domain.port.ForPersistingLastServicesReached;
@@ -89,6 +101,12 @@ import java.util.stream.Stream;
 public class VpnService implements
     CreatePeerUseCase,
     EnrolDeviceUseCase,
+    RequestEnrolmentUseCase,
+    ListEnrolmentRequestsUseCase,
+    ApproveEnrolmentUseCase,
+    RefuseEnrolmentUseCase,
+    LookUpEnrolmentTicketUseCase,
+    LeaveFleetUseCase,
     DeletePeerUseCase,
     GetVpnClientsUseCase,
     GetVpnPeersUseCase,
@@ -140,6 +158,7 @@ public class VpnService implements
     private final ForTrackingHostKeys forTrackingHostKeys;
     private final ForPersistingMachinePositions forPersistingMachinePositions;
     private final ForPersistingLastServicesReached forPersistingLastServicesReached;
+    private final ForHoldingEnrolmentRequests forHoldingEnrolmentRequests;
 
     public VpnService(ConfigResolver configResolver,
                       ForGettingVpnClients forGettingVpnClients,
@@ -161,7 +180,8 @@ public class VpnService implements
                       ForPersistingHostCredentials forPersistingHostCredentials,
                       ForTrackingHostKeys forTrackingHostKeys,
                       ForPersistingMachinePositions forPersistingMachinePositions,
-                      ForPersistingLastServicesReached forPersistingLastServicesReached) {
+                      ForPersistingLastServicesReached forPersistingLastServicesReached,
+                      ForHoldingEnrolmentRequests forHoldingEnrolmentRequests) {
         this.configResolver = configResolver;
         this.forGettingVpnClients = forGettingVpnClients;
         this.forResolvingPeerIds = forResolvingPeerIds;
@@ -183,6 +203,7 @@ public class VpnService implements
         this.forTrackingHostKeys = forTrackingHostKeys;
         this.forPersistingMachinePositions = forPersistingMachinePositions;
         this.forPersistingLastServicesReached = forPersistingLastServicesReached;
+        this.forHoldingEnrolmentRequests = forHoldingEnrolmentRequests;
     }
 
     // --- GetVpnClientsUseCase ---
@@ -205,7 +226,9 @@ public class VpnService implements
             forPersistingReverseProxyRoutes.getReverseProxyRoutes(),
             configResolver.getDomain(),
             Instant.now());
-        return forGettingVpnClients.getClients().stream()
+        // Configured peers the interface has forgotten are listed too, or nothing could ever remove them.
+        return PeerRoster.reconcile(forGettingVpnClients.getClients(), peerConfigProvider.getAllPeerConfigs())
+            .stream()
             .map(client -> toVpnPeerView(client, context))
             .toList();
     }
@@ -628,6 +651,15 @@ public class VpnService implements
 
     @Override
     public EnrolledDeviceUco enrol(String name, String publicKey) {
+        return enrolDevice(name, publicKey);
+    }
+
+    /**
+     * The enrolment itself, shared by the operator-driven {@code enrol} and by {@link #approve}, so a
+     * phone that came in through a join code joins on exactly the terms one that came in through the
+     * console does.
+     */
+    private EnrolledDeviceUco enrolDevice(String name, String publicKey) {
         // Both judgements BEFORE any state change, exactly as createPeer validates a lanCidr: the key
         // goes straight into `wg set ... peer <key>`'s argv and onto disk, and a name that slugs to
         // nothing has no config directory to live in.
@@ -672,6 +704,71 @@ public class VpnService implements
             log.error("Error enrolling device", e);
             throw new RuntimeException("Failed to enrol device: " + e.getMessage(), e);
         }
+    }
+
+    // --- Enrolment requests: a phone waits to be approved (#359 slice 1b) ---
+
+    @Override
+    public EnrolmentRequest request(String name, String publicKey) {
+        if (!EnrolmentRequest.mayOpenAnother(forHoldingEnrolmentRequests.livePending().size())) {
+            throw new ConflictException("Too many phones are already waiting to join. Approve or refuse "
+                + "one of them, or wait for a request to expire.");
+        }
+        // The key and the name are judged inside the store's open(), by the domain, before anything
+        // is stored — this call is still anonymous and must be able to cost nothing.
+        EnrolmentRequest opened = forHoldingEnrolmentRequests.open(name, publicKey);
+        log.info("A device is waiting to join as '{}' with join code {}", opened.name(), opened.code());
+        return opened;
+    }
+
+    @Override
+    public List<EnrolmentRequest> pending() {
+        return forHoldingEnrolmentRequests.livePending();
+    }
+
+    @Override
+    public ApprovedEnrolmentUco approve(String code) {
+        EnrolmentRequest request = forHoldingEnrolmentRequests.findByCode(code)
+            .orElseThrow(() -> new NotFoundException("No phone is waiting with join code " + code
+                + ". It may have expired — ask for a new code on the phone."));
+
+        EnrolledDeviceUco device = enrolDevice(request.name(), request.publicKey());
+        // Only once the peer really exists: a failed enrolment leaves the phone waiting, so the
+        // operator can simply approve it again.
+        forHoldingEnrolmentRequests.recordApproval(request.code(), device.configFile());
+        log.info("Approved join code {} as peer {}", request.code(), device.id());
+        return new ApprovedEnrolmentUco(request.ticket(), device);
+    }
+
+    @Override
+    public Optional<EnrolmentRequest> refuse(String code) {
+        Optional<EnrolmentRequest> refused = forHoldingEnrolmentRequests.remove(code);
+        refused.ifPresent(request -> log.info("Refused join code {}", request.code()));
+        return refused;
+    }
+
+    @Override
+    public EnrolmentVerdict lookUp(String ticket) {
+        return forHoldingEnrolmentRequests.findByTicket(ticket)
+            .map(request -> request.verdictFor(ticket, System.currentTimeMillis()))
+            .orElseGet(EnrolmentVerdict::gone);
+    }
+
+    // --- LeaveFleetUseCase: a phone removes itself (#359 slice 1b) ---
+
+    @Override
+    public boolean leave(String publicKey, String presharedKey) {
+        LeaveProof proof = LeaveProof.of(publicKey, presharedKey);
+        Optional<ForGettingPeerConfigurations.PeerConfiguration> peer =
+            proof.whichPeer(peerConfigProvider.getAllPeerConfigs());
+        if (peer.isEmpty()) {
+            // Never says which half was wrong, and never carries either key into the log.
+            log.info("A device asked to leave the fleet and proved no peer");
+            return false;
+        }
+        log.info("Peer {} is leaving the fleet at its own request", peer.get().id());
+        deletePeer(peer.get().id());
+        return true;
     }
 
     /**

@@ -105,6 +105,25 @@ public abstract class VaierWebMvcIntegrationBase {
     @MockBean
     protected EnrolDeviceUseCase enrolDeviceUseCase;
 
+    // #359 slice 1b: the join-code flow and a phone removing itself.
+    @MockBean
+    protected LeaveFleetUseCase leaveFleetUseCase;
+
+    @MockBean
+    protected RequestEnrolmentUseCase requestEnrolmentUseCase;
+
+    @MockBean
+    protected ListEnrolmentRequestsUseCase listEnrolmentRequestsUseCase;
+
+    @MockBean
+    protected ApproveEnrolmentUseCase approveEnrolmentUseCase;
+
+    @MockBean
+    protected RefuseEnrolmentUseCase refuseEnrolmentUseCase;
+
+    @MockBean
+    protected LookUpEnrolmentTicketUseCase lookUpEnrolmentTicketUseCase;
+
     @MockBean
     protected DeletePeerUseCase deletePeerUseCase;
 

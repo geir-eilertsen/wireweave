@@ -642,6 +642,26 @@ class ReverseProxyRouteTest {
     }
 
     @Test
+    void hostState_peerAddress_aLocalContainerOnTheSamePort_cannotVouchForAStalePeer() {
+        // The live false positive: openhab on a relay peer at :8080 read OK for forty minutes with the
+        // peer's tunnel down, because Vaier's own container listens on 8080. The address is the peer's,
+        // so only the peer's tunnel gets a say.
+        ReverseProxyRoute route = route("openhab.relay.example.com", "10.13.13.3", 8080);
+        VpnClient stale = new VpnClient("pk", "10.13.13.3/32,192.168.1.0/24", "1.2.3.4", "51820", "0", "0", "0");
+        List<DockerService> local = List.of(runningLocal("vaier", 8080));
+
+        assertThat(route.hostState(local, List.of(stale))).isEqualTo(State.UNREACHABLE);
+    }
+
+    @Test
+    void hostState_peerAddress_connectedPeer_returnsOkRegardlessOfLocalContainers() {
+        ReverseProxyRoute route = route("openhab.relay.example.com", "10.13.13.3", 8080);
+        VpnClient connected = connectedPeer("10.13.13.3/32,192.168.1.0/24");
+
+        assertThat(route.hostState(List.of(), List.of(connected))).isEqualTo(State.OK);
+    }
+
+    @Test
     void hostState_noMatchingLocalOrPeer_returnsUnreachable() {
         ReverseProxyRoute route = route("app.example.com", "192.168.99.1", 8080);
 

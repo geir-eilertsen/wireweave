@@ -1,17 +1,11 @@
 package net.vaier.app
 
 import android.content.Context
+import android.content.SharedPreferences
 import androidx.core.content.edit
 import com.wireguard.crypto.KeyPair
 
-/** The keys this phone minted, waiting for an operator to approve them. */
-data class PendingEnrolment(
-    val address: String,
-    val deviceName: String,
-    val publicKey: String,
-)
-
-/** This phone's settled place in the fleet. */
+/** This phone's settled place in Vaier. */
 data class Membership(
     val address: String,
     val deviceName: String,
@@ -20,8 +14,8 @@ data class Membership(
 )
 
 /**
- * Everything this phone knows about its place in the fleet, in app-private storage — the same bar
- * the WireGuard app sets. The private key is minted here and never leaves.
+ * Everything this phone knows about its place in Vaier, in app-private storage — the same bar the
+ * WireGuard app sets. The private key is minted here and never leaves.
  */
 class VaierStore(context: Context) {
 
@@ -30,12 +24,27 @@ class VaierStore(context: Context) {
     val privateKey: String? get() = prefs.getString(PRIVATE_KEY, null)
     val publicKey: String? get() = prefs.getString(PUBLIC_KEY, null)
 
-    val pending: PendingEnrolment?
+    /** The host stamped into this APK, once it has been read out of the file. */
+    val stampedAddress: String? get() = prefs.getString(STAMPED_ADDRESS, null)
+
+    fun rememberStamp(address: String) = prefs.edit { putString(STAMPED_ADDRESS, address) }
+
+    /** Only a request Vaier has answered is one this phone can wait on, so all five parts must be here. */
+    val pending: PendingJoin?
         get() {
             if (membership != null) return null
             val address = prefs.getString(ADDRESS, null) ?: return null
             val publicKey = publicKey ?: return null
-            return PendingEnrolment(address, prefs.getString(DEVICE_NAME, null).orEmpty(), publicKey)
+            val code = prefs.getString(CODE, null) ?: return null
+            val ticket = prefs.getString(TICKET, null) ?: return null
+            return PendingJoin(
+                address = address,
+                deviceName = prefs.getString(DEVICE_NAME, null).orEmpty(),
+                publicKey = publicKey,
+                code = code,
+                ticket = ticket,
+                expiresAtEpochMillis = prefs.getLong(EXPIRES_AT, 0),
+            )
         }
 
     val membership: Membership?
@@ -49,28 +58,44 @@ class VaierStore(context: Context) {
             )
         }
 
-    /** Mints a fresh keypair and remembers what we are about to ask Vaier for. */
-    fun beginEnrolment(address: String, deviceName: String): PendingEnrolment {
+    /** Mints a fresh keypair for the ask about to be made, and hands back the half Vaier may see. */
+    fun beginJoin(address: String, deviceName: String): String {
         val keys = KeyPair()
         prefs.edit {
-            clear()
+            forget()
             putString(PRIVATE_KEY, keys.privateKey.toBase64())
             putString(PUBLIC_KEY, keys.publicKey.toBase64())
             putString(ADDRESS, address)
             putString(DEVICE_NAME, deviceName)
         }
-        return PendingEnrolment(address, deviceName, keys.publicKey.toBase64())
+        return keys.publicKey.toBase64()
     }
 
-    fun complete(enrolment: Enrolment) {
-        prefs.edit {
-            putString(CONFIG, enrolment.configText)
-            putString(TUNNEL_ADDRESS, enrolment.tunnelAddress)
-            putString(DEVICE_NAME, enrolment.peerName)
-        }
+    /** Vaier answered: the code to show, the ticket to wait on, and when the wait runs out. */
+    fun awaitApproval(code: String, ticket: String, expiresAtEpochMillis: Long) = prefs.edit {
+        putString(CODE, code)
+        putString(TICKET, ticket)
+        putLong(EXPIRES_AT, expiresAtEpochMillis)
     }
 
-    fun leave() = prefs.edit { clear() }
+    fun complete(enrolment: Enrolment) = prefs.edit {
+        putString(CONFIG, enrolment.configText)
+        putString(TUNNEL_ADDRESS, enrolment.tunnelAddress)
+        putString(DEVICE_NAME, enrolment.peerName)
+        remove(CODE)
+        remove(TICKET)
+        remove(EXPIRES_AT)
+    }
+
+    /** Drops this phone's place and its keys — after leaving, after a refusal, or on cancel. */
+    fun forget() = prefs.edit { forget() }
+
+    /** The stamp survives: it describes the APK this phone is running, not where it belongs. */
+    private fun SharedPreferences.Editor.forget() {
+        val stamp = stampedAddress
+        clear()
+        stamp?.let { putString(STAMPED_ADDRESS, it) }
+    }
 
     private companion object {
         const val PRIVATE_KEY = "privateKey"
@@ -79,5 +104,9 @@ class VaierStore(context: Context) {
         const val DEVICE_NAME = "deviceName"
         const val TUNNEL_ADDRESS = "tunnelAddress"
         const val CONFIG = "config"
+        const val STAMPED_ADDRESS = "stampedAddress"
+        const val CODE = "joinCode"
+        const val TICKET = "joinTicket"
+        const val EXPIRES_AT = "joinExpiresAt"
     }
 }

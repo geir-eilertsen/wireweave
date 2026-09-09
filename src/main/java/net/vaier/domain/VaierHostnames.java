@@ -2,6 +2,7 @@ package net.vaier.domain;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.Optional;
 import net.vaier.config.ServiceNames;
 
 /**
@@ -17,6 +18,17 @@ public record VaierHostnames(String baseDomain) {
     /** The FQDN the Vaier web UI is served on, e.g. {@code vaier.example.com}. */
     public String vaierServerFqdn() {
         return ServiceNames.VAIER + "." + baseDomain;
+    }
+
+    /**
+     * The same FQDN, or empty when there is no base domain to build it from. A deployment that has not
+     * been configured yet genuinely has no name to give out — {@code "vaier.null"} is not a host — and
+     * that judgement belongs here, with the type that makes the name, rather than at each caller.
+     */
+    public Optional<String> configuredVaierServerFqdn() {
+        return baseDomain == null || baseDomain.isBlank()
+            ? Optional.empty()
+            : Optional.of(vaierServerFqdn());
     }
 
     /** The FQDN oauth2-proxy is served on for social login, e.g. {@code oauth2.example.com}. */

@@ -24,6 +24,7 @@ import net.vaier.application.GetServerLocationUseCase;
 import net.vaier.application.GetServerLocationUseCase.ServerLocation;
 import net.vaier.application.GetVpnPeersUseCase;
 import net.vaier.application.GetVpnPeersUseCase.VpnPeerView;
+import net.vaier.application.LeaveFleetUseCase;
 import net.vaier.application.ClaimDeviceUseCase;
 import net.vaier.application.ForgetMyPositionUseCase;
 import net.vaier.application.GetMyDeviceUseCase;
@@ -78,6 +79,7 @@ class VpnPeerRestControllerTest {
     @Mock CreatePeerUseCase createPeerUseCase;
     @Mock DeletePeerUseCase deletePeerUseCase;
     @Mock EnrolDeviceUseCase enrolDeviceUseCase;
+    @Mock LeaveFleetUseCase leaveFleetUseCase;
     @Mock GenerateDockerComposeUseCase generateDockerComposeUseCase;
     @Mock GeneratePeerSetupScriptUseCase generatePeerSetupScriptUseCase;
     @Mock UpdateLanCidrUseCase updateLanCidrUseCase;
@@ -979,5 +981,44 @@ class VpnPeerRestControllerTest {
         var body = (VpnPeerRestController.PeerConfigResponse) controller.getPeerConfig("phone").getBody();
 
         assertThat(body.availableArtifacts()).isEmpty();
+    }
+
+    // --- POST /vpn/peers/leave: a phone removes itself from the fleet (#359 slice 1b) ---
+
+    private static final String LEAVE_PSK = "cGKrDp0z0Fs0IiUrPzuTfnJ7CEZzSXpGX0ZlLBFgLGE=";
+
+    @Test
+    void leave_removesThePeerAndTellsTheFleet() {
+        when(leaveFleetUseCase.leave(DEVICE_KEY, LEAVE_PSK)).thenReturn(true);
+
+        var response = controller.leaveFleet(
+            new VpnPeerRestController.LeaveFleetRequest(DEVICE_KEY, LEAVE_PSK));
+
+        assertThat(response.getStatusCode().value()).isEqualTo(204);
+        verify(forPublishingEvents).publish("vpn-peers", "peers-updated", "");
+    }
+
+    @Test
+    void leave_whenNothingIsProved_is404_andSaysNoMoreThanThat() {
+        // One answer for "no such key" and "wrong preshared key" alike: an anonymous caller must not
+        // be able to learn which peers exist by trying keys.
+        when(leaveFleetUseCase.leave(DEVICE_KEY, "wrong-preshared-key")).thenReturn(false);
+
+        var response = controller.leaveFleet(
+            new VpnPeerRestController.LeaveFleetRequest(DEVICE_KEY, "wrong-preshared-key"));
+
+        assertThat(response.getStatusCode().value()).isEqualTo(404);
+        verify(forPublishingEvents, never()).publish(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void leave_doesNotJudgeTheKeysItself_theDomainDoes() {
+        when(leaveFleetUseCase.leave(DEVICE_KEY, null))
+            .thenThrow(new IllegalArgumentException("Leaving requires both keys"));
+
+        assertThatThrownBy(() -> controller.leaveFleet(
+                new VpnPeerRestController.LeaveFleetRequest(DEVICE_KEY, null)))
+            .isInstanceOf(IllegalArgumentException.class);
+        verify(forPublishingEvents, never()).publish(anyString(), anyString(), anyString());
     }
 }

@@ -25,14 +25,6 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-
-            <!-- Where the operator's browser hands the approved enrolment back: vaier://enrol#<payload> -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="vaier" android:host="enrol" />
-            </intent-filter>
         </activity>
     </application>
 </manifest>
